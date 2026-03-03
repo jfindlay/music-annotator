@@ -1,0 +1,180 @@
+[project]
+name = "music_annotator"
+version = "0.1.0"
+authors = [
+    { name = "Justin Findlay", email = "justin@findlay.space" },
+]
+description = "Copy and tag a classical music album using MusicBrainz metadata and Classical Extras conventions."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-3.0-or-later"
+classifiers = [
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Sound/Audio :: Analysis",
+]
+dependencies = [
+    "mutagen==1.47",
+    "musicbrainzngs==0.7.1",
+    "pydantic==2.12.5",
+    "structlog==25.5.0",
+]
+
+[project.scripts]
+music-annotator = "music_annotator.__main__:main"
+
+[project.urls]
+"Homepage" = "https://github.com/jfindlay/music_annotator/"
+"Bug Tracker" = "https://github.com/jfindlay/music_annotator/issues/"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["music_annotator"]
+
+[tool.setuptools.package-data]
+music_annotator = ["py.typed"]
+
+# ---------------------------------------------------------------------------
+# Type checking
+# ---------------------------------------------------------------------------
+
+[tool.mypy]
+python_version = "3.12"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+warn_unused_ignores = true
+strict_equality = true
+extra_checks = true
+
+# musicbrainzngs ships no stubs; suppress the missing-stubs error
+[[tool.mypy.overrides]]
+module = "musicbrainzngs.*"
+ignore_missing_imports = true
+
+# mutagen ships py.typed but some internal modules are untyped
+[[tool.mypy.overrides]]
+module = "mutagen.*"
+ignore_missing_imports = true
+
+# pyfakefs is only installed in the test env; suppress missing-stubs in check_type env
+[[tool.mypy.overrides]]
+module = "pyfakefs.*"
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# Linting
+# ---------------------------------------------------------------------------
+
+[tool.pylint.FORMAT]
+max-line-length = 128
+
+[tool.pylint."MESSAGES CONTROL"]
+disable = [
+    "broad-exception-caught",
+    "logging-fstring-interpolation",
+    "no-member",
+    "not-an-iterable",
+    "redefined-builtin",
+    "too-few-public-methods",
+    "too-many-arguments",
+    "too-many-lines",
+    "too-many-positional-arguments",
+    "too-many-locals",
+    "too-many-branches",
+    "too-many-statements",
+    "use-implicit-booleaness-not-comparison",
+]
+
+# ---------------------------------------------------------------------------
+# Formatting (ruff)
+# ---------------------------------------------------------------------------
+
+[tool.ruff]
+line-length = 128
+
+[tool.ruff.lint]
+select = ["I"]
+
+# ---------------------------------------------------------------------------
+# Testing
+# ---------------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=music_annotator --cov-report=term-missing --cov-report=html"
+
+[tool.coverage.run]
+source = ["music_annotator"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 100
+
+# ---------------------------------------------------------------------------
+# Tox
+# ---------------------------------------------------------------------------
+
+[tool.tox]
+requires = ["tox-uv"]
+isolated_build = true
+labels = { analyze = [
+    "build",
+    "test",
+    "check_type",
+    "check_format",
+    "check_lint",
+    "check_upgrade",
+], edit = ["fix_format"] }
+
+[tool.tox.env.build]
+package = "wheel"
+wheel_build_env = "any"
+
+[tool.tox.env.test]
+deps = ["pytest", "pytest-mock", "pytest-cov", "pyfakefs"]
+commands = [["pytest", "tests/"]]
+
+[tool.tox.env.check_type]
+deps = ["mypy", "pytest", "pytest-mock", "pyfakefs", "types-Pygments"]
+commands = [["mypy", "src/", "tests/"]]
+
+[tool.tox.env.check_upgrade]
+allowlist_externals = ["bash"]
+deps = ["pyupgrade"]
+commands = [
+    [
+        "bash",
+        "-c",
+        "shopt -s globstar; pyupgrade --py312-plus src/**/*.py tests/**/*.py",
+    ],
+]
+
+[tool.tox.env.check_format]
+allowlist_externals = ["ruff"]
+deps = ["ruff"]
+commands = [["ruff", "check", "src/", "tests/"], ["ruff", "format", "--check", "src/", "tests/"]]
+
+[tool.tox.env.check_lint]
+allowlist_externals = ["pylint"]
+deps = ["pylint", "pytest", "pytest-mock", "pyfakefs"]
+commands = [["pylint", "src/", "tests/"]]
+
+[tool.tox.env.fix_format]
+allowlist_externals = ["bash", "ruff"]
+deps = ["pyupgrade", "ruff"]
+commands = [
+    [
+        "bash",
+        "-c",
+        "shopt -s globstar; pyupgrade --exit-zero-even-if-changed --py312-plus src/**/*.py tests/**/*.py",
+    ],
+    ["ruff", "check", "--fix", "src/", "tests/"],
+    ["ruff", "format", "src/", "tests/"],
+]
