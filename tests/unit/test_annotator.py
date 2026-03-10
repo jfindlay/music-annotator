@@ -45,11 +45,8 @@ from music_annotator.models import (
 def _w(d: dict[str, JSON]) -> MBWork:
     """Validate a raw work dict into an MBWork model.
 
-    Args:
-        d: Raw dict matching the musicbrainzngs work response shape.
-
-    Returns:
-        An :class:`~music_annotator.models.MBWork` instance.
+    :param d: Raw dict matching the musicbrainzngs work response shape.
+    :returns: An :class:`~music_annotator.models.MBWork` instance.
     """
     return MBWork.model_validate(d)
 
@@ -57,11 +54,8 @@ def _w(d: dict[str, JSON]) -> MBWork:
 def _rec(d: dict[str, JSON]) -> MBRecording:
     """Validate a raw recording dict into an MBRecording model.
 
-    Args:
-        d: Raw dict matching the musicbrainzngs recording response shape.
-
-    Returns:
-        An :class:`~music_annotator.models.MBRecording` instance.
+    :param d: Raw dict matching the musicbrainzngs recording response shape.
+    :returns: An :class:`~music_annotator.models.MBRecording` instance.
     """
     return MBRecording.model_validate(d)
 
@@ -69,11 +63,8 @@ def _rec(d: dict[str, JSON]) -> MBRecording:
 def _rel(d: dict[str, JSON]) -> MBRelease:
     """Validate a raw release dict into an MBRelease model.
 
-    Args:
-        d: Raw dict matching the musicbrainzngs release response shape.
-
-    Returns:
-        An :class:`~music_annotator.models.MBRelease` instance.
+    :param d: Raw dict matching the musicbrainzngs release response shape.
+    :returns: An :class:`~music_annotator.models.MBRelease` instance.
     """
     return MBRelease.model_validate(d)
 
@@ -81,11 +72,8 @@ def _rel(d: dict[str, JSON]) -> MBRelease:
 def _trk(d: dict[str, JSON]) -> MBTrack:
     """Validate a raw track dict into an MBTrack model.
 
-    Args:
-        d: Raw dict matching the musicbrainzngs track response shape.
-
-    Returns:
-        An :class:`~music_annotator.models.MBTrack` instance.
+    :param d: Raw dict matching the musicbrainzngs track response shape.
+    :returns: An :class:`~music_annotator.models.MBTrack` instance.
     """
     return MBTrack.model_validate(d)
 
@@ -93,11 +81,8 @@ def _trk(d: dict[str, JSON]) -> MBTrack:
 def _ac(items: list[JSON]) -> list[MBArtistCredit | str]:
     """Validate a raw artist-credit list into typed items.
 
-    Args:
-        items: Raw artist-credit list from musicbrainzngs response.
-
-    Returns:
-        A list of :class:`~music_annotator.models.MBArtistCredit` or ``str`` items.
+    :param items: Raw artist-credit list from musicbrainzngs response.
+    :returns: A list of :class:`~music_annotator.models.MBArtistCredit` or ``str`` items.
     """
     result: list[MBArtistCredit | str] = []
     for item in items:
@@ -129,8 +114,7 @@ class TestIsEnsemble:
     def test_orchestra_names_are_ensembles(self, name: str) -> None:
         """Orchestra names should be recognised as ensembles.
 
-        Args:
-            name: Artist name to test.
+        :param name: Artist name to test.
         """
         assert is_ensemble(name)
 
@@ -145,8 +129,7 @@ class TestIsEnsemble:
     def test_choir_names_are_ensembles(self, name: str) -> None:
         """Choir names should be recognised as ensembles.
 
-        Args:
-            name: Artist name to test.
+        :param name: Artist name to test.
         """
         assert is_ensemble(name)
         assert is_choir(name)
@@ -162,8 +145,7 @@ class TestIsEnsemble:
     def test_person_names_not_ensembles(self, name: str) -> None:
         """Person names should not be identified as ensembles.
 
-        Args:
-            name: Artist name to test.
+        :param name: Artist name to test.
         """
         assert not is_ensemble(name)
 
@@ -284,9 +266,8 @@ class TestLastName:
     def test_last_name(self, sort_name: str, expected: str) -> None:
         """last_name returns the portion before the first comma.
 
-        Args:
-            sort_name: Sort-name string to test.
-            expected: Expected last name.
+        :param sort_name: Sort-name string to test.
+        :param expected: Expected last name.
         """
         assert last_name(sort_name) == expected
 
@@ -368,9 +349,8 @@ class TestPeriodForYear:
     def test_period_for_year(self, year: int | None, expected: str) -> None:
         """Maps year to correct period name.
 
-        Args:
-            year: Input year (or None).
-            expected: Expected period name.
+        :param year: Input year (or None).
+        :param expected: Expected period name.
         """
         assert period_for_year(year) == expected
 
@@ -397,9 +377,8 @@ class TestParseYear:
     def test_parse_year(self, date_str: str, expected: int | None) -> None:
         """Extracts the first four-digit year, or None.
 
-        Args:
-            date_str: Input date string.
-            expected: Expected year or None.
+        :param date_str: Input date string.
+        :param expected: Expected year or None.
         """
         assert parse_year(date_str) == expected
 
@@ -595,8 +574,7 @@ class TestBuildWorkHierarchy:
     def test_two_levels(self, mocker: MockerFixture) -> None:
         """A work with one parent returns a two-element list.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         parent = _w({"id": "w2", "title": "Symphony No. 1", "work-relation-list": []})
         child = _w(
@@ -731,11 +709,8 @@ class TestBuildDestPath:
     def _make_tags(self, **kwargs: str) -> TrackTags:
         """Create a minimal TrackTags with required movement fields.
 
-        Args:
-            **kwargs: Additional keyword arguments to pass to TrackTags.
-
-        Returns:
-            A TrackTags instance with movementnumber and movementtotal set.
+        :param kwargs: Additional keyword arguments to pass to TrackTags.
+        :returns: A TrackTags instance with movementnumber and movementtotal set.
         """
         return TrackTags(
             title=kwargs.get("title", "I. Allegro"),
@@ -751,8 +726,7 @@ class TestBuildDestPath:
     def test_returns_path_under_dest_root(self, fs: FakeFilesystem) -> None:
         """Returned path is under dest_root.
 
-        Args:
-            fs: pyfakefs filesystem fixture.
+        :param fs: pyfakefs filesystem fixture.
         """
         dest_root = Path("/music_lib")
         fs.create_dir(str(dest_root))
@@ -767,8 +741,7 @@ class TestBuildDestPath:
     def test_path_contains_work_title(self, fs: FakeFilesystem) -> None:
         """Path contains a component derived from the work title.
 
-        Args:
-            fs: pyfakefs filesystem fixture.
+        :param fs: pyfakefs filesystem fixture.
         """
         dest_root = Path("/music_lib")
         fs.create_dir(str(dest_root))
@@ -784,8 +757,7 @@ class TestBuildDestPath:
     def test_path_contains_movement_number_prefix(self, fs: FakeFilesystem) -> None:
         """Filename starts with zero-padded movement number.
 
-        Args:
-            fs: pyfakefs filesystem fixture.
+        :param fs: pyfakefs filesystem fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
@@ -801,8 +773,7 @@ class TestBuildDestPath:
     def test_three_digit_prefix_for_large_work(self, fs: FakeFilesystem) -> None:
         """Movement number prefix is 3 digits when total > 99.
 
-        Args:
-            fs: pyfakefs filesystem fixture.
+        :param fs: pyfakefs filesystem fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
@@ -827,8 +798,7 @@ class TestInitMb:
     def test_parses_app_version_contact(self, mocker: MockerFixture) -> None:
         """init_mb calls mb.set_useragent with app, version, contact.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mock_set = mocker.patch("music_annotator.mb.set_useragent")
         music_annotator.init_mb("MyApp/2.0 contact@example.com")
@@ -837,8 +807,7 @@ class TestInitMb:
     def test_parses_no_contact(self, mocker: MockerFixture) -> None:
         """init_mb handles user-agent without contact string.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mock_set = mocker.patch("music_annotator.mb.set_useragent")
         music_annotator.init_mb("MyApp/1.0")
@@ -847,8 +816,7 @@ class TestInitMb:
     def test_parses_no_slash(self, mocker: MockerFixture) -> None:
         """init_mb handles user-agent without any slash.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mock_set = mocker.patch("music_annotator.mb.set_useragent")
         music_annotator.init_mb("MyApp")
@@ -976,11 +944,8 @@ class TestBuildDestPathEdgeCases:
     def _make_tags_no_composer(self, **kwargs: str) -> TrackTags:
         """Build TrackTags with no composer last names and no conductors/ensembles.
 
-        Args:
-            **kwargs: Additional keyword arguments for TrackTags.
-
-        Returns:
-            A TrackTags instance.
+        :param kwargs: Additional keyword arguments for TrackTags.
+        :returns: A TrackTags instance.
         """
         return TrackTags(
             title=kwargs.get("title", "I. Allegro"),
@@ -995,8 +960,7 @@ class TestBuildDestPathEdgeCases:
     def test_rec_title_fallback_when_no_title(self, fs: FakeFilesystem) -> None:
         """build_dest_path uses _rec_title fallback when tags.title is empty.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
@@ -1021,8 +985,7 @@ class TestBuildDestPathEdgeCases:
     def test_no_person_in_artist_credit_uses_unknown_composer(self, fs: FakeFilesystem) -> None:
         """build_dest_path uses 'Unknown Composer' when artist-credit has no Person type.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
@@ -1039,8 +1002,7 @@ class TestBuildDestPathEdgeCases:
     def test_dict_artist_credit_without_person_type(self, fs: FakeFilesystem) -> None:
         """build_dest_path uses 'Unknown Composer' when dict artist lacks 'Person' type.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
@@ -1064,8 +1026,7 @@ class TestBuildDestPathEdgeCases:
     def test_duplicate_composer_lastnames_deduplicated(self, fs: FakeFilesystem) -> None:
         """Duplicate entries in CWP_COMPOSER_LASTNAMES are deduplicated.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
@@ -1093,8 +1054,7 @@ class TestBuildDestPathEdgeCases:
     def test_no_conductors_or_ensembles_uses_fallback_performer(self, fs: FakeFilesystem) -> None:
         """build_dest_path uses CEA_ENSEMBLE_NAMES fallback when conductors/ensembles empty.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
@@ -1121,8 +1081,7 @@ class TestBuildDestPathEdgeCases:
     def test_conductors_present_used_as_performers(self, fs: FakeFilesystem) -> None:
         """build_dest_path uses conductor name as performers when conductor is present.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))

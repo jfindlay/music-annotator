@@ -33,11 +33,8 @@ _MINIMAL_FLAC = _FLAC_MAGIC + _STREAMINFO_BLOCK
 def _make_release(release_id: str = "rel-1") -> MBRelease:
     """Return a minimal but structurally valid MB release model.
 
-    Args:
-        release_id: The MBID to use for this release.
-
-    Returns:
-        An :class:`~music_annotator.models.MBRelease` instance.
+    :param release_id: The MBID to use for this release.
+    :returns: An :class:`~music_annotator.models.MBRelease` instance.
     """
     return MBRelease.model_validate(
         {
@@ -120,12 +117,9 @@ def _make_release(release_id: str = "rel-1") -> MBRelease:
 def _make_recording_detail(rec_id: str, track_title: str) -> MBRecording:
     """Return a minimal recording detail model with a single composer relation.
 
-    Args:
-        rec_id: The recording MBID.
-        track_title: The recording title.
-
-    Returns:
-        An :class:`~music_annotator.models.MBRecording` instance.
+    :param rec_id: The recording MBID.
+    :param track_title: The recording title.
+    :returns: An :class:`~music_annotator.models.MBRecording` instance.
     """
     return MBRecording.model_validate(
         {
@@ -165,8 +159,7 @@ def _make_recording_detail(rec_id: str, track_title: str) -> MBRecording:
 def _make_work_detail() -> MBWork:
     """Return a minimal work model for Fontane di Roma.
 
-    Returns:
-        An :class:`~music_annotator.models.MBWork` instance.
+    :returns: An :class:`~music_annotator.models.MBWork` instance.
     """
     return MBWork.model_validate(
         {
@@ -199,9 +192,8 @@ def _make_work_detail() -> MBWork:
 def _patch_mb(mocker: MockerFixture, release: MBRelease) -> None:
     """Patch all musicbrainzngs calls used by run().
 
-    Args:
-        mocker: pytest-mock fixture.
-        release: The MBRelease model to return from fetch_release.
+    :param mocker: pytest-mock fixture.
+    :param release: The MBRelease model to return from fetch_release.
     """
     mocker.patch("music_annotator.mb.set_useragent")
     mocker.patch("music_annotator.fetch_release", return_value=release)
@@ -229,9 +221,8 @@ class TestRunDryRun:
     def test_dry_run_completes_without_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """run() in dry-run mode logs planned ops without raising.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs filesystem fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
         """
         src_dir = Path("/src/album")
         fs.create_dir(str(src_dir))
@@ -256,9 +247,8 @@ class TestRunDryRun:
     def test_dry_run_no_files_written(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """run() in dry-run mode writes no files to dest_root.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs filesystem fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
         """
         src_dir = Path("/src/album")
         fs.create_dir(str(src_dir))
@@ -295,9 +285,8 @@ class TestRunNoFetchRels:
     def test_no_fetch_rels_dry_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """run() with fetch_rels=False + dry_run=True completes without error.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs filesystem fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
         """
         src_dir = Path("/src/album2")
         fs.create_dir(str(src_dir))
@@ -335,9 +324,8 @@ class TestRunTrackCountMismatch:
     def test_mismatch_does_not_raise(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Track-count mismatch is logged as a warning, not an exception.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs filesystem fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
         """
         src_dir = Path("/src/mismatch")
         fs.create_dir(str(src_dir))

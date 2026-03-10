@@ -24,8 +24,7 @@ class TestConfigureLogging:
     def test_verbose_sets_debug(self, mocker: MockerFixture) -> None:
         """When verbose=True the root log level is DEBUG.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mock_basic = mocker.patch("music_annotator.__main__.logging.basicConfig")
         mocker.patch("music_annotator.__main__.structlog.configure")
@@ -37,8 +36,7 @@ class TestConfigureLogging:
     def test_non_verbose_sets_info(self, mocker: MockerFixture) -> None:
         """When verbose=False the root log level is INFO.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mock_basic = mocker.patch("music_annotator.__main__.logging.basicConfig")
         mocker.patch("music_annotator.__main__.structlog.configure")
@@ -49,8 +47,7 @@ class TestConfigureLogging:
     def test_structlog_configure_called(self, mocker: MockerFixture) -> None:
         """structlog.configure is called exactly once.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.__main__.logging.basicConfig")
         mock_cfg = mocker.patch("music_annotator.__main__.structlog.configure")
@@ -77,8 +74,7 @@ class TestBuildParser:
     def test_parses_minimal_args(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
         """Parser accepts required args and returns correct Namespace.
 
-        Args:
-            fs: pyfakefs fixture (ensures Path exists check is independent of real FS).
+        :param fs: pyfakefs fixture (ensures Path exists check is independent of real FS).
         """
         parser = _build_parser()
         ns = parser.parse_args(["--release-id", "abc-123", "--src-dir", "/src", "--dest-dir", "/dest"])
@@ -142,8 +138,7 @@ class TestMain:
     def _patch_common(self, mocker: MockerFixture) -> None:
         """Patch logging and structlog so tests don't reconfigure the process logger.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.__main__.logging.basicConfig")
         mocker.patch("music_annotator.__main__.structlog.configure")
@@ -152,9 +147,8 @@ class TestMain:
     def test_exits_1_when_src_dir_missing(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
         """main() exits with code 1 when --src-dir does not exist.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         self._patch_common(mocker)
         with patch.object(
@@ -169,9 +163,8 @@ class TestMain:
     def test_exits_0_on_success(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() exits cleanly (no SystemExit) when run succeeds.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         self._patch_common(mocker)
         fs.create_dir("/src")
@@ -196,9 +189,8 @@ class TestMain:
     def test_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() exits with code 1 when run() raises an unexpected exception.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         self._patch_common(mocker)
         fs.create_dir("/src")
@@ -215,9 +207,8 @@ class TestMain:
     def test_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() exits with code 1 on KeyboardInterrupt.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         self._patch_common(mocker)
         fs.create_dir("/src")
@@ -234,9 +225,8 @@ class TestMain:
     def test_no_fetch_rels_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """--no-fetch-rels is translated to fetch_rels=False in run().
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         self._patch_common(mocker)
         fs.create_dir("/src")
@@ -262,9 +252,8 @@ class TestMain:
     def test_verbose_passed_to_configure_logging(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """--verbose causes _configure_logging to be called with verbose=True.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         mock_cfg = mocker.patch("music_annotator.__main__._configure_logging")
         mocker.patch("music_annotator.__main__.structlog.get_logger")

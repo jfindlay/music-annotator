@@ -408,10 +408,9 @@ class TestMBRelease:
 def test_artist_entry_roundtrip(name: str, sort: str, mbid: str) -> None:
     """ArtistEntry round-trips through model_dump correctly.
 
-    Args:
-        name: Artist display name.
-        sort: Artist sort name.
-        mbid: Artist MBID.
+    :param name: Artist display name.
+    :param sort: Artist sort name.
+    :param mbid: Artist MBID.
     """
     e = ArtistEntry(name=name, sort=sort, mbid=mbid)
     d = e.model_dump()

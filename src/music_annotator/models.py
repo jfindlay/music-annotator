@@ -1,8 +1,7 @@
 """Pydantic data models for MusicBrainz API responses and Classical Extras tag fields.
 
-These models validate and structure the raw dict data returned by ``musicbrainzngs``
-before it is consumed by the annotation logic.  All fields that the MB API may omit
-default to empty strings or empty lists so callers never need to guard against
+These models validate and structure the raw dict data returned by ``musicbrainzngs`` before it is consumed by the annotation
+logic.  All fields that the MB API may omit default to empty strings or empty lists so callers never need to guard against
 ``KeyError``.
 """
 
@@ -24,7 +23,10 @@ type JSON = dict[str, JSON] | list[JSON] | str | float | int | bool | None  # py
 
 
 class MBArtist(BaseModel):
-    """A single artist entity as returned inside an artist-credit or relation."""
+    """A single artist entity as returned inside an artist-credit or relation.
+
+    Important attributes: ``id`` (MBID), ``name`` (display name), ``sort_name`` (sortable form), ``type`` (e.g. ``"Person"``).
+    """
 
     id: str = ""
     name: str = ""
@@ -35,7 +37,13 @@ class MBArtist(BaseModel):
 
 
 class MBArtistCredit(BaseModel):
-    """One item in an ``artist-credit`` list (either a join phrase string or an artist dict)."""
+    """One item in an ``artist-credit`` list — either a structured artist entry or a plain join-phrase string.
+
+    The MB API returns ``artist-credit`` as a mixed list; bare strings are join phrases (e.g. ``" & "``).
+
+    Important attributes: ``name`` (credited name), ``artist`` (:class:`MBArtist`), ``joinphrase`` (text appended after this
+    credit, e.g. ``", "``).
+    """
 
     name: str = ""
     artist: MBArtist = Field(default_factory=MBArtist)
@@ -44,8 +52,26 @@ class MBArtistCredit(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class MBAttribute(BaseModel):
+    """A structured attribute on a work, such as a key signature or composition date.
+
+    Important attributes: ``type`` (attribute category, e.g. ``"Key"``), ``value`` (attribute value, e.g. ``"G minor"``).
+
+    .. note::
+        This class must be defined before :class:`MBArtistRelation` and :class:`MBWork` because both reference it in their
+        ``attribute_list`` field type.
+    """
+
+    type: str = ""
+    value: str = ""
+
+
 class MBArtistRelation(BaseModel):
-    """An entry in an ``artist-relation-list``."""
+    """An entry in an ``artist-relation-list`` on a recording or work.
+
+    Important attributes: ``type`` (relation type, e.g. ``"composer"``), ``direction``, ``artist`` (:class:`MBArtist`),
+    ``attribute_list`` (list of :class:`MBAttribute` or plain strings from the MB API).
+    """
 
     type: str = ""
     direction: str = ""
@@ -56,7 +82,10 @@ class MBArtistRelation(BaseModel):
 
 
 class MBWorkStub(BaseModel):
-    """Minimal work reference embedded in a ``work-relation-list`` entry."""
+    """Minimal work reference embedded in a ``work-relation-list`` entry.
+
+    Important attributes: ``id`` (work MBID), ``title`` (work title).
+    """
 
     id: str = ""
     title: str = ""
@@ -65,7 +94,11 @@ class MBWorkStub(BaseModel):
 
 
 class MBWorkRelation(BaseModel):
-    """An entry in a ``work-relation-list``."""
+    """An entry in a ``work-relation-list`` on a recording or work.
+
+    Important attributes: ``type`` (relation type, e.g. ``"parts"`` or ``"performance"``), ``direction``
+    (``"forward"``/``"backward"``), ``work`` (:class:`MBWorkStub`).
+    """
 
     type: str = ""
     direction: str = ""
@@ -77,21 +110,20 @@ class MBWorkRelation(BaseModel):
 
 
 class MBTag(BaseModel):
-    """A folksonomy tag attached to a MB entity."""
+    """A folksonomy tag attached to a MB entity.
+
+    Important attributes: ``name`` (tag text), ``count`` (vote count).
+    """
 
     name: str = ""
     count: int = 0
 
 
-class MBAttribute(BaseModel):
-    """A structured attribute on a work (key, composed date, …)."""
-
-    type: str = ""
-    value: str = ""
-
-
 class MBLifeSpan(BaseModel):
-    """A begin/end life-span on a work or artist."""
+    """A begin/end life-span on a work or artist.
+
+    Important attributes: ``begin`` (ISO date string), ``end`` (ISO date string), ``ended`` (boolean).
+    """
 
     begin: str = ""
     end: str = ""
@@ -101,7 +133,11 @@ class MBLifeSpan(BaseModel):
 
 
 class MBWork(BaseModel):
-    """A MusicBrainz work entity with all fields used by the annotator."""
+    """A MusicBrainz work entity with all fields used by the annotator.
+
+    Important attributes: ``id`` (MBID), ``title``, ``type`` (e.g. ``"Symphony"``), ``language``, ``key``,
+    ``artist_relation_list``, ``work_relation_list``, ``tag_list``, ``attribute_list``, ``life_span``.
+    """
 
     id: str = ""
     title: str = ""
@@ -119,14 +155,13 @@ class MBWork(BaseModel):
     @field_validator("attribute_list", mode="before")
     @classmethod
     def coerce_attributes(cls, v: JSON) -> list[JSON]:
-        """Accept both plain string attributes and dict attributes from the MB API.
+        """Normalise the ``attribute-list`` field from the MB API response.
 
-        Args:
-            v: Raw value from the MB API response for ``attribute-list``.
+        The MB API may return ``None``, a non-list scalar, or a proper list.  Dicts within the list are coerced to
+        :class:`MBAttribute` by Pydantic's union validation; plain strings are kept as-is.
 
-        Returns:
-            The validated list; dicts are coerced to ``MBAttribute`` by Pydantic,
-            strings are kept as-is, and ``None`` is normalised to ``[]``.
+        :param v: Raw value from the MB API response for ``attribute-list``.
+        :returns: The validated list, or ``[]`` when ``v`` is ``None`` or not a list.
         """
         if isinstance(v, list):
             return v
@@ -134,7 +169,10 @@ class MBWork(BaseModel):
 
 
 class MBLabel(BaseModel):
-    """Minimal label entity used inside label-info-list."""
+    """Minimal label entity used inside ``label-info-list``.
+
+    Important attributes: ``id`` (label MBID), ``name`` (label display name).
+    """
 
     id: str = ""
     name: str = ""
@@ -143,7 +181,10 @@ class MBLabel(BaseModel):
 
 
 class MBLabelInfo(BaseModel):
-    """One entry in a release's ``label-info-list``."""
+    """One entry in a release's ``label-info-list``.
+
+    Important attributes: ``label`` (:class:`MBLabel`), ``catalog_number``.
+    """
 
     label: MBLabel = Field(default_factory=MBLabel)
     catalog_number: str = Field(default="", alias="catalog-number")
@@ -152,7 +193,10 @@ class MBLabelInfo(BaseModel):
 
 
 class MBReleaseGroup(BaseModel):
-    """Release-group summary embedded in a release response."""
+    """Release-group summary embedded in a release response.
+
+    Important attributes: ``id`` (release-group MBID), ``primary_type`` (e.g. ``"Album"``), ``first_release_date``.
+    """
 
     id: str = ""
     primary_type: str = Field(default="", alias="primary-type")
@@ -162,7 +206,10 @@ class MBReleaseGroup(BaseModel):
 
 
 class MBTextRepresentation(BaseModel):
-    """Script and language metadata on a release."""
+    """Script and language metadata on a release.
+
+    Important attributes: ``script`` (e.g. ``"Latn"``), ``language`` (ISO 639-3, e.g. ``"deu"``).
+    """
 
     script: str = ""
     language: str = ""
@@ -171,7 +218,10 @@ class MBTextRepresentation(BaseModel):
 
 
 class MBRecordingStub(BaseModel):
-    """Minimal recording reference embedded in a track entry."""
+    """Minimal recording reference embedded in a track entry within a release.
+
+    Important attributes: ``id`` (recording MBID), ``title``, ``artist_credit``.
+    """
 
     id: str = ""
     title: str = ""
@@ -181,7 +231,10 @@ class MBRecordingStub(BaseModel):
 
 
 class MBTrack(BaseModel):
-    """One track entry within a medium's ``track-list``."""
+    """One track entry within a medium's ``track-list``.
+
+    Important attributes: ``id`` (track MBID), ``position`` (1-based integer), ``recording`` (:class:`MBRecordingStub`).
+    """
 
     id: str = ""
     position: int = 0
@@ -191,7 +244,10 @@ class MBTrack(BaseModel):
 
 
 class MBMedium(BaseModel):
-    """One disc (medium) in a release."""
+    """One disc (medium) in a release.
+
+    Important attributes: ``position`` (1-based disc number), ``format`` (e.g. ``"CD"``), ``track_list``.
+    """
 
     position: int = 1
     format: str = ""
@@ -201,7 +257,11 @@ class MBMedium(BaseModel):
 
 
 class MBRelease(BaseModel):
-    """Top-level release entity as returned by ``musicbrainzngs.get_release_by_id``."""
+    """Top-level release entity as returned by ``musicbrainzngs.get_release_by_id``.
+
+    Important attributes: ``id`` (release MBID), ``title``, ``date``, ``status``, ``barcode``, ``artist_credit``,
+    ``release_group``, ``label_info_list``, ``medium_list``, ``text_representation``.
+    """
 
     id: str = ""
     title: str = ""
@@ -218,7 +278,11 @@ class MBRelease(BaseModel):
 
 
 class MBRecording(BaseModel):
-    """Recording entity with artist and work relations."""
+    """Recording entity with artist and work relationships, as returned by ``musicbrainzngs.get_recording_by_id``.
+
+    Important attributes: ``id`` (recording MBID), ``title``, ``artist_credit``, ``artist_relation_list``,
+    ``work_relation_list``.
+    """
 
     id: str = ""
     title: str = ""
@@ -235,7 +299,12 @@ class MBRecording(BaseModel):
 
 
 class ArtistEntry(BaseModel):
-    """A resolved artist with name, sort-name, and MBID, used in CE role buckets."""
+    """A resolved artist with display name, sort name, MBID, and optional instrument label.
+
+    Used as the element type in all :class:`RoleBuckets` and :class:`CeaPerformers` lists.
+
+    Important attributes: ``name``, ``sort``, ``mbid``, ``instrument`` (empty string when the artist has no instrument role).
+    """
 
     name: str
     sort: str
@@ -244,11 +313,13 @@ class ArtistEntry(BaseModel):
 
 
 class RoleBuckets(BaseModel):
-    """Collected artist roles extracted from a work's artist-relation-list.
+    """Collected artist roles extracted from a work's ``artist-relation-list``.
 
-    Each list holds deduplicated ``ArtistEntry`` objects for that role.
-    Deduplication is by MBID so the same person credited at multiple levels
-    of a work hierarchy appears only once.
+    Each list holds deduplicated :class:`ArtistEntry` objects for that role.  Deduplication is by MBID so the same person
+    credited at multiple levels of a work hierarchy (movement → symphonic poem → collection) appears only once.
+
+    Important attributes: ``composers``, ``lyricists``, ``librettists``, ``translators``, ``arrangers``, ``orchestrators``,
+    ``reconstructors``, ``revisors``.
     """
 
     composers: list[ArtistEntry] = Field(default_factory=list)
@@ -263,29 +334,20 @@ class RoleBuckets(BaseModel):
     def seen_ids(self, role: str) -> set[str]:
         """Return the set of MBIDs already present in the named role list.
 
-        Args:
-            role: The role name (must be a field name on this model, e.g.
-                  ``"composers"``).
-
-        Returns:
-            A set of non-empty MBID strings for all entries in the role list.
-
-        Raises:
-            AttributeError: If ``role`` does not name a field on this model.
+        :param role: The role name, which must be a field name on this model (e.g. ``"composers"``).
+        :returns: A set of non-empty MBID strings for all entries currently in the role list.
+        :raises AttributeError: If ``role`` does not name a field on this model.
         """
         return {e.mbid for e in getattr(self, role) if e.mbid}
 
     def add_unique(self, role: str, entry: ArtistEntry) -> None:
         """Append ``entry`` to the named role list only if its MBID is not yet present.
 
-        If ``entry.mbid`` is empty the entry is always appended (no dedup possible).
+        If ``entry.mbid`` is empty the entry is always appended because deduplication by MBID is not possible.
 
-        Args:
-            role: The role name (must be a field name on this model).
-            entry: The ``ArtistEntry`` to potentially add.
-
-        Raises:
-            AttributeError: If ``role`` does not name a field on this model.
+        :param role: The role name, which must be a field name on this model.
+        :param entry: The :class:`ArtistEntry` to potentially append.
+        :raises AttributeError: If ``role`` does not name a field on this model.
         """
         bucket: list[ArtistEntry] = getattr(self, role)
         if entry.mbid and entry.mbid in self.seen_ids(role):
@@ -294,7 +356,11 @@ class RoleBuckets(BaseModel):
 
 
 class CeaPerformers(BaseModel):
-    """CE ``_cea_*`` performer classifications extracted from recording artist-rels."""
+    """CE ``_cea_*`` performer classifications extracted from recording-level artist relations.
+
+    Important attributes: ``conductors``, ``chorusmasters``, ``leaders``, ``arrangers``, ``orchestrators``, ``composers``,
+    ``producers``, ``engineers``, ``ensembles``, ``vocalists``, ``instrumentalists``, ``other_soloists``.
+    """
 
     conductors: list[ArtistEntry] = Field(default_factory=list)
     chorusmasters: list[ArtistEntry] = Field(default_factory=list)
@@ -313,14 +379,16 @@ class CeaPerformers(BaseModel):
     def all_soloists(self) -> list[ArtistEntry]:
         """Return all non-ensemble, non-conductor performing artists.
 
-        Returns:
-            Concatenated list of vocalists, instrumentalists, and other soloists.
+        :returns: Concatenated list of ``vocalists``, ``instrumentalists``, and ``other_soloists``.
         """
         return self.vocalists + self.instrumentalists + self.other_soloists
 
 
 class WorkDates(BaseModel):
-    """Composed, published, and premiered dates extracted from work attributes."""
+    """Composed, published, and premiered dates extracted from work attributes.
+
+    Important attributes: ``composed``, ``published``, ``premiered`` — all strings, defaulting to ``""``.
+    """
 
     composed: str = ""
     published: str = ""
@@ -330,8 +398,11 @@ class WorkDates(BaseModel):
 class WorkHierarchyLevel(BaseModel):
     """One level in a Classical Extras work hierarchy.
 
-    Level 0 is the recording's direct (bottom) work; higher indices are
-    parent works toward the root.
+    Level 0 is the recording's direct (bottom) work; higher indices are parent works toward the root.  These map to the
+    ``cwp_work_0`` … ``cwp_work_N`` tag convention.
+
+    Important attributes: ``index``, ``work_id``, ``work_title``, ``part_title`` (stripped movement/part name for
+    ``cwp_part_N``).
     """
 
     index: int
@@ -343,8 +414,11 @@ class WorkHierarchyLevel(BaseModel):
 class CwpTags(BaseModel):
     """All Classical Extras ``_cwp_*`` tag values for one track.
 
-    This model is constructed after the full work hierarchy is resolved
-    and movement numbers are computed across the release.
+    This model is constructed after the full work hierarchy is resolved and movement numbers are computed across the release.
+
+    Important attributes: ``work_top``, ``workid_top``, ``part_levels``, ``part``, ``work``, ``groupheading``,
+    ``inter_work``, ``movt_num``, ``movt_tot``, ``single_work_album``, ``levels`` (per-level :class:`WorkHierarchyLevel`
+    list), plus all artist role and date string fields.
     """
 
     work_top: str = ""
@@ -392,10 +466,12 @@ class CwpTags(BaseModel):
 class TrackTags(BaseModel):
     """The complete flat tag mapping written to one audio file.
 
-    Keys whose names start with ``_`` are internal and not written to disk.
-    All values are strings; the ``cover_data`` and ``cover_mime`` fields are
-    kept separate so callers can pass them to the tagging functions without
-    stuffing raw bytes into the string dict.
+    All values are strings.  Fields whose names appear in the ``excluded`` set inside :meth:`to_file_dict` are internal
+    helpers and are not written to disk.  Per-level ``cwp_work_N`` / ``cwp_workid_N`` / ``cwp_part_N`` tags are stored as
+    Pydantic ``extra`` fields via ``model_config = {"extra": "allow"}``.
+
+    Important attributes: all standard Picard tag fields, MusicBrainz ID fields, ``_cea_*`` fields, ``_cwp_*`` fields,
+    and the internal ``cea_conductors_list`` / ``cea_ensembles_list`` lists used for path building.
     """
 
     # Internal (not written to file)
@@ -536,15 +612,14 @@ class TrackTags(BaseModel):
     model_config = {"extra": "allow"}
 
     def to_file_dict(self) -> dict[str, str]:
-        """Return a ``{tag_name: value}`` dict suitable for writing to an audio file.
+        """Return a ``{tag_name: value}`` mapping suitable for writing to an audio file.
 
-        Internal fields (``cea_conductors_list``, ``cea_ensembles_list``) are
-        excluded.  Empty values are excluded.  All keys are uppercased to match
-        Vorbis / ID3 conventions.
+        Internal fields (``cea_conductors_list``, ``cea_ensembles_list``) are excluded.  Empty values are excluded.  All
+        keys are uppercased to match Vorbis Comment / ID3 conventions.  Dynamically-added per-level
+        ``cwp_work_N`` / ``cwp_workid_N`` / ``cwp_part_N`` extra fields are included.
 
-        Returns:
-            A flat ``dict[str, str]`` of non-empty tag key/value pairs with
-            uppercase keys, excluding internal list fields.
+        :returns: A flat ``dict[str, str]`` of non-empty tag key/value pairs with uppercase keys, excluding internal list
+            fields.
         """
         excluded = {"cea_conductors_list", "cea_ensembles_list"}
         out: dict[str, str] = {}
@@ -559,17 +634,19 @@ class TrackTags(BaseModel):
 
 
 class CoverArt(BaseModel):
-    """Cover art image bytes and inferred MIME type."""
+    """Cover art image bytes and inferred MIME type.
+
+    Important attributes: ``data`` (raw image bytes, ``b""`` when unavailable), ``mime`` (MIME type string).
+    """
 
     data: bytes = b""
     mime: str = ""
 
     @property
     def available(self) -> bool:
-        """Return True if image data is present.
+        """Return ``True`` if image data is present.
 
-        Returns:
-            ``True`` when ``data`` is non-empty.
+        :returns: ``True`` when ``data`` is non-empty.
         """
         return len(self.data) > 0
 

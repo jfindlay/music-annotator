@@ -30,11 +30,8 @@ from music_annotator.models import (
 def _rel(d: dict[str, JSON]) -> MBRelease:
     """Validate a raw release dict into an MBRelease model.
 
-    Args:
-        d: Raw dict matching the musicbrainzngs release response shape.
-
-    Returns:
-        An :class:`~music_annotator.models.MBRelease` instance.
+    :param d: Raw dict matching the musicbrainzngs release response shape.
+    :returns: An :class:`~music_annotator.models.MBRelease` instance.
     """
     return MBRelease.model_validate(d)
 
@@ -42,11 +39,8 @@ def _rel(d: dict[str, JSON]) -> MBRelease:
 def _rec(d: dict[str, JSON]) -> MBRecording:
     """Validate a raw recording dict into an MBRecording model.
 
-    Args:
-        d: Raw dict matching the musicbrainzngs recording response shape.
-
-    Returns:
-        An :class:`~music_annotator.models.MBRecording` instance.
+    :param d: Raw dict matching the musicbrainzngs recording response shape.
+    :returns: An :class:`~music_annotator.models.MBRecording` instance.
     """
     return MBRecording.model_validate(d)
 
@@ -54,11 +48,8 @@ def _rec(d: dict[str, JSON]) -> MBRecording:
 def _trk(d: dict[str, JSON]) -> MBTrack:
     """Validate a raw track dict into an MBTrack model.
 
-    Args:
-        d: Raw dict matching the musicbrainzngs track response shape.
-
-    Returns:
-        An :class:`~music_annotator.models.MBTrack` instance.
+    :param d: Raw dict matching the musicbrainzngs track response shape.
+    :returns: An :class:`~music_annotator.models.MBTrack` instance.
     """
     return MBTrack.model_validate(d)
 
@@ -66,11 +57,8 @@ def _trk(d: dict[str, JSON]) -> MBTrack:
 def _w(d: dict[str, JSON]) -> MBWork:
     """Validate a raw work dict into an MBWork model.
 
-    Args:
-        d: Raw dict matching the musicbrainzngs work response shape.
-
-    Returns:
-        An :class:`~music_annotator.models.MBWork` instance.
+    :param d: Raw dict matching the musicbrainzngs work response shape.
+    :returns: An :class:`~music_annotator.models.MBWork` instance.
     """
     return MBWork.model_validate(d)
 
@@ -106,11 +94,8 @@ _MINIMAL_MP3 = _ID3_HEADER + b"\xff\xfb\x90\x00" + b"\x00" * 413  # one MP3 fram
 def _make_release(n_tracks: int = 1) -> MBRelease:
     """Build a minimal release model.
 
-    Args:
-        n_tracks: Number of tracks to include on medium 1.
-
-    Returns:
-        An :class:`~music_annotator.models.MBRelease` instance.
+    :param n_tracks: Number of tracks to include on medium 1.
+    :returns: An :class:`~music_annotator.models.MBRelease` instance.
     """
     tracks: list[JSON] = []
     for i in range(1, n_tracks + 1):
@@ -149,11 +134,8 @@ def _make_release(n_tracks: int = 1) -> MBRelease:
 def _make_rec_detail(rec_id: str = "rec-1") -> MBRecording:
     """Build a minimal recording detail model.
 
-    Args:
-        rec_id: Recording MBID.
-
-    Returns:
-        An :class:`~music_annotator.models.MBRecording` instance.
+    :param rec_id: Recording MBID.
+    :returns: An :class:`~music_annotator.models.MBRecording` instance.
     """
     return MBRecording.model_validate(
         {
@@ -183,13 +165,10 @@ class TestBuildCeaPerformers:
     def _recording(self, rtype: str, name: str = "Artist X", attrs: list[JSON] | None = None) -> MBRecording:
         """Build a minimal MBRecording with one artist relation.
 
-        Args:
-            rtype: Relation type string.
-            name: Artist display name.
-            attrs: attribute-list entries.
-
-        Returns:
-            An :class:`~music_annotator.models.MBRecording` instance.
+        :param rtype: Relation type string.
+        :param name: Artist display name.
+        :param attrs: attribute-list entries.
+        :returns: An :class:`~music_annotator.models.MBRecording` instance.
         """
         return _rec(
             {
@@ -318,13 +297,10 @@ class TestBuildTrackTags:
     def _track(self, pos: int = 1, rec_id: str = "rec-1", title: str = "Track 1") -> MBTrack:
         """Build a minimal MBTrack model.
 
-        Args:
-            pos: Track position (int).
-            rec_id: Recording MBID.
-            title: Recording title.
-
-        Returns:
-            An :class:`~music_annotator.models.MBTrack` instance.
+        :param pos: Track position (int).
+        :param rec_id: Recording MBID.
+        :param title: Recording title.
+        :returns: An :class:`~music_annotator.models.MBTrack` instance.
         """
         return _trk(
             {
@@ -694,8 +670,7 @@ class TestFindSourceFiles:
     def test_returns_flac_files(self, fs: FakeFilesystem) -> None:
         """Returns .flac files sorted by name.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         fs.create_dir(str(src))
@@ -707,8 +682,7 @@ class TestFindSourceFiles:
     def test_returns_mp3_files(self, fs: FakeFilesystem) -> None:
         """Returns .mp3 files.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         fs.create_dir(str(src))
@@ -719,8 +693,7 @@ class TestFindSourceFiles:
     def test_excludes_non_audio(self, fs: FakeFilesystem) -> None:
         """Non-audio files (e.g. .txt) are excluded.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         fs.create_dir(str(src))
@@ -734,8 +707,7 @@ class TestFindSourceFiles:
     def test_empty_dir_returns_empty_list(self, fs: FakeFilesystem) -> None:
         """Empty directory returns empty list.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src_empty")
         fs.create_dir(str(src))
@@ -744,8 +716,7 @@ class TestFindSourceFiles:
     def test_mixed_extensions(self, fs: FakeFilesystem) -> None:
         """Handles mix of .flac, .mp3, .ogg, .m4a, .wav.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         fs.create_dir(str(src))
@@ -766,8 +737,7 @@ class TestApplyTagsFlac:
     def test_writes_tags_to_flac(self, fs: FakeFilesystem) -> None:
         """Tags are written to a FLAC file without raising.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.flac")
         fs.create_dir("/out")
@@ -778,8 +748,7 @@ class TestApplyTagsFlac:
     def test_writes_cover_art_to_flac(self, fs: FakeFilesystem) -> None:
         """Cover art is embedded without raising when cover.available is True.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.flac")
         fs.create_dir("/out")
@@ -791,8 +760,7 @@ class TestApplyTagsFlac:
     def test_no_cover_no_error(self, fs: FakeFilesystem) -> None:
         """apply_tags_flac succeeds when no cover is passed.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.flac")
         fs.create_dir("/out")
@@ -803,8 +771,7 @@ class TestApplyTagsFlac:
     def test_empty_cover_not_embedded(self, fs: FakeFilesystem) -> None:
         """Empty CoverArt (available=False) is not embedded.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.flac")
         fs.create_dir("/out")
@@ -825,8 +792,7 @@ class TestApplyTagsMp3:
     def test_writes_basic_tags(self, fs: FakeFilesystem) -> None:
         """Writes standard ID3 frames without raising.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.mp3")
         fs.create_dir("/out")
@@ -850,8 +816,7 @@ class TestApplyTagsMp3:
     def test_writes_cover_art_to_mp3(self, fs: FakeFilesystem) -> None:
         """Cover art APIC frame is written without raising.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.mp3")
         fs.create_dir("/out")
@@ -863,8 +828,7 @@ class TestApplyTagsMp3:
     def test_no_cover_no_error(self, fs: FakeFilesystem) -> None:
         """apply_tags_mp3 succeeds when no cover is passed.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.mp3")
         fs.create_dir("/out")
@@ -874,8 +838,7 @@ class TestApplyTagsMp3:
     def test_tracknumber_with_total(self, fs: FakeFilesystem) -> None:
         """TRCK frame is formatted as 'N/Total' when totaltracks is set.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.mp3")
         fs.create_dir("/out")
@@ -886,8 +849,7 @@ class TestApplyTagsMp3:
     def test_tracknumber_without_total(self, fs: FakeFilesystem) -> None:
         """TRCK frame is just 'N' when totaltracks is empty.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.mp3")
         fs.create_dir("/out")
@@ -907,9 +869,8 @@ class TestRunFullPipeline:
     def _patch_mb(self, mocker: MockerFixture, release: MBRelease) -> None:
         """Patch all MB API calls.
 
-        Args:
-            mocker: pytest-mock fixture.
-            release: MBRelease model to return from fetch_release.
+        :param mocker: pytest-mock fixture.
+        :param release: MBRelease model to return from fetch_release.
         """
         mocker.patch("music_annotator.mb.set_useragent")
         mocker.patch("music_annotator.fetch_release", return_value=release)
@@ -932,9 +893,8 @@ class TestRunFullPipeline:
     def test_files_copied_to_dest(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """FLAC files are copied to dest_root in non-dry-run mode.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         dest = Path("/dest")
@@ -960,9 +920,8 @@ class TestRunFullPipeline:
     def test_movement_numbers_assigned(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Movement numbers are assigned after all tracks are processed.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         dest = Path("/dest")
@@ -988,9 +947,8 @@ class TestRunFullPipeline:
     def test_tag_error_logged_not_raised(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """A tagging error is logged but does not abort the run.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         dest = Path("/dest")
@@ -1015,9 +973,8 @@ class TestRunFullPipeline:
     def test_unsupported_ext_logged_not_raised(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Unsupported audio extension is logged but does not abort the run.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         dest = Path("/dest")
@@ -1040,9 +997,8 @@ class TestRunFullPipeline:
     def test_cover_art_fetched_in_non_dry_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """fetch_cover_art is called in non-dry-run mode.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         dest = Path("/dest")
@@ -1068,9 +1024,8 @@ class TestRunFullPipeline:
     def test_cover_available_logged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """When cover art is available, a log message is emitted (no exception).
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         dest = Path("/dest")
@@ -1099,9 +1054,8 @@ class TestRunFullPipeline:
     def test_no_fetch_rels_builds_minimal_tags(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """fetch_rels=False builds minimal tags without calling fetch_recording_detail.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         dest = Path("/dest")
@@ -1128,9 +1082,8 @@ class TestRunFullPipeline:
     def test_mp3_tagged_in_non_dry_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """MP3 files are tagged with apply_tags_mp3 in non-dry-run mode.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         dest = Path("/dest")
@@ -1195,8 +1148,7 @@ class TestApplyTagsMp3EdgeCases:
     def test_no_title_no_error(self, fs: FakeFilesystem) -> None:
         """apply_tags_mp3 succeeds when TrackTags has no title set.
 
-        Args:
-            fs: pyfakefs fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.mp3")
         fs.create_dir("/out")
@@ -1207,9 +1159,8 @@ class TestApplyTagsMp3EdgeCases:
     def test_existing_id3_tags_deleted(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """apply_tags_mp3 deletes existing ID3 tags before writing new ones.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.mp3")
         fs.create_dir("/out")
@@ -1227,9 +1178,8 @@ class TestApplyTagsMp3EdgeCases:
     def test_audio_tags_none_skips_delete(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """apply_tags_mp3 skips tag deletion when audio.tags is None (covers 1374->1379).
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         dest = Path("/out/track.mp3")
         fs.create_dir("/out")
@@ -1385,9 +1335,8 @@ class TestRunWithWorkHierarchy:
     def test_work_hierarchy_fetched_when_performance_rel(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """fetch_work_detail is called when recording has a performance work relation.
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         dest = Path("/dest")
@@ -1441,9 +1390,8 @@ class TestRunWithWorkHierarchy:
     def test_non_performance_work_rel_skipped(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Non-performance work relation is skipped (covers 1590->1589 branch).
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         dest = Path("/dest")
@@ -1485,9 +1433,8 @@ class TestRunWithWorkHierarchy:
     def test_performance_rel_with_empty_work_id_skips_fetch(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Performance relation with empty work id skips fetch_work_detail (covers 1592->1596).
 
-        Args:
-            mocker: pytest-mock fixture.
-            fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
         src = Path("/src")
         dest = Path("/dest")

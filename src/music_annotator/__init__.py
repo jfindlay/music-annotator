@@ -1,4 +1,4 @@
-"""music_annotator — Copy and tag a classical music album using MusicBrainz metadata.
+"""music-annotator — Copy and tag a classical music album using MusicBrainz metadata.
 
 Implements the Classical Extras Picard plugin conventions
 (github.com/metabrainz/picard-plugins/tree/2.0/plugins/classical_extras).
@@ -73,7 +73,7 @@ import musicbrainzngs as mb
 import structlog
 from mutagen.flac import FLAC
 from mutagen.flac import Picture as FLACPicture
-from mutagen.id3 import (
+from mutagen.id3 import (  # type: ignore[attr-defined]
     APIC,
     ID3,
     TALB,
@@ -261,10 +261,10 @@ _T = TypeVar("_T")
 def init_mb(user_agent: str) -> None:
     """Configure the musicbrainzngs user-agent from a ``"App/Version contact"`` string.
 
-    Args:
-        user_agent: A user-agent string of the form ``"AppName/1.0 contact@example.com"``.
-            The part before the first ``/`` is the application name; the first token
-            after it is the version; the remainder is the contact string.
+    Splits the string on the first ``/`` to extract the application name, then splits the remainder on the first whitespace to
+    separate version from contact.  The extracted values are passed directly to ``mb.set_useragent``.
+
+    :param user_agent: A user-agent string of the form ``"AppName/1.0 contact@example.com"``.
     """
     parts = user_agent.split("/", 1)
     app = parts[0].strip()
@@ -276,21 +276,15 @@ def init_mb(user_agent: str) -> None:
 
 
 def _mb_retry(fn: Callable[_P, _T]) -> Callable[_P, _T]:
-    """Decorator: exponential-backoff retry on MB rate-limit errors.
+    """Decorator that wraps a callable with exponential-backoff retry on MB rate-limit errors.
 
-    Wraps any callable that may raise :class:`musicbrainzngs.ResponseError`
-    with a six-attempt retry loop, sleeping ``2 ** attempt`` seconds between
-    retries on 429, 503, or 500 responses.
+    Attempts the call up to six times, sleeping ``2 ** attempt`` seconds between retries when the response error contains
+    ``"429"``, ``"503"``, or ``"500"``.  Any other :class:`~musicbrainzngs.ResponseError` is re-raised immediately.
 
-    Args:
-        fn: The callable to wrap.
-
-    Returns:
-        A wrapped version of ``fn`` with the same signature.
-
-    Raises:
-        mb.ResponseError: If the error is not a rate-limit / server error.
-        RuntimeError: If all six retry attempts are exhausted.
+    :param fn: The callable to wrap.
+    :returns: A wrapped version of ``fn`` with the same signature.
+    :raises mb.ResponseError: If the error is not a rate-limit or server error.
+    :raises RuntimeError: If all six retry attempts are exhausted.
     """
 
     @functools.wraps(fn)
@@ -313,13 +307,13 @@ def _mb_retry(fn: Callable[_P, _T]) -> Callable[_P, _T]:
 
 @_mb_retry
 def _get_release_by_id(release_id: str) -> dict[str, JSON]:
-    """Thin typed wrapper around ``mb.get_release_by_id`` for ``@_mb_retry``.
+    """Thin typed wrapper around ``mb.get_release_by_id`` decorated with ``@_mb_retry``.
 
-    Args:
-        release_id: The MusicBrainz release MBID.
+    Requests all includes needed for full annotation: artists, recordings, release groups, labels, media, artist credits,
+    work relations, and recording-level relations.
 
-    Returns:
-        The raw response dict from ``musicbrainzngs``.
+    :param release_id: The MusicBrainz release MBID.
+    :returns: The raw response dict from ``musicbrainzngs``.
     """
     result: dict[str, JSON] = mb.get_release_by_id(
         release_id,
@@ -340,16 +334,13 @@ def _get_release_by_id(release_id: str) -> dict[str, JSON]:
 def fetch_release(release_id: str) -> MBRelease:
     """Fetch a full MusicBrainz release with all includes needed for annotation.
 
-    Args:
-        release_id: The MusicBrainz release MBID (UUID string).
+    Calls :func:`_get_release_by_id` (which is retried on rate-limit errors), waits one second as a polite delay, then
+    validates the ``"release"`` key of the response into an :class:`~music_annotator.models.MBRelease` model.
 
-    Returns:
-        An :class:`~music_annotator.models.MBRelease` instance populated from
-        the ``musicbrainzngs`` response.
-
-    Raises:
-        mb.ResponseError: On a non-retryable API error.
-        RuntimeError: If all retry attempts are exhausted.
+    :param release_id: The MusicBrainz release MBID (UUID string).
+    :returns: An :class:`~music_annotator.models.MBRelease` instance populated from the ``musicbrainzngs`` response.
+    :raises mb.ResponseError: On a non-retryable API error.
+    :raises RuntimeError: If all retry attempts are exhausted.
     """
     log.info("fetch_release", release_id=release_id)
     result = _get_release_by_id(release_id)
@@ -359,13 +350,12 @@ def fetch_release(release_id: str) -> MBRelease:
 
 @_mb_retry
 def _get_recording_by_id(recording_id: str) -> dict[str, JSON]:
-    """Thin typed wrapper around ``mb.get_recording_by_id`` for ``@_mb_retry``.
+    """Thin typed wrapper around ``mb.get_recording_by_id`` decorated with ``@_mb_retry``.
 
-    Args:
-        recording_id: The MusicBrainz recording MBID.
+    Requests artist credits, work relations, and artist relations.
 
-    Returns:
-        The raw response dict from ``musicbrainzngs``.
+    :param recording_id: The MusicBrainz recording MBID.
+    :returns: The raw response dict from ``musicbrainzngs``.
     """
     result: dict[str, JSON] = mb.get_recording_by_id(
         recording_id,
@@ -377,16 +367,13 @@ def _get_recording_by_id(recording_id: str) -> dict[str, JSON]:
 def fetch_recording_detail(recording_id: str) -> MBRecording:
     """Fetch a recording with its artist and work relationships.
 
-    Args:
-        recording_id: The MusicBrainz recording MBID.
+    Calls :func:`_get_recording_by_id` (retried on rate-limit errors), waits one second, then validates the
+    ``"recording"`` key into an :class:`~music_annotator.models.MBRecording` model.
 
-    Returns:
-        An :class:`~music_annotator.models.MBRecording` instance populated from
-        the ``musicbrainzngs`` response.
-
-    Raises:
-        mb.ResponseError: On a non-retryable API error.
-        RuntimeError: If all retry attempts are exhausted.
+    :param recording_id: The MusicBrainz recording MBID.
+    :returns: An :class:`~music_annotator.models.MBRecording` instance populated from the ``musicbrainzngs`` response.
+    :raises mb.ResponseError: On a non-retryable API error.
+    :raises RuntimeError: If all retry attempts are exhausted.
     """
     log.debug("fetch_recording", recording_id=recording_id)
     result = _get_recording_by_id(recording_id)
@@ -400,24 +387,16 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     Strategy:
 
     1. Try the release's own CAA entry via ``mb.get_image_front()``.
-    2. On HTTP 404, try the release-group front via
-       ``mb.get_release_group_image_front()``.
+    2. On HTTP 404, try the release-group front via ``mb.get_release_group_image_front()``.
     3. On any remaining error, return an empty :class:`~music_annotator.models.CoverArt`.
 
-    The MIME type is inferred from image magic bytes:
-    ``\\xff\\xd8`` → ``image/jpeg``; ``\\x89PNG`` → ``image/png``.
+    The MIME type is inferred from image magic bytes: ``\\xff\\xd8`` → ``image/jpeg``; ``\\x89PNG`` → ``image/png``.
 
-    Args:
-        release_id: The MusicBrainz release MBID.
-        release_group_id: The MusicBrainz release-group MBID (used as fallback).
-            Pass an empty string to skip the fallback.
-
-    Returns:
-        A :class:`~music_annotator.models.CoverArt` instance whose ``data`` is
-        non-empty on success, or whose ``data`` is ``b""`` when no art was found.
-
-    Raises:
-        Nothing — all ``mb.ResponseError`` exceptions are caught and logged.
+    :param release_id: The MusicBrainz release MBID.
+    :param release_group_id: The MusicBrainz release-group MBID used as a fallback.  Pass an empty string to skip the
+        fallback.
+    :returns: A :class:`~music_annotator.models.CoverArt` instance whose ``data`` is non-empty on success, or whose
+        ``data`` is ``b""`` when no art was found.
     """
 
     def _infer_mime(data: bytes) -> str:
@@ -458,13 +437,12 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
 
 @_mb_retry
 def _get_work_by_id(work_id: str) -> dict[str, JSON]:
-    """Thin typed wrapper around ``mb.get_work_by_id`` for ``@_mb_retry``.
+    """Thin typed wrapper around ``mb.get_work_by_id`` decorated with ``@_mb_retry``.
 
-    Args:
-        work_id: The MusicBrainz work MBID.
+    Requests artist relations, work relations, URL relations, tags, and aliases.
 
-    Returns:
-        The raw response dict from ``musicbrainzngs``.
+    :param work_id: The MusicBrainz work MBID.
+    :returns: The raw response dict from ``musicbrainzngs``.
     """
     result: dict[str, JSON] = mb.get_work_by_id(
         work_id,
@@ -474,22 +452,15 @@ def _get_work_by_id(work_id: str) -> dict[str, JSON]:
 
 
 def fetch_work_detail(work_id: str) -> MBWork:
-    """Fetch a work with artist relationships, parent work links, tags and aliases.
+    """Fetch a work with artist relationships, parent work links, tags, and aliases.
 
-    Results are cached in the module-level ``_WORK_CACHE`` dict so that shared
-    parent works (e.g. a symphonic poem that is the parent of four movements) are
-    only fetched once per process.
+    Results are cached in the module-level :data:`_WORK_CACHE` dict so that shared parent works (e.g. a symphonic poem
+    that is the parent of four movements) are only fetched once per process.
 
-    Args:
-        work_id: The MusicBrainz work MBID.
-
-    Returns:
-        An :class:`~music_annotator.models.MBWork` instance populated from the
-        ``musicbrainzngs`` response.
-
-    Raises:
-        mb.ResponseError: On a non-retryable API error.
-        RuntimeError: If all retry attempts are exhausted.
+    :param work_id: The MusicBrainz work MBID.
+    :returns: An :class:`~music_annotator.models.MBWork` instance populated from the ``musicbrainzngs`` response.
+    :raises mb.ResponseError: On a non-retryable API error.
+    :raises RuntimeError: If all retry attempts are exhausted.
     """
     if work_id in _WORK_CACHE:
         log.debug("fetch_work_cache_hit", work_id=work_id)
@@ -508,58 +479,46 @@ def fetch_work_detail(work_id: str) -> MBWork:
 
 
 def is_ensemble(name: str) -> bool:
-    """Return True if the artist name contains an ensemble-identifying substring.
+    """Return ``True`` if the artist name contains an ensemble-identifying substring.
 
-    Args:
-        name: The artist display name.
+    Checks against the union set :data:`ENSEMBLE_STRINGS` which covers orchestras, choirs, and chamber groups.
 
-    Returns:
-        ``True`` when any token from :data:`ENSEMBLE_STRINGS` appears in the
-        lowercased name.
+    :param name: The artist display name.
+    :returns: ``True`` when any token from :data:`ENSEMBLE_STRINGS` appears in the lowercased name.
     """
     low = name.lower()
     return any(s in low for s in ENSEMBLE_STRINGS)
 
 
 def is_choir(name: str) -> bool:
-    """Return True if the artist name contains a choir-identifying substring.
+    """Return ``True`` if the artist name contains a choir-identifying substring.
 
-    Args:
-        name: The artist display name.
-
-    Returns:
-        ``True`` when any token from :data:`CHOIR_STRINGS` appears in the
-        lowercased name.
+    :param name: The artist display name.
+    :returns: ``True`` when any token from :data:`CHOIR_STRINGS` appears in the lowercased name.
     """
     low = name.lower()
     return any(s in low for s in CHOIR_STRINGS)
 
 
 def is_orchestra(name: str) -> bool:
-    """Return True if the artist name contains an orchestra-identifying substring.
+    """Return ``True`` if the artist name contains an orchestra-identifying substring.
 
-    Args:
-        name: The artist display name.
-
-    Returns:
-        ``True`` when any token from :data:`ORCHESTRA_STRINGS` appears in the
-        lowercased name.
+    :param name: The artist display name.
+    :returns: ``True`` when any token from :data:`ORCHESTRA_STRINGS` appears in the lowercased name.
     """
     low = name.lower()
     return any(s in low for s in ORCHESTRA_STRINGS)
 
 
 def artist_credit_phrase(credit_list: list[MBArtistCredit | str]) -> str:
-    """Reconstruct the display credit phrase from a MusicBrainz artist-credit list.
+    """Reconstruct the display credit phrase from a MusicBrainz ``artist-credit`` list.
 
-    The MB API returns artist-credit as a list mixing :class:`~music_annotator.models.MBArtistCredit`
-    instances (for actual artists) and plain strings (for join phrases like ``" & "``).
+    The MB API returns ``artist-credit`` as a mixed list of :class:`~music_annotator.models.MBArtistCredit` instances
+    (for actual artists) and plain strings (for join phrases like ``" & "``).  This function concatenates the credited name
+    of each artist (falling back to the artist's canonical name) with any intervening join-phrase strings.
 
-    Args:
-        credit_list: The ``artist-credit`` list from a MB response.
-
-    Returns:
-        The concatenated display string, e.g. ``"Karajan & Berliner Philharmoniker"``.
+    :param credit_list: The ``artist-credit`` list from a MB response.
+    :returns: The concatenated display string, e.g. ``"Karajan & Berliner Philharmoniker"``.
     """
     parts: list[str] = []
     for item in credit_list:
@@ -574,30 +533,24 @@ def artist_credit_phrase(credit_list: list[MBArtistCredit | str]) -> str:
 
 
 def artist_ids(credit_list: list[MBArtistCredit | str]) -> list[str]:
-    """Extract MBIDs from an artist-credit list.
+    """Extract MBIDs from an ``artist-credit`` list, skipping plain join-phrase strings.
 
-    Args:
-        credit_list: The ``artist-credit`` list from a MB response.
-
-    Returns:
-        A list of MBID strings for all :class:`~music_annotator.models.MBArtistCredit`
-        entries in the credit list, in order.
+    :param credit_list: The ``artist-credit`` list from a MB response.
+    :returns: A list of MBID strings for all :class:`~music_annotator.models.MBArtistCredit` entries that have a
+        non-empty ``artist.id``, in order.
     """
     return [item.artist.id for item in credit_list if isinstance(item, MBArtistCredit) and item.artist.id]
 
 
 def artist_sort_names(credit_list: list[MBArtistCredit | str]) -> list[str]:
-    """Extract sort-names from an artist-credit list.
+    """Extract sort-names from an ``artist-credit`` list, skipping join-phrase-only entries.
 
-    Entries with no artist MBID (i.e., join-phrase-only dicts) are skipped.
+    Entries with no artist MBID (i.e. join-phrase-only dicts such as ``{"joinphrase": " & "}``) are skipped because they
+    do not represent a real credited artist.
 
-    Args:
-        credit_list: The ``artist-credit`` list from a MB response.
-
-    Returns:
-        A list of sort-name strings (falling back to display name when absent)
-        for all :class:`~music_annotator.models.MBArtistCredit` entries in the
-        credit list that have a non-empty artist MBID, in order.
+    :param credit_list: The ``artist-credit`` list from a MB response.
+    :returns: A list of sort-name strings (falling back to the display name when ``sort_name`` is absent) for all
+        :class:`~music_annotator.models.MBArtistCredit` entries that have a non-empty ``artist.id``, in order.
     """
     result_names: list[str] = []
     for item in credit_list:
@@ -607,15 +560,11 @@ def artist_sort_names(credit_list: list[MBArtistCredit | str]) -> list[str]:
 
 
 def last_name(sort_name: str) -> str:
-    """Extract the last name from a MusicBrainz sort-name ``"Surname, Forename"``.
+    """Extract the last name from a MusicBrainz sort-name of the form ``"Surname, Forename"``.
 
-    Args:
-        sort_name: A sort-name string, typically ``"Surname, Forename"`` or just
-            a single name.
-
-    Returns:
-        The part of the sort-name before the first comma, stripped of whitespace.
-        Returns the full string if no comma is present.
+    :param sort_name: A sort-name string, typically ``"Surname, Forename"`` or just a single token.
+    :returns: The part of the sort-name before the first comma, stripped of whitespace.  Returns the full string when no
+        comma is present.
     """
     return sort_name.split(",")[0].strip()
 
@@ -626,26 +575,18 @@ def last_name(sort_name: str) -> str:
 
 
 def build_work_hierarchy(work: MBWork, visited: set[str] | None = None) -> list[MBWork]:
-    """Walk up the MusicBrainz work parent chain and return the hierarchy list.
+    """Walk up the MusicBrainz work parent chain and return the full hierarchy list.
 
-    The returned list runs from the recording's direct (bottom) work at index 0
-    to the root (top) work at the highest index, matching the Classical Extras
-    ``_cwp_work_0`` … ``_cwp_work_N`` convention.
+    The returned list runs from the recording's direct (bottom) work at index 0 to the root (top) work at the highest
+    index, matching the Classical Extras ``cwp_work_0`` … ``cwp_work_N`` tag convention.  Only the first backward
+    ``"parts"`` or ``"part of"`` relation at each level is followed; cycle detection via ``visited`` prevents infinite
+    loops on circular parent references.
 
-    Args:
-        work: The bottom-level :class:`~music_annotator.models.MBWork` as
-            returned by :func:`fetch_work_detail`.
-        visited: Set of work MBIDs already visited in this traversal (used to
-            prevent infinite loops on circular parent references).  Pass
-            ``None`` to start a fresh traversal.
-
-    Returns:
-        A list of :class:`~music_annotator.models.MBWork` instances from
-        bottom (index 0) to top (last index).
-
-    Raises:
-        mb.ResponseError: If fetching a parent work fails with a non-retryable error.
-        RuntimeError: If all retry attempts for a parent work fetch are exhausted.
+    :param work: The bottom-level :class:`~music_annotator.models.MBWork` as returned by :func:`fetch_work_detail`.
+    :param visited: Set of work MBIDs already visited in this traversal.  Pass ``None`` to start a fresh traversal.
+    :returns: A list of :class:`~music_annotator.models.MBWork` instances from bottom (index 0) to top (last index).
+    :raises mb.ResponseError: If fetching a parent work fails with a non-retryable error.
+    :raises RuntimeError: If all retry attempts for a parent work fetch are exhausted.
     """
     if visited is None:
         visited = set()
@@ -668,23 +609,18 @@ def build_work_hierarchy(work: MBWork, visited: set[str] | None = None) -> list[
 
 
 def strip_common_prefix(child: str, parent: str) -> str:
-    """Remove from ``child`` any text that duplicates ``parent``, producing a short label.
+    """Remove from ``child`` any text that duplicates ``parent``, producing a short movement label.
 
-    Implements the CE ``_cwp_part_n`` stripping logic:
+    Implements the CE ``cwp_part_N`` stripping logic:
 
-    1. If ``child`` starts with ``parent`` (case-insensitive), strip that prefix
-       and any leading punctuation/whitespace.
-    2. Otherwise, if ``child`` contains a colon, return the portion after the
-       first colon.
+    1. If ``child`` starts with ``parent`` (case-insensitive), strip that prefix and any leading punctuation or whitespace.
+    2. Otherwise, if ``child`` contains a colon, return the portion after the first colon.
     3. Otherwise return ``child`` unchanged.
 
-    Args:
-        child: The full work name at the lower hierarchy level (e.g.
-            ``"Fontane di Roma, P 106: I. La fontana di Valle Giulia all'alba"``).
-        parent: The work name of the parent level (e.g. ``"Fontane di Roma, P 106"``).
-
-    Returns:
-        The stripped part label (e.g. ``"I. La fontana di Valle Giulia all'alba"``),
+    :param child: The full work name at the lower hierarchy level
+        (e.g. ``"Fontane di Roma, P 106: I. La fontana di Valle Giulia all'alba"``).
+    :param parent: The work name at the parent level (e.g. ``"Fontane di Roma, P 106"``).
+    :returns: The stripped part label (e.g. ``"I. La fontana di Valle Giulia all'alba"``),
         or ``child`` unchanged when no prefix is found.
     """
     if not parent or not child:
@@ -701,12 +637,12 @@ def strip_common_prefix(child: str, parent: str) -> str:
 def period_for_year(year: int | None) -> str:
     """Map a composition year to the corresponding Classical Extras period name.
 
-    Args:
-        year: The four-digit composition year, or ``None`` when unknown.
+    Iterates :data:`PERIOD_MAP` and returns the name of the first entry whose inclusive ``[start, end]`` range contains
+    ``year``.
 
-    Returns:
-        A period name from :data:`PERIOD_MAP` (e.g. ``"Late Romantic"``), or an
-        empty string when ``year`` is ``None`` or falls outside all defined ranges.
+    :param year: The four-digit composition year, or ``None`` when unknown.
+    :returns: A period name from :data:`PERIOD_MAP` (e.g. ``"Late Romantic"``), or an empty string when ``year`` is
+        ``None`` or falls outside all defined ranges.
     """
     if year is None:
         return ""
@@ -722,19 +658,14 @@ def period_for_year(year: int | None) -> str:
 
 
 def extract_work_artist_rels(work: MBWork, role_buckets: RoleBuckets) -> None:
-    """Fill ``role_buckets`` from the work's ``artist-relation-list``.
+    """Fill ``role_buckets`` in-place from the work's ``artist-relation-list``.
 
-    Follows the CE ``_cwp_`` convention.  Deduplicates entries by MBID so
-    that the same composer credited at every level of the work hierarchy
-    (movement → symphonic poem → collection) appears only once.
+    Follows the CE ``cwp_`` convention.  Deduplicates entries by MBID so that the same composer credited at every level
+    of the work hierarchy (movement → symphonic poem → collection) appears only once.  Unknown relation types are silently
+    ignored.
 
-    Args:
-        work: The :class:`~music_annotator.models.MBWork` instance.
-        role_buckets: The :class:`~music_annotator.models.RoleBuckets` instance
-            to populate in-place.
-
-    Returns:
-        None.  ``role_buckets`` is mutated directly.
+    :param work: The :class:`~music_annotator.models.MBWork` instance.
+    :param role_buckets: The :class:`~music_annotator.models.RoleBuckets` instance to populate in-place.
     """
     for rel in work.artist_relation_list:
         entry = ArtistEntry(name=rel.artist.name, sort=rel.artist.sort_name or rel.artist.name, mbid=rel.artist.id)
@@ -760,15 +691,12 @@ def extract_work_artist_rels(work: MBWork, role_buckets: RoleBuckets) -> None:
 def collect_work_dates(work: MBWork) -> WorkDates:
     """Extract composed, published, and premiered dates from a work's attributes.
 
-    Checks both the ``attribute-list`` (for typed date attributes) and the
-    ``life-span.begin`` field (used as a composed-date fallback by MB).
+    Checks both the ``attribute-list`` (for typed date attributes) and the ``life-span.begin`` field (used as a
+    composed-date fallback by MB when no explicit composition-date attribute is present).
 
-    Args:
-        work: The :class:`~music_annotator.models.MBWork` instance.
-
-    Returns:
-        A :class:`~music_annotator.models.WorkDates` instance with any dates found.
-        Fields default to empty strings when not present.
+    :param work: The :class:`~music_annotator.models.MBWork` instance.
+    :returns: A :class:`~music_annotator.models.WorkDates` instance with any dates found.  Fields default to empty
+        strings when not present.
     """
     composed = published = premiered = ""
     for attr in work.attribute_list:
@@ -791,12 +719,8 @@ def collect_work_dates(work: MBWork) -> WorkDates:
 def parse_year(date_str: str) -> int | None:
     """Parse the first four-digit year from a date string.
 
-    Args:
-        date_str: A date string such as ``"1900"``, ``"1900-06-15"``, or ``""``.
-
-    Returns:
-        The integer year, or ``None`` when no four-digit sequence is found or
-        the input is empty.
+    :param date_str: A date string such as ``"1900"``, ``"1900-06-15"``, or ``""``.
+    :returns: The integer year, or ``None`` when no four-digit sequence is found or the input is empty.
     """
     if not date_str:
         return None
@@ -807,13 +731,12 @@ def parse_year(date_str: str) -> int | None:
 def collect_work_tags_and_key(work: MBWork) -> tuple[list[str], str]:
     """Return the folksonomy tag list and key signature from a work.
 
-    Args:
-        work: The :class:`~music_annotator.models.MBWork` instance.
+    The key is taken from :attr:`~music_annotator.models.MBWork.key` and overridden by any ``attribute-list`` entry
+    whose ``type`` is ``"key"`` or ``"key signature"``.
 
-    Returns:
-        A 2-tuple ``(tag_names, key_signature)`` where ``tag_names`` is a list
-        of folksonomy tag name strings and ``key_signature`` is the key
-        signature string (e.g. ``"G minor"``), or ``""`` when absent.
+    :param work: The :class:`~music_annotator.models.MBWork` instance.
+    :returns: A 2-tuple ``(tag_names, key_signature)`` where ``tag_names`` is a list of folksonomy tag name strings and
+        ``key_signature`` is the key signature string (e.g. ``"G minor"``), or ``""`` when absent.
     """
     tags: list[str] = [t.name for t in work.tag_list]
     key: str = work.key
@@ -829,14 +752,17 @@ def collect_work_tags_and_key(work: MBWork) -> tuple[list[str], str]:
 
 
 def build_cea_performers(recording_detail: MBRecording) -> CeaPerformers:
-    """Classify recording-level artist relations into CE ``_cea_*`` performer buckets.
+    """Classify recording-level artist relations into CE ``cea_*`` performer buckets.
 
-    Args:
-        recording_detail: The :class:`~music_annotator.models.MBRecording`
-            instance as returned by :func:`fetch_recording_detail`.
+    Iterates the ``artist-relation-list`` of the recording and routes each entry into the appropriate bucket of the
+    returned :class:`~music_annotator.models.CeaPerformers` instance.  For ``"performer"``-type relations the first
+    ``attribute-list`` entry is used as the instrument label; entries matching :func:`is_ensemble` go to ``ensembles``;
+    entries with a vocal keyword in the instrument label go to ``vocalists``; all others go to ``instrumentalists`` (with
+    an instrument label) or ``other_soloists`` (without).
 
-    Returns:
-        A populated :class:`~music_annotator.models.CeaPerformers` instance.
+    :param recording_detail: The :class:`~music_annotator.models.MBRecording` instance as returned by
+        :func:`fetch_recording_detail`.
+    :returns: A populated :class:`~music_annotator.models.CeaPerformers` instance.
     """
     cea = CeaPerformers()
     for rel in recording_detail.artist_relation_list:
@@ -884,18 +810,22 @@ def build_cwp_tags(
     work_hierarchy: list[MBWork],
     role_buckets: RoleBuckets,
 ) -> CwpTags:
-    """Build Classical Extras ``_cwp_*`` tag values from the resolved work hierarchy.
+    """Build Classical Extras ``cwp_*`` tag values from the resolved work hierarchy.
 
-    Args:
-        work_hierarchy: The list of :class:`~music_annotator.models.MBWork`
-            instances from bottom (index 0) to top (last index), as returned
-            by :func:`build_work_hierarchy`.
-        role_buckets: The :class:`~music_annotator.models.RoleBuckets` already
-            populated by :func:`extract_work_artist_rels` for every level.
+    Constructs the full :class:`~music_annotator.models.CwpTags` model by:
 
-    Returns:
-        A :class:`~music_annotator.models.CwpTags` instance with all
-        ``cwp_*`` fields populated.
+    - Setting ``work_top``/``workid_top`` from the root work.
+    - Collecting dates, key, and work-type genre from the bottom work.
+    - Stripping common name prefixes to produce per-level ``part_title`` values.
+    - Building ``groupheading`` from the top work title and all intermediate part titles.
+    - Mapping composed date to a CE period name via :func:`period_for_year`.
+    - Populating all artist role strings from ``role_buckets``.
+
+    :param work_hierarchy: List of :class:`~music_annotator.models.MBWork` from bottom (index 0) to top (last index), as
+        returned by :func:`build_work_hierarchy`.
+    :param role_buckets: A :class:`~music_annotator.models.RoleBuckets` already populated by
+        :func:`extract_work_artist_rels` for every level of the hierarchy.
+    :returns: A :class:`~music_annotator.models.CwpTags` instance with all ``cwp_*`` fields populated.
     """
     cwp = CwpTags()
     if not work_hierarchy:
@@ -994,25 +924,20 @@ def build_track_tags(
 ) -> TrackTags:
     """Build the complete tag model for one track, implementing all CE conventions.
 
-    This is the central function that combines release, recording, and work
-    hierarchy data into a :class:`~music_annotator.models.TrackTags` instance
-    ready for writing to an audio file.
+    This is the central function that combines release, recording, and work-hierarchy data into a
+    :class:`~music_annotator.models.TrackTags` instance ready for writing to an audio file.  The movement-number fields
+    (``movementnumber``, ``movementtotal``, ``cwp_movt_num``, ``cwp_movt_tot``, ``cwp_single_work_album``) are left as
+    empty strings at this stage; they are filled in by :func:`run` after all tracks have been processed and grouped by
+    top-work MBID.
 
-    Args:
-        release: The :class:`~music_annotator.models.MBRelease` from :func:`fetch_release`.
-        track: The :class:`~music_annotator.models.MBTrack` for this track.
-        medium_pos: The 1-based disc/medium position (typically ``1`` for single-disc releases).
-        recording_detail: The :class:`~music_annotator.models.MBRecording` from
-            :func:`fetch_recording_detail`.
-        work_hierarchy: The work hierarchy list from :func:`build_work_hierarchy`,
-            or an empty list when no work link was found.
-
-    Returns:
-        A :class:`~music_annotator.models.TrackTags` instance with all fields populated.
-        Movement number and total fields (``movementnumber``, ``movementtotal``,
-        ``cwp_movt_num``, ``cwp_movt_tot``, ``cwp_single_work_album``) are left
-        empty strings at this stage; they are filled in by the caller after all
-        tracks have been processed.
+    :param release: The :class:`~music_annotator.models.MBRelease` from :func:`fetch_release`.
+    :param track: The :class:`~music_annotator.models.MBTrack` for this track.
+    :param medium_pos: The 1-based disc/medium position (typically ``1`` for single-disc releases).
+    :param recording_detail: The :class:`~music_annotator.models.MBRecording` from :func:`fetch_recording_detail`.
+    :param work_hierarchy: The work hierarchy list from :func:`build_work_hierarchy`, or an empty list when no work link
+        was found.
+    :returns: A :class:`~music_annotator.models.TrackTags` instance with all fields populated except movement-number
+        fields.
     """
     rec = track.recording
 
@@ -1241,29 +1166,22 @@ def build_track_tags(
 def safe_name(s: str, max_len: int = 80) -> str:
     """Sanitise a string for use as a filesystem path component.
 
-    Replaces characters forbidden on common filesystems (Windows/POSIX) with
-    underscores, strips leading/trailing dots and spaces, and truncates to
-    ``max_len`` characters.
+    Replaces characters forbidden on common filesystems (Windows/POSIX) with underscores, strips leading and trailing
+    dots and spaces, and truncates to ``max_len`` characters.
 
-    Args:
-        s: The raw name string.
-        max_len: Maximum length of the returned string.  Defaults to 80.
-
-    Returns:
-        A sanitised string safe for use as a directory or file name.
+    :param s: The raw name string.
+    :param max_len: Maximum length of the returned string.  Defaults to ``80``.
+    :returns: A sanitised string safe for use as a directory or file name.
     """
     s = _SAFE_RE.sub("_", s).strip(". ")
     return s[:max_len]
 
 
 def _rec_title(track: MBTrack) -> str:
-    """Return the recording title for a track.
+    """Return the recording title for a track, falling back to ``"Unknown"``.
 
-    Args:
-        track: An :class:`~music_annotator.models.MBTrack` instance.
-
-    Returns:
-        The title of the nested recording, or ``"Unknown"`` when absent.
+    :param track: An :class:`~music_annotator.models.MBTrack` instance.
+    :returns: The title of the nested recording, or ``"Unknown"`` when absent.
     """
     return track.recording.title or "Unknown"
 
@@ -1278,21 +1196,16 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
             <Work title> (<work MBID>)/
               <nn> - <movement title>
 
-    The numeric prefix is the movement number within the work (not the album
-    track number).  Width is 2 digits normally; 3 digits when the work
-    contains more than 99 movements.
+    The numeric prefix is the movement number within the work (not the album track number).  Width is 2 digits normally;
+    3 digits when the work contains more than 99 movements.
 
-    Args:
-        dest_root: The root destination directory.
-        release: The :class:`~music_annotator.models.MBRelease` from :func:`fetch_release`.
-        track: The :class:`~music_annotator.models.MBTrack` for this track.
-        tags: The :class:`~music_annotator.models.TrackTags` instance for this
-            track, which must already have ``movementnumber`` and
-            ``movementtotal`` filled in.
-
-    Returns:
-        A :class:`~pathlib.Path` for the destination file *without* extension
-        (callers append ``.flac``, ``.mp3``, etc.).
+    :param dest_root: The root destination directory.
+    :param release: The :class:`~music_annotator.models.MBRelease` from :func:`fetch_release`.
+    :param track: The :class:`~music_annotator.models.MBTrack` for this track.
+    :param tags: The :class:`~music_annotator.models.TrackTags` instance for this track, which must already have
+        ``movementnumber`` and ``movementtotal`` filled in.
+    :returns: A :class:`~pathlib.Path` for the destination file *without* extension (callers append ``.flac``, ``.mp3``,
+        etc.).
     """
     file_dict = tags.to_file_dict()
 
@@ -1351,34 +1264,27 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
 def apply_tags_flac(dest_file: Path, tags: TrackTags, cover: CoverArt | None = None) -> None:
     """Write Vorbis Comment tags and optional cover art to a FLAC file.
 
-    Clears any existing tags, writes all non-internal non-empty fields from
-    ``tags``, and (if provided) embeds ``cover`` as a front-cover PICTURE block.
+    Clears any existing tags, writes all non-internal non-empty fields from ``tags`` as lowercase Vorbis Comment keys,
+    and (if provided) embeds ``cover`` as a type-3 (front cover) PICTURE block.
 
-    Args:
-        dest_file: Path to the destination FLAC file (must already exist).
-        tags: The :class:`~music_annotator.models.TrackTags` instance to write.
-        cover: Optional :class:`~music_annotator.models.CoverArt`; when
-            ``cover.available`` is ``True`` the image is embedded as a
-            type-3 (front cover) PICTURE block.
-
-    Returns:
-        None.
-
-    Raises:
-        mutagen.MutagenError: If the file cannot be read or written.
+    :param dest_file: Path to the destination FLAC file (must already exist).
+    :param tags: The :class:`~music_annotator.models.TrackTags` instance to write.
+    :param cover: Optional :class:`~music_annotator.models.CoverArt`; when ``cover.available`` is ``True`` the image is
+        embedded as a type-3 (front cover) PICTURE block.
+    :raises mutagen.MutagenError: If the file cannot be read or written.
     """
     audio = FLAC(str(dest_file))
     audio.clear()
     for key, value in tags.to_file_dict().items():
         audio[key.lower()] = value
     if cover and cover.available:
-        pic = FLACPicture()
+        pic = FLACPicture()  # type: ignore[no-untyped-call]
         pic.type = 3  # front cover
         pic.mime = cover.mime or "image/jpeg"
         pic.desc = "Cover"
         pic.width = pic.height = pic.depth = pic.colors = 0
         pic.data = cover.data
-        audio.add_picture(pic)
+        audio.add_picture(pic)  # type: ignore[no-untyped-call]
     audio.save()
     log.debug("tagged_flac", path=str(dest_file))
 
@@ -1386,21 +1292,14 @@ def apply_tags_flac(dest_file: Path, tags: TrackTags, cover: CoverArt | None = N
 def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = None) -> None:
     """Write ID3v2.4 tags and optional cover art to an MP3 file.
 
-    Deletes any existing ID3 tags, writes standard text frames and TXXX frames
-    for all non-internal non-empty fields, and (if provided) adds an APIC frame.
+    Deletes any existing ID3 tags, writes standard text frames (``TIT2``, ``TPE1``, etc.) and ``TXXX`` frames for all
+    non-internal non-empty fields, and (if provided) adds an ``APIC`` frame for the cover image.
 
-    Args:
-        dest_file: Path to the destination MP3 file (must already exist).
-        tags: The :class:`~music_annotator.models.TrackTags` instance to write.
-        cover: Optional :class:`~music_annotator.models.CoverArt`; when
-            ``cover.available`` is ``True`` the image is embedded as APIC
-            type 3 (front cover).
-
-    Returns:
-        None.
-
-    Raises:
-        mutagen.MutagenError: If the file cannot be read or written.
+    :param dest_file: Path to the destination MP3 file (must already exist).
+    :param tags: The :class:`~music_annotator.models.TrackTags` instance to write.
+    :param cover: Optional :class:`~music_annotator.models.CoverArt`; when ``cover.available`` is ``True`` the image is
+        embedded as APIC type 3 (front cover).
+    :raises mutagen.MutagenError: If the file cannot be read or written.
     """
     try:
         audio = MP3(str(dest_file))
@@ -1409,37 +1308,37 @@ def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = No
     except Exception:  # noqa: BLE001
         pass
 
-    id3_tags = ID3()
+    id3_tags = ID3()  # type: ignore[no-untyped-call]
     file_dict = tags.to_file_dict()
 
     def txxx(desc: str, val: str) -> None:
         if val:
-            id3_tags.add(TXXX(encoding=3, desc=desc, text=val))
+            id3_tags.add(TXXX(encoding=3, desc=desc, text=val))  # type: ignore[no-untyped-call]
 
     if file_dict.get("TITLE"):
-        id3_tags.add(TIT2(encoding=3, text=file_dict["TITLE"]))
+        id3_tags.add(TIT2(encoding=3, text=file_dict["TITLE"]))  # type: ignore[no-untyped-call]
     if file_dict.get("ARTIST"):
-        id3_tags.add(TPE1(encoding=3, text=file_dict["ARTIST"]))
+        id3_tags.add(TPE1(encoding=3, text=file_dict["ARTIST"]))  # type: ignore[no-untyped-call]
     if file_dict.get("ALBUMARTIST"):
-        id3_tags.add(TPE2(encoding=3, text=file_dict["ALBUMARTIST"]))
+        id3_tags.add(TPE2(encoding=3, text=file_dict["ALBUMARTIST"]))  # type: ignore[no-untyped-call]
     if file_dict.get("ALBUM"):
-        id3_tags.add(TALB(encoding=3, text=file_dict["ALBUM"]))
+        id3_tags.add(TALB(encoding=3, text=file_dict["ALBUM"]))  # type: ignore[no-untyped-call]
     if file_dict.get("TRACKNUMBER"):
         total = file_dict.get("TOTALTRACKS", "")
         trck_text = f"{file_dict['TRACKNUMBER']}/{total}" if total else file_dict["TRACKNUMBER"]
-        id3_tags.add(TRCK(encoding=3, text=trck_text))
+        id3_tags.add(TRCK(encoding=3, text=trck_text))  # type: ignore[no-untyped-call]
     if file_dict.get("DISCNUMBER"):
-        id3_tags.add(TPOS(encoding=3, text=file_dict["DISCNUMBER"]))
+        id3_tags.add(TPOS(encoding=3, text=file_dict["DISCNUMBER"]))  # type: ignore[no-untyped-call]
     if file_dict.get("DATE"):
-        id3_tags.add(TDRC(encoding=3, text=file_dict["DATE"]))
+        id3_tags.add(TDRC(encoding=3, text=file_dict["DATE"]))  # type: ignore[no-untyped-call]
     if file_dict.get("ORIGINALDATE"):
-        id3_tags.add(TDOR(encoding=3, text=file_dict["ORIGINALDATE"]))
+        id3_tags.add(TDOR(encoding=3, text=file_dict["ORIGINALDATE"]))  # type: ignore[no-untyped-call]
     if file_dict.get("COMPOSER"):
-        id3_tags.add(TCOM(encoding=3, text=file_dict["COMPOSER"]))
+        id3_tags.add(TCOM(encoding=3, text=file_dict["COMPOSER"]))  # type: ignore[no-untyped-call]
     if file_dict.get("CONDUCTOR"):
-        id3_tags.add(TPE3(encoding=3, text=file_dict["CONDUCTOR"]))
+        id3_tags.add(TPE3(encoding=3, text=file_dict["CONDUCTOR"]))  # type: ignore[no-untyped-call]
     if file_dict.get("ORGANIZATION"):
-        id3_tags.add(TPUB(encoding=3, text=file_dict["ORGANIZATION"]))
+        id3_tags.add(TPUB(encoding=3, text=file_dict["ORGANIZATION"]))  # type: ignore[no-untyped-call]
 
     txxx_map: dict[str, str] = {
         "MUSICBRAINZ_ALBUMID": "MusicBrainz Album Id",
@@ -1489,8 +1388,8 @@ def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = No
         txxx(txxx_desc, file_dict.get(meta_key, ""))
 
     if cover and cover.available:
-        id3_tags.add(
-            APIC(
+        id3_tags.add(  # type: ignore[no-untyped-call]
+            APIC(  # type: ignore[no-untyped-call]
                 encoding=3,
                 mime=cover.mime or "image/jpeg",
                 type=3,
@@ -1509,18 +1408,14 @@ def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = No
 
 
 def find_source_files(src_dir: Path) -> list[Path]:
-    """Return sorted list of audio files in ``src_dir``.
+    """Return a sorted list of audio files in ``src_dir``.
 
-    Args:
-        src_dir: Directory to scan.  Only the immediate children are checked
-            (not recursive).
+    Only the immediate children of ``src_dir`` are checked (not recursive).  Files are included when their lowercased
+    suffix appears in :data:`AUDIO_EXTENSIONS`.
 
-    Returns:
-        A list of :class:`~pathlib.Path` objects for all files whose extension
-        (lowercased) is in :data:`AUDIO_EXTENSIONS`, sorted by filename.
-
-    Raises:
-        OSError: If ``src_dir`` does not exist or is not readable.
+    :param src_dir: Directory to scan.
+    :returns: A list of :class:`~pathlib.Path` objects for all matching files, sorted by filename.
+    :raises OSError: If ``src_dir`` does not exist or is not readable.
     """
     return sorted(
         (p for p in src_dir.iterdir() if p.suffix.lower() in AUDIO_EXTENSIONS),
@@ -1550,27 +1445,20 @@ def run(
 
     4. Compute movement numbers and totals grouped by top-work MBID.
     5. Copy each source file to the destination tree and apply tags.
-    6. Restore the source file's atime/mtime on the destination.
+    6. Restore the source file's atime/mtime on the destination (``mutagen.save()`` would otherwise bump mtime).
 
-    Args:
-        release_id: The MusicBrainz release MBID.
-        src_dir: Directory containing the source audio files.  Files are
-            matched to release tracks by sorted filename order.
-        dest_root: Root directory of the destination music library.
-        user_agent: User-agent string passed to :func:`init_mb`.
-        dry_run: When ``True``, log planned operations without copying or
-            writing any files.
-        fetch_rels: When ``False``, skip per-recording lookups and produce
-            minimal tags (faster but incomplete).
-
-    Returns:
-        None.
-
-    Raises:
-        mb.ResponseError: On a non-retryable MusicBrainz API error.
-        RuntimeError: If all retry attempts are exhausted for any API call.
-        OSError: If source files cannot be read or destination files cannot be
-            written.
+    :param release_id: The MusicBrainz release MBID.
+    :param src_dir: Directory containing the source audio files.  Files are matched to release tracks by sorted filename
+        order.  A count mismatch between source files and release tracks is logged as a warning but does not abort.
+    :param dest_root: Root directory of the destination music library.
+    :param user_agent: User-agent string passed to :func:`init_mb`.
+    :param dry_run: When ``True``, log planned operations without copying or writing any files.  MB API calls for the
+        release and recording relations still happen so the planned tag data is logged accurately.
+    :param fetch_rels: When ``False``, skip per-recording lookups and produce minimal tags (faster but incomplete).
+        Composer, conductor, work hierarchy, and Classical Extras tags will be absent.
+    :raises mb.ResponseError: On a non-retryable MusicBrainz API error.
+    :raises RuntimeError: If all retry attempts are exhausted for any API call.
+    :raises OSError: If source files cannot be read or destination files cannot be written.
     """
     init_mb(user_agent)
 

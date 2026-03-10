@@ -1,7 +1,6 @@
-"""CLI entry point for music_annotator.
+"""CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and delegates to
-:func:`~music_annotator.run`.
+Configures structlog for human-friendly console output and delegates to :func:`~music_annotator.run`.
 
 Usage::
 
@@ -27,11 +26,12 @@ import music_annotator
 
 
 def _configure_logging(verbose: bool) -> None:
-    """Set up structlog with a human-readable console renderer.
+    """Set up structlog with a human-readable console renderer writing to stderr.
 
-    Args:
-        verbose: When ``True``, set the root log level to ``DEBUG``; otherwise
-            use ``INFO``.
+    Processors are chained in the standard structlog order: level filter, logger name, log level, positional argument
+    formatting, ISO timestamp, stack-info rendering, exception formatting, and finally the console renderer.
+
+    :param verbose: When ``True``, set the root log level to ``DEBUG``; otherwise use ``INFO``.
     """
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
@@ -61,14 +61,16 @@ class _Formatter(
     argparse.ArgumentDefaultsHelpFormatter,
     argparse.RawDescriptionHelpFormatter,
 ):
-    """Combined formatter: shows argument defaults and preserves raw epilog/description."""
+    """Combined formatter that shows argument defaults and preserves raw epilog/description formatting."""
 
 
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the CLI argument parser.
 
-    Returns:
-        A configured :class:`argparse.ArgumentParser` instance.
+    Registers all ``music-annotator`` arguments with help text, defaults, and types.  The epilog contains usage examples
+    rendered verbatim thanks to :class:`_Formatter`.
+
+    :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
     parser = argparse.ArgumentParser(
         prog="music-annotator",
@@ -126,8 +128,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-fetch-rels",
         action="store_true",
         help=(
-            "Skip per-recording relationship lookups (faster but produces minimal tags). "
-            "Composer, conductor, work hierarchy, and Classical Extras tags will be absent."
+            "Skip per-recording relationship lookups (faster but produces minimal tags). Composer, conductor, work "
+            "hierarchy, and Classical Extras tags will be absent."
         ),
     )
     parser.add_argument(
@@ -142,14 +144,11 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     """Parse CLI arguments, configure logging, and invoke :func:`~music_annotator.run`.
 
-    This function is the entry point registered as ``music-annotator`` in
-    ``pyproject.toml``.  It exits with code 1 if an unrecoverable error occurs.
+    This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates that
+    ``--src-dir`` exists before delegating to :func:`~music_annotator.run`, and converts any unhandled exception or
+    keyboard interrupt into a logged error with exit code 1.
 
-    Returns:
-        None.
-
-    Raises:
-        SystemExit: With code 0 on success, code 1 on unrecoverable error.
+    :raises SystemExit: With code 0 on success, code 1 on unrecoverable error.
     """
     parser = _build_parser()
     args = parser.parse_args()

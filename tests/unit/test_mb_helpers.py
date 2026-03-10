@@ -28,8 +28,7 @@ class TestMbRetry:
     def test_success_on_first_attempt(self, mocker: MockerFixture) -> None:
         """Returns immediately when the decorated function succeeds on first call.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         inner = mocker.MagicMock(return_value={"release": {}})
         inner.__name__ = "mock_fn"
@@ -45,8 +44,7 @@ class TestMbRetry:
     def test_retries_on_503(self, mocker: MockerFixture) -> None:
         """Retries on 503 error and succeeds on subsequent attempt.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         err = mb.ResponseError(cause=Exception("503 Service Unavailable"))
@@ -64,8 +62,7 @@ class TestMbRetry:
     def test_retries_on_429(self, mocker: MockerFixture) -> None:
         """Retries on 429 rate-limit error.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         err = mb.ResponseError(cause=Exception("429 Too Many Requests"))
@@ -82,8 +79,7 @@ class TestMbRetry:
     def test_raises_immediately_on_non_retryable_error(self, mocker: MockerFixture) -> None:
         """Raises ResponseError immediately on a non-retryable status code.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         err = mb.ResponseError(cause=Exception("404 Not Found"))
@@ -101,8 +97,7 @@ class TestMbRetry:
     def test_raises_runtime_error_after_all_retries(self, mocker: MockerFixture) -> None:
         """Raises RuntimeError after all 6 retry attempts are exhausted.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         err = mb.ResponseError(cause=Exception("503 Service Unavailable"))
@@ -129,8 +124,7 @@ class TestFetchRelease:
     def test_returns_mbrelease(self, mocker: MockerFixture) -> None:
         """Returns an MBRelease populated from the 'release' key of the MB response.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch(
@@ -144,8 +138,7 @@ class TestFetchRelease:
     def test_passes_includes(self, mocker: MockerFixture) -> None:
         """Calls get_release_by_id with the required includes list.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mock_api = mocker.patch(
@@ -169,8 +162,7 @@ class TestFetchRecordingDetail:
     def test_returns_mbrecording(self, mocker: MockerFixture) -> None:
         """Returns an MBRecording populated from the 'recording' key of the MB response.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch(
@@ -183,8 +175,7 @@ class TestFetchRecordingDetail:
     def test_returns_empty_mbrecording_on_missing_key(self, mocker: MockerFixture) -> None:
         """Returns a default MBRecording when 'recording' key is absent from response.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch(
@@ -207,8 +198,7 @@ class TestFetchCoverArt:
     def test_returns_jpeg_cover_art(self, mocker: MockerFixture) -> None:
         """Returns CoverArt with image/jpeg when data starts with FF D8.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 100
@@ -220,8 +210,7 @@ class TestFetchCoverArt:
     def test_returns_png_cover_art(self, mocker: MockerFixture) -> None:
         """Returns CoverArt with image/png when data starts with 89PNG.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
@@ -233,8 +222,7 @@ class TestFetchCoverArt:
     def test_falls_back_to_release_group_on_404(self, mocker: MockerFixture) -> None:
         """Falls back to release-group art when release returns 404.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 100
@@ -249,8 +237,7 @@ class TestFetchCoverArt:
     def test_returns_empty_on_non_404_error(self, mocker: MockerFixture) -> None:
         """Returns empty CoverArt when release returns a non-404 error.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch(
@@ -263,8 +250,7 @@ class TestFetchCoverArt:
     def test_returns_empty_when_no_release_group_id(self, mocker: MockerFixture) -> None:
         """Returns empty CoverArt when 404 and no release_group_id provided.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch(
@@ -277,8 +263,7 @@ class TestFetchCoverArt:
     def test_returns_empty_when_release_group_also_fails(self, mocker: MockerFixture) -> None:
         """Returns empty CoverArt when both release and release-group art fail.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         err = mb.ResponseError(cause=Exception("404 Not Found"))
@@ -293,8 +278,7 @@ class TestFetchCoverArt:
     def test_returns_empty_when_raw_is_falsy(self, mocker: MockerFixture) -> None:
         """Returns empty CoverArt when get_image_front returns empty bytes.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch("music_annotator.mb.get_image_front", return_value=b"")
@@ -306,8 +290,7 @@ class TestFetchCoverArt:
 
         The _infer_mime helper defaults to 'image/jpeg' for unknown image types.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         # Data starts with neither b'\xff\xd8' (JPEG) nor b'\x89PNG' (PNG)
@@ -320,8 +303,7 @@ class TestFetchCoverArt:
     def test_release_group_returns_empty_raw(self, mocker: MockerFixture) -> None:
         """Returns empty CoverArt when release-group image fetch returns empty bytes.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch(
@@ -348,8 +330,7 @@ class TestFetchWorkDetail:
     def test_fetches_and_returns_work(self, mocker: MockerFixture) -> None:
         """Fetches work from API and returns an MBWork instance.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch(
@@ -362,8 +343,7 @@ class TestFetchWorkDetail:
     def test_caches_result(self, mocker: MockerFixture) -> None:
         """Second call returns cached result without calling the API again.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mock_api = mocker.patch(
@@ -377,8 +357,7 @@ class TestFetchWorkDetail:
     def test_cache_hit_returns_correct_value(self, mocker: MockerFixture) -> None:
         """Cached value is returned on second call.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch(
@@ -392,8 +371,7 @@ class TestFetchWorkDetail:
     def test_returns_empty_mbwork_on_missing_key(self, mocker: MockerFixture) -> None:
         """Returns a default MBWork when 'work' key is absent from API response.
 
-        Args:
-            mocker: pytest-mock fixture.
+        :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch("music_annotator.mb.get_work_by_id", return_value={})

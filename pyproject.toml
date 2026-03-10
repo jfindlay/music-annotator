@@ -1,5 +1,5 @@
 [project]
-name = "music_annotator"
+name = "music-annotator"
 version = "0.1.0"
 authors = [
     { name = "Justin Findlay", email = "justin@findlay.space" },
@@ -25,8 +25,8 @@ dependencies = [
 music-annotator = "music_annotator.__main__:main"
 
 [project.urls]
-"Homepage" = "https://github.com/jfindlay/music_annotator/"
-"Bug Tracker" = "https://github.com/jfindlay/music_annotator/issues/"
+"Homepage" = "https://github.com/jfindlay/music-annotator/"
+"Bug Tracker" = "https://github.com/jfindlay/music-annotator/issues/"
 
 [build-system]
 requires = ["setuptools"]
@@ -45,21 +45,11 @@ music_annotator = ["py.typed"]
 
 [tool.mypy]
 python_version = "3.12"
-disallow_untyped_defs = true
-disallow_incomplete_defs = true
-warn_return_any = true
-warn_unused_ignores = true
-strict_equality = true
-extra_checks = true
+strict = true
 
 # musicbrainzngs ships no stubs; suppress the missing-stubs error
 [[tool.mypy.overrides]]
 module = "musicbrainzngs.*"
-ignore_missing_imports = true
-
-# mutagen ships py.typed but some internal modules are untyped
-[[tool.mypy.overrides]]
-module = "mutagen.*"
 ignore_missing_imports = true
 
 # pyfakefs is only installed in the test env; suppress missing-stubs in check_type env
@@ -107,7 +97,7 @@ select = ["I"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--cov=music_annotator --cov-report=term-missing --cov-report=html"
+addopts = "--cov=music_annotator --cov-report=term-missing"
 
 [tool.coverage.run]
 source = ["music_annotator"]
@@ -142,7 +132,7 @@ deps = ["pytest", "pytest-mock", "pytest-cov", "pyfakefs"]
 commands = [["pytest", "tests/"]]
 
 [tool.tox.env.check_type]
-deps = ["mypy", "pytest", "pytest-mock", "pyfakefs", "types-Pygments"]
+deps = ["mypy", "pytest", "pytest-mock", "pyfakefs"]
 commands = [["mypy", "src/", "tests/"]]
 
 [tool.tox.env.check_upgrade]
@@ -157,17 +147,15 @@ commands = [
 ]
 
 [tool.tox.env.check_format]
-allowlist_externals = ["ruff"]
 deps = ["ruff"]
 commands = [["ruff", "check", "src/", "tests/"], ["ruff", "format", "--check", "src/", "tests/"]]
 
 [tool.tox.env.check_lint]
-allowlist_externals = ["pylint"]
 deps = ["pylint", "pytest", "pytest-mock", "pyfakefs"]
 commands = [["pylint", "src/", "tests/"]]
 
 [tool.tox.env.fix_format]
-allowlist_externals = ["bash", "ruff"]
+allowlist_externals = ["bash"]
 deps = ["pyupgrade", "ruff"]
 commands = [
     [
