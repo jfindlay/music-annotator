@@ -97,14 +97,23 @@ class MBWorkRelation(BaseModel):
     """An entry in a ``work-relation-list`` on a recording or work.
 
     Important attributes: ``type`` (relation type, e.g. ``"parts"`` or ``"performance"``), ``direction``
-    (``"forward"``/``"backward"``), ``work`` (:class:`MBWorkStub`).
+    (``"forward"``/``"backward"``), ``work`` (:class:`MBWork`).
+
+    When the recording was fetched with the ``work-level-rels`` include, ``work`` is a fully populated
+    :class:`MBWork` (with its own ``artist_relation_list`` and ``work_relation_list``).  Without that
+    include it contains only ``id`` and ``title``.
+
+    .. note::
+        Because :class:`MBWork` is defined after this class, Pydantic's forward-reference resolution is
+        triggered by calling ``MBWorkRelation.model_rebuild()`` at module level after :class:`MBWork` is
+        defined.
     """
 
     type: str = ""
     direction: str = ""
     work_id: str = Field(default="", alias="work-id")
     work_title: str = Field(default="", alias="work-title")
-    work: MBWorkStub = Field(default_factory=MBWorkStub)
+    work: MBWork = Field(default_factory=lambda: MBWork())  # pylint: disable=unnecessary-lambda
 
     model_config = {"populate_by_name": True}
 
@@ -166,6 +175,10 @@ class MBWork(BaseModel):
         if isinstance(v, list):
             return v
         return []
+
+
+# MBWorkRelation.work is typed as MBWork (a forward reference resolved here).
+MBWorkRelation.model_rebuild()
 
 
 class MBLabel(BaseModel):

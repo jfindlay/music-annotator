@@ -1473,3 +1473,109 @@ class TestRunWithWorkHierarchy:
         )
         # fetch_work_detail should NOT be called (work id was empty)
         mock_work.assert_not_called()
+
+    def test_inlined_work_skips_fetch_work_detail(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When work-level-rels inlines the full work, fetch_work_detail is NOT called.
+
+        A recording whose performance-relation work already has a non-empty ``artist_relation_list``
+        (as supplied by the MB API ``work-level-rels`` include) should be used directly without an
+        extra round-trip to ``fetch_work_detail``.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        mocker.patch("music_annotator.mb.set_useragent")
+        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+
+        # Work with an inlined artist relation (simulates work-level-rels response)
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "Track",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [
+                        {
+                            "type": "performance",
+                            "work": {
+                                "id": "w1",
+                                "title": "The Work",
+                                "artist-relation-list": [{"type": "composer", "artist": {"id": "a1", "name": "Bach"}}],
+                                "work-relation-list": [],
+                            },
+                        }
+                    ],
+                }
+            )
+
+        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
+        mock_work = mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        # fetch_work_detail should NOT be called — inlined work data was used directly
+        mock_work.assert_not_called()
+
+    def test_stub_work_falls_back_to_fetch_work_detail(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When embedded work has no relation data (stub only), fetch_work_detail IS called.
+
+        This covers the fallback branch when ``work-level-rels`` is absent or the library returned
+        only a stub (empty ``artist_relation_list`` and ``work_relation_list``).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        mocker.patch("music_annotator.mb.set_useragent")
+        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+
+        # Work with no inlined relations (stub shape — both lists empty)
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "Track",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [{"type": "performance", "work": {"id": "w1", "title": "The Work"}}],
+                }
+            )
+
+        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
+        mock_work = mocker.patch(
+            "music_annotator.fetch_work_detail",
+            return_value=_w({"id": "w1", "title": "The Work", "work-relation-list": [], "artist-relation-list": []}),
+        )
+        mocker.patch("music_annotator.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        # fetch_work_detail MUST be called — work had no inlined relation data
+        mock_work.assert_called_once_with("w1")

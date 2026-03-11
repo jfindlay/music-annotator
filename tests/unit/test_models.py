@@ -14,7 +14,6 @@ from music_annotator.models import (
     MBRelease,
     MBWork,
     MBWorkRelation,
-    MBWorkStub,
     RoleBuckets,
     TrackTags,
     WorkDates,
@@ -425,27 +424,59 @@ def test_artist_entry_roundtrip(name: str, sort: str, mbid: str) -> None:
 
 
 class TestMBWorkRelation:
-    """Tests for MBWorkRelation.work typed access via MBWorkStub."""
+    """Tests for MBWorkRelation.work typed access via MBWork."""
 
     def test_work_id(self) -> None:
-        """work.id returns the id from the nested work stub."""
+        """work.id returns the id from the nested work."""
         rel = MBWorkRelation.model_validate({"type": "parts", "work": {"id": "w-abc", "title": "Symphony"}})
         assert rel.work.id == "w-abc"
 
     def test_work_title(self) -> None:
-        """work.title returns the title from the nested work stub."""
+        """work.title returns the title from the nested work."""
         rel = MBWorkRelation.model_validate({"type": "parts", "work": {"id": "w-abc", "title": "Symphony No. 1"}})
         assert rel.work.title == "Symphony No. 1"
 
     def test_work_id_empty_when_default(self) -> None:
-        """work.id returns empty string when constructed with default MBWorkStub."""
-        rel = MBWorkRelation(work=MBWorkStub())
+        """work.id returns empty string when constructed with default MBWork."""
+        rel = MBWorkRelation(work=MBWork())
         assert rel.work.id == ""
 
     def test_work_title_empty_when_default(self) -> None:
-        """work.title returns empty string when constructed with default MBWorkStub."""
-        rel = MBWorkRelation(work=MBWorkStub())
+        """work.title returns empty string when constructed with default MBWork."""
+        rel = MBWorkRelation(work=MBWork())
         assert rel.work.title == ""
+
+    def test_work_has_artist_relation_list_when_inlined(self) -> None:
+        """work.artist_relation_list is populated when work-level-rels inlines the full work."""
+        rel = MBWorkRelation.model_validate(
+            {
+                "type": "performance",
+                "work": {
+                    "id": "w-full",
+                    "title": "Symphony",
+                    "artist-relation-list": [{"type": "composer", "artist": {"id": "a1", "name": "Bach"}}],
+                },
+            }
+        )
+        assert rel.work.id == "w-full"
+        assert len(rel.work.artist_relation_list) == 1
+        assert rel.work.artist_relation_list[0].type == "composer"
+
+    def test_work_has_work_relation_list_when_inlined(self) -> None:
+        """work.work_relation_list is populated when work-level-rels inlines the full work."""
+        rel = MBWorkRelation.model_validate(
+            {
+                "type": "performance",
+                "work": {
+                    "id": "w-mov",
+                    "title": "Movement I",
+                    "work-relation-list": [{"type": "parts", "direction": "backward", "work": {"id": "w-top"}}],
+                },
+            }
+        )
+        assert rel.work.id == "w-mov"
+        assert len(rel.work.work_relation_list) == 1
+        assert rel.work.work_relation_list[0].type == "parts"
 
 
 # ---------------------------------------------------------------------------

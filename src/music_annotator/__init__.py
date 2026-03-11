@@ -366,7 +366,7 @@ def _get_recording_by_id(recording_id: str) -> dict[str, JSON]:
     """
     result: dict[str, JSON] = mb.get_recording_by_id(
         recording_id,
-        includes=["artists", "work-rels", "artist-rels"],
+        includes=["artists", "work-rels", "artist-rels", "work-level-rels"],
     )
     return result
 
@@ -478,6 +478,28 @@ def fetch_work_detail(work_id: str) -> MBWork:
     work = MBWork.model_validate(result.get("work", {}))
     _WORK_CACHE[work_id] = work
     return work
+
+
+def _get_bottom_work(embedded: MBWork) -> MBWork:
+    """Return the bottom work for a performance relation, using inlined data when available.
+
+    When ``musicbrainzngs`` is called with the ``work-level-rels`` include, the MB API inlines the
+    full work detail (including its own ``artist-relation-list`` and ``work-relation-list``) directly
+    inside the recording response.  In that case ``embedded`` already carries all the data needed and
+    no extra network round-trip is required.
+
+    If ``embedded`` has empty relation lists (stub shape — ``work-level-rels`` was absent or the
+    library did not parse the inlined data), fall back to :func:`fetch_work_detail`.
+
+    :param embedded: The :class:`~music_annotator.models.MBWork` extracted from the recording's
+        performance ``work-relation-list`` entry.
+    :returns: A fully populated :class:`~music_annotator.models.MBWork`.
+    """
+    if embedded.artist_relation_list or embedded.work_relation_list:
+        log.debug("bottom_work_inlined", work_id=embedded.id)
+        return embedded
+    log.debug("fetch_bottom_work", work_id=embedded.id)
+    return fetch_work_detail(embedded.id)
 
 
 # ---------------------------------------------------------------------------
@@ -1517,10 +1539,8 @@ def run(
             work_hierarchy: list[MBWork] = []
             for rel in rec_detail.work_relation_list:
                 if rel.type == "performance":
-                    bottom_work_id = rel.work.id
-                    if bottom_work_id:
-                        log.debug("fetch_bottom_work", work_id=bottom_work_id)
-                        bottom_work = fetch_work_detail(bottom_work_id)
+                    if rel.work.id:
+                        bottom_work = _get_bottom_work(rel.work)
                         work_hierarchy = build_work_hierarchy(bottom_work)
                     break
 
