@@ -1,6 +1,6 @@
 [project]
 name = "music-annotator"
-version = "0.1.0"
+dynamic = ["version"]
 authors = [
     { name = "Justin Findlay", email = "justin@findlay.space" },
 ]
@@ -30,8 +30,10 @@ music-annotator = "music_annotator.__main__:main"
 "Bug Tracker" = "https://github.com/jfindlay/music-annotator/issues/"
 
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
 
 [tool.setuptools]
 package-dir = { "" = "src" }

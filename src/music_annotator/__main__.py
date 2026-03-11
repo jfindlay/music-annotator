@@ -4,7 +4,7 @@ Configures structlog for human-friendly console output and exposes two subcomman
 
 * ``apply`` — copy and tag a directory of tracks for a known MusicBrainz release MBID.
 * ``search`` — search MusicBrainz for releases matching one or more source directories, prompt for confirmation, then apply tags
-interactively.
+  interactively.
 
 Usage::
 
@@ -12,19 +12,22 @@ Usage::
         --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
         --src-dir "/path/to/source/album" \\
         --dest-dir /tmp/music_library \\
-        [--user-agent "MyApp/1.0 contact@example.com"] \\
+        --user-agent-email contact@example.com \\
+        [--user-agent-app "MyApp/1.0"] \\
         [--dry-run] [--no-fetch-rels]
 
     music-annotator search \\
         --dest-dir /tmp/music_library \\
+        --user-agent-email contact@example.com \\
         /path/to/album1 /path/to/album2 \\
-        [--user-agent "MyApp/1.0 contact@example.com"] \\
+        [--user-agent-app "MyApp/1.0"] \\
         [--limit 10] [--dry-run] [--no-fetch-rels]
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import logging
 import sys
 import textwrap
@@ -33,6 +36,22 @@ from pathlib import Path
 import structlog
 
 import music_annotator
+
+_VERSION: str = importlib.metadata.version("music-annotator")
+_DEFAULT_USER_AGENT_APP: str = f"MusicAnnotator/{_VERSION}"
+
+
+def _resolve_path(value: str) -> Path:
+    """Expand user home directory, resolve symlinks, and make a path absolute.
+
+    Applied as the ``type=`` callable on every path argument so that all paths
+    reaching the rest of the program are fully resolved before any existence
+    checks occur.
+
+    :param value: The raw string value supplied on the command line.
+    :returns: A fully resolved :class:`~pathlib.Path`.
+    """
+    return Path(value).expanduser().resolve()
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -49,6 +68,15 @@ def _configure_logging(verbose: bool) -> None:
         stream=sys.stderr,
         level=level,
     )
+    # musicbrainzngs uses logger "musicbrainzngs" (defined in mbxml.py) and logs INFO messages for every XML field its parser
+    # has no explicit handler for.  Most of these are genuinely harmless (direction/begin/end/ended/artist/work on relations ARE
+    # parsed correctly; the messages fire due to a name collision between the elements list and inner_els dict).  Two fields are
+    # real data losses: artist/label/etc. "type-id" attribute (UUID form of the type string) and recording "first-release-date".
+    # Neither is currently used by music-annotator.
+    #
+    # The upstream fix in musicbrainzngs: add type-id to parse_artist attribs list, add first-release-date to parse_recording
+    # elements list — consider forking or contributing.
+    logging.getLogger("musicbrainzngs").setLevel(logging.WARNING)
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
@@ -77,8 +105,8 @@ class _Formatter(
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
     """Add arguments shared by both the ``apply`` and ``search`` subcommands.
 
-    Shared arguments are: ``--dest-dir``, ``--user-agent``, ``--dry-run``, and ``--no-fetch-rels``.  ``-v``/``--verbose`` lives
-    on the top-level parser so it must appear before the subcommand token.
+    Shared arguments are: ``--dest-dir``, ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``, and
+    ``--no-fetch-rels``.  ``-v``/``--verbose`` lives on the top-level parser so it must appear before the subcommand token.
 
     :param parser: The subcommand parser to which the arguments are added.
     """
@@ -86,14 +114,20 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--dest-dir",
         required=True,
         metavar="DIR",
-        type=Path,
+        type=_resolve_path,
         help="Root destination directory for the annotated music library.",
     )
     parser.add_argument(
-        "--user-agent",
-        default="MusicAnnotator/0.1 music-annotator@example.com",
+        "--user-agent-app",
+        default=_DEFAULT_USER_AGENT_APP,
         metavar="STRING",
-        help='MusicBrainz user-agent string in the form "AppName/Version contact@example.com".',
+        help='MusicBrainz user-agent app token in the form "AppName/Version" (default: %(default)s).',
+    )
+    parser.add_argument(
+        "--user-agent-email",
+        required=True,
+        metavar="EMAIL",
+        help="Contact e-mail address included in the MusicBrainz user-agent string.",
     )
     parser.add_argument(
         "--dry-run",
@@ -114,9 +148,9 @@ def _build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level CLI argument parser with ``apply`` and ``search`` subcommands.
 
     ``-v``/``--verbose`` is registered on the top-level parser and must appear before the subcommand token (e.g.
-    ``music-annotator -v apply ...``).  Both subcommands share ``--dest-dir``, ``--user-agent``, ``--dry-run``, and
-    ``--no-fetch-rels``.  The ``apply`` subcommand additionally requires ``--release-id`` and ``--src-dir``.  The ``search``
-    subcommand takes one or more positional source directories and an optional ``--limit``.
+    ``music-annotator -v apply ...``).  Both subcommands share ``--dest-dir``, ``--user-agent-app``, ``--user-agent-email``,
+    ``--dry-run``, and ``--no-fetch-rels``.  The ``apply`` subcommand additionally requires ``--release-id`` and ``--src-dir``.
+    The ``search`` subcommand takes one or more positional source directories and an optional ``--limit``.
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -124,6 +158,12 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="music-annotator",
         description=("Copy and tag classical music albums using MusicBrainz metadata and Classical Extras conventions."),
         formatter_class=_Formatter,
+    )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {_VERSION}",
     )
     parser.add_argument(
         "-v",
@@ -146,13 +186,15 @@ def _build_parser() -> argparse.ArgumentParser:
               music-annotator apply \\
                   --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
                   --src-dir "/mnt/music/Respighi - Pini di Roma" \\
-                  --dest-dir /tmp/music_library
+                  --dest-dir /tmp/music_library \\
+                  --user-agent-email tagger@example.com
 
               music-annotator apply \\
                   --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
                   --src-dir "/mnt/music/Respighi - Pini di Roma" \\
                   --dest-dir /tmp/music_library \\
-                  --user-agent "MyTagger/1.0 tagger@example.com" \\
+                  --user-agent-email tagger@example.com \\
+                  --user-agent-app "MyTagger/1.0" \\
                   --dry-run
             """),
     )
@@ -166,7 +208,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--src-dir",
         required=True,
         metavar="DIR",
-        type=Path,
+        type=_resolve_path,
         help="Directory containing the source audio files to copy and tag.",
     )
     _add_common_args(apply_parser)
@@ -182,11 +224,13 @@ def _build_parser() -> argparse.ArgumentParser:
             Examples:
               music-annotator search \\
                   --dest-dir /tmp/music_library \\
+                  --user-agent-email tagger@example.com \\
                   "/mnt/music/Respighi - Pini di Roma" \\
                   "/mnt/music/Brahms - Symphonies"
 
               music-annotator search \\
                   --dest-dir /tmp/music_library \\
+                  --user-agent-email tagger@example.com \\
                   --limit 5 --dry-run \\
                   /mnt/music/untagged/*
             """),
@@ -195,7 +239,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "src_dirs",
         nargs="+",
         metavar="DIR",
-        type=Path,
+        type=_resolve_path,
         help="One or more source directories to search and tag.",
     )
     search_parser.add_argument(
@@ -225,6 +269,8 @@ def main() -> None:
 
     log = structlog.get_logger(__name__)
 
+    user_agent = f"{args.user_agent_app} {args.user_agent_email}"
+
     match args.subcommand:
         case "apply":
             if not args.src_dir.is_dir():
@@ -235,7 +281,7 @@ def main() -> None:
                     release_id=args.release_id,
                     src_dir=args.src_dir,
                     dest_root=args.dest_dir,
-                    user_agent=args.user_agent,
+                    user_agent=user_agent,
                     dry_run=args.dry_run,
                     fetch_rels=not args.no_fetch_rels,
                 )
@@ -256,7 +302,7 @@ def main() -> None:
                 music_annotator.discover(
                     src_dirs=args.src_dirs,
                     dest_root=args.dest_dir,
-                    user_agent=args.user_agent,
+                    user_agent=user_agent,
                     dry_run=args.dry_run,
                     fetch_rels=not args.no_fetch_rels,
                     limit=args.limit,
