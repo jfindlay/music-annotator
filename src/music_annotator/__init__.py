@@ -59,7 +59,9 @@ Usage::
 
 from __future__ import annotations
 
+import datetime
 import functools
+import json
 import os
 import re
 import shutil
@@ -107,6 +109,8 @@ from music_annotator.models import (
     MBWork,
     RoleBuckets,
     TrackTags,
+    TransactionEntry,
+    TransactionLog,
     WorkDates,
     WorkHierarchyLevel,
 )
@@ -147,6 +151,8 @@ __all__ = [
     "parse_dir_hint",
     "search_releases_by_dir",
     "discover",
+    "write_transaction_log",
+    "JOURNAL_FILENAME",
 ]
 
 # ---------------------------------------------------------------------------
@@ -1452,6 +1458,54 @@ def find_source_files(src_dir: Path) -> list[Path]:
     )
 
 
+#: Filename of the JSON transaction journal written inside the destination root.
+JOURNAL_FILENAME: str = "music_annotator_journal.json"
+
+
+def write_transaction_log(journal_path: Path, new_entries: list[TransactionEntry]) -> None:
+    """Append ``new_entries`` to the JSON transaction journal at ``journal_path``.
+
+    If the journal file already exists and contains a valid JSON array of objects, the new entries are
+    merged into the existing list before writing.  If the file is absent, corrupt, or empty it is
+    (re-)created with only ``new_entries``.
+
+    The journal is written atomically: entries are serialised to a temporary in-memory string first
+    and the file is only opened for writing once the serialisation succeeds.
+
+    :param journal_path: Absolute path of the journal file (typically
+        ``<dest_root>/music_annotator_journal.json``).
+    :param new_entries: The :class:`~music_annotator.models.TransactionEntry` objects to append.
+    """
+    existing: list[JSON] = []
+    if journal_path.exists():
+        try:
+            raw = journal_path.read_text(encoding="utf-8")
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                existing = parsed
+        except (OSError, json.JSONDecodeError):
+            log.warning("journal_corrupt_reset", path=str(journal_path))
+
+    combined = TransactionLog(entries=[TransactionEntry.model_validate(e) for e in existing] + new_entries)
+    journal_path.write_text(
+        json.dumps([e.model_dump() for e in combined.entries], indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    log.info("journal_written", path=str(journal_path), total=len(combined.entries))
+
+
+def _check_collisions(dest_files: list[Path]) -> list[Path]:
+    """Return the subset of ``dest_files`` that already exist on disk.
+
+    Used by :func:`run` to identify which planned output files would be overwritten before copying
+    begins, so the user can be warned and asked whether to proceed.
+
+    :param dest_files: Ordered list of absolute destination paths to check.
+    :returns: A (possibly empty) list of paths from ``dest_files`` that already exist.
+    """
+    return [p for p in dest_files if p.exists()]
+
+
 def run(
     release_id: str,
     src_dir: Path,
@@ -1473,8 +1527,17 @@ def run(
        c. Build the full :class:`~music_annotator.models.TrackTags` model.
 
     4. Compute movement numbers and totals grouped by top-work MBID.
-    5. Copy each source file to the destination tree and apply tags.
-    6. Restore the source file's atime/mtime on the destination (``mutagen.save()`` would otherwise bump mtime).
+    5. Compute all destination paths and check for collisions with existing files.
+       If any destination files already exist (and ``dry_run`` is ``False``), print a warning listing
+       the conflicts and prompt the user:
+
+       * ``o`` / ``overwrite`` — continue and overwrite all conflicting files.
+       * ``s`` / ``skip`` — copy only the new files; leave existing files untouched.
+       * ``a`` / ``abort`` — raise :exc:`SystemExit` without copying anything.
+
+    6. Copy each source file to the destination tree, apply tags, and restore source timestamps.
+    7. Append a :class:`~music_annotator.models.TransactionEntry` per file to
+       ``<dest_root>/music_annotator_journal.json`` (created or updated atomically).
 
     :param release_id: The MusicBrainz release MBID.
     :param src_dir: Directory containing the source audio files.  Files are matched to release tracks by sorted filename
@@ -1482,12 +1545,14 @@ def run(
     :param dest_root: Root directory of the destination music library.
     :param user_agent: User-agent string passed to :func:`init_mb`.
     :param dry_run: When ``True``, log planned operations without copying or writing any files.  MB API calls for the
-        release and recording relations still happen so the planned tag data is logged accurately.
+        release and recording relations still happen so the planned tag data is logged accurately.  The collision prompt
+        and the journal write are also skipped.
     :param fetch_rels: When ``False``, skip per-recording lookups and produce minimal tags (faster but incomplete).
         Composer, conductor, work hierarchy, and Classical Extras tags will be absent.
     :raises mb.ResponseError: On a non-retryable MusicBrainz API error.
     :raises RuntimeError: If all retry attempts are exhausted for any API call.
     :raises OSError: If source files cannot be read or destination files cannot be written.
+    :raises SystemExit: With code 1 if the user chooses to abort when collisions are detected.
     """
     init_mb(user_agent)
 
@@ -1583,13 +1648,49 @@ def run(
                 barcode=release.barcode,
             )
 
-    # Copy and tag
+    # Build the full (src_file, dest_file) plan before touching the filesystem.
+    plan: list[tuple[int, Path, Path]] = []
     for idx, (src_file, (track, _medium_pos)) in enumerate(file_track_pairs):
         final_tags = tags_map[idx]
         dest_base = build_dest_path(dest_root, release, track, final_tags)
         dest_file = dest_base.with_suffix(src_file.suffix.lower())
-
         log.info("copy_track", src=src_file.name, dest=str(dest_file.relative_to(dest_root)))
+        plan.append((idx, src_file, dest_file))
+
+    # --- Collision detection and user prompt ---
+    skip_dest: set[Path] = set()
+    if not dry_run:
+        collisions = _check_collisions([dest for _, _, dest in plan])
+        if collisions:
+            print(f"\nWARNING: {len(collisions)} destination file(s) already exist:")
+            for p in collisions:
+                print(f"  {p}")
+            print("\nChoose an action:")
+            print("  [o] overwrite  — replace all existing files")
+            print("  [s] skip       — copy only new files, leave existing untouched")
+            print("  [a] abort      — quit without copying anything")
+            while True:
+                choice = input("Your choice [o/s/a]: ").strip().lower()
+                match choice:
+                    case "o" | "overwrite":
+                        log.info("collision_choice_overwrite", count=len(collisions))
+                        break
+                    case "s" | "skip":
+                        skip_dest = set(collisions)
+                        log.info("collision_choice_skip", skipped=len(skip_dest))
+                        break
+                    case "a" | "abort":
+                        log.warning("collision_choice_abort")
+                        raise SystemExit(1)
+                    case _:
+                        print("Please enter 'o', 's', or 'a'.")
+
+    # --- Copy, tag, and journal ---
+    journal_entries: list[TransactionEntry] = []
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+
+    for idx, src_file, dest_file in plan:
+        final_tags = tags_map[idx]
 
         if dry_run:
             log.info(
@@ -1598,6 +1699,28 @@ def run(
                 conductor=final_tags.conductor,
                 work=final_tags.work,
                 period=final_tags.period,
+            )
+            journal_entries.append(
+                TransactionEntry(
+                    timestamp=now,
+                    release_id=release_id,
+                    source=str(src_file),
+                    destination=str(dest_file),
+                    action="dry_run",
+                )
+            )
+            continue
+
+        if dest_file in skip_dest:
+            log.info("skip_existing", dest=str(dest_file.relative_to(dest_root)))
+            journal_entries.append(
+                TransactionEntry(
+                    timestamp=now,
+                    release_id=release_id,
+                    source=str(src_file),
+                    destination=str(dest_file),
+                    action="skipped",
+                )
             )
             continue
 
@@ -1623,6 +1746,19 @@ def run(
             log.error("tag_error", file=dest_file.name, error=str(exc))
 
         os.utime(dest_file, src_times)
+
+        journal_entries.append(
+            TransactionEntry(
+                timestamp=now,
+                release_id=release_id,
+                source=str(src_file),
+                destination=str(dest_file),
+                action="copied",
+            )
+        )
+
+    if not dry_run:
+        write_transaction_log(dest_root / JOURNAL_FILENAME, journal_entries)
 
     log.info("run_complete", dest=str(dest_root))
 

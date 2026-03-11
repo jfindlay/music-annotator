@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import musicbrainzngs as mb
 import pytest
+from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
 import music_annotator
 from music_annotator import (
+    _check_collisions,
     _mb_retry,
     fetch_cover_art,
     fetch_recording_detail,
     fetch_release,
     fetch_work_detail,
+    write_transaction_log,
 )
+from music_annotator.models import TransactionEntry
 
 # ---------------------------------------------------------------------------
 # _mb_retry
@@ -378,3 +384,160 @@ class TestFetchWorkDetail:
         result = fetch_work_detail("w-missing")
         assert result.id == ""
         assert result.title == ""
+
+
+# ---------------------------------------------------------------------------
+# _check_collisions
+# ---------------------------------------------------------------------------
+
+
+class TestCheckCollisions:
+    """Tests for _check_collisions helper."""
+
+    def test_no_collisions_when_all_new(self, fs: FakeFilesystem) -> None:
+        """Returns empty list when none of the destination files exist.
+
+        :param fs: pyfakefs fixture.
+        """
+        paths = [Path("/dest/a.flac"), Path("/dest/b.flac")]
+        fs.create_dir("/dest")
+        assert _check_collisions(paths) == []
+
+    def test_returns_existing_files(self, fs: FakeFilesystem) -> None:
+        """Returns only the paths that already exist.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        fs.create_file("/dest/exists.flac")
+        paths = [Path("/dest/exists.flac"), Path("/dest/new.flac")]
+        result = _check_collisions(paths)
+        assert result == [Path("/dest/exists.flac")]
+
+    def test_all_existing(self, fs: FakeFilesystem) -> None:
+        """Returns all paths when every destination file already exists.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        fs.create_file("/dest/a.flac")
+        fs.create_file("/dest/b.flac")
+        paths = [Path("/dest/a.flac"), Path("/dest/b.flac")]
+        result = _check_collisions(paths)
+        assert result == paths
+
+    def test_empty_list(self) -> None:
+        """Returns empty list for empty input.
+
+        No filesystem access needed.
+        """
+        assert _check_collisions([]) == []
+
+
+# ---------------------------------------------------------------------------
+# write_transaction_log
+# ---------------------------------------------------------------------------
+
+
+def _entry(action: str = "copied", src: str = "/src/01.flac", dest: str = "/dest/01.flac") -> TransactionEntry:
+    """Build a minimal TransactionEntry for testing.
+
+    :param action: The action string.
+    :param src: Source path string.
+    :param dest: Destination path string.
+    :returns: A :class:`~music_annotator.models.TransactionEntry`.
+    """
+    return TransactionEntry(
+        timestamp="2026-01-01T00:00:00+00:00",
+        release_id="rel-1",
+        source=src,
+        destination=dest,
+        action=action,
+    )
+
+
+class TestWriteTransactionLog:
+    """Tests for write_transaction_log."""
+
+    def test_creates_new_journal_file(self, fs: FakeFilesystem) -> None:
+        """Creates the journal file when it does not yet exist.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        journal = Path("/dest/music_annotator_journal.json")
+        entry = _entry()
+        write_transaction_log(journal, [entry])
+        assert journal.exists()
+        data = json.loads(journal.read_text(encoding="utf-8"))
+        assert len(data) == 1
+        assert data[0]["action"] == "copied"
+        assert data[0]["source"] == "/src/01.flac"
+
+    def test_appends_to_existing_journal(self, fs: FakeFilesystem) -> None:
+        """New entries are appended to existing journal contents.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        journal = Path("/dest/music_annotator_journal.json")
+        first = _entry(action="copied", src="/src/01.flac", dest="/dest/01.flac")
+        write_transaction_log(journal, [first])
+
+        second = _entry(action="skipped", src="/src/02.flac", dest="/dest/02.flac")
+        write_transaction_log(journal, [second])
+
+        data = json.loads(journal.read_text(encoding="utf-8"))
+        assert len(data) == 2
+        assert data[0]["action"] == "copied"
+        assert data[1]["action"] == "skipped"
+
+    def test_corrupt_journal_is_reset(self, fs: FakeFilesystem) -> None:
+        """A corrupt journal file is overwritten with only the new entries.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        journal = Path("/dest/music_annotator_journal.json")
+        journal.write_text("NOT VALID JSON", encoding="utf-8")
+        entry = _entry()
+        write_transaction_log(journal, [entry])
+        data = json.loads(journal.read_text(encoding="utf-8"))
+        assert len(data) == 1
+
+    def test_non_list_json_is_reset(self, fs: FakeFilesystem) -> None:
+        """A journal containing valid JSON but not a list is overwritten.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        journal = Path("/dest/music_annotator_journal.json")
+        journal.write_text('{"not": "a list"}', encoding="utf-8")
+        entry = _entry()
+        write_transaction_log(journal, [entry])
+        data = json.loads(journal.read_text(encoding="utf-8"))
+        assert len(data) == 1
+
+    def test_multiple_entries_written(self, fs: FakeFilesystem) -> None:
+        """Multiple entries are all written in a single call.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        journal = Path("/dest/music_annotator_journal.json")
+        entries = [_entry(src=f"/src/0{i}.flac", dest=f"/dest/0{i}.flac") for i in range(1, 4)]
+        write_transaction_log(journal, entries)
+        data = json.loads(journal.read_text(encoding="utf-8"))
+        assert len(data) == 3
+
+    def test_dry_run_entries_preserved(self, fs: FakeFilesystem) -> None:
+        """Entries with action='dry_run' are written and preserved correctly.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        journal = Path("/dest/music_annotator_journal.json")
+        entry = _entry(action="dry_run")
+        write_transaction_log(journal, [entry])
+        data = json.loads(journal.read_text(encoding="utf-8"))
+        assert data[0]["action"] == "dry_run"

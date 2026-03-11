@@ -16,6 +16,8 @@ from music_annotator.models import (
     MBWorkRelation,
     RoleBuckets,
     TrackTags,
+    TransactionEntry,
+    TransactionLog,
     WorkDates,
     WorkHierarchyLevel,
 )
@@ -507,3 +509,72 @@ class TestMBWorkCoerceAttributesList:
         """A non-list, non-None value (e.g. a bare string) returns []."""
         w = MBWork.model_validate({"attribute-list": "unexpected"})
         assert w.attribute_list == []
+
+
+# ---------------------------------------------------------------------------
+# TransactionEntry
+# ---------------------------------------------------------------------------
+
+
+class TestTransactionEntry:
+    """Tests for TransactionEntry model."""
+
+    def test_fields_round_trip(self) -> None:
+        """All fields survive a model_dump / model_validate round trip."""
+        entry = TransactionEntry(
+            timestamp="2026-01-01T00:00:00+00:00",
+            release_id="rel-abc",
+            source="/src/01.flac",
+            destination="/dest/01.flac",
+            action="copied",
+        )
+        data = entry.model_dump()
+        restored = TransactionEntry.model_validate(data)
+        assert restored.timestamp == "2026-01-01T00:00:00+00:00"
+        assert restored.release_id == "rel-abc"
+        assert restored.source == "/src/01.flac"
+        assert restored.destination == "/dest/01.flac"
+        assert restored.action == "copied"
+
+    def test_action_skipped(self) -> None:
+        """action field accepts 'skipped'."""
+        entry = TransactionEntry(timestamp="t", release_id="r", source="s", destination="d", action="skipped")
+        assert entry.action == "skipped"
+
+    def test_action_dry_run(self) -> None:
+        """action field accepts 'dry_run'."""
+        entry = TransactionEntry(timestamp="t", release_id="r", source="s", destination="d", action="dry_run")
+        assert entry.action == "dry_run"
+
+
+# ---------------------------------------------------------------------------
+# TransactionLog
+# ---------------------------------------------------------------------------
+
+
+class TestTransactionLog:
+    """Tests for TransactionLog model."""
+
+    def test_default_entries_is_empty(self) -> None:
+        """Default TransactionLog has an empty entries list."""
+        log = TransactionLog()
+        assert log.entries == []
+
+    def test_entries_validated(self) -> None:
+        """Entries are coerced from raw dicts via model_validate."""
+        log = TransactionLog.model_validate(
+            {
+                "entries": [
+                    {
+                        "timestamp": "2026-01-01T00:00:00+00:00",
+                        "release_id": "r",
+                        "source": "s",
+                        "destination": "d",
+                        "action": "copied",
+                    }
+                ]
+            }
+        )
+        assert len(log.entries) == 1
+        assert isinstance(log.entries[0], TransactionEntry)
+        assert log.entries[0].action == "copied"

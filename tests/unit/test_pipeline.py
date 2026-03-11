@@ -4,13 +4,16 @@ find_source_files, and run (non-dry-run).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
+import pytest
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
 import music_annotator
 from music_annotator import (
+    JOURNAL_FILENAME,
     apply_tags_flac,
     apply_tags_mp3,
     build_cea_performers,
@@ -1579,3 +1582,346 @@ class TestRunWithWorkHierarchy:
         )
         # fetch_work_detail MUST be called — work had no inlined relation data
         mock_work.assert_called_once_with("w1")
+
+
+# ---------------------------------------------------------------------------
+# run() — collision detection, user prompt, and journal
+# ---------------------------------------------------------------------------
+
+
+def _setup_single_track_run(mocker: MockerFixture, fs: FakeFilesystem, src: Path, dest: Path) -> None:
+    """Set up a minimal single-track run with all MB API calls mocked.
+
+    Creates src/01.flac, patches fetch_release/fetch_cover_art/fetch_recording_detail/
+    fetch_work_detail/mb.set_useragent, and patches apply_tags_flac to a no-op.
+
+    :param mocker: pytest-mock fixture.
+    :param fs: pyfakefs fixture.
+    :param src: Source directory path.
+    :param dest: Destination root path.
+    """
+    fs.create_dir(str(src))
+    fs.create_dir(str(dest))
+    fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+    mocker.patch("music_annotator.mb.set_useragent")
+    mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
+    mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+
+    def _fetch_rec(rec_id: str) -> MBRecording:
+        return _rec(
+            {
+                "id": rec_id,
+                "title": "Track",
+                "artist-credit": [],
+                "artist-relation-list": [],
+                "work-relation-list": [],
+            }
+        )
+
+    mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
+    mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
+    mocker.patch("music_annotator.apply_tags_flac")
+
+
+class TestRunCollisionAndJournal:
+    """Tests for run() collision detection, user prompt, and transaction journal."""
+
+    def test_journal_written_on_successful_copy(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """A journal file is written to dest_root after a successful copy run.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        journal_path = dest / JOURNAL_FILENAME
+        assert journal_path.exists()
+        data = json.loads(journal_path.read_text(encoding="utf-8"))
+        assert len(data) == 1
+        assert data[0]["action"] == "copied"
+        assert data[0]["release_id"] == "rel-1"
+
+    def test_journal_not_written_in_dry_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """No journal file is written when dry_run=True.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=True,
+            fetch_rels=False,
+        )
+        assert not (dest / JOURNAL_FILENAME).exists()
+
+    def test_no_collision_no_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """No prompt is shown when no destination files already exist.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+        mock_input = mocker.patch("builtins.input")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+        mock_input.assert_not_called()
+
+    def test_collision_overwrite_copies_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Choosing 'overwrite' when a collision exists still copies and tags the file.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        # Pre-populate the destination with any file to create a guaranteed collision.
+        # We patch _check_collisions to return a fixed path so we don't depend on the
+        # exact dest path that build_dest_path would compute.
+        collision_path = dest / "existing.flac"
+        fs.create_file(str(collision_path))
+        mocker.patch("music_annotator._check_collisions", return_value=[collision_path])
+        mocker.patch("builtins.input", return_value="o")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+        # File was copied (at least one flac in dest tree, excluding the pre-existing one)
+        flac_files = [p for p in dest.rglob("*.flac") if p != collision_path]
+        assert len(flac_files) >= 1
+
+    def test_collision_overwrite_journal_action_copied(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Journal records action='copied' for files written on overwrite choice.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        collision_path = dest / "existing.flac"
+        fs.create_file(str(collision_path))
+        mocker.patch("music_annotator._check_collisions", return_value=[collision_path])
+        mocker.patch("builtins.input", return_value="overwrite")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+        data = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
+        assert any(e["action"] == "copied" for e in data)
+
+    def test_collision_skip_skips_existing_and_copies_new(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Choosing 'skip' when collisions exist: conflicting files are skipped, new files are copied.
+
+        Uses a 2-track release so there is one collision and one new file.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        mocker.patch("music_annotator.mb.set_useragent")
+        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=2))
+        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
+            )
+
+        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
+        mock_tag = mocker.patch("music_annotator.apply_tags_flac")
+
+        # We'll capture the planned dest paths by letting build_dest_path run, then
+        # intercept _check_collisions to report the first dest as a collision.
+        captured_dests: list[Path] = []
+
+        def _capture_check(paths: list[Path]) -> list[Path]:
+            captured_dests.extend(paths)
+            return [paths[0]]  # first file is the collision
+
+        mocker.patch("music_annotator._check_collisions", side_effect=_capture_check)  # pylint: disable=protected-access
+        mocker.patch("builtins.input", return_value="s")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        # apply_tags_flac should have been called exactly once (the non-skipped file)
+        assert mock_tag.call_count == 1
+
+        # Journal should have one skipped and one copied
+        data = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
+        actions = {e["action"] for e in data}
+        assert "skipped" in actions
+        assert "copied" in actions
+
+    def test_collision_abort_raises_system_exit(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Choosing 'abort' when collisions exist raises SystemExit(1) without copying anything.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        collision_path = dest / "existing.flac"
+        fs.create_file(str(collision_path))
+        mocker.patch("music_annotator._check_collisions", return_value=[collision_path])
+        mocker.patch("builtins.input", return_value="a")
+
+        with pytest.raises(SystemExit) as exc_info:
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=False,
+            )
+        assert exc_info.value.code == 1
+        # No journal should have been written
+        assert not (dest / JOURNAL_FILENAME).exists()
+
+    def test_collision_abort_long_form_raises_system_exit(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Choosing 'abort' (long form) when collisions exist raises SystemExit(1).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        collision_path = dest / "existing.flac"
+        fs.create_file(str(collision_path))
+        mocker.patch("music_annotator._check_collisions", return_value=[collision_path])
+        mocker.patch("builtins.input", return_value="abort")
+
+        with pytest.raises(SystemExit) as exc_info:
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=False,
+            )
+        assert exc_info.value.code == 1
+
+    def test_collision_invalid_then_valid_input(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Invalid prompt input is ignored until a valid choice is entered.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        collision_path = dest / "existing.flac"
+        fs.create_file(str(collision_path))
+        mocker.patch("music_annotator._check_collisions", return_value=[collision_path])
+        # First two inputs are invalid; third is valid "skip"
+        mocker.patch("builtins.input", side_effect=["x", "yes", "skip"])
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+        # Run completed (chose skip on 3rd attempt); journal should exist
+        assert (dest / JOURNAL_FILENAME).exists()
+
+    def test_journal_appends_across_multiple_runs(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Journal entries accumulate across multiple calls to run().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        # First run
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+        data_after_first = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
+        assert len(data_after_first) == 1
+
+        # Patch so the second run doesn't try to re-copy (would be a no-op anyway in fake fs,
+        # but reset the MB mock return to avoid interaction with the first run's cache).
+        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator._check_collisions", return_value=[])  # pylint: disable=protected-access
+        mocker.patch("music_annotator.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+        data_after_second = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
+        assert len(data_after_second) == 2

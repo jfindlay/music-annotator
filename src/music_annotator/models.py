@@ -692,3 +692,31 @@ class CoverArt(BaseModel):
         return len(self.data) > 0
 
     model_config = {"arbitrary_types_allowed": True}
+
+
+class TransactionEntry(BaseModel):
+    """A single entry in the :class:`TransactionLog` describing one file operation.
+
+    Important attributes: ``timestamp`` (ISO-8601 UTC string), ``release_id`` (MusicBrainz MBID),
+    ``source`` (absolute path of the input audio file), ``destination`` (absolute path of the output
+    file including extension), ``action`` (one of ``"copied"``, ``"skipped"``, ``"dry_run"``).
+    """
+
+    timestamp: str
+    release_id: str
+    source: str
+    destination: str
+    action: str  # "copied" | "skipped" | "dry_run"
+
+
+class TransactionLog(BaseModel):
+    """A journal of file operations performed by :func:`~music_annotator.run`.
+
+    Persisted as a JSON array at ``<dest_root>/music_annotator_journal.json``.  Each call to
+    :func:`~music_annotator.write_transaction_log` appends new entries to any that already exist in
+    that file, so the log accumulates across multiple runs.
+
+    Important attributes: ``entries`` (list of :class:`TransactionEntry`).
+    """
+
+    entries: list[TransactionEntry] = Field(default_factory=list)
