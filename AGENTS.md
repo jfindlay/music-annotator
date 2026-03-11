@@ -22,7 +22,8 @@ music-annotator/
     example/
       test_example.py     ← full-pipeline integration smoke tests
   pyproject.toml      ← all config (mypy, pylint, ruff, tox, coverage)
-  venv/               ← project-local venv; contains tox + tox-uv; recreate with `virtualenv venv` if needed
+  venv/               ← project-local venv; contains tox + tox-uv; recreate with `virtualenv venv` if needed; not tracked in
+                        git
 ```
 
 ## Tooling

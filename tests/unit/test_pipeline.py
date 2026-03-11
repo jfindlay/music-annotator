@@ -1,5 +1,6 @@
-"""Unit tests for pipeline functions: build_cea_performers, build_track_tags,
-apply_tags_flac, apply_tags_mp3, find_source_files, and run (non-dry-run)."""
+"""Unit tests for pipeline functions: build_cea_performers, build_track_tags, apply_tags_flac, apply_tags_mp3,
+find_source_files, and run (non-dry-run).
+"""
 
 from __future__ import annotations
 

@@ -1,9 +1,7 @@
 """Example / integration smoke tests for music_annotator.run().
 
-These tests exercise the full pipeline end-to-end against a fabricated
-two-track release.  All MusicBrainz API calls are replaced by pytest-mock
-stubs and all file I/O is handled by pyfakefs so no real network or disk
-access occurs.
+These tests exercise the full pipeline end-to-end against a fabricated two-track release.  All MusicBrainz API calls are
+replaced by pytest-mock stubs and all file I/O is handled by pyfakefs so no real network or disk access occurs.
 """
 
 from __future__ import annotations

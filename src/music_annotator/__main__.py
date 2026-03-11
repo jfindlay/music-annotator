@@ -1,15 +1,25 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and delegates to :func:`~music_annotator.run`.
+Configures structlog for human-friendly console output and exposes two subcommands:
+
+* ``apply`` — copy and tag a directory of tracks for a known MusicBrainz release MBID.
+* ``search`` — search MusicBrainz for releases matching one or more source directories, prompt for confirmation, then apply tags
+interactively.
 
 Usage::
 
-    python -m music_annotator \\
-        --release-id  53c4d36c-1032-4f78-baba-fc972249d7d1 \\
+    music-annotator apply \\
+        --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
         --src-dir "/path/to/source/album" \\
         --dest-dir /tmp/music_library \\
         [--user-agent "MyApp/1.0 contact@example.com"] \\
         [--dry-run] [--no-fetch-rels]
+
+    music-annotator search \\
+        --dest-dir /tmp/music_library \\
+        /path/to/album1 /path/to/album2 \\
+        [--user-agent "MyApp/1.0 contact@example.com"] \\
+        [--limit 10] [--dry-run] [--no-fetch-rels]
 """
 
 from __future__ import annotations
@@ -64,48 +74,14 @@ class _Formatter(
     """Combined formatter that shows argument defaults and preserves raw epilog/description formatting."""
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    """Build and return the CLI argument parser.
+def _add_common_args(parser: argparse.ArgumentParser) -> None:
+    """Add arguments shared by both the ``apply`` and ``search`` subcommands.
 
-    Registers all ``music-annotator`` arguments with help text, defaults, and types.  The epilog contains usage examples
-    rendered verbatim thanks to :class:`_Formatter`.
+    Shared arguments are: ``--dest-dir``, ``--user-agent``, ``--dry-run``, and ``--no-fetch-rels``.  ``-v``/``--verbose`` lives
+    on the top-level parser so it must appear before the subcommand token.
 
-    :returns: A fully configured :class:`argparse.ArgumentParser` instance.
+    :param parser: The subcommand parser to which the arguments are added.
     """
-    parser = argparse.ArgumentParser(
-        prog="music-annotator",
-        description=(
-            "Copy and tag a classical music album directory using MusicBrainz metadata, following Classical Extras conventions."
-        ),
-        formatter_class=_Formatter,
-        epilog=textwrap.dedent("""\
-            Examples:
-              python -m music_annotator \\
-                  --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
-                  --src-dir "/mnt/music/Respighi - Pini di Roma" \\
-                  --dest-dir /tmp/music_library
-
-              python -m music_annotator \\
-                  --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
-                  --src-dir "/mnt/music/Respighi - Pini di Roma" \\
-                  --dest-dir /tmp/music_library \\
-                  --user-agent "MyTagger/1.0 tagger@example.com" \\
-                  --dry-run
-            """),
-    )
-    parser.add_argument(
-        "--release-id",
-        required=True,
-        metavar="MBID",
-        help="MusicBrainz release MBID (UUID) to fetch metadata for.",
-    )
-    parser.add_argument(
-        "--src-dir",
-        required=True,
-        metavar="DIR",
-        type=Path,
-        help="Directory containing the source audio files to copy and tag.",
-    )
     parser.add_argument(
         "--dest-dir",
         required=True,
@@ -128,25 +104,117 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-fetch-rels",
         action="store_true",
         help=(
-            "Skip per-recording relationship lookups (faster but produces minimal tags). Composer, conductor, work "
-            "hierarchy, and Classical Extras tags will be absent."
+            "Skip per-recording relationship lookups (faster but produces minimal tags). Composer, conductor, work hierarchy, "
+            "and Classical Extras tags will be absent."
         ),
+    )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """Build and return the top-level CLI argument parser with ``apply`` and ``search`` subcommands.
+
+    ``-v``/``--verbose`` is registered on the top-level parser and must appear before the subcommand token (e.g.
+    ``music-annotator -v apply ...``).  Both subcommands share ``--dest-dir``, ``--user-agent``, ``--dry-run``, and
+    ``--no-fetch-rels``.  The ``apply`` subcommand additionally requires ``--release-id`` and ``--src-dir``.  The ``search``
+    subcommand takes one or more positional source directories and an optional ``--limit``.
+
+    :returns: A fully configured :class:`argparse.ArgumentParser` instance.
+    """
+    parser = argparse.ArgumentParser(
+        prog="music-annotator",
+        description=("Copy and tag classical music albums using MusicBrainz metadata and Classical Extras conventions."),
+        formatter_class=_Formatter,
     )
     parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable DEBUG-level logging.",
+        help="Enable DEBUG-level logging (must appear before the subcommand).",
     )
+    subparsers = parser.add_subparsers(dest="subcommand", metavar="SUBCOMMAND")
+    subparsers.required = True
+
+    # ------------------------------------------------------------------
+    # apply subcommand
+    # ------------------------------------------------------------------
+    apply_parser = subparsers.add_parser(
+        "apply",
+        help="Copy and tag a source directory for a known MusicBrainz release MBID.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Examples:
+              music-annotator apply \\
+                  --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
+                  --src-dir "/mnt/music/Respighi - Pini di Roma" \\
+                  --dest-dir /tmp/music_library
+
+              music-annotator apply \\
+                  --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
+                  --src-dir "/mnt/music/Respighi - Pini di Roma" \\
+                  --dest-dir /tmp/music_library \\
+                  --user-agent "MyTagger/1.0 tagger@example.com" \\
+                  --dry-run
+            """),
+    )
+    apply_parser.add_argument(
+        "--release-id",
+        required=True,
+        metavar="MBID",
+        help="MusicBrainz release MBID (UUID) to fetch metadata for.",
+    )
+    apply_parser.add_argument(
+        "--src-dir",
+        required=True,
+        metavar="DIR",
+        type=Path,
+        help="Directory containing the source audio files to copy and tag.",
+    )
+    _add_common_args(apply_parser)
+
+    # ------------------------------------------------------------------
+    # search subcommand
+    # ------------------------------------------------------------------
+    search_parser = subparsers.add_parser(
+        "search",
+        help="Search MusicBrainz for releases matching source directories, confirm, and apply.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Examples:
+              music-annotator search \\
+                  --dest-dir /tmp/music_library \\
+                  "/mnt/music/Respighi - Pini di Roma" \\
+                  "/mnt/music/Brahms - Symphonies"
+
+              music-annotator search \\
+                  --dest-dir /tmp/music_library \\
+                  --limit 5 --dry-run \\
+                  /mnt/music/untagged/*
+            """),
+    )
+    search_parser.add_argument(
+        "src_dirs",
+        nargs="+",
+        metavar="DIR",
+        type=Path,
+        help="One or more source directories to search and tag.",
+    )
+    search_parser.add_argument(
+        "--limit",
+        type=int,
+        default=10,
+        metavar="N",
+        help="Maximum number of MusicBrainz search candidates to display per directory.",
+    )
+    _add_common_args(search_parser)
+
     return parser
 
 
 def main() -> None:
-    """Parse CLI arguments, configure logging, and invoke :func:`~music_annotator.run`.
+    """Parse CLI arguments, configure logging, and dispatch to ``apply`` or ``search``.
 
-    This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates that
-    ``--src-dir`` exists before delegating to :func:`~music_annotator.run`, and converts any unhandled exception or
-    keyboard interrupt into a logged error with exit code 1.
+    This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
+    before delegating and converts any unhandled exception or keyboard interrupt into a logged error with exit code 1.
 
     :raises SystemExit: With code 0 on success, code 1 on unrecoverable error.
     """
@@ -157,25 +225,52 @@ def main() -> None:
 
     log = structlog.get_logger(__name__)
 
-    if not args.src_dir.is_dir():
-        log.error("src_dir_not_found", path=str(args.src_dir))
-        sys.exit(1)
+    match args.subcommand:
+        case "apply":
+            if not args.src_dir.is_dir():
+                log.error("src_dir_not_found", path=str(args.src_dir))
+                sys.exit(1)
+            try:
+                music_annotator.run(
+                    release_id=args.release_id,
+                    src_dir=args.src_dir,
+                    dest_root=args.dest_dir,
+                    user_agent=args.user_agent,
+                    dry_run=args.dry_run,
+                    fetch_rels=not args.no_fetch_rels,
+                )
+            except KeyboardInterrupt:
+                log.warning("interrupted")
+                sys.exit(1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("fatal_error", error=str(exc), exc_info=True)
+                sys.exit(1)
 
-    try:
-        music_annotator.run(
-            release_id=args.release_id,
-            src_dir=args.src_dir,
-            dest_root=args.dest_dir,
-            user_agent=args.user_agent,
-            dry_run=args.dry_run,
-            fetch_rels=not args.no_fetch_rels,
-        )
-    except KeyboardInterrupt:
-        log.warning("interrupted")
-        sys.exit(1)
-    except Exception as exc:  # noqa: BLE001
-        log.error("fatal_error", error=str(exc), exc_info=True)
-        sys.exit(1)
+        case "search":
+            missing = [str(d) for d in args.src_dirs if not d.is_dir()]
+            if missing:
+                for path in missing:
+                    log.error("src_dir_not_found", path=path)
+                sys.exit(1)
+            try:
+                music_annotator.discover(
+                    src_dirs=args.src_dirs,
+                    dest_root=args.dest_dir,
+                    user_agent=args.user_agent,
+                    dry_run=args.dry_run,
+                    fetch_rels=not args.no_fetch_rels,
+                    limit=args.limit,
+                )
+            except KeyboardInterrupt:
+                log.warning("interrupted")
+                sys.exit(1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("fatal_error", error=str(exc), exc_info=True)
+                sys.exit(1)
+
+        case _:  # pragma: no cover
+            parser.print_help()
+            sys.exit(1)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -18,6 +18,7 @@ dependencies = [
     "mutagen==1.47",
     "musicbrainzngs==0.7.1",
     "pydantic==2.12.5",
+    "PyYAML==6.0.1",
     "structlog==25.5.0",
 ]
 
@@ -132,7 +133,7 @@ deps = ["pytest", "pytest-mock", "pytest-cov", "pyfakefs"]
 commands = [["pytest", "tests/"]]
 
 [tool.tox.env.check_type]
-deps = ["mypy", "pytest", "pytest-mock", "pyfakefs"]
+deps = ["mypy", "pytest", "pytest-mock", "pyfakefs", "types-PyYAML"]
 commands = [["mypy", "src/", "tests/"]]
 
 [tool.tox.env.check_upgrade]

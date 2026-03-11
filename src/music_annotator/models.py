@@ -633,6 +633,34 @@ class TrackTags(BaseModel):
         return out
 
 
+class MBReleaseCandidate(BaseModel):
+    """A single result from a MusicBrainz release search, enriched with a human-readable summary.
+
+    This model is produced by :func:`~music_annotator.search_releases_by_dir` and consumed by
+    :func:`~music_annotator.discover` to display ranked candidates to the user for confirmation.
+
+    Important attributes:
+        ``release_id`` (MBID of the release), ``score`` (MB relevance score 0–100),
+        ``title`` (release title), ``artist`` (credit phrase), ``date`` (release date),
+        ``format`` (medium format, e.g. ``"CD"``), ``tracks`` (total track count),
+        ``label`` (label name), ``catalog_number``, ``country``, ``status``,
+        ``mb_url`` (canonical MusicBrainz URL for the release).
+    """
+
+    release_id: str = ""
+    score: int = 0
+    title: str = ""
+    artist: str = ""
+    date: str = ""
+    format: str = ""
+    tracks: int = 0
+    label: str = ""
+    catalog_number: str = ""
+    country: str = ""
+    status: str = ""
+    mb_url: str = ""
+
+
 class CoverArt(BaseModel):
     """Cover art image bytes and inferred MIME type.
 
