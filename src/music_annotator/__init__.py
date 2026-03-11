@@ -61,6 +61,7 @@ from __future__ import annotations
 
 import datetime
 import functools
+import hashlib
 import json
 import os
 import re
@@ -160,6 +161,10 @@ __all__ = [
     "apply_tags_flac",
     "apply_tags_mp3",
     "find_source_files",
+    "_sha256_file",
+    "_read_tags_flac",
+    "_read_tags_mp3",
+    "_verify_copy",
     "run",
     "parse_disc_info_yaml",
     "parse_disc_toc",
@@ -1339,6 +1344,72 @@ def apply_tags_flac(dest_file: Path, tags: TrackTags, cover: CoverArt | None = N
     log.debug("tagged_flac", path=str(dest_file))
 
 
+#: Standard ID3 text-frame keys written by :func:`apply_tags_mp3` (excluding ``TRACKNUMBER`` which uses special
+#: ``N/total`` formatting handled separately).
+_MP3_STD_KEYS: frozenset[str] = frozenset(
+    {
+        "TITLE",
+        "ARTIST",
+        "ALBUMARTIST",
+        "ALBUM",
+        "TRACKNUMBER",
+        "DISCNUMBER",
+        "DATE",
+        "ORIGINALDATE",
+        "COMPOSER",
+        "CONDUCTOR",
+        "ORGANIZATION",
+    }
+)
+
+#: Mapping from uppercase tag-dict key to TXXX frame description string, used by both :func:`apply_tags_mp3` and
+#: :func:`_read_tags_mp3` so that the same table drives both writing and read-back verification.
+_MP3_TXXX_MAP: dict[str, str] = {
+    "MUSICBRAINZ_ALBUMID": "MusicBrainz Album Id",
+    "MUSICBRAINZ_TRACKID": "MusicBrainz Release Track Id",
+    "MUSICBRAINZ_RECORDINGID": "MusicBrainz Track Id",
+    "MUSICBRAINZ_RELEASEGROUPID": "MusicBrainz Release Group Id",
+    "MUSICBRAINZ_ALBUMARTISTID": "MusicBrainz Album Artist Id",
+    "MUSICBRAINZ_ARTISTID": "MusicBrainz Artist Id",
+    "MUSICBRAINZ_WORKID": "MusicBrainz Work Id",
+    "MUSICBRAINZ_CONDUCTORID": "MusicBrainz Conductor Id",
+    "MUSICBRAINZ_COMPOSERID": "MusicBrainz Composer Id",
+    "CATALOGNUMBER": "CATALOGNUMBER",
+    "BARCODE": "BARCODE",
+    "WORK": "WORK",
+    "GROUPHEADING": "GROUPHEADING",
+    "TOP_WORK": "TOP_WORK",
+    "PART": "PART",
+    "MOVEMENT": "MOVEMENT",
+    "MOVEMENTNUMBER": "MOVEMENTNUMBER",
+    "MOVEMENTTOTAL": "MOVEMENTTOTAL",
+    "IS_CLASSICAL": "IS_CLASSICAL",
+    "GENRE": "GENRE",
+    "PERIOD": "PERIOD",
+    "KEY": "KEY",
+    "WORK_YEAR": "WORK_YEAR",
+    "COMPOSED_DATE": "COMPOSED_DATE",
+    "LANGUAGE": "LANGUAGE",
+    "SCRIPT": "SCRIPT",
+    "RELEASETYPE": "MusicBrainz Album Type",
+    "RELEASESTATUS": "MusicBrainz Album Status",
+    "SOLOISTS": "SOLOISTS",
+    "ENSEMBLE": "ENSEMBLE",
+    "CEA_RECORDING_ARTIST": "CEA_RECORDING_ARTIST",
+    "CEA_SOLOISTS": "CEA_SOLOISTS",
+    "CEA_ENSEMBLES": "CEA_ENSEMBLES",
+    "CEA_CONDUCTORS": "CEA_CONDUCTORS",
+    "CEA_COMPOSERS": "CEA_COMPOSERS",
+    "CWP_WORK_TOP": "CWP_WORK_TOP",
+    "CWP_GROUPHEADING": "CWP_GROUPHEADING",
+    "CWP_PART": "CWP_PART",
+    "CWP_COMPOSERS": "CWP_COMPOSERS",
+    "CWP_KEYS": "CWP_KEYS",
+    "CWP_COMPOSED_DATES": "CWP_COMPOSED_DATES",
+    "CWP_WORKTYPE_GENRES": "CWP_WORKTYPE_GENRES",
+}
+
+
 def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = None) -> None:
     """Write ID3v2.4 tags and optional cover art to an MP3 file.
 
@@ -1390,51 +1461,7 @@ def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = No
     if file_dict.get("ORGANIZATION"):
         id3_tags.add(TPUB(encoding=3, text=file_dict["ORGANIZATION"]))  # type: ignore[no-untyped-call]
 
-    txxx_map: dict[str, str] = {
-        "MUSICBRAINZ_ALBUMID": "MusicBrainz Album Id",
-        "MUSICBRAINZ_TRACKID": "MusicBrainz Release Track Id",
-        "MUSICBRAINZ_RECORDINGID": "MusicBrainz Track Id",
-        "MUSICBRAINZ_RELEASEGROUPID": "MusicBrainz Release Group Id",
-        "MUSICBRAINZ_ALBUMARTISTID": "MusicBrainz Album Artist Id",
-        "MUSICBRAINZ_ARTISTID": "MusicBrainz Artist Id",
-        "MUSICBRAINZ_WORKID": "MusicBrainz Work Id",
-        "MUSICBRAINZ_CONDUCTORID": "MusicBrainz Conductor Id",
-        "MUSICBRAINZ_COMPOSERID": "MusicBrainz Composer Id",
-        "CATALOGNUMBER": "CATALOGNUMBER",
-        "BARCODE": "BARCODE",
-        "WORK": "WORK",
-        "GROUPHEADING": "GROUPHEADING",
-        "TOP_WORK": "TOP_WORK",
-        "PART": "PART",
-        "MOVEMENT": "MOVEMENT",
-        "MOVEMENTNUMBER": "MOVEMENTNUMBER",
-        "MOVEMENTTOTAL": "MOVEMENTTOTAL",
-        "IS_CLASSICAL": "IS_CLASSICAL",
-        "GENRE": "GENRE",
-        "PERIOD": "PERIOD",
-        "KEY": "KEY",
-        "WORK_YEAR": "WORK_YEAR",
-        "COMPOSED_DATE": "COMPOSED_DATE",
-        "LANGUAGE": "LANGUAGE",
-        "SCRIPT": "SCRIPT",
-        "RELEASETYPE": "MusicBrainz Album Type",
-        "RELEASESTATUS": "MusicBrainz Album Status",
-        "SOLOISTS": "SOLOISTS",
-        "ENSEMBLE": "ENSEMBLE",
-        "CEA_RECORDING_ARTIST": "CEA_RECORDING_ARTIST",
-        "CEA_SOLOISTS": "CEA_SOLOISTS",
-        "CEA_ENSEMBLES": "CEA_ENSEMBLES",
-        "CEA_CONDUCTORS": "CEA_CONDUCTORS",
-        "CEA_COMPOSERS": "CEA_COMPOSERS",
-        "CWP_WORK_TOP": "CWP_WORK_TOP",
-        "CWP_GROUPHEADING": "CWP_GROUPHEADING",
-        "CWP_PART": "CWP_PART",
-        "CWP_COMPOSERS": "CWP_COMPOSERS",
-        "CWP_KEYS": "CWP_KEYS",
-        "CWP_COMPOSED_DATES": "CWP_COMPOSED_DATES",
-        "CWP_WORKTYPE_GENRES": "CWP_WORKTYPE_GENRES",
-    }
-    for meta_key, txxx_desc in txxx_map.items():
+    for meta_key, txxx_desc in _MP3_TXXX_MAP.items():
         txxx(txxx_desc, file_dict.get(meta_key, ""))
 
     if cover and cover.available:
@@ -1521,6 +1548,155 @@ def _check_collisions(dest_files: list[Path]) -> list[Path]:
     return [p for p in dest_files if p.exists()]
 
 
+def _sha256_file(path: Path) -> str:
+    """Return the hex-encoded SHA-256 digest of the file at ``path``.
+
+    Reads the file in 64 KiB chunks to avoid loading large audio files into memory at once.
+
+    :param path: Path to the file to hash.
+    :returns: A lowercase hexadecimal SHA-256 digest string.
+    :raises OSError: If the file cannot be opened or read.
+    """
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _read_tags_flac(path: Path) -> dict[str, str]:
+    """Read Vorbis Comment tags from a FLAC file and return them in the same format as :meth:`~TrackTags.to_file_dict`.
+
+    Only the first value of each multi-valued comment is returned.  Keys are uppercased to match :meth:`~TrackTags.to_file_dict`
+    output.  The PICTURE block is excluded (cover art is verified separately in :func:`_verify_copy`).
+
+    :param path: Path to the FLAC file to read.
+    :returns: A ``{UPPERCASE_KEY: value}`` dict of non-empty tag values.
+    :raises mutagen.MutagenError: If the file cannot be read.
+    """
+    audio = FLAC(str(path))
+    return {k.upper(): v[0] for k, v in audio.items() if v and v[0]}
+
+
+def _read_tags_mp3(path: Path) -> dict[str, str]:
+    """Read ID3v2.4 tags from an MP3 file and return them in the same format as :meth:`~TrackTags.to_file_dict`.
+
+    Reconstructs the standard text-frame fields (``TITLE``, ``ARTIST``, etc.) and all ``TXXX`` frames listed in
+    :data:`_MP3_TXXX_MAP` from the inverse mapping.  The ``APIC`` cover-art frame is excluded (cover art is verified
+    separately in :func:`_verify_copy`).  The ``TRACKNUMBER`` field is normalised to strip the ``/total`` suffix written
+    by :func:`apply_tags_mp3` so that it can be compared directly to :meth:`~TrackTags.to_file_dict` output.
+
+    :param path: Path to the MP3 file to read.
+    :returns: A ``{UPPERCASE_KEY: value}`` dict of non-empty tag values.
+    :raises mutagen.MutagenError: If the file cannot be read.
+    """
+    id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+    result: dict[str, str] = {}
+
+    # Standard text frames
+    _std_frames: dict[str, str] = {
+        "TIT2": "TITLE",
+        "TPE1": "ARTIST",
+        "TPE2": "ALBUMARTIST",
+        "TALB": "ALBUM",
+        "TPOS": "DISCNUMBER",
+        "TDRC": "DATE",
+        "TDOR": "ORIGINALDATE",
+        "TCOM": "COMPOSER",
+        "TPE3": "CONDUCTOR",
+        "TPUB": "ORGANIZATION",
+    }
+    for frame_id, tag_key in _std_frames.items():
+        frame = id3.get(frame_id)  # type: ignore[no-untyped-call]
+        if frame and str(frame):
+            result[tag_key] = str(frame)
+
+    # TRCK may be "N/total" — keep only the track number
+    trck = id3.get("TRCK")  # type: ignore[no-untyped-call]
+    if trck and str(trck):
+        result["TRACKNUMBER"] = str(trck).split("/", maxsplit=1)[0]
+
+    # TXXX frames — invert _MP3_TXXX_MAP (desc → tag_key)
+    _txxx_inv = {desc: key for key, desc in _MP3_TXXX_MAP.items()}
+    for frame in id3.getall("TXXX"):  # type: ignore[no-untyped-call]
+        maybe_key: str | None = _txxx_inv.get(frame.desc)
+        if maybe_key and frame.text and frame.text[0]:
+            result[maybe_key] = frame.text[0]
+
+    return {k: v for k, v in result.items() if v}
+
+
+def _verify_copy(
+    src_file: Path,
+    dest_file: Path,
+    tags: TrackTags,
+    cover: CoverArt | None,
+    src_mtime: float,
+) -> None:
+    """Verify that ``dest_file`` has been correctly tagged and has the expected modification time.
+
+    Called by :func:`run` after :func:`apply_tags_flac` / :func:`apply_tags_mp3` and :func:`os.utime` have been applied.
+    Raw copy integrity (SHA-256 equality before tagging) is verified inline in :func:`run` immediately after
+    :func:`shutil.copy2`; this function handles the post-tagging checks:
+
+    1. **Tag round-trip** — tags read back from ``dest_file`` match the expected :meth:`~TrackTags.to_file_dict` output.
+    2. **Cover art** — if ``cover`` is provided and available, the embedded image bytes match ``cover.data``.
+    3. **mtime** — ``dest_file`` modification time matches ``src_mtime`` (restored by :func:`os.utime`).
+
+    :param src_file: Original source audio file (used for format detection and human-readable error messages).
+    :param dest_file: Destination file to inspect.
+    :param tags: The :class:`~music_annotator.models.TrackTags` instance that was written to ``dest_file``.
+    :param cover: Optional :class:`~music_annotator.models.CoverArt`; cover bytes are verified when ``cover.available``.
+    :param src_mtime: Expected ``st_mtime`` value as restored by :func:`os.utime`.
+    :raises RuntimeError: If any verification check fails.
+    """
+    # 1. Tag round-trip
+    ext = src_file.suffix.lower()
+    match ext:
+        case ".flac":
+            actual_tags = _read_tags_flac(dest_file)
+            expected_tags = tags.to_file_dict()
+        case ".mp3":
+            actual_tags = _read_tags_mp3(dest_file)
+            # apply_tags_mp3 only writes standard frames + _MP3_TXXX_MAP keys; filter to that writable set.
+            writable = _MP3_STD_KEYS | frozenset(_MP3_TXXX_MAP)
+            expected_tags = {k: v for k, v in tags.to_file_dict().items() if k in writable}
+        case _:  # pragma: no cover
+            actual_tags = {}
+            expected_tags = {}
+    if actual_tags != expected_tags:
+        missing = {k: expected_tags[k] for k in expected_tags if k not in actual_tags}
+        extra = {k: actual_tags[k] for k in actual_tags if k not in expected_tags}
+        wrong = {
+            k: (expected_tags[k], actual_tags[k])
+            for k in expected_tags
+            if k in actual_tags and actual_tags[k] != expected_tags[k]
+        }
+        raise RuntimeError(
+            f"tag verification failure for '{dest_file.name}': "
+            f"missing={list(missing)}, extra={list(extra)}, wrong={list(wrong)}"
+        )
+
+    # 2. Cover art
+    if cover and cover.available:
+        match ext:
+            case ".flac":
+                pics = FLAC(str(dest_file)).pictures
+                cover_ok = bool(pics) and pics[0].data == cover.data
+            case ".mp3":
+                apic_frames = ID3(str(dest_file)).getall("APIC")  # type: ignore[no-untyped-call]
+                cover_ok = bool(apic_frames) and apic_frames[0].data == cover.data
+            case _:  # pragma: no cover
+                cover_ok = True
+        if not cover_ok:
+            raise RuntimeError(f"cover art verification failure for '{dest_file.name}'")
+
+    # 3. mtime
+    dest_mtime = dest_file.stat().st_mtime
+    if dest_mtime != src_mtime:
+        raise RuntimeError(f"mtime verification failure for '{dest_file.name}': expected {src_mtime}, got {dest_mtime}")
+
+
 def run(
     release_id: str,
     src_dir: Path,
@@ -1565,7 +1741,8 @@ def run(
     :param fetch_rels: When ``False``, skip per-recording lookups and produce minimal tags (faster but incomplete).
         Composer, conductor, work hierarchy, and Classical Extras tags will be absent.
     :raises mb.ResponseError: On a non-retryable MusicBrainz API error.
-    :raises RuntimeError: If all retry attempts are exhausted for any API call.
+    :raises RuntimeError: If all retry attempts are exhausted for any API call, or if post-copy verification fails (copy
+        integrity, tag round-trip, cover art, or mtime mismatch).
     :raises OSError: If source files cannot be read or destination files cannot be written.
     :raises SystemExit: With code 1 if the user chooses to abort when collisions are detected.
     """
@@ -1742,12 +1919,21 @@ def run(
 
         dest_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # Capture source timestamps before copying; mutagen's .save() bumps mtime.
+        # Capture source timestamps and hash before copying; mutagen's .save() bumps mtime.
         # On Linux, ctime (inode-change time) cannot be set by userspace.
         src_stat = src_file.stat()
         src_times = (src_stat.st_atime, src_stat.st_mtime)
+        src_hash = _sha256_file(src_file)
 
         shutil.copy2(src_file, dest_file)
+
+        # Verify raw copy integrity before tagging mutates the destination.
+        dest_copy_hash = _sha256_file(dest_file)
+        if dest_copy_hash != src_hash:
+            raise RuntimeError(
+                f"copy integrity failure for '{dest_file.name}': "
+                f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_copy_hash[:12]}…"
+            )
 
         ext = src_file.suffix.lower()
         try:
@@ -1762,6 +1948,8 @@ def run(
             log.error("tag_error", file=dest_file.name, error=str(exc))
 
         os.utime(dest_file, src_times)
+
+        _verify_copy(src_file, dest_file, final_tags, cover, src_stat.st_mtime)
 
         journal_entries.append(
             TransactionEntry(
@@ -2228,11 +2416,12 @@ def discover(
     1. Searches MB using :func:`search_releases_by_dir` and prints a numbered candidate list.
     2. Prompts the user to enter a candidate number, a raw MBID, or ``s`` to skip.
     3. If a valid selection is made, calls :func:`run` to copy and tag that directory.
+    4. After a successful copy (unless ``dry_run`` is set), prompts the user to delete the original source directory.
 
     :param src_dirs: List of source directories to process in order.
     :param dest_root: Root destination directory for the annotated music library.
     :param user_agent: MusicBrainz user-agent string.
-    :param dry_run: When ``True``, pass through to :func:`run` without writing files.
+    :param dry_run: When ``True``, pass through to :func:`run` without writing files; the delete prompt is suppressed.
     :param fetch_rels: When ``False``, skip per-recording relation lookups in :func:`run`.
     :param limit: Maximum number of search candidates to display per directory.
     """
@@ -2292,3 +2481,12 @@ def discover(
             )
         except Exception as exc:  # noqa: BLE001
             log.error("discover_run_error", release_id=release_id, error=str(exc), exc_info=True)
+            continue
+
+        if not dry_run:
+            _console.print(f"\n  [bold]Delete original directory[/] [bold red]{src_dir}[/][bold]?[/] [dim](y/n)[/] ", end="")
+            if input("").strip().lower() in {"y", "yes"}:
+                shutil.rmtree(src_dir)
+                log.info("discover_deleted_src", path=str(src_dir))
+            else:
+                log.info("discover_kept_src", path=str(src_dir))

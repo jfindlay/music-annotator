@@ -1154,6 +1154,90 @@ class TestDiscover:
         music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
         mock_run.assert_not_called()
 
+    def test_delete_prompt_y_removes_src_dir(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Answering 'y' to the delete prompt removes the original source directory.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        self._patch_mb_and_run(mocker, [_candidate()])
+        mocker.patch("builtins.input", side_effect=["1", "y"])
+
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
+        assert not src.exists()
+
+    def test_delete_prompt_yes_removes_src_dir(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Answering 'yes' to the delete prompt removes the original source directory.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        self._patch_mb_and_run(mocker, [_candidate()])
+        mocker.patch("builtins.input", side_effect=["1", "yes"])
+
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
+        assert not src.exists()
+
+    def test_delete_prompt_n_keeps_src_dir(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Answering 'n' to the delete prompt leaves the source directory intact.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        self._patch_mb_and_run(mocker, [_candidate()])
+        mocker.patch("builtins.input", side_effect=["1", "n"])
+
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
+        assert src.exists()
+
+    def test_delete_prompt_suppressed_on_dry_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When dry_run=True the delete prompt is never shown and the directory is untouched.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        self._patch_mb_and_run(mocker, [_candidate()])
+        mock_input = mocker.patch("builtins.input", side_effect=["1"])
+
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0", dry_run=True)
+        assert mock_input.call_count == 1
+        assert src.exists()
+
+    def test_delete_prompt_suppressed_on_run_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When run() raises, the delete prompt is not shown.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        mocker.patch("music_annotator.mb.set_useragent")
+        mocker.patch("music_annotator.search_releases_by_dir", return_value=[_candidate()])
+        mocker.patch("music_annotator.run", side_effect=RuntimeError("oops"))
+        mock_input = mocker.patch("builtins.input", side_effect=["1"])
+
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
+        assert mock_input.call_count == 1
+        assert src.exists()
+
 
 # ---------------------------------------------------------------------------
 # parse_disc_toc

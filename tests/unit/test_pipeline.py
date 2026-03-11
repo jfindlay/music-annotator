@@ -4,16 +4,24 @@ find_source_files, and run (non-dry-run).
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shutil
 from pathlib import Path
 
 import pytest
+from mutagen.id3 import ID3, TXXX  # type: ignore[attr-defined]
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
 import music_annotator
 from music_annotator import (
     JOURNAL_FILENAME,
+    _read_tags_flac,
+    _read_tags_mp3,
+    _sha256_file,
+    _verify_copy,
     apply_tags_flac,
     apply_tags_mp3,
     build_cea_performers,
@@ -871,7 +879,7 @@ class TestRunFullPipeline:
     """Tests for run() in non-dry-run mode with fetch_rels=True."""
 
     def _patch_mb(self, mocker: MockerFixture, release: MBRelease) -> None:
-        """Patch all MB API calls.
+        """Patch all MB API calls and post-copy verification.
 
         :param mocker: pytest-mock fixture.
         :param release: MBRelease model to return from fetch_release.
@@ -893,6 +901,7 @@ class TestRunFullPipeline:
 
         mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
 
     def test_files_copied_to_dest(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """FLAC files are copied to dest_root in non-dry-run mode.
@@ -1072,6 +1081,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
         spy = mocker.patch("music_annotator.fetch_recording_detail")
         mocker.patch("music_annotator.apply_tags_flac")
+        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1380,6 +1390,7 @@ class TestRunWithWorkHierarchy:
             ),
         )
         mocker.patch("music_annotator.apply_tags_flac")
+        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1422,6 +1433,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator.apply_tags_flac")
+        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1465,6 +1477,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator.apply_tags_flac")
+        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1522,6 +1535,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator.apply_tags_flac")
+        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1571,6 +1585,7 @@ class TestRunWithWorkHierarchy:
             return_value=_w({"id": "w1", "title": "The Work", "work-relation-list": [], "artist-relation-list": []}),
         )
         mocker.patch("music_annotator.apply_tags_flac")
+        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1622,6 +1637,7 @@ def _setup_single_track_run(mocker: MockerFixture, fs: FakeFilesystem, src: Path
     mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
     mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
     mocker.patch("music_annotator.apply_tags_flac")
+    mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
 
 
 class TestRunCollisionAndJournal:
@@ -1776,6 +1792,7 @@ class TestRunCollisionAndJournal:
         mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
         mock_tag = mocker.patch("music_annotator.apply_tags_flac")
+        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
 
         # We'll capture the planned dest paths by letting build_dest_path run, then
         # intercept _check_collisions to report the first dest as a collision.
@@ -1914,6 +1931,7 @@ class TestRunCollisionAndJournal:
         mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
         mocker.patch("music_annotator._check_collisions", return_value=[])  # pylint: disable=protected-access
         mocker.patch("music_annotator.apply_tags_flac")
+        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1925,3 +1943,322 @@ class TestRunCollisionAndJournal:
         )
         data_after_second = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
         assert len(data_after_second) == 2
+
+
+# ---------------------------------------------------------------------------
+# _sha256_file
+# ---------------------------------------------------------------------------
+
+
+class TestSha256File:
+    """Tests for _sha256_file."""
+
+    def test_known_hash(self, fs: FakeFilesystem) -> None:
+        """SHA-256 of known bytes matches the expected digest.
+
+        :param fs: pyfakefs fixture.
+        """
+        data = b"hello world"
+        path = Path("/tmp/test.bin")
+        fs.create_file(str(path), contents=data)
+        assert _sha256_file(path) == hashlib.sha256(data).hexdigest()
+
+    def test_empty_file(self, fs: FakeFilesystem) -> None:
+        """SHA-256 of an empty file matches the expected digest.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/tmp/empty.bin")
+        fs.create_file(str(path), contents=b"")
+        assert _sha256_file(path) == hashlib.sha256(b"").hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# _read_tags_flac / _read_tags_mp3
+# ---------------------------------------------------------------------------
+
+
+class TestReadTagsFlac:
+    """Tests for _read_tags_flac."""
+
+    def test_round_trip(self, fs: FakeFilesystem) -> None:
+        """Tags written by apply_tags_flac are read back correctly by _read_tags_flac.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        tags = TrackTags(title="Eroica", album="Beethoven Symphonies", tracknumber="1", composer="Beethoven")
+        apply_tags_flac(path, tags)
+        assert _read_tags_flac(path) == tags.to_file_dict()
+
+    def test_no_tags_returns_empty(self, fs: FakeFilesystem) -> None:
+        """A freshly-written FLAC with no tags returns an empty dict.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/bare.flac")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        assert _read_tags_flac(path) == {}
+
+
+class TestReadTagsMp3:
+    """Tests for _read_tags_mp3."""
+
+    def test_round_trip(self, fs: FakeFilesystem) -> None:
+        """Tags written by apply_tags_mp3 are read back correctly by _read_tags_mp3.
+
+        apply_tags_mp3 only writes the subset of fields in _MP3_STD_KEYS | _MP3_TXXX_MAP, so the
+        expected dict is filtered to that writable set before comparison.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        tags = TrackTags(title="Eroica", album="Beethoven Symphonies", tracknumber="3", totaltracks="9", composer="Beethoven")
+        apply_tags_mp3(path, tags)
+        writable = music_annotator._MP3_STD_KEYS | frozenset(music_annotator._MP3_TXXX_MAP)  # pylint: disable=protected-access
+        expected = {k: v for k, v in tags.to_file_dict().items() if k in writable}
+        assert _read_tags_mp3(path) == expected
+
+    def test_no_tags_returns_defaults(self, fs: FakeFilesystem) -> None:
+        """An MP3 written with a default TrackTags() returns only the non-empty default fields.
+
+        TrackTags() has non-empty defaults IS_CLASSICAL="1" and GENRE="Classical" which are in
+        _MP3_TXXX_MAP and will be written by apply_tags_mp3 even when no fields are explicitly set.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/bare.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        apply_tags_mp3(path, TrackTags())
+        assert _read_tags_mp3(path) == {"IS_CLASSICAL": "1", "GENRE": "Classical"}
+
+    def test_unknown_txxx_desc_ignored(self, fs: FakeFilesystem) -> None:
+        """TXXX frames with descriptions not in _MP3_TXXX_MAP are silently ignored.
+
+        This covers the branch where ``tag_key`` is falsy (unknown TXXX description) so the frame
+        is skipped without being added to the result dict.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        apply_tags_mp3(path, TrackTags(title="T"))
+        # Inject a TXXX frame with an unknown description after the normal write.
+        id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+        id3.add(TXXX(encoding=3, desc="UNKNOWN_DESC", text=["some value"]))  # type: ignore[no-untyped-call]
+        id3.save(str(path))
+        # The unknown TXXX frame must not appear in the result.
+        result = _read_tags_mp3(path)
+        assert "UNKNOWN_DESC" not in result
+        assert result.get("TITLE") == "T"
+
+
+# ---------------------------------------------------------------------------
+# _verify_copy
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyCopy:
+    """Tests for _verify_copy."""
+
+    def test_flac_passes(self, fs: FakeFilesystem) -> None:
+        """_verify_copy passes for a correctly-tagged FLAC file with matching mtime.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_dir("/src")
+        fs.create_dir("/dest")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        shutil.copy2(str(src), str(dest))
+        tags = TrackTags(title="Symphony No. 5", tracknumber="1")
+        apply_tags_flac(dest, tags)
+        mtime = src.stat().st_mtime
+        os.utime(dest, (mtime, mtime))
+        _verify_copy(src, dest, tags, None, mtime)
+
+    def test_mp3_passes(self, fs: FakeFilesystem) -> None:
+        """_verify_copy passes for a correctly-tagged MP3 file with matching mtime.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.mp3")
+        dest = Path("/dest/track.mp3")
+        fs.create_dir("/src")
+        fs.create_dir("/dest")
+        fs.create_file(str(src), contents=_MINIMAL_MP3)
+        shutil.copy2(str(src), str(dest))
+        tags = TrackTags(title="Symphony No. 5", tracknumber="1")
+        apply_tags_mp3(dest, tags)
+        mtime = src.stat().st_mtime
+        os.utime(dest, (mtime, mtime))
+        _verify_copy(src, dest, tags, None, mtime)
+
+    def test_flac_with_cover_passes(self, fs: FakeFilesystem) -> None:
+        """_verify_copy passes when cover art matches the embedded bytes.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_dir("/src")
+        fs.create_dir("/dest")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        shutil.copy2(str(src), str(dest))
+        tags = TrackTags(title="T")
+        cover = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")
+        apply_tags_flac(dest, tags, cover)
+        mtime = src.stat().st_mtime
+        os.utime(dest, (mtime, mtime))
+        _verify_copy(src, dest, tags, cover, mtime)
+
+    def test_mp3_with_cover_passes(self, fs: FakeFilesystem) -> None:
+        """_verify_copy passes when MP3 cover art matches the embedded bytes.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.mp3")
+        dest = Path("/dest/track.mp3")
+        fs.create_dir("/src")
+        fs.create_dir("/dest")
+        fs.create_file(str(src), contents=_MINIMAL_MP3)
+        shutil.copy2(str(src), str(dest))
+        tags = TrackTags(title="T")
+        cover = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")
+        apply_tags_mp3(dest, tags, cover)
+        mtime = src.stat().st_mtime
+        os.utime(dest, (mtime, mtime))
+        _verify_copy(src, dest, tags, cover, mtime)
+
+    def test_tag_mismatch_raises(self, fs: FakeFilesystem) -> None:
+        """_verify_copy raises RuntimeError when the read-back tags do not match expected.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_dir("/src")
+        fs.create_dir("/dest")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        shutil.copy2(str(src), str(dest))
+        tags = TrackTags(title="Correct Title")
+        apply_tags_flac(dest, tags)
+        wrong_tags = TrackTags(title="Wrong Title")
+        mtime = src.stat().st_mtime
+        os.utime(dest, (mtime, mtime))
+        with pytest.raises(RuntimeError, match="tag verification failure"):
+            _verify_copy(src, dest, wrong_tags, None, mtime)
+
+    def test_cover_mismatch_flac_raises(self, fs: FakeFilesystem) -> None:
+        """_verify_copy raises RuntimeError when FLAC cover art does not match.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_dir("/src")
+        fs.create_dir("/dest")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        shutil.copy2(str(src), str(dest))
+        tags = TrackTags(title="T")
+        cover_written = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")
+        apply_tags_flac(dest, tags, cover_written)
+        mtime = src.stat().st_mtime
+        os.utime(dest, (mtime, mtime))
+        wrong_cover = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x01" * 100, mime="image/jpeg")
+        with pytest.raises(RuntimeError, match="cover art verification failure"):
+            _verify_copy(src, dest, tags, wrong_cover, mtime)
+
+    def test_cover_mismatch_mp3_raises(self, fs: FakeFilesystem) -> None:
+        """_verify_copy raises RuntimeError when MP3 cover art does not match.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.mp3")
+        dest = Path("/dest/track.mp3")
+        fs.create_dir("/src")
+        fs.create_dir("/dest")
+        fs.create_file(str(src), contents=_MINIMAL_MP3)
+        shutil.copy2(str(src), str(dest))
+        tags = TrackTags(title="T")
+        cover_written = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")
+        apply_tags_mp3(dest, tags, cover_written)
+        mtime = src.stat().st_mtime
+        os.utime(dest, (mtime, mtime))
+        wrong_cover = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x01" * 100, mime="image/jpeg")
+        with pytest.raises(RuntimeError, match="cover art verification failure"):
+            _verify_copy(src, dest, tags, wrong_cover, mtime)
+
+    def test_mtime_mismatch_raises(self, fs: FakeFilesystem) -> None:
+        """_verify_copy raises RuntimeError when the destination mtime does not match.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_dir("/src")
+        fs.create_dir("/dest")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        shutil.copy2(str(src), str(dest))
+        tags = TrackTags(title="T")
+        apply_tags_flac(dest, tags)
+        mtime = src.stat().st_mtime
+        os.utime(dest, (mtime, mtime))
+        with pytest.raises(RuntimeError, match="mtime verification failure"):
+            _verify_copy(src, dest, tags, None, mtime + 1.0)
+
+    def test_no_cover_skips_cover_check(self, fs: FakeFilesystem) -> None:
+        """_verify_copy does not check cover art when cover is None.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_dir("/src")
+        fs.create_dir("/dest")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        shutil.copy2(str(src), str(dest))
+        tags = TrackTags(title="T")
+        apply_tags_flac(dest, tags)
+        mtime = src.stat().st_mtime
+        os.utime(dest, (mtime, mtime))
+        _verify_copy(src, dest, tags, None, mtime)
+
+
+# ---------------------------------------------------------------------------
+# run() — copy-integrity hash check
+# ---------------------------------------------------------------------------
+
+
+class TestRunCopyIntegrity:
+    """Tests for the inline SHA-256 copy-integrity check inside run()."""
+
+    def test_hash_mismatch_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """run() raises RuntimeError when the post-copy hash does not match the source hash.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+        # Return different hashes for the two _sha256_file calls (src then dest).
+        mocker.patch("music_annotator._sha256_file", side_effect=["aaa", "bbb"])  # pylint: disable=protected-access
+
+        with pytest.raises(RuntimeError, match="copy integrity failure"):
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=False,
+            )
