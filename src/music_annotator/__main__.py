@@ -54,14 +54,16 @@ def _resolve_path(value: str) -> Path:
     return Path(value).expanduser().resolve()
 
 
-def _configure_logging(verbose: bool) -> None:
+def _configure_logging(verbose: bool, no_color: bool = False) -> None:
     """Set up structlog with a human-readable console renderer writing to stderr.
 
     Processors are chained in the standard structlog order: level filter, logger name, log level, positional argument
     formatting, ISO timestamp, stack-info rendering, exception formatting, and finally the console renderer.
 
     :param verbose: When ``True``, set the root log level to ``DEBUG``; otherwise use ``INFO``.
+    :param no_color: When ``True``, disable color in :mod:`music_annotator` interactive output and in structlog log lines.
     """
+    music_annotator.configure_color(enabled=not no_color)
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         format="%(message)s",
@@ -86,7 +88,7 @@ def _configure_logging(verbose: bool) -> None:
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
-            structlog.dev.ConsoleRenderer(),
+            structlog.dev.ConsoleRenderer(colors=not no_color),
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
         context_class=dict,
@@ -170,6 +172,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--verbose",
         action="store_true",
         help="Enable DEBUG-level logging (must appear before the subcommand).",
+    )
+    parser.add_argument(
+        "-C",
+        "--no-color",
+        action="store_true",
+        help="Disable color output (must appear before the subcommand).",
     )
     subparsers = parser.add_subparsers(dest="subcommand", metavar="SUBCOMMAND")
     subparsers.required = True
@@ -265,7 +273,7 @@ def main() -> None:
     parser = _build_parser()
     args = parser.parse_args()
 
-    _configure_logging(args.verbose)
+    _configure_logging(args.verbose, no_color=args.no_color)
 
     log = structlog.get_logger(__name__)
 

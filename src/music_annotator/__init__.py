@@ -93,6 +93,7 @@ from mutagen.id3 import (  # type: ignore[attr-defined]
     TXXX,
 )
 from mutagen.mp3 import MP3
+from rich.console import Console
 
 from music_annotator.models import (
     JSON,
@@ -116,8 +117,22 @@ from music_annotator.models import (
 )
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
+_console: Console = Console()
+
+
+def configure_color(enabled: bool) -> None:
+    """Replace the module-level rich :class:`~rich.console.Console` instance to enable or disable color output.
+
+    Called by :func:`~music_annotator.__main__._configure_logging` when the ``--no-color`` CLI flag is present.
+
+    :param enabled: When ``False``, replace the console with one that produces plain text without ANSI codes.
+    """
+    global _console  # noqa: PLW0603  # pylint: disable=global-statement
+    _console = Console(no_color=not enabled)
+
 
 __all__ = [
+    "configure_color",
     "init_mb",
     "fetch_release",
     "fetch_recording_detail",
@@ -1662,15 +1677,16 @@ def run(
     if not dry_run:
         collisions = _check_collisions([dest for _, _, dest in plan])
         if collisions:
-            print(f"\nWARNING: {len(collisions)} destination file(s) already exist:")
+            _console.print(f"\n[bold red]WARNING:[/] [red]{len(collisions)} destination file(s) already exist:[/]")
             for p in collisions:
-                print(f"  {p}")
-            print("\nChoose an action:")
-            print("  [o] overwrite  — replace all existing files")
-            print("  [s] skip       — copy only new files, leave existing untouched")
-            print("  [a] abort      — quit without copying anything")
+                _console.print(f"  [red]{p}[/]")
+            _console.print("\n[bold]Choose an action:[/]")
+            _console.print("  [bold red]\\[a] abort[/]      — quit without copying anything")
+            _console.print("  [bold yellow]\\[s] skip[/]       — copy only new files, leave existing untouched")
+            _console.print("  [bold green]\\[o] overwrite[/]  — replace all existing files")
             while True:
-                choice = input("Your choice [o/s/a]: ").strip().lower()
+                _console.print("[bold]Your choice \\[a/s/o]:[/] ", end="")
+                choice = input("").strip().lower()
                 match choice:
                     case "o" | "overwrite":
                         log.info("collision_choice_overwrite", count=len(collisions))
@@ -1683,7 +1699,7 @@ def run(
                         log.warning("collision_choice_abort")
                         raise SystemExit(1)
                     case _:
-                        print("Please enter 'o', 's', or 'a'.")
+                        _console.print("[yellow]Please enter 'a', 's', or 'o'.[/]")
 
     # --- Copy, tag, and journal ---
     journal_entries: list[TransactionEntry] = []
@@ -2186,13 +2202,13 @@ def _format_candidate(index: int, candidate: MBReleaseCandidate) -> str:
     :returns: A multi-line string ready to print to stdout.
     """
     lines = [
-        f"  [{index}] score={candidate.score}  {candidate.title}",
-        f"       artist : {candidate.artist or '(unknown)'}",
-        f"       date   : {candidate.date or '(unknown)'}",
-        f"       format : {candidate.format or '(unknown)'}  tracks={candidate.tracks}",
-        f"       status : {candidate.status or '(unknown)'}  country={candidate.country or '?'}",
-        f"       label  : {candidate.label or '(none)'}  catno={candidate.catalog_number or '(none)'}",
-        f"       url    : {candidate.mb_url}",
+        f"  [bold yellow]\\[{index}][/] [dim]score={candidate.score}[/]  [bold white]{candidate.title}[/]",
+        f"  [dim]     artist :[/] {candidate.artist or '(unknown)'}",
+        f"  [dim]     date   :[/] {candidate.date or '(unknown)'}",
+        f"  [dim]     format :[/] {candidate.format or '(unknown)'}  tracks={candidate.tracks}",
+        f"  [dim]     status :[/] {candidate.status or '(unknown)'}  country={candidate.country or '?'}",
+        f"  [dim]     label  :[/] {candidate.label or '(none)'}  catno={candidate.catalog_number or '(none)'}",
+        f"  [dim]     url    :[/] [dim cyan]{candidate.mb_url}[/]",
     ]
     return "\n".join(lines)
 
@@ -2223,27 +2239,29 @@ def discover(
     init_mb(user_agent)
     for src_dir in src_dirs:
         log.info("discover_dir", path=str(src_dir))
-        print(f"\n{'=' * 72}")
-        print(f"Directory: {src_dir}")
-        print(f"{'=' * 72}")
+        rule = f"[bold cyan]{'=' * 72}[/]"
+        _console.print(f"\n{rule}")
+        _console.print(f"[bold cyan]Directory:[/] [bold]{src_dir}[/]")
+        _console.print(rule)
 
         try:
             candidates = search_releases_by_dir(src_dir, limit=limit)
         except ValueError as exc:
             log.warning("discover_skip", reason=str(exc))
-            print(f"  Skipped: {exc}")
+            _console.print(f"  [yellow]Skipped:[/] {exc}")
             continue
 
         if not candidates:
-            print("  No candidates found.")
+            _console.print("  [yellow]No candidates found.[/]")
             continue
 
         for i, candidate in enumerate(candidates, 1):
-            print(_format_candidate(i, candidate))
-            print()
+            _console.print(_format_candidate(i, candidate))
+            _console.print()
 
-        print(f"  Enter a number (1–{len(candidates)}), a raw MBID, or 's' to skip:")
-        choice = input("  > ").strip()
+        _console.print(f"  [bold]Enter a number (1–{len(candidates)}), a raw MBID, or 's' to skip:[/]")
+        _console.print("  [bold]>[/] ", end="")
+        choice = input("").strip()
 
         if choice.lower() in {"s", "skip", ""}:
             log.info("discover_skipped", path=str(src_dir))
@@ -2256,7 +2274,7 @@ def discover(
             if 0 <= idx < len(candidates):
                 release_id = candidates[idx].release_id
             else:
-                print(f"  Invalid selection '{choice}', skipping.")
+                _console.print(f"  [yellow]Invalid selection '{choice}', skipping.[/]")
                 continue
         else:
             # Treat as raw MBID

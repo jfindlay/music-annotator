@@ -19,6 +19,7 @@ from music_annotator import (
     build_work_hierarchy,
     collect_work_dates,
     collect_work_tags_and_key,
+    configure_color,
     extract_work_artist_rels,
     is_choir,
     is_ensemble,
@@ -91,6 +92,25 @@ def _ac(items: list[JSON]) -> list[MBArtistCredit | str]:
         elif isinstance(item, dict):
             result.append(MBArtistCredit.model_validate(item))
     return result
+
+
+# ---------------------------------------------------------------------------
+# configure_color
+# ---------------------------------------------------------------------------
+
+
+class TestConfigureColor:
+    """Tests for configure_color."""
+
+    def test_disable_color_replaces_console(self) -> None:
+        """configure_color(False) replaces _console with a no_color Console."""
+        configure_color(enabled=False)
+        assert music_annotator._console.no_color  # pylint: disable=protected-access
+
+    def test_enable_color_replaces_console(self) -> None:
+        """configure_color(True) replaces _console with a color-capable Console."""
+        configure_color(enabled=True)
+        assert not music_annotator._console.no_color  # pylint: disable=protected-access
 
 
 # ---------------------------------------------------------------------------

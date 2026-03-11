@@ -107,6 +107,52 @@ class TestConfigureLogging:
         _configure_logging(verbose=False)
         mock_cfg.assert_called_once()
 
+    def test_no_color_calls_configure_color_disabled(self, mocker: MockerFixture) -> None:
+        """no_color=True calls music_annotator.configure_color(enabled=False).
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mock_cc = mocker.patch("music_annotator.__main__.music_annotator.configure_color")
+        _configure_logging(verbose=False, no_color=True)
+        mock_cc.assert_called_once_with(enabled=False)
+
+    def test_color_enabled_by_default(self, mocker: MockerFixture) -> None:
+        """no_color defaults to False, so configure_color is called with enabled=True.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mock_cc = mocker.patch("music_annotator.__main__.music_annotator.configure_color")
+        _configure_logging(verbose=False)
+        mock_cc.assert_called_once_with(enabled=True)
+
+    def test_no_color_disables_console_renderer_colors(self, mocker: MockerFixture) -> None:
+        """no_color=True passes colors=False to structlog ConsoleRenderer.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mocker.patch("music_annotator.__main__.music_annotator.configure_color")
+        mock_renderer = mocker.patch("music_annotator.__main__.structlog.dev.ConsoleRenderer")
+        _configure_logging(verbose=False, no_color=True)
+        mock_renderer.assert_called_once_with(colors=False)
+
+    def test_color_on_enables_console_renderer_colors(self, mocker: MockerFixture) -> None:
+        """no_color=False (default) passes colors=True to structlog ConsoleRenderer.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mocker.patch("music_annotator.__main__.music_annotator.configure_color")
+        mock_renderer = mocker.patch("music_annotator.__main__.structlog.dev.ConsoleRenderer")
+        _configure_logging(verbose=False)
+        mock_renderer.assert_called_once_with(colors=True)
+
 
 # ---------------------------------------------------------------------------
 # _build_parser
@@ -209,6 +255,24 @@ class TestBuildParser:
         parser = _build_parser()
         ns = parser.parse_args(["-v", *self._APPLY_BASE])
         assert ns.verbose
+
+    def test_no_color_long_flag(self) -> None:
+        """--no-color before the subcommand sets no_color=True."""
+        parser = _build_parser()
+        ns = parser.parse_args(["--no-color", *self._APPLY_BASE])
+        assert ns.no_color
+
+    def test_no_color_short_flag(self) -> None:
+        """-C before the subcommand sets no_color=True."""
+        parser = _build_parser()
+        ns = parser.parse_args(["-C", *self._APPLY_BASE])
+        assert ns.no_color
+
+    def test_no_color_default_false(self) -> None:
+        """no_color defaults to False when flag is absent."""
+        parser = _build_parser()
+        ns = parser.parse_args(self._APPLY_BASE)
+        assert not ns.no_color
 
     def test_apply_custom_user_agent_app(self) -> None:
         """apply --user-agent-app overrides the default."""
@@ -472,7 +536,7 @@ class TestMain:
             ],
         ):
             main()
-        mock_cfg.assert_called_once_with(True)
+        mock_cfg.assert_called_once_with(True, no_color=False)
 
     # ------------------------------------------------------------------
     # search subcommand
@@ -652,4 +716,31 @@ class TestMain:
             ],
         ):
             main()
-        mock_cfg.assert_called_once_with(True)
+        mock_cfg.assert_called_once_with(True, no_color=False)
+
+    def test_no_color_passed_to_configure_logging(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """-C before apply causes _configure_logging to be called with no_color=True.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mock_cfg = mocker.patch("music_annotator.__main__._configure_logging")
+        mocker.patch("music_annotator.__main__.structlog.get_logger")
+        mocker.patch("music_annotator.discover")
+        fs.create_dir("/src")
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "music-annotator",
+                "-C",
+                "search",
+                "--dest-dir",
+                "/d",
+                "--user-agent-email",
+                "t@x.com",
+                "/src",
+            ],
+        ):
+            main()
+        mock_cfg.assert_called_once_with(False, no_color=True)

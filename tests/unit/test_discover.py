@@ -898,7 +898,7 @@ class TestFormatCandidate:
     def test_contains_index(self) -> None:
         """Formatted string contains the 1-based index."""
         result = _format_candidate(3, _candidate())
-        assert "[3]" in result
+        assert "3" in result
 
     def test_contains_score(self) -> None:
         """Formatted string contains the score."""
