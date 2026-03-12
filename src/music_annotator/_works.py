@@ -11,7 +11,7 @@ import re
 import structlog
 
 from music_annotator._mb_api import fetch_work_detail
-from music_annotator.models import ArtistEntry, MBAttribute, MBWork, RoleBuckets, WorkDates
+from music_annotator.models import ArtistEntry, MBAttribute, MBWork, MBWorkRelation, RoleBuckets, WorkDates
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -84,6 +84,102 @@ def build_work_hierarchy(work: MBWork, visited: set[str] | None = None) -> list[
     return hierarchy
 
 
+def _score_top_work(top: MBWork) -> int:
+    """Score a top-level work for suitability as the principal performance target.
+
+    Used by :func:`select_primary_performance_work` to rank the root of each candidate's
+    ``parts/backward`` parent chain.  A higher score means a more self-standing primary
+    composition.
+
+    Scoring:
+
+    * ``+2`` if the work has a non-empty MB work type (e.g. ``"Concerto"``, ``"Symphony"``).
+      A typed work is an explicitly classified primary composition.
+    * ``+1`` if the work has **no** ``based on`` relation with direction ``"backward"``.
+      A ``based on/backward`` relation means the work exists *in reference to* another work
+      (e.g. a cadenza collection is ``based on/backward`` the concerto it was written for),
+      indicating subsidiary status.
+
+    :param top: The root :class:`~music_annotator.models.MBWork` of a candidate's parent chain.
+    :returns: An integer score in the range ``[0, 3]``.
+    """
+    score = 0
+    if top.type:
+        score += 2
+    has_based_on_backward = any(rel.type == "based on" and rel.direction == "backward" for rel in top.work_relation_list)
+    if not has_based_on_backward:
+        score += 1
+    return score
+
+
+def select_primary_performance_work(candidates: list[MBWork]) -> MBWork:
+    """Choose the principal work from a list of performance-linked works.
+
+    When a recording is linked via multiple ``performance`` relations to more than one work
+    (e.g. both a Beethoven concerto movement and a Kreisler cadenza to that movement),
+    this function selects the work that should be treated as the primary musical subject for
+    tagging and directory naming.
+
+    Algorithm:
+
+    1. For each candidate, walk its ``parts/backward`` parent chain (fetching parents via
+       :func:`~music_annotator._mb_api.fetch_work_detail`, using the in-process cache) to
+       find the root (top-level) work.
+    2. Score the top-level work using :func:`_score_top_work`:
+
+       * ``+2`` for a non-empty MB work type.
+       * ``+1`` for absence of a ``based on/backward`` relation.
+
+    3. Return the candidate whose root scores highest.  Ties are broken by preferring the
+       candidate that appears first in ``candidates`` (i.e. first ``performance`` link in the
+       recording's relation list).
+
+    This is an extension beyond Classical Extras, which generates multi-valued tags for all
+    performance-linked works without choosing a primary.  music-annotator requires a single
+    principal work per recording for unambiguous directory naming.
+
+    :param candidates: Non-empty list of :class:`~music_annotator.models.MBWork` instances,
+        one per ``performance`` relation on the recording.  Must contain at least one element.
+    :returns: The selected primary :class:`~music_annotator.models.MBWork`.
+    """
+    if len(candidates) == 1:
+        return candidates[0]
+
+    best_work = candidates[0]
+    best_score = -1
+
+    for work in candidates:
+        # Walk to the top of this work's parts/backward chain.
+        top = work
+        visited: set[str] = set()
+        while True:
+            if top.id in visited:
+                break
+            visited.add(top.id)
+            parent_rel: MBWorkRelation | None = next(
+                (r for r in top.work_relation_list if r.direction == "backward" and r.type in ("parts", "part of")),
+                None,
+            )
+            if parent_rel is None or not parent_rel.work.id:
+                break
+            top = fetch_work_detail(parent_rel.work.id)
+
+        score = _score_top_work(top)
+        log.debug(
+            "work_primary_score",
+            work_id=work.id,
+            work_title=work.title,
+            top_id=top.id,
+            top_title=top.title,
+            score=score,
+        )
+        if score > best_score:
+            best_score = score
+            best_work = work
+
+    return best_work
+
+
 def strip_common_prefix(child: str, parent: str) -> str:
     """Remove from ``child`` any text that duplicates ``parent``, producing a short movement label.
 
@@ -135,6 +231,11 @@ def extract_work_artist_rels(work: MBWork, role_buckets: RoleBuckets) -> None:
     of the work hierarchy (movement → symphonic poem → collection) appears only once.  Unknown relation types are silently
     ignored.
 
+    Composer relations that carry the MB ``"additional"`` or ``"assistant"`` attribute string in their ``attribute-list``
+    are routed to ``role_buckets.additional_composers`` rather than ``role_buckets.composers``.  This is an extension
+    beyond Classical Extras; it allows subsidiary completion/ghost-writer credits (e.g. Süssmayr on the Mozart Requiem)
+    to be distinguished from the primary composer(s) so that directory naming is unambiguous.
+
     :param work: The :class:`~music_annotator.models.MBWork` instance.
     :param role_buckets: The :class:`~music_annotator.models.RoleBuckets` instance to populate in-place.
     """
@@ -142,7 +243,10 @@ def extract_work_artist_rels(work: MBWork, role_buckets: RoleBuckets) -> None:
         entry = ArtistEntry(name=rel.artist.name, sort=rel.artist.sort_name or rel.artist.name, mbid=rel.artist.id)
         match rel.type:
             case "composer":
-                role_buckets.add_unique("composers", entry)
+                if "additional" in rel.attribute_list or "assistant" in rel.attribute_list:
+                    role_buckets.add_unique("additional_composers", entry)
+                else:
+                    role_buckets.add_unique("composers", entry)
             case "writer":
                 role_buckets.add_unique("writers", entry)
             case "lyricist":

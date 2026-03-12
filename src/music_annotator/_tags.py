@@ -218,11 +218,14 @@ def build_cwp_tags(
     year = parse_year(cwp.composed_dates)
     cwp.period = period_for_year(year)
 
-    # Work-level artist roles
-    if role_buckets.composers:
-        cwp.composers = "; ".join(e.name for e in role_buckets.composers)
-        cwp.composers_sort = "; ".join(e.sort for e in role_buckets.composers)
-        cwp.composer_lastnames = "; ".join(last_name(e.sort) for e in role_buckets.composers)
+    # Work-level artist roles.
+    # When only additional/assistant composers are present (no plain primary composer), fall back to those
+    # so that directory naming and tag fields are still populated rather than left blank.
+    effective_composers = role_buckets.composers or role_buckets.additional_composers
+    if effective_composers:
+        cwp.composers = "; ".join(e.name for e in effective_composers)
+        cwp.composers_sort = "; ".join(e.sort for e in effective_composers)
+        cwp.composer_lastnames = "; ".join(last_name(e.sort) for e in effective_composers)
     if role_buckets.writers:
         cwp.writers = "; ".join(e.name for e in role_buckets.writers)
         cwp.writers_sort = "; ".join(e.sort for e in role_buckets.writers)
@@ -312,12 +315,15 @@ def build_track_tags(
             direct_work_title = rel.work.title
             break
 
-    # Derive COMPOSER
+    # Derive COMPOSER.
+    # Prefer plain primary composers; fall back to additional_composers when no primary composer is linked
+    # (e.g. a recording where only a completion credit carries the "additional" attribute).
+    effective_work_composers = role_buckets.composers or role_buckets.additional_composers
     composer_name = composer_sort = composer_id = ""
-    if role_buckets.composers:
-        composer_name = "; ".join(e.name for e in role_buckets.composers)
-        composer_sort = "; ".join(e.sort for e in role_buckets.composers)
-        composer_id = "/".join(e.mbid for e in role_buckets.composers)
+    if effective_work_composers:
+        composer_name = "; ".join(e.name for e in effective_work_composers)
+        composer_sort = "; ".join(e.sort for e in effective_work_composers)
+        composer_id = "/".join(e.mbid for e in effective_work_composers)
     elif cea.composers:
         composer_name = "; ".join(e.name for e in cea.composers)
         composer_sort = "; ".join(e.sort for e in cea.composers)
@@ -403,8 +409,8 @@ def build_track_tags(
     album_soloists = [e for e in all_soloists if _is_album_artist(e)]
     album_conductors = [e for e in cea.conductors if _is_album_artist(e)]
     album_ensembles = [e for e in cea.ensembles if _is_album_artist(e)]
-    # For composers: use work-level role_buckets; fall back to cea.composers if no work link.
-    all_composers = role_buckets.composers or cea.composers
+    # For composers: prefer primary work-level composers, then additional, then recording-level cea.composers.
+    all_composers = role_buckets.composers or role_buckets.additional_composers or cea.composers
     album_composers = [e for e in all_composers if _is_album_artist(e)]
 
     # Support performers: soloists and ensembles who are NOT album artists (conductors excluded per CE).

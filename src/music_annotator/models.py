@@ -335,11 +335,17 @@ class RoleBuckets(BaseModel):
     (the MB ``"composer"`` relation type).  Both populate the standard ``COMPOSER`` host tag, but CE exposes them separately
     as ``CWP_WRITERS`` / ``CWP_COMPOSERS`` so library software can display the distinction.
 
-    Important attributes: ``composers``, ``writers``, ``lyricists``, ``librettists``, ``translators``, ``arrangers``,
-    ``orchestrators``, ``reconstructors``, ``revisors``.
+    Beyond CE, music-annotator further separates ``composers`` (plain ``"composer"`` relation, no attributes) from
+    ``additional_composers`` (``"composer"`` relation carrying the ``"additional"`` or ``"assistant"`` MB attribute).
+    This distinction is not defined by CE but allows the primary composer to be identified unambiguously when MB marks
+    a completion or ghost-writer contribution as subsidiary (e.g. Süssmayr on the Mozart Requiem).
+
+    Important attributes: ``composers``, ``additional_composers``, ``writers``, ``lyricists``, ``librettists``,
+    ``translators``, ``arrangers``, ``orchestrators``, ``reconstructors``, ``revisors``.
     """
 
     composers: list[ArtistEntry] = Field(default_factory=list)
+    additional_composers: list[ArtistEntry] = Field(default_factory=list)
     writers: list[ArtistEntry] = Field(default_factory=list)
     lyricists: list[ArtistEntry] = Field(default_factory=list)
     librettists: list[ArtistEntry] = Field(default_factory=list)

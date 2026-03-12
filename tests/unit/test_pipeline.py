@@ -1676,6 +1676,150 @@ class TestRunWithWorkHierarchy:
         # fetch_work_detail MUST be called — work had no inlined relation data
         mock_work.assert_called_once_with("w1")
 
+    def test_multiple_performance_rels_selects_primary(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When a recording has two performance relations, select_primary_performance_work is called.
+
+        The candidate with the higher-scoring top work is selected as the primary work.
+        The lower-scoring candidate (cadenza) is ignored for work-hierarchy purposes.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        # Recording with two performance relations: cadenza (w-cad) and concerto movement (w-mvt)
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "Track",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [
+                        {"type": "performance", "work": {"id": "w-cad", "title": "Cadenza"}},
+                        {"type": "performance", "work": {"id": "w-mvt", "title": "I. Allegro"}},
+                    ],
+                }
+            )
+
+        # fetch_work_detail returns different works for each ID:
+        # cadenza top-work: untyped + has based-on backward → score 0
+        # concerto root: typed Concerto, no based-on → score 3
+        cadenza_work = _w(
+            {
+                "id": "w-cad",
+                "type": "",
+                "title": "Cadenza",
+                "work-relation-list": [{"type": "based on", "direction": "backward", "work": {"id": "w-conc"}}],
+                "artist-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        concerto_mvt = _w(
+            {
+                "id": "w-mvt",
+                "type": "",
+                "title": "I. Allegro",
+                "work-relation-list": [{"type": "parts", "direction": "backward", "work": {"id": "w-conc"}}],
+                "artist-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        concerto_root = _w(
+            {
+                "id": "w-conc",
+                "type": "Concerto",
+                "title": "Violin Concerto in D major, Op. 61",
+                "work-relation-list": [],
+                "artist-relation-list": [
+                    {"type": "composer", "artist": {"id": "a-beet", "name": "Beethoven", "sort-name": "Beethoven, Ludwig van"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        def _fetch_work(work_id: str) -> MBWork:
+            return {"w-cad": cadenza_work, "w-mvt": concerto_mvt, "w-conc": concerto_root}[work_id]
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        # Patch in both locations: _mb_api (used by _get_bottom_work) and _works (used by select_primary_performance_work)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        # The concerto root should be the top work (primary selected over cadenza)
+        # Verify by checking the destination path contains "Beethoven" in composer component
+        dest_files = list(dest.rglob("*.flac"))
+        assert len(dest_files) == 1
+        assert "Beethoven" in str(dest_files[0])
+
+    def test_performance_rel_empty_work_id_skipped_in_candidates(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Performance relations with empty work.id are excluded from candidates list.
+
+        When only empty-id performance relations exist, work_hierarchy stays empty.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "Track",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [
+                        {"type": "performance", "work": {"id": "", "title": ""}},
+                        {"type": "performance", "work": {"id": "", "title": ""}},
+                    ],
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        mock_work.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # run() — collision detection, user prompt, and journal

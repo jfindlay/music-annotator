@@ -31,6 +31,7 @@ from music_annotator import (
     safe_name,
     strip_common_prefix,
 )
+from music_annotator._works import _score_top_work, select_primary_performance_work
 from music_annotator.models import (
     JSON,
     ArtistEntry,
@@ -595,6 +596,323 @@ class TestExtractWorkArtistRels:
         )
         for role in ("composers", "lyricists", "arrangers", "orchestrators"):
             assert not getattr(rb, role)
+
+
+# ---------------------------------------------------------------------------
+# extract_work_artist_rels — additional/assistant composer routing
+# ---------------------------------------------------------------------------
+
+
+class TestExtractWorkArtistRelsAdditionalComposer:
+    """Tests for the additional/assistant composer routing in extract_work_artist_rels."""
+
+    def test_additional_composer_routed_to_additional_composers(self) -> None:
+        """Composer relation with 'additional' attribute goes to additional_composers, not composers."""
+        rb = RoleBuckets()
+        extract_work_artist_rels(
+            _w(
+                {
+                    "artist-relation-list": [
+                        {
+                            "type": "composer",
+                            "attribute-list": ["additional"],
+                            "artist": {"id": "s1", "name": "Süssmayr", "sort-name": "Süssmayr, Franz Xaver"},
+                        },
+                    ]
+                }
+            ),
+            rb,
+        )
+        assert len(rb.additional_composers) == 1
+        assert rb.additional_composers[0].name == "Süssmayr"
+        assert not rb.composers
+
+    def test_assistant_composer_routed_to_additional_composers(self) -> None:
+        """Composer relation with 'assistant' attribute goes to additional_composers, not composers."""
+        rb = RoleBuckets()
+        extract_work_artist_rels(
+            _w(
+                {
+                    "artist-relation-list": [
+                        {
+                            "type": "composer",
+                            "attribute-list": ["assistant"],
+                            "artist": {"id": "a1", "name": "Assistant A", "sort-name": "A, Assistant"},
+                        },
+                    ]
+                }
+            ),
+            rb,
+        )
+        assert len(rb.additional_composers) == 1
+        assert not rb.composers
+
+    def test_plain_composer_still_goes_to_composers(self) -> None:
+        """Composer relation with no attributes continues to go to composers."""
+        rb = RoleBuckets()
+        extract_work_artist_rels(
+            _w(
+                {
+                    "artist-relation-list": [
+                        {
+                            "type": "composer",
+                            "attribute-list": [],
+                            "artist": {"id": "m1", "name": "Mozart", "sort-name": "Mozart, Wolfgang Amadeus"},
+                        },
+                    ]
+                }
+            ),
+            rb,
+        )
+        assert len(rb.composers) == 1
+        assert rb.composers[0].name == "Mozart"
+        assert not rb.additional_composers
+
+    def test_additional_composer_deduplication(self) -> None:
+        """Same additional composer MBID from two hierarchy levels is added only once."""
+        rel: JSON = {
+            "type": "composer",
+            "attribute-list": ["additional"],
+            "artist": {"id": "s1", "name": "Süssmayr", "sort-name": "Süssmayr, Franz Xaver"},
+        }
+        rb = RoleBuckets()
+        extract_work_artist_rels(_w({"artist-relation-list": [rel]}), rb)
+        extract_work_artist_rels(_w({"artist-relation-list": [rel]}), rb)
+        assert len(rb.additional_composers) == 1
+
+    def test_primary_and_additional_composer_both_present(self) -> None:
+        """Primary composer goes to composers and additional goes to additional_composers."""
+        rb = RoleBuckets()
+        extract_work_artist_rels(
+            _w(
+                {
+                    "artist-relation-list": [
+                        {
+                            "type": "composer",
+                            "attribute-list": [],
+                            "artist": {"id": "m1", "name": "Mozart", "sort-name": "Mozart, Wolfgang Amadeus"},
+                        },
+                        {
+                            "type": "composer",
+                            "attribute-list": ["additional"],
+                            "artist": {"id": "s1", "name": "Süssmayr", "sort-name": "Süssmayr, Franz Xaver"},
+                        },
+                    ]
+                }
+            ),
+            rb,
+        )
+        assert len(rb.composers) == 1
+        assert rb.composers[0].name == "Mozart"
+        assert len(rb.additional_composers) == 1
+        assert rb.additional_composers[0].name == "Süssmayr"
+
+
+# ---------------------------------------------------------------------------
+# _score_top_work
+# ---------------------------------------------------------------------------
+
+
+class TestScoreTopWork:
+    """Tests for _score_top_work scoring logic."""
+
+    def test_typed_no_based_on_scores_three(self) -> None:
+        """Typed work with no based-on backward relation scores 3 (2 + 1)."""
+        work = _w({"id": "w1", "type": "Concerto", "work-relation-list": []})
+        assert _score_top_work(work) == 3
+
+    def test_typed_with_based_on_backward_scores_two(self) -> None:
+        """Typed work that has a based-on backward relation scores 2 (only type bonus)."""
+        work = _w(
+            {
+                "id": "w1",
+                "type": "Cadenza collection",
+                "work-relation-list": [{"type": "based on", "direction": "backward", "work": {"id": "w2"}}],
+            }
+        )
+        assert _score_top_work(work) == 2
+
+    def test_untyped_no_based_on_scores_one(self) -> None:
+        """Untyped work with no based-on backward relation scores 1 (only no-based-on bonus)."""
+        work = _w({"id": "w1", "type": "", "work-relation-list": []})
+        assert _score_top_work(work) == 1
+
+    def test_untyped_with_based_on_backward_scores_zero(self) -> None:
+        """Untyped work with a based-on backward relation scores 0."""
+        work = _w(
+            {
+                "id": "w1",
+                "type": "",
+                "work-relation-list": [{"type": "based on", "direction": "backward", "work": {"id": "w2"}}],
+            }
+        )
+        assert _score_top_work(work) == 0
+
+    def test_based_on_forward_direction_not_penalised(self) -> None:
+        """A based-on relation with forward direction does not reduce the score."""
+        work = _w(
+            {
+                "id": "w1",
+                "type": "",
+                "work-relation-list": [{"type": "based on", "direction": "forward", "work": {"id": "w2"}}],
+            }
+        )
+        assert _score_top_work(work) == 1
+
+    def test_other_relation_type_not_penalised(self) -> None:
+        """A non-based-on relation with backward direction does not affect score."""
+        work = _w(
+            {
+                "id": "w1",
+                "type": "Symphony",
+                "work-relation-list": [{"type": "parts", "direction": "backward", "work": {"id": "w2"}}],
+            }
+        )
+        assert _score_top_work(work) == 3
+
+
+# ---------------------------------------------------------------------------
+# select_primary_performance_work
+# ---------------------------------------------------------------------------
+
+
+class TestSelectPrimaryPerformanceWork:
+    """Tests for select_primary_performance_work candidate selection."""
+
+    def test_single_candidate_returned_without_fetch(self, mocker: MockerFixture) -> None:
+        """With only one candidate, it is returned immediately and fetch_work_detail is not called.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_fetch = mocker.patch("music_annotator._works.fetch_work_detail")
+        work = _w({"id": "w1", "title": "Concerto", "work-relation-list": []})
+        result = select_primary_performance_work([work])
+        assert result.id == "w1"
+        mock_fetch.assert_not_called()
+
+    def test_higher_scoring_candidate_selected(self, mocker: MockerFixture) -> None:
+        """The candidate whose top-level work scores highest is selected.
+
+        Simulates the Beethoven concerto vs. Kreisler cadenza scenario:
+        - Cadenza work → cadenza collection (untyped, has based-on → score 0)
+        - Beethoven movement → concerto root (typed=Concerto, no based-on → score 3)
+
+        :param mocker: pytest-mock fixture.
+        """
+        # Cadenza: bottom work has a parts/backward parent, whose top is untyped + based-on
+        cadenza_top = _w(
+            {
+                "id": "cad-top",
+                "type": "",
+                "title": "Cadenza collection",
+                "work-relation-list": [{"type": "based on", "direction": "backward", "work": {"id": "beethoven-root"}}],
+            }
+        )
+        cadenza_bottom = _w(
+            {
+                "id": "cad-bot",
+                "title": "Cadenza for Op. 61",
+                "work-relation-list": [{"type": "parts", "direction": "backward", "work": {"id": "cad-top"}}],
+            }
+        )
+
+        # Beethoven movement: bottom work has a parts/backward parent (the concerto root)
+        beethoven_root = _w(
+            {
+                "id": "beethoven-root",
+                "type": "Concerto",
+                "title": "Violin Concerto in D major, Op. 61",
+                "work-relation-list": [],
+            }
+        )
+        beethoven_movement = _w(
+            {
+                "id": "beethoven-mvt",
+                "title": "I. Allegro ma non troppo",
+                "work-relation-list": [{"type": "parts", "direction": "backward", "work": {"id": "beethoven-root"}}],
+            }
+        )
+
+        def _fetch(work_id: str) -> MBWork:
+            return {
+                "cad-top": cadenza_top,
+                "beethoven-root": beethoven_root,
+            }[work_id]
+
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch)
+
+        result = select_primary_performance_work([cadenza_bottom, beethoven_movement])
+        assert result.id == "beethoven-mvt"
+
+    def test_tie_broken_by_first_appearance(self, mocker: MockerFixture) -> None:
+        """When two candidates score equally, the first one in the list wins.
+
+        :param mocker: pytest-mock fixture.
+        """
+        work_a = _w({"id": "wa", "title": "Work A", "type": "", "work-relation-list": []})
+        work_b = _w({"id": "wb", "title": "Work B", "type": "", "work-relation-list": []})
+        mocker.patch("music_annotator._works.fetch_work_detail")
+        result = select_primary_performance_work([work_a, work_b])
+        assert result.id == "wa"
+
+    def test_cycle_detection_does_not_loop(self, mocker: MockerFixture) -> None:
+        """Circular parent references do not cause infinite loops.
+
+        :param mocker: pytest-mock fixture.
+        """
+        # w1 → w2 (parts/backward), w2 → w1 (parts/backward) — a cycle
+        work1 = _w(
+            {
+                "id": "w1",
+                "type": "Concerto",
+                "title": "Cyclic Work",
+                "work-relation-list": [{"type": "parts", "direction": "backward", "work": {"id": "w2"}}],
+            }
+        )
+        work2 = _w(
+            {
+                "id": "w2",
+                "type": "",
+                "title": "Cyclic Parent",
+                "work-relation-list": [{"type": "parts", "direction": "backward", "work": {"id": "w1"}}],
+            }
+        )
+        mocker.patch("music_annotator._works.fetch_work_detail", return_value=work2)
+        # Should terminate without error
+        result = select_primary_performance_work([work1, work1])
+        assert result.id == "w1"
+
+
+# ---------------------------------------------------------------------------
+# build_cwp_tags — additional_composers fallback
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCwpTagsAdditionalComposerFallback:
+    """Tests for additional_composers fallback in build_cwp_tags."""
+
+    def test_only_additional_composers_used_as_fallback(self) -> None:
+        """When composers is empty, additional_composers are used for cwp.composers etc."""
+        rb = RoleBuckets()
+        rb.additional_composers.append(ArtistEntry(name="Süssmayr", sort="Süssmayr, Franz Xaver", mbid="s1"))
+        cwp = build_cwp_tags(
+            [_w({"id": "w1", "title": "Requiem", "work-relation-list": [], "attribute-list": [], "tag-list": []})],
+            rb,
+        )
+        assert cwp.composers == "Süssmayr"
+        assert "Süssmayr" in cwp.composer_lastnames
+
+    def test_primary_composers_take_precedence_over_additional(self) -> None:
+        """When both composers and additional_composers are present, primary composers win."""
+        rb = RoleBuckets()
+        rb.composers.append(ArtistEntry(name="Mozart", sort="Mozart, Wolfgang Amadeus", mbid="m1"))
+        rb.additional_composers.append(ArtistEntry(name="Süssmayr", sort="Süssmayr, Franz Xaver", mbid="s1"))
+        cwp = build_cwp_tags(
+            [_w({"id": "w1", "title": "Requiem", "work-relation-list": [], "attribute-list": [], "tag-list": []})],
+            rb,
+        )
+        assert cwp.composers == "Mozart"
+        assert "Süssmayr" not in cwp.composers
 
 
 # ---------------------------------------------------------------------------

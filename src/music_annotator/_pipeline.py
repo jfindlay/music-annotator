@@ -38,7 +38,7 @@ from music_annotator._pipeline_io import (
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path, build_track_tags
-from music_annotator._works import build_work_hierarchy
+from music_annotator._works import build_work_hierarchy, select_primary_performance_work
 from music_annotator.models import CoverArt, MBMedium, MBTrack, MBWork, TrackTags, TransactionEntry
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
@@ -252,12 +252,14 @@ def run(
             rec_detail = fetch_recording_detail(rec_id)
 
             work_hierarchy: list[MBWork] = []
-            for rel in rec_detail.work_relation_list:
-                if rel.type == "performance":
-                    if rel.work.id:
-                        bottom_work = _get_bottom_work(rel.work)
-                        work_hierarchy = build_work_hierarchy(bottom_work)
-                    break
+            # Inflate each performance-linked work stub to a full work before scoring.
+            # _get_bottom_work fetches from MB only when the embedded work lacks relation data.
+            performance_works = [
+                _get_bottom_work(rel.work) for rel in rec_detail.work_relation_list if rel.type == "performance" and rel.work.id
+            ]
+            if performance_works:
+                primary_work = select_primary_performance_work(performance_works)
+                work_hierarchy = build_work_hierarchy(primary_work)
 
             tags_map[idx] = build_track_tags(release, track, _medium_pos, rec_detail, work_hierarchy)
             tags_map[idx].acoustid_id = fetch_acoustid_id(rec_id)
