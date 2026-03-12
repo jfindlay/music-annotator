@@ -1,0 +1,632 @@
+"""CEA/CWP builder and track-tag assembly functions for music-annotator.
+
+Implements the Classical Extras performer classification (``build_cea_performers``), the CWP tag
+builder (``build_cwp_tags``), and the central ``build_track_tags`` function that combines all
+metadata sources into a :class:`~music_annotator.models.TrackTags` ready for writing.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import structlog
+
+from music_annotator._artists import (
+    artist_credit_phrase,
+    artist_ids,
+    artist_sort_names,
+    last_name,
+)
+from music_annotator._works import (
+    WORKTYPE_GENRES,
+    collect_work_dates,
+    collect_work_tags_and_key,
+    extract_work_artist_rels,
+    parse_year,
+    period_for_year,
+    strip_common_prefix,
+)
+from music_annotator.models import (
+    ArtistEntry,
+    CeaPerformers,
+    CwpTags,
+    MBArtistCredit,
+    MBAttribute,
+    MBRecording,
+    MBRelease,
+    MBTrack,
+    MBWork,
+    RoleBuckets,
+    TrackTags,
+    WorkHierarchyLevel,
+)
+
+log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
+
+#: Regex matching filesystem-unsafe characters for :func:`safe_name`.
+_SAFE_RE: re.Pattern[str] = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def safe_name(s: str, max_len: int = 80) -> str:
+    """Sanitise a string for use as a filesystem path component.
+
+    Replaces characters forbidden on common filesystems (Windows/POSIX) with underscores, strips leading and trailing
+    dots and spaces, and truncates to ``max_len`` characters.
+
+    :param s: The raw name string.
+    :param max_len: Maximum length of the returned string.  Defaults to ``80``.
+    :returns: A sanitised string safe for use as a directory or file name.
+    """
+    s = _SAFE_RE.sub("_", s).strip(". ")
+    return s[:max_len]
+
+
+def _rec_title(track: MBTrack) -> str:
+    """Return the recording title for a track, falling back to ``"Unknown"``.
+
+    :param track: An :class:`~music_annotator.models.MBTrack` instance.
+    :returns: The title of the nested recording, or ``"Unknown"`` when absent.
+    """
+    return track.recording.title or "Unknown"
+
+
+def build_cea_performers(recording_detail: MBRecording) -> CeaPerformers:
+    """Classify recording-level artist relations into CE ``cea_*`` performer buckets.
+
+    Iterates the ``artist-relation-list`` of the recording and routes each entry into the appropriate bucket of the
+    returned :class:`~music_annotator.models.CeaPerformers` instance.  For ``"performer"``-type relations the first
+    ``attribute-list`` entry is used as the instrument label; entries matching :func:`is_ensemble` go to ``ensembles``;
+    entries with a vocal keyword in the instrument label go to ``vocalists``; all others go to ``instrumentalists`` (with
+    an instrument label) or ``other_soloists`` (without).
+
+    :param recording_detail: The :class:`~music_annotator.models.MBRecording` instance as returned by
+        :func:`fetch_recording_detail`.
+    :returns: A populated :class:`~music_annotator.models.CeaPerformers` instance.
+    """
+    from music_annotator._artists import is_ensemble  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+    cea = CeaPerformers()
+    for rel in recording_detail.artist_relation_list:
+        name = rel.artist.name
+        sort = rel.artist.sort_name or name
+        mid = rel.artist.id
+        entry = ArtistEntry(name=name, sort=sort, mbid=mid)
+
+        match rel.type:
+            case "conductor":
+                cea.conductors.append(entry)
+            case "chorus master":
+                cea.chorusmasters.append(entry)
+            case "concertmaster":
+                cea.leaders.append(entry)
+            case "arranger" | "instrument arranger" | "vocal arranger":
+                cea.arrangers.append(entry)
+            case "orchestrator":
+                cea.orchestrators.append(entry)
+            case "composer" | "writer":
+                cea.composers.append(entry)  # recording-level: CE merges both into composer host tag
+            case "producer":
+                cea.producers.append(entry)
+            case "balance":
+                cea.engineers.append(entry)
+            case "performer" | "instrument" | "vocal" | "performing orchestra":
+                if is_ensemble(name):
+                    cea.ensembles.append(entry)
+                else:
+                    first_attr = rel.attribute_list[0] if rel.attribute_list else ""
+                    instr: str = first_attr.value if isinstance(first_attr, MBAttribute) else first_attr
+                    entry = ArtistEntry(name=name, sort=sort, mbid=mid, instrument=instr)
+                    vocal_keywords = ("soprano", "mezzo", "tenor", "baritone", "bass", "contralto", "voice", "vocal", "singer")
+                    if any(v in instr.lower() for v in vocal_keywords):
+                        cea.vocalists.append(entry)
+                    elif instr:
+                        cea.instrumentalists.append(entry)
+                    else:
+                        cea.other_soloists.append(entry)
+
+    return cea
+
+
+def build_cwp_tags(
+    work_hierarchy: list[MBWork],
+    role_buckets: RoleBuckets,
+) -> CwpTags:
+    """Build Classical Extras ``cwp_*`` tag values from the resolved work hierarchy.
+
+    Constructs the full :class:`~music_annotator.models.CwpTags` model by:
+
+    - Setting ``work_top``/``workid_top`` from the root work.
+    - Collecting dates, key, and work-type genre from the bottom work.
+    - Stripping common name prefixes to produce per-level ``part_title`` values.
+    - Building ``groupheading`` from the top work title and all intermediate part titles.
+    - Mapping composed date to a CE period name via :func:`period_for_year`.
+    - Populating all artist role strings from ``role_buckets``.
+
+    :param work_hierarchy: List of :class:`~music_annotator.models.MBWork` from bottom (index 0) to top (last index), as
+        returned by :func:`build_work_hierarchy`.
+    :param role_buckets: A :class:`~music_annotator.models.RoleBuckets` already populated by
+        :func:`extract_work_artist_rels` for every level of the hierarchy.
+    :returns: A :class:`~music_annotator.models.CwpTags` instance with all ``cwp_*`` fields populated.
+    """
+    cwp = CwpTags()
+    if not work_hierarchy:
+        return cwp
+
+    n_levels = len(work_hierarchy)
+    cwp.part_levels = n_levels - 1
+
+    # Build per-level name/id maps before stripping
+    work_names: dict[int, str] = {}
+    work_ids: dict[int, str] = {}
+    for i, w in enumerate(work_hierarchy):
+        work_names[i] = w.title
+        work_ids[i] = w.id
+
+    top_work = work_hierarchy[-1]
+    cwp.work_top = top_work.title
+    cwp.workid_top = top_work.id
+
+    # Dates and key from bottom-level work
+    dates = collect_work_dates(work_hierarchy[0])
+    cwp.composed_dates = dates.composed
+    cwp.published_dates = dates.published
+    cwp.premiered_dates = dates.premiered
+    _, key = collect_work_tags_and_key(work_hierarchy[0])
+    cwp.keys = key
+    cwp.worktype_genres = work_hierarchy[0].type
+
+    # Strip part names
+    part_names: dict[int, str] = {}
+    for i in range(n_levels):
+        parent_name = work_names.get(i + 1, "") if i < n_levels - 1 else ""
+        part_names[i] = strip_common_prefix(work_names[i], parent_name)
+
+    # Assemble levels list
+    cwp.levels = [
+        WorkHierarchyLevel(
+            index=i,
+            work_id=work_ids[i],
+            work_title=work_names[i],
+            part_title=part_names[i],
+        )
+        for i in range(n_levels)
+    ]
+
+    if n_levels == 1:
+        cwp.work = work_names[0]
+        cwp.groupheading = work_names[0]
+        cwp.part = ""
+    else:
+        cwp.work = cwp.work_top
+        gh_parts = [cwp.work_top]
+        for j in range(n_levels - 2, 0, -1):
+            inter_part = part_names.get(j, work_names.get(j, ""))
+            if inter_part:
+                gh_parts.append(inter_part)
+        bottom_part = part_names.get(0, "")
+        if bottom_part:
+            gh_parts.append(bottom_part)
+        cwp.groupheading = " :: ".join(gh_parts)
+        cwp.part = bottom_part
+
+    if n_levels > 2:
+        inter_parts = [part_names.get(j, work_names.get(j, "")) for j in range(1, n_levels - 1)]
+        cwp.inter_work = " :: ".join(p for p in inter_parts if p)
+
+    # Period
+    year = parse_year(cwp.composed_dates)
+    cwp.period = period_for_year(year)
+
+    # Work-level artist roles
+    if role_buckets.composers:
+        cwp.composers = "; ".join(e.name for e in role_buckets.composers)
+        cwp.composers_sort = "; ".join(e.sort for e in role_buckets.composers)
+        cwp.composer_lastnames = "; ".join(last_name(e.sort) for e in role_buckets.composers)
+    if role_buckets.writers:
+        cwp.writers = "; ".join(e.name for e in role_buckets.writers)
+        cwp.writers_sort = "; ".join(e.sort for e in role_buckets.writers)
+    for role_name in ("arrangers", "orchestrators", "reconstructors", "revisors", "lyricists", "librettists", "translators"):
+        bucket: list[ArtistEntry] = getattr(role_buckets, role_name)
+        if bucket:
+            setattr(cwp, role_name, "; ".join(e.name for e in bucket))
+            setattr(cwp, f"{role_name}_sort", "; ".join(e.sort for e in bucket))
+    # Plain (un-annotated) arranger names — parallel to cwp.arrangers but without instrument/role annotations.
+    # Merges work-level arrangers and orchestrators into a single de-duplicated list of display names.
+    arranger_name_seen: set[str] = set()
+    arranger_name_parts: list[str] = []
+    for e in role_buckets.arrangers + role_buckets.orchestrators:
+        if e.name not in arranger_name_seen:
+            arranger_name_seen.add(e.name)
+            arranger_name_parts.append(e.name)
+    if arranger_name_parts:
+        cwp.arranger_names = "; ".join(arranger_name_parts)
+
+    # work_part_levels: equals part_levels for a single-medium run; stored explicitly to match CE tag output.
+    cwp.work_part_levels = cwp.part_levels
+
+    return cwp
+
+
+def build_track_tags(
+    release: MBRelease,
+    track: MBTrack,
+    medium_pos: int,
+    recording_detail: MBRecording,
+    work_hierarchy: list[MBWork],
+) -> TrackTags:
+    """Build the complete tag model for one track, implementing all CE conventions.
+
+    This is the central function that combines release, recording, and work-hierarchy data into a
+    :class:`~music_annotator.models.TrackTags` instance ready for writing to an audio file.  The movement-number fields
+    (``movementnumber``, ``movementtotal``, ``cwp_movt_num``, ``cwp_movt_tot``, ``cwp_single_work_album``) are left as
+    empty strings at this stage; they are filled in by :func:`run` after all tracks have been processed and grouped by
+    top-work MBID.
+
+    :param release: The :class:`~music_annotator.models.MBRelease` from :func:`fetch_release`.
+    :param track: The :class:`~music_annotator.models.MBTrack` for this track.
+    :param medium_pos: The 1-based disc/medium position (typically ``1`` for single-disc releases).
+    :param recording_detail: The :class:`~music_annotator.models.MBRecording` from :func:`fetch_recording_detail`.
+    :param work_hierarchy: The work hierarchy list from :func:`build_work_hierarchy`, or an empty list when no work link
+        was found.
+    :returns: A :class:`~music_annotator.models.TrackTags` instance with all fields populated except movement-number
+        fields.
+    """
+    rec = track.recording
+
+    # Release-level artists
+    album_artist_phrase = artist_credit_phrase(release.artist_credit)
+    album_artist_ids_str = "/".join(artist_ids(release.artist_credit))
+    album_artist_sort = "; ".join(artist_sort_names(release.artist_credit))
+
+    # Recording artist credit (from the recording stub on the track)
+    rec_artist_phrase = artist_credit_phrase(rec.artist_credit)
+    rec_artist_ids_str = "/".join(artist_ids(rec.artist_credit))
+    rec_artist_sort = "; ".join(artist_sort_names(rec.artist_credit))
+
+    # Label / catalogue
+    label_info = release.label_info_list[0] if release.label_info_list else None
+    label_name = label_info.label.name if label_info else ""
+    catalog_number = label_info.catalog_number if label_info else ""
+
+    # Track counts
+    medium = next((m for m in release.medium_list if m.position == medium_pos), None)
+    total_tracks = str(len(medium.track_list) if medium else 0)
+
+    # CEA classification
+    cea = build_cea_performers(recording_detail)
+    all_soloists = cea.all_soloists
+
+    # Work hierarchy + roles
+    role_buckets = RoleBuckets()
+    for w in work_hierarchy:
+        extract_work_artist_rels(w, role_buckets)
+    cwp = build_cwp_tags(work_hierarchy, role_buckets)
+
+    # Direct work link from recording
+    direct_work_id = ""
+    direct_work_title = ""
+    for rel in recording_detail.work_relation_list:
+        if rel.type == "performance":
+            direct_work_id = rel.work.id
+            direct_work_title = rel.work.title
+            break
+
+    # Derive COMPOSER
+    composer_name = composer_sort = composer_id = ""
+    if role_buckets.composers:
+        composer_name = "; ".join(e.name for e in role_buckets.composers)
+        composer_sort = "; ".join(e.sort for e in role_buckets.composers)
+        composer_id = "/".join(e.mbid for e in role_buckets.composers)
+    elif cea.composers:
+        composer_name = "; ".join(e.name for e in cea.composers)
+        composer_sort = "; ".join(e.sort for e in cea.composers)
+        composer_id = "/".join(e.mbid for e in cea.composers)
+
+    conductor_name = "; ".join(e.name for e in cea.conductors)
+    conductor_id = "/".join(e.mbid for e in cea.conductors)
+    chorusmaster = "; ".join(e.name for e in cea.chorusmasters)
+    leader = "; ".join(e.name for e in cea.leaders)
+
+    # Arranger string (annotated with role in parens per CE convention)
+    arranger_seen: set[str] = set()
+    arranger_parts: list[str] = []
+    for e in cea.arrangers:
+        arranger_parts.append(e.name)
+        arranger_seen.add(e.name)
+    for e in role_buckets.arrangers:
+        if e.name not in arranger_seen:
+            arranger_parts.append(e.name)
+            arranger_seen.add(e.name)
+    for e in role_buckets.orchestrators:
+        if e.name not in arranger_seen:
+            arranger_parts.append(f"{e.name} (orch.)")
+            arranger_seen.add(e.name)
+    for e in role_buckets.reconstructors:
+        arranger_parts.append(f"{e.name} (reconstructed)")
+    for e in role_buckets.revisors:
+        arranger_parts.append(f"{e.name} (revised)")
+    arranger_str = "; ".join(arranger_parts)
+
+    lyricist_str = "; ".join(e.name for e in role_buckets.lyricists + role_buckets.librettists)
+    translator_str = "; ".join(e.name for e in role_buckets.translators)
+
+    # Performer strings
+    soloist_names = [e.name for e in all_soloists]
+    soloist_str = "; ".join(f"{e.name} ({e.instrument})" if e.instrument else e.name for e in all_soloists)
+    ensemble_names = [e.name for e in cea.ensembles]
+    ensemble_str = "; ".join(ensemble_names)
+    vocalist_str = "; ".join(f"{e.name} ({e.instrument})" if e.instrument else e.name for e in cea.vocalists)
+    instrumentalist_str = "; ".join(f"{e.name} ({e.instrument})" if e.instrument else e.name for e in cea.instrumentalists)
+    instruments_str = "; ".join(e.instrument for e in all_soloists if e.instrument)
+
+    recording_artist_names = [e.name for e in all_soloists + cea.ensembles]
+    if cea.conductors:
+        recording_artist_names += [e.name for e in cea.conductors]
+    cea_recording_artist = "; ".join(recording_artist_names) or rec_artist_phrase
+
+    # CEA_RECORDING_ARTISTS (multi-value equivalent) and sort names — same data as cea_recording_artist but
+    # stored so downstream tag-mapping scripts can access the raw list.
+    cea_recording_artists = cea_recording_artist
+    cea_recording_artists_sort = "; ".join(e.sort for e in all_soloists + cea.ensembles + cea.conductors) or rec_artist_sort
+
+    # CEA_MB_ARTISTS: raw MB recording artist-credit phrase, preserved before any replacement.
+    cea_mb_artists = rec_artist_phrase
+
+    # CEA plain-name variants (without instrument/voice in brackets).
+    cea_vocalist_names = "; ".join(e.name for e in cea.vocalists)
+    cea_instrumentalist_names = "; ".join(e.name for e in cea.instrumentalists)
+
+    # CEA sort names
+    cea_soloists_sort = "; ".join(e.sort for e in all_soloists)
+    cea_ensembles_sort = "; ".join(e.sort for e in cea.ensembles)
+
+    # CEA_INSTRUMENTS_ALL: instruments from recording-level soloists only; work-level instruments are in
+    # cwp_keys / cwp_worktype_genres.  CE defines this as the union of recording and work instrument tags; for
+    # music-annotator (which stores work-level role names as CWP tags, not instrument names) this is identical
+    # to the recording-level instruments string.
+    instruments_all_str = instruments_str
+
+    # CEA_ALBUM_* and CEA_SUPPORT_PERFORMERS.
+    # "Album artist" means: credited at the release level in MB (release.artist_credit).
+    release_artist_names: set[str] = {
+        c.artist.name for c in release.artist_credit if isinstance(c, MBArtistCredit) and c.artist.name
+    }
+    release_artist_sorts: set[str] = {
+        c.artist.sort_name for c in release.artist_credit if isinstance(c, MBArtistCredit) and c.artist.sort_name
+    }
+
+    def _is_album_artist(entry: ArtistEntry) -> bool:
+        """Return True when ``entry`` is credited at the MB release level."""
+        return entry.name in release_artist_names or entry.sort in release_artist_sorts
+
+    album_soloists = [e for e in all_soloists if _is_album_artist(e)]
+    album_conductors = [e for e in cea.conductors if _is_album_artist(e)]
+    album_ensembles = [e for e in cea.ensembles if _is_album_artist(e)]
+    # For composers: use work-level role_buckets; fall back to cea.composers if no work link.
+    all_composers = role_buckets.composers or cea.composers
+    album_composers = [e for e in all_composers if _is_album_artist(e)]
+
+    # Support performers: soloists and ensembles who are NOT album artists (conductors excluded per CE).
+    support_performers = [e for e in all_soloists + cea.ensembles if not _is_album_artist(e)]
+
+    # Final work/movement tags
+    _level0_title = cwp.levels[0].work_id and cwp.levels[0].work_title if cwp.levels else ""
+    work_tag = cwp.work_top or _level0_title or direct_work_title or ""
+    groupheading = cwp.groupheading or work_tag
+    part_tag = cwp.part or (cwp.levels[0].part_title if cwp.levels else "")
+    wtype_genre = WORKTYPE_GENRES.get(cwp.worktype_genres, "")
+    genre = wtype_genre or "Classical"
+
+    tags = TrackTags(
+        cea_conductors_list=cea.conductors,
+        cea_ensembles_list=cea.ensembles,
+        title=rec.title,
+        artist=rec_artist_phrase,
+        artists=rec_artist_phrase,
+        artistsort=rec_artist_sort,
+        albumartist=album_artist_phrase,
+        albumartistsort=album_artist_sort,
+        album=release.title,
+        tracknumber=str(track.position),
+        totaltracks=total_tracks,
+        discnumber=str(medium_pos),
+        date=release.date,
+        originaldate=release.release_group.first_release_date,
+        media="CD",
+        script=release.text_representation.script,
+        language=release.text_representation.language,
+        releasetype=release.release_group.primary_type,
+        releasestatus=release.status,
+        organization=label_name,
+        label=label_name,
+        catalognumber=catalog_number,
+        barcode=release.barcode,
+        work=work_tag,
+        groupheading=groupheading,
+        top_work=cwp.work_top or work_tag,
+        part=part_tag,
+        movement=part_tag,
+        subtitle=part_tag,
+        composer=composer_name,
+        composersort=composer_sort,
+        conductor=conductor_name,
+        lyricist=lyricist_str,
+        translator=translator_str,
+        arranger=arranger_str,
+        chorusmaster=chorusmaster,
+        leader=leader,
+        soloists=soloist_str,
+        ensemble=ensemble_str,
+        band=ensemble_str,
+        vocalists=vocalist_str,
+        instrumentalists=instrumentalist_str,
+        instrument=instruments_str,
+        genre=genre,
+        period=cwp.period,
+        key=cwp.keys,
+        is_classical="1",
+        work_year=cwp.composed_dates or cwp.published_dates or cwp.premiered_dates,
+        composed_date=cwp.composed_dates,
+        published_date=cwp.published_dates,
+        premiered_date=cwp.premiered_dates,
+        producer="; ".join(e.name for e in cea.producers),
+        engineer="; ".join(e.name for e in cea.engineers),
+        musicbrainz_albumid=release.id,
+        musicbrainz_trackid=track.id,
+        musicbrainz_recordingid=rec.id,
+        musicbrainz_releasegroupid=release.release_group.id,
+        musicbrainz_albumartistid=album_artist_ids_str,
+        musicbrainz_artistid=rec_artist_ids_str,
+        musicbrainz_workid=direct_work_id or (cwp.levels[0].work_id if cwp.levels else ""),
+        musicbrainz_conductorid=conductor_id,
+        musicbrainz_composerid=composer_id,
+        musicbrainz_releasetrackid=track.id,
+        cea_recording_artist=cea_recording_artist,
+        cea_recording_artists=cea_recording_artists,
+        cea_recording_artists_sort=cea_recording_artists_sort,
+        cea_mb_artists=cea_mb_artists,
+        cea_soloists=soloist_str,
+        cea_soloist_names="; ".join(soloist_names),
+        cea_soloists_sort=cea_soloists_sort,
+        cea_vocalists=vocalist_str,
+        cea_vocalist_names=cea_vocalist_names,
+        cea_instrumentalists=instrumentalist_str,
+        cea_instrumentalist_names=cea_instrumentalist_names,
+        cea_other_soloists="; ".join(e.name for e in cea.other_soloists),
+        cea_ensembles=ensemble_str,
+        cea_ensemble_names="; ".join(ensemble_names),
+        cea_ensembles_sort=cea_ensembles_sort,
+        cea_album_soloists="; ".join(e.name for e in album_soloists),
+        cea_album_soloists_sort="; ".join(e.sort for e in album_soloists),
+        cea_album_conductors="; ".join(e.name for e in album_conductors),
+        cea_album_conductors_sort="; ".join(e.sort for e in album_conductors),
+        cea_album_ensembles="; ".join(e.name for e in album_ensembles),
+        cea_album_ensembles_sort="; ".join(e.sort for e in album_ensembles),
+        cea_album_composers="; ".join(e.name for e in album_composers),
+        cea_album_composers_sort="; ".join(e.sort for e in album_composers),
+        cea_support_performers="; ".join(f"{e.name} ({e.instrument})" if e.instrument else e.name for e in support_performers),
+        cea_support_performers_sort="; ".join(e.sort for e in support_performers),
+        cea_conductors=conductor_name,
+        cea_composers=cwp.composers or composer_name,
+        cea_composer_lastnames=cwp.composer_lastnames or last_name(composer_sort),
+        cea_performers=rec_artist_phrase,
+        cea_arrangers=arranger_str,
+        cea_orchestrators="; ".join(e.name for e in role_buckets.orchestrators),
+        cea_chorusmasters=chorusmaster,
+        cea_leaders=leader,
+        cea_instruments=instruments_str,
+        cea_instruments_all=instruments_all_str,
+        cwp_work_top=cwp.work_top,
+        cwp_workid_top=cwp.workid_top,
+        cwp_part_levels=str(cwp.part_levels),
+        cwp_work_part_levels=str(cwp.work_part_levels),
+        cwp_part=cwp.part,
+        cwp_work=cwp.work,
+        cwp_groupheading=cwp.groupheading,
+        cwp_inter_work=cwp.inter_work,
+        cwp_composers=cwp.composers,
+        cwp_composers_sort=cwp.composers_sort,
+        cwp_composer_lastnames=cwp.composer_lastnames,
+        cwp_writers=cwp.writers,
+        cwp_writers_sort=cwp.writers_sort,
+        cwp_arrangers=cwp.arrangers,
+        cwp_arrangers_sort=cwp.arrangers_sort,
+        cwp_arranger_names=cwp.arranger_names,
+        cwp_orchestrators=cwp.orchestrators,
+        cwp_orchestrators_sort=cwp.orchestrators_sort,
+        cwp_reconstructors=cwp.reconstructors,
+        cwp_reconstructors_sort=cwp.reconstructors_sort,
+        cwp_revisors=cwp.revisors,
+        cwp_revisors_sort=cwp.revisors_sort,
+        cwp_lyricists=cwp.lyricists,
+        cwp_lyricists_sort=cwp.lyricists_sort,
+        cwp_librettists=cwp.librettists,
+        cwp_librettists_sort=cwp.librettists_sort,
+        cwp_translators=cwp.translators,
+        cwp_translators_sort=cwp.translators_sort,
+        cwp_keys=cwp.keys,
+        cwp_composed_dates=cwp.composed_dates,
+        cwp_published_dates=cwp.published_dates,
+        cwp_premiered_dates=cwp.premiered_dates,
+        cwp_worktype_genres=cwp.worktype_genres,
+    )
+
+    # Add per-level fields as model_extra
+    for level in cwp.levels:
+        i = level.index
+        tags.model_extra[f"cwp_work_{i}"] = level.work_title  # type: ignore[index]
+        tags.model_extra[f"cwp_workid_{i}"] = level.work_id  # type: ignore[index]
+        tags.model_extra[f"cwp_part_{i}"] = level.part_title  # type: ignore[index]
+
+    return tags
+
+
+def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: TrackTags) -> Path:
+    """Compute the destination path (without extension) for one annotated track.
+
+    Layout::
+
+        <dest_root>/
+          <Composer last names> - <Conductor; Ensemble>/
+            <Work title> (<work MBID>)/
+              <nn> - <movement title>
+
+    The numeric prefix is the movement number within the work (not the album track number).  Width is 2 digits normally;
+    3 digits when the work contains more than 99 movements.
+
+    :param dest_root: The root destination directory.
+    :param release: The :class:`~music_annotator.models.MBRelease` from :func:`fetch_release`.
+    :param track: The :class:`~music_annotator.models.MBTrack` for this track.
+    :param tags: The :class:`~music_annotator.models.TrackTags` instance for this track, which must already have
+        ``movementnumber`` and ``movementtotal`` filled in.
+    :returns: A :class:`~pathlib.Path` for the destination file *without* extension (callers append ``.flac``, ``.mp3``,
+        etc.).
+    """
+    file_dict = tags.to_file_dict()
+
+    # Composer directory component
+    raw_composer = file_dict.get("CWP_COMPOSER_LASTNAMES") or file_dict.get("CEA_COMPOSER_LASTNAMES", "")
+    if raw_composer:
+        seen: set[str] = set()
+        unique: list[str] = []
+        for part in raw_composer.split("; "):
+            part = part.strip()
+            if part and part not in seen:
+                seen.add(part)
+                unique.append(part)
+        composer = "; ".join(unique)
+    else:
+        composer = ""
+        for credit in release.artist_credit:
+            if isinstance(credit, MBArtistCredit) and credit.artist.type == "Person":
+                composer = credit.artist.sort_name or credit.artist.name
+                break
+        if not composer:
+            composer = "Unknown Composer"
+
+    # Performers directory component
+    conductors = [e.name for e in tags.cea_conductors_list]
+    ensembles = [e.name for e in tags.cea_ensembles_list]
+    if conductors or ensembles:
+        performers = "; ".join(conductors + ensembles)
+    else:
+        performers = file_dict.get("CEA_ENSEMBLE_NAMES") or file_dict.get("ARTIST", "Unknown Performers")
+
+    # Work directory component
+    work_title = file_dict.get("CWP_WORK_TOP") or file_dict.get("WORK", "")
+    work_mbid = file_dict.get("CWP_WORKID_TOP") or file_dict.get("MUSICBRAINZ_WORKID", "")
+    work_dir = safe_name(work_title)
+    if work_mbid:
+        work_dir = f"{work_dir} ({work_mbid})"
+
+    # Movement number prefix
+    movt_num = int(file_dict.get("MOVEMENTNUMBER") or str(track.position))
+    movt_tot = int(file_dict.get("MOVEMENTTOTAL") or "1")
+    width = 3 if movt_tot > 99 else 2
+    track_num = str(movt_num).zfill(width)
+
+    top_dir = safe_name(f"{composer} - {performers}")
+    track_title = safe_name(file_dict.get("TITLE") or _rec_title(track))
+
+    return dest_root / top_dir / work_dir / f"{track_num} - {track_title}"

@@ -20,6 +20,7 @@ from pytest_mock import MockerFixture
 import music_annotator
 from music_annotator import (
     JOURNAL_FILENAME,
+    CollisionPolicy,
     _read_tags_flac,
     _read_tags_mp3,
     _sha256_file,
@@ -929,9 +930,9 @@ class TestRunFullPipeline:
         :param mocker: pytest-mock fixture.
         :param release: MBRelease model to return from fetch_release.
         """
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.fetch_release", return_value=release)
-        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         def _fetch_rec(rec_id: str) -> MBRecording:
             return _rec(
@@ -944,9 +945,9 @@ class TestRunFullPipeline:
                 }
             )
 
-        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
-        mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
     def test_files_copied_to_dest(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """FLAC files are copied to dest_root in non-dry-run mode.
@@ -962,7 +963,7 @@ class TestRunFullPipeline:
 
         release = _make_release(n_tracks=1)
         self._patch_mb(mocker, release)
-        mocker.patch("music_annotator.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
 
         music_annotator.run(
             release_id="rel-1",
@@ -990,7 +991,7 @@ class TestRunFullPipeline:
 
         release = _make_release(n_tracks=2)
         self._patch_mb(mocker, release)
-        mock_tag = mocker.patch("music_annotator.apply_tags_flac")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1016,7 +1017,7 @@ class TestRunFullPipeline:
 
         release = _make_release(n_tracks=1)
         self._patch_mb(mocker, release)
-        mocker.patch("music_annotator.apply_tags_flac", side_effect=MutagenError("tag boom"))
+        mocker.patch("music_annotator._pipeline.apply_tags_flac", side_effect=MutagenError("tag boom"))
 
         # Should not raise
         music_annotator.run(
@@ -1066,8 +1067,8 @@ class TestRunFullPipeline:
 
         release = _make_release(n_tracks=1)
         self._patch_mb(mocker, release)
-        mock_cov = mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
-        mocker.patch("music_annotator.apply_tags_flac")
+        mock_cov = mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1095,10 +1096,10 @@ class TestRunFullPipeline:
         self._patch_mb(mocker, release)
         jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
         mocker.patch(
-            "music_annotator.fetch_cover_art",
+            "music_annotator._pipeline.fetch_cover_art",
             return_value=CoverArt(front=[CoverImage(data=jpeg, mime="image/jpeg")]),
         )
-        mocker.patch("music_annotator.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1121,12 +1122,12 @@ class TestRunFullPipeline:
         fs.create_dir(str(dest))
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
-        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
-        spy = mocker.patch("music_annotator.fetch_recording_detail")
-        mocker.patch("music_annotator.apply_tags_flac")
-        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        spy = mocker.patch("music_annotator._pipeline.fetch_recording_detail")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1152,7 +1153,7 @@ class TestRunFullPipeline:
 
         release = _make_release(n_tracks=1)
         self._patch_mb(mocker, release)
-        mock_tag = mocker.patch("music_annotator.apply_tags_mp3")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_mp3")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1229,7 +1230,7 @@ class TestApplyTagsMp3EdgeCases:
         mock_tags = mocker.MagicMock()
         mock_audio = mocker.MagicMock()
         mock_audio.tags = mock_tags
-        mocker.patch("music_annotator.MP3", return_value=mock_audio)
+        mocker.patch("music_annotator._tagger.MP3", return_value=mock_audio)
 
         apply_tags_mp3(dest, TrackTags(title="T"))
         mock_tags.delete.assert_called_once_with(str(dest))
@@ -1247,7 +1248,7 @@ class TestApplyTagsMp3EdgeCases:
         # audio.tags = None → if audio.tags: is False → skip delete → go to 1379
         mock_audio = mocker.MagicMock()
         mock_audio.tags = None
-        mocker.patch("music_annotator.MP3", return_value=mock_audio)
+        mocker.patch("music_annotator._tagger.MP3", return_value=mock_audio)
 
         # Should complete without error — tags is None so delete is never called
         apply_tags_mp3(dest, TrackTags(title="T"))
@@ -1403,9 +1404,9 @@ class TestRunWithWorkHierarchy:
         fs.create_dir(str(dest))
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
-        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         # Recording with a performance → work relation
         def _fetch_rec(rec_id: str) -> MBRecording:
@@ -1419,9 +1420,9 @@ class TestRunWithWorkHierarchy:
                 }
             )
 
-        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch(
-            "music_annotator.fetch_work_detail",
+            "music_annotator._mb_api.fetch_work_detail",
             return_value=_w(
                 {
                     "id": "w1",
@@ -1434,8 +1435,8 @@ class TestRunWithWorkHierarchy:
                 }
             ),
         )
-        mocker.patch("music_annotator.apply_tags_flac")
-        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1459,9 +1460,9 @@ class TestRunWithWorkHierarchy:
         fs.create_dir(str(dest))
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
-        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         def _fetch_rec(rec_id: str) -> MBRecording:
             return _rec(
@@ -1475,10 +1476,10 @@ class TestRunWithWorkHierarchy:
                 }
             )
 
-        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
-        mock_work = mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator.apply_tags_flac")
-        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1503,9 +1504,9 @@ class TestRunWithWorkHierarchy:
         fs.create_dir(str(dest))
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
-        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         def _fetch_rec(rec_id: str) -> MBRecording:
             return _rec(
@@ -1519,10 +1520,10 @@ class TestRunWithWorkHierarchy:
                 }
             )
 
-        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
-        mock_work = mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator.apply_tags_flac")
-        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1551,9 +1552,9 @@ class TestRunWithWorkHierarchy:
         fs.create_dir(str(dest))
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
-        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         # Work with an inlined artist relation (simulates work-level-rels response)
         def _fetch_rec(rec_id: str) -> MBRecording:
@@ -1577,10 +1578,10 @@ class TestRunWithWorkHierarchy:
                 }
             )
 
-        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
-        mock_work = mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator.apply_tags_flac")
-        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1608,9 +1609,9 @@ class TestRunWithWorkHierarchy:
         fs.create_dir(str(dest))
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
-        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         # Work with no inlined relations (stub shape — both lists empty)
         def _fetch_rec(rec_id: str) -> MBRecording:
@@ -1624,13 +1625,13 @@ class TestRunWithWorkHierarchy:
                 }
             )
 
-        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch(
-            "music_annotator.fetch_work_detail",
+            "music_annotator._mb_api.fetch_work_detail",
             return_value=_w({"id": "w1", "title": "The Work", "work-relation-list": [], "artist-relation-list": []}),
         )
-        mocker.patch("music_annotator.apply_tags_flac")
-        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1664,9 +1665,9 @@ def _setup_single_track_run(mocker: MockerFixture, fs: FakeFilesystem, src: Path
     fs.create_dir(str(dest))
     fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-    mocker.patch("music_annotator.mb.set_useragent")
-    mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
-    mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+    mocker.patch("music_annotator._mb_api.mb.set_useragent")
+    mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
+    mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
     def _fetch_rec(rec_id: str) -> MBRecording:
         return _rec(
@@ -1679,10 +1680,10 @@ def _setup_single_track_run(mocker: MockerFixture, fs: FakeFilesystem, src: Path
             }
         )
 
-    mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
-    mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
-    mocker.patch("music_annotator.apply_tags_flac")
-    mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+    mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+    mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+    mocker.patch("music_annotator._pipeline.apply_tags_flac")
+    mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
 
 class TestRunCollisionAndJournal:
@@ -1769,7 +1770,7 @@ class TestRunCollisionAndJournal:
         # exact dest path that build_dest_path would compute.
         collision_path = dest / "existing.flac"
         fs.create_file(str(collision_path))
-        mocker.patch("music_annotator._check_collisions", return_value=[collision_path])
+        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
         mocker.patch("builtins.input", return_value="o")
 
         music_annotator.run(
@@ -1796,7 +1797,7 @@ class TestRunCollisionAndJournal:
 
         collision_path = dest / "existing.flac"
         fs.create_file(str(collision_path))
-        mocker.patch("music_annotator._check_collisions", return_value=[collision_path])
+        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
         mocker.patch("builtins.input", return_value="overwrite")
 
         music_annotator.run(
@@ -1825,19 +1826,19 @@ class TestRunCollisionAndJournal:
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
         fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=2))
-        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=2))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         def _fetch_rec(rec_id: str) -> MBRecording:
             return _rec(
                 {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
             )
 
-        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
-        mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
-        mock_tag = mocker.patch("music_annotator.apply_tags_flac")
-        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         # We'll capture the planned dest paths by letting build_dest_path run, then
         # intercept _check_collisions to report the first dest as a collision.
@@ -1847,7 +1848,7 @@ class TestRunCollisionAndJournal:
             captured_dests.extend(paths)
             return [paths[0]]  # first file is the collision
 
-        mocker.patch("music_annotator._check_collisions", side_effect=_capture_check)  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._check_collisions", side_effect=_capture_check)  # pylint: disable=protected-access
         mocker.patch("builtins.input", return_value="s")
 
         music_annotator.run(
@@ -1880,7 +1881,7 @@ class TestRunCollisionAndJournal:
 
         collision_path = dest / "existing.flac"
         fs.create_file(str(collision_path))
-        mocker.patch("music_annotator._check_collisions", return_value=[collision_path])
+        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
         mocker.patch("builtins.input", return_value="a")
 
         with pytest.raises(SystemExit) as exc_info:
@@ -1908,7 +1909,7 @@ class TestRunCollisionAndJournal:
 
         collision_path = dest / "existing.flac"
         fs.create_file(str(collision_path))
-        mocker.patch("music_annotator._check_collisions", return_value=[collision_path])
+        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
         mocker.patch("builtins.input", return_value="abort")
 
         with pytest.raises(SystemExit) as exc_info:
@@ -1934,7 +1935,7 @@ class TestRunCollisionAndJournal:
 
         collision_path = dest / "existing.flac"
         fs.create_file(str(collision_path))
-        mocker.patch("music_annotator._check_collisions", return_value=[collision_path])
+        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
         # First two inputs are invalid; third is valid "skip"
         mocker.patch("builtins.input", side_effect=["x", "yes", "skip"])
 
@@ -1973,10 +1974,10 @@ class TestRunCollisionAndJournal:
 
         # Patch so the second run doesn't try to re-copy (would be a no-op anyway in fake fs,
         # but reset the MB mock return to avoid interaction with the first run's cache).
-        mocker.patch("music_annotator.fetch_release", return_value=_make_release(n_tracks=1))
-        mocker.patch("music_annotator._check_collisions", return_value=[])  # pylint: disable=protected-access
-        mocker.patch("music_annotator.apply_tags_flac")
-        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[])  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
             release_id="rel-1",
@@ -1988,6 +1989,36 @@ class TestRunCollisionAndJournal:
         )
         data_after_second = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
         assert len(data_after_second) == 2
+
+    def test_collision_policy_overwrite_skips_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Passing CollisionPolicy.OVERWRITE skips the interactive prompt entirely.
+
+        Verifies the branch where ``collision_policy != CollisionPolicy.ASK`` so
+        ``_prompt_collision_policy`` is never called even when collisions exist.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        collision_path = dest / "existing.flac"
+        fs.create_file(str(collision_path))
+        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
+        mock_prompt = mocker.patch("music_annotator._pipeline._prompt_collision_policy")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+            collision_policy=CollisionPolicy.OVERWRITE,
+        )
+        # Prompt must NOT be called when policy is already set
+        mock_prompt.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2065,7 +2096,7 @@ class TestReadTagsMp3:
         fs.create_file(str(path), contents=_MINIMAL_MP3)
         tags = TrackTags(title="Eroica", album="Beethoven Symphonies", tracknumber="3", totaltracks="9", composer="Beethoven")
         apply_tags_mp3(path, tags)
-        writable = music_annotator._MP3_STD_KEYS | frozenset(music_annotator._MP3_TXXX_MAP)  # pylint: disable=protected-access
+        writable = music_annotator._tagger._MP3_STD_KEYS | frozenset(music_annotator._tagger._MP3_TXXX_MAP)  # pylint: disable=protected-access
         expected = {k: v for k, v in tags.to_file_dict().items() if k in writable}
         assert _read_tags_mp3(path) == expected
 
@@ -2304,7 +2335,7 @@ class TestRunCopyIntegrity:
         dest = Path("/dest")
         _setup_single_track_run(mocker, fs, src, dest)
         # Return different hashes for the two _sha256_file calls (src then dest).
-        mocker.patch("music_annotator._sha256_file", side_effect=["aaa", "bbb"])  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._sha256_file", side_effect=["aaa", "bbb"])  # pylint: disable=protected-access
 
         with pytest.raises(RuntimeError, match="copy integrity failure"):
             music_annotator.run(
@@ -2338,7 +2369,7 @@ class TestFetchAcoustidId:
         ctx.__enter__ = MagicMock(return_value=ctx)
         ctx.__exit__ = MagicMock(return_value=False)
         ctx.read = MagicMock(return_value=body)
-        mocker.patch("music_annotator.urllib.request.urlopen", return_value=ctx)
+        mocker.patch("music_annotator._mb_api.urllib.request.urlopen", return_value=ctx)
 
     def test_valid_response_returns_id(self, mocker: MockerFixture) -> None:
         """A well-formed AcoustID response returns the first track id.
@@ -2393,7 +2424,7 @@ class TestFetchAcoustidId:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.urllib.request.urlopen", side_effect=OSError("network failure"))
+        mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=OSError("network failure"))
         assert fetch_acoustid_id("rec-mbid") == ""
 
 
@@ -2411,19 +2442,19 @@ class TestRunMultiDisc:
         :param mocker: pytest-mock fixture.
         :param release: Release model to return from fetch_release.
         """
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.fetch_release", return_value=release)
-        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         def _fetch_rec(rec_id: str) -> MBRecording:
             return _rec(
                 {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
             )
 
-        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
-        mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator.apply_tags_flac")
-        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
     def test_single_matching_medium_selected(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """When exactly one medium matches the source file count, it is selected automatically.
@@ -2442,7 +2473,7 @@ class TestRunMultiDisc:
 
         release = _make_multi_disc_release([3, 2])
         self._patch_mb_multi(mocker, release)
-        mock_tag = mocker.patch("music_annotator.apply_tags_flac")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
 
         music_annotator.run(
             release_id="rel-multi",
@@ -2471,7 +2502,7 @@ class TestRunMultiDisc:
 
         release = _make_multi_disc_release([1, 1])
         self._patch_mb_multi(mocker, release)
-        mock_tag = mocker.patch("music_annotator.apply_tags_flac")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
 
         music_annotator.run(
             release_id="rel-multi",
@@ -2500,7 +2531,7 @@ class TestRunMultiDisc:
 
         release = _make_multi_disc_release([1, 1])
         self._patch_mb_multi(mocker, release)
-        mock_tag = mocker.patch("music_annotator.apply_tags_flac")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
 
         music_annotator.run(
             release_id="rel-multi",
@@ -2566,9 +2597,9 @@ class TestRunMultiDisc:
                 "medium-list": [],
             }
         )
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.fetch_release", return_value=release)
-        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         with pytest.raises(ValueError, match="has no mediums"):
             music_annotator.run(

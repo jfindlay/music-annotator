@@ -13,14 +13,14 @@ from pytest_mock import MockerFixture
 
 import music_annotator
 from music_annotator import (
-    _check_collisions,
-    _mb_retry,
     fetch_cover_art,
     fetch_recording_detail,
     fetch_release,
     fetch_work_detail,
     write_transaction_log,
 )
+from music_annotator._mb_api import _mb_retry
+from music_annotator._pipeline_io import _check_collisions
 from music_annotator.models import TransactionEntry
 
 # ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ class TestMbRetry:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         err = mb.ResponseError(cause=Exception("503 Service Unavailable"))
         inner = mocker.MagicMock(side_effect=[err, {"ok": True}])
         inner.__name__ = "mock_fn"
@@ -70,7 +70,7 @@ class TestMbRetry:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         err = mb.ResponseError(cause=Exception("429 Too Many Requests"))
         inner = mocker.MagicMock(side_effect=[err, {"ok": True}])
         inner.__name__ = "mock_fn"
@@ -87,7 +87,7 @@ class TestMbRetry:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         err = mb.ResponseError(cause=Exception("404 Not Found"))
         inner = mocker.MagicMock(side_effect=err)
         inner.__name__ = "mock_fn"
@@ -105,7 +105,7 @@ class TestMbRetry:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         err = mb.ResponseError(cause=Exception("503 Service Unavailable"))
         inner = mocker.MagicMock(side_effect=err)
         inner.__name__ = "mock_fn"
@@ -132,9 +132,9 @@ class TestFetchRelease:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_release_by_id",
+            "music_annotator._mb_api.mb.get_release_by_id",
             return_value={"release": {"id": "rel-1", "title": "Test"}},
         )
         result = fetch_release("rel-1")
@@ -146,9 +146,9 @@ class TestFetchRelease:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mock_api = mocker.patch(
-            "music_annotator.mb.get_release_by_id",
+            "music_annotator._mb_api.mb.get_release_by_id",
             return_value={"release": {}},
         )
         fetch_release("rel-1")
@@ -170,9 +170,9 @@ class TestFetchRecordingDetail:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_recording_by_id",
+            "music_annotator._mb_api.mb.get_recording_by_id",
             return_value={"recording": {"id": "rec-1", "title": "Adagio"}},
         )
         result = fetch_recording_detail("rec-1")
@@ -183,9 +183,9 @@ class TestFetchRecordingDetail:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_recording_by_id",
+            "music_annotator._mb_api.mb.get_recording_by_id",
             return_value={},
         )
         result = fetch_recording_detail("rec-1")
@@ -220,10 +220,10 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 100
-        mocker.patch("music_annotator.mb.get_image_list", return_value=_make_listing(("111", "Front")))
-        mocker.patch("music_annotator.mb.get_image", return_value=jpeg_bytes)
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("111", "Front")))
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg_bytes)
         result = fetch_cover_art("rel-1")
         assert result.available
         assert len(result.front) == 1
@@ -234,10 +234,10 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-        mocker.patch("music_annotator.mb.get_image_list", return_value=_make_listing(("222", "Front")))
-        mocker.patch("music_annotator.mb.get_image", return_value=png_bytes)
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("222", "Front")))
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=png_bytes)
         result = fetch_cover_art("rel-1")
         assert result.available
         assert result.mime == "image/png"
@@ -247,10 +247,10 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         bmp_bytes = b"BM" + b"\x00" * 100
-        mocker.patch("music_annotator.mb.get_image_list", return_value=_make_listing(("333", "Front")))
-        mocker.patch("music_annotator.mb.get_image", return_value=bmp_bytes)
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("333", "Front")))
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=bmp_bytes)
         result = fetch_cover_art("rel-1")
         assert result.available
         assert result.mime == "image/jpeg"
@@ -260,13 +260,13 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 10
         mocker.patch(
-            "music_annotator.mb.get_image_list",
+            "music_annotator._mb_api.mb.get_image_list",
             return_value=_make_listing(("1", "Front"), ("2", "Back"), ("3", "Booklet"), ("4", "Medium")),
         )
-        mocker.patch("music_annotator.mb.get_image", return_value=jpeg)
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
         result = fetch_cover_art("rel-1")
         assert len(result.front) == 1
         assert len(result.back) == 1
@@ -278,13 +278,13 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 10
         mocker.patch(
-            "music_annotator.mb.get_image_list",
+            "music_annotator._mb_api.mb.get_image_list",
             return_value=_make_listing(("10", "Booklet"), ("11", "Booklet"), ("12", "Booklet")),
         )
-        mocker.patch("music_annotator.mb.get_image", return_value=jpeg)
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
         result = fetch_cover_art("rel-1")
         assert len(result.booklet) == 3
         assert not result.front
@@ -294,12 +294,12 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_image_list",
+            "music_annotator._mb_api.mb.get_image_list",
             return_value=_make_listing(("99", "Spine"), ("100", "Tray")),
         )
-        mock_get = mocker.patch("music_annotator.mb.get_image")
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image")
         result = fetch_cover_art("rel-1")
         mock_get.assert_not_called()
         assert not result.available
@@ -309,10 +309,10 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
-        mocker.patch("music_annotator.mb.get_image_list", return_value=_make_listing(("55", "Front")))
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("55", "Front")))
         mocker.patch(
-            "music_annotator.mb.get_image",
+            "music_annotator._mb_api.mb.get_image",
             side_effect=mb.ResponseError(cause=Exception("503 error")),
         )
         result = fetch_cover_art("rel-1")
@@ -323,9 +323,9 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
-        mocker.patch("music_annotator.mb.get_image_list", return_value=_make_listing(("66", "Front")))
-        mocker.patch("music_annotator.mb.get_image", return_value=b"")
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("66", "Front")))
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=b"")
         result = fetch_cover_art("rel-1")
         assert not result.available
 
@@ -334,13 +334,13 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 100
         mocker.patch(
-            "music_annotator.mb.get_image_list",
+            "music_annotator._mb_api.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
         )
-        mocker.patch("music_annotator.mb.get_release_group_image_front", return_value=jpeg_bytes)
+        mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", return_value=jpeg_bytes)
         result = fetch_cover_art("rel-1", release_group_id="rg-1")
         assert result.available
         assert len(result.front) == 1
@@ -350,9 +350,9 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_image_list",
+            "music_annotator._mb_api.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
         )
         result = fetch_cover_art("rel-1", release_group_id="")
@@ -363,9 +363,9 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_image_list",
+            "music_annotator._mb_api.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("500 Internal Server Error")),
         )
         result = fetch_cover_art("rel-1")
@@ -376,13 +376,13 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_image_list",
+            "music_annotator._mb_api.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
         )
         mocker.patch(
-            "music_annotator.mb.get_release_group_image_front",
+            "music_annotator._mb_api.mb.get_release_group_image_front",
             side_effect=mb.ResponseError(cause=Exception("500 error")),
         )
         result = fetch_cover_art("rel-1", release_group_id="rg-1")
@@ -393,12 +393,12 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_image_list",
+            "music_annotator._mb_api.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
         )
-        mocker.patch("music_annotator.mb.get_release_group_image_front", return_value=b"")
+        mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", return_value=b"")
         result = fetch_cover_art("rel-1", release_group_id="rg-1")
         assert not result.available
 
@@ -407,10 +407,10 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         listing = {"images": [{"types": ["Front"], "front": True, "back": False}]}
-        mocker.patch("music_annotator.mb.get_image_list", return_value=listing)
-        mock_get = mocker.patch("music_annotator.mb.get_image")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image")
         result = fetch_cover_art("rel-1")
         mock_get.assert_not_called()
         assert not result.available
@@ -420,8 +420,8 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
-        mocker.patch("music_annotator.mb.get_image_list", return_value={"images": "bad"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value={"images": "bad"})
         result = fetch_cover_art("rel-1")
         assert not result.available
 
@@ -432,10 +432,10 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         listing = {"images": [{"id": "77", "types": "Front", "front": True}]}
-        mocker.patch("music_annotator.mb.get_image_list", return_value=listing)
-        mock_get = mocker.patch("music_annotator.mb.get_image")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image")
         result = fetch_cover_art("rel-1")
         mock_get.assert_not_called()
         assert not result.available
@@ -447,12 +447,12 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_image_list",
+            "music_annotator._mb_api.mb.get_image_list",
             return_value=_make_listing(("2", "Back"), ("3", "Booklet"), ("4", "Medium")),
         )
-        mocker.patch("music_annotator.mb.get_image", return_value=b"")
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=b"")
         result = fetch_cover_art("rel-1")
         assert not result.back
         assert not result.booklet
@@ -469,16 +469,16 @@ class TestFetchWorkDetail:
 
     def setup_method(self) -> None:
         """Clear the module-level work cache before each test."""
-        music_annotator._WORK_CACHE.clear()  # pylint: disable=protected-access
+        music_annotator._mb_api._WORK_CACHE.clear()  # pylint: disable=protected-access
 
     def test_fetches_and_returns_work(self, mocker: MockerFixture) -> None:
         """Fetches work from API and returns an MBWork instance.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_work_by_id",
+            "music_annotator._mb_api.mb.get_work_by_id",
             return_value={"work": {"id": "w1", "title": "Fontane di Roma"}},
         )
         result = fetch_work_detail("w1")
@@ -489,9 +489,9 @@ class TestFetchWorkDetail:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mock_api = mocker.patch(
-            "music_annotator.mb.get_work_by_id",
+            "music_annotator._mb_api.mb.get_work_by_id",
             return_value={"work": {"id": "w1", "title": "Cached Work"}},
         )
         fetch_work_detail("w1")
@@ -503,9 +503,9 @@ class TestFetchWorkDetail:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_work_by_id",
+            "music_annotator._mb_api.mb.get_work_by_id",
             return_value={"work": {"id": "w2", "title": "Symphony"}},
         )
         first = fetch_work_detail("w2")
@@ -517,8 +517,8 @@ class TestFetchWorkDetail:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator.time.sleep")
-        mocker.patch("music_annotator.mb.get_work_by_id", return_value={})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_work_by_id", return_value={})
         result = fetch_work_detail("w-missing")
         assert result.id == ""
         assert result.title == ""

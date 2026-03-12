@@ -8,10 +8,19 @@ project.
 ```
 music-annotator/
   src/music_annotator/
-    __init__.py       ← all business logic (~2 900 lines)
-    __main__.py       ← CLI entry point
-    models.py         ← Pydantic models for MB API + tag output (~800 lines)
-    py.typed          ← PEP 561 marker
+    __init__.py         ← thin re-export layer; defines __all__ and public API surface
+    __main__.py         ← CLI entry point
+    models.py           ← Pydantic models for MB API + tag output (~800 lines)
+    py.typed            ← PEP 561 marker
+    _console.py         ← shared rich Console instance and configure_color()
+    _mb_api.py          ← MB API wrappers: _mb_retry, fetch_*, init_mb, _get_bottom_work, _WORK_CACHE
+    _artists.py         ← artist helper functions and string constants (is_ensemble, artist_credit_phrase, …)
+    _works.py           ← work hierarchy traversal and date/key extraction (build_work_hierarchy, …)
+    _tags.py            ← tag-building logic (build_cea_performers, build_track_tags, build_dest_path, …)
+    _tagger.py          ← mutagen tagging (apply_tags_flac, apply_tags_mp3, _MP3_STD_KEYS, _MP3_TXXX_MAP)
+    _pipeline_io.py     ← filesystem I/O helpers (find_source_files, _sha256_file, _verify_copy, …)
+    _pipeline.py        ← top-level run() pipeline; CollisionPolicy enum, _select_medium
+    _discover.py        ← interactive discovery workflow; DiscoverUI Protocol, TerminalDiscoverUI, discover()
   tests/
     unit/
       test_annotator.py   ← pure-logic unit tests
@@ -19,6 +28,7 @@ music-annotator/
       test_mb_helpers.py  ← _mb_retry + fetch_* tests
       test_models.py      ← Pydantic model tests
       test_pipeline.py    ← build_cea_performers, build_track_tags, apply_tags_*, run()
+      test_discover.py    ← discover(), search_releases_by_dir, parse_disc_*, _format_candidate
     example/
       test_example.py     ← full-pipeline integration smoke tests
   pyproject.toml      ← all config (mypy, pylint, ruff, tox, coverage)
@@ -38,7 +48,7 @@ All quality checks are driven by tox via the project-local venv:
 | Env | Command | Requirement |
 |---|---|---|
 | `build` | setuptools wheel | must succeed |
-| `test` | pytest | 469 tests pass; **100% branch coverage** |
+| `test` | pytest | 471 tests pass; **100% branch coverage** |
 | `check_type` | mypy (strict) | **zero errors** |
 | `check_format` | ruff check + ruff format --check | **zero warnings** |
 | `check_lint` | pylint | **10.00/10** |
@@ -82,7 +92,7 @@ Never skip the full `tox -m analyze` run before declaring a task done.
 - `MBAttribute` must be defined *before* any model that references it (`MBArtistRelation`, `MBWork`).
 
 ### Retry decorator
-- `_mb_retry` in `__init__.py` uses `@functools.wraps` + `ParamSpec`/`TypeVar` for a fully typed decorator — do not use untyped
+- `_mb_retry` in `_mb_api.py` uses `@functools.wraps` + `ParamSpec`/`TypeVar` for a fully typed decorator — do not use untyped
   alternatives.
 - All three MB API wrappers (`fetch_release`, `fetch_recording_detail`, `fetch_work_detail`) are decorated with `@_mb_retry`.
 
@@ -121,7 +131,9 @@ All mock return values for `fetch_release`, `fetch_recording_detail`, and `fetch
 
 ### Test isolation
 - Tests must not make real network calls. All `musicbrainzngs.*` functions, `fetch_*` functions, and
-  `music_annotator.urllib.request.urlopen` (used by `fetch_acoustid_id`) are mocked via `pytest-mock`.
+  `music_annotator._mb_api.urllib.request.urlopen` (used by `fetch_acoustid_id`) are mocked via `pytest-mock`.
+- Patch targets must use the submodule where the name is bound, not where it originates. For example, patch
+  `music_annotator._pipeline.apply_tags_flac` (where it is imported), not `music_annotator._tagger.apply_tags_flac`.
 - Minimal real FLAC/MP3 byte sequences are embedded as constants in `test_pipeline.py` and `test_example.py` for testing mutagen
   tagging without actual audio files.
 

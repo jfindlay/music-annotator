@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -105,12 +106,14 @@ class TestConfigureColor:
     def test_disable_color_replaces_console(self) -> None:
         """configure_color(False) replaces _console with a no_color Console."""
         configure_color(enabled=False)
-        assert music_annotator._console.no_color  # pylint: disable=protected-access
+        _cm = sys.modules["music_annotator._console"]
+        assert _cm._console.no_color  # pylint: disable=protected-access
 
     def test_enable_color_replaces_console(self) -> None:
         """configure_color(True) replaces _console with a color-capable Console."""
         configure_color(enabled=True)
-        assert not music_annotator._console.no_color  # pylint: disable=protected-access
+        _cm = sys.modules["music_annotator._console"]
+        assert not _cm._console.no_color  # pylint: disable=protected-access
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +626,7 @@ class TestBuildWorkHierarchy:
                 ],
             }
         )
-        mocker.patch("music_annotator.fetch_work_detail", return_value=parent)
+        mocker.patch("music_annotator._works.fetch_work_detail", return_value=parent)
         result = build_work_hierarchy(child)
         assert len(result) == 2
         assert result[0].id == "w1"
@@ -859,7 +862,7 @@ class TestInitMb:
 
         :param mocker: pytest-mock fixture.
         """
-        mock_set = mocker.patch("music_annotator.mb.set_useragent")
+        mock_set = mocker.patch("music_annotator._mb_api.mb.set_useragent")
         music_annotator.init_mb("MyApp/2.0 contact@example.com")
         mock_set.assert_called_once_with("MyApp", "2.0", "contact@example.com")
 
@@ -868,7 +871,7 @@ class TestInitMb:
 
         :param mocker: pytest-mock fixture.
         """
-        mock_set = mocker.patch("music_annotator.mb.set_useragent")
+        mock_set = mocker.patch("music_annotator._mb_api.mb.set_useragent")
         music_annotator.init_mb("MyApp/1.0")
         mock_set.assert_called_once_with("MyApp", "1.0", "")
 
@@ -877,7 +880,7 @@ class TestInitMb:
 
         :param mocker: pytest-mock fixture.
         """
-        mock_set = mocker.patch("music_annotator.mb.set_useragent")
+        mock_set = mocker.patch("music_annotator._mb_api.mb.set_useragent")
         music_annotator.init_mb("MyApp")
         mock_set.assert_called_once_with("MyApp", "1.0", "")
 

@@ -18,7 +18,8 @@ from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
 import music_annotator
-from music_annotator import _format_candidate, _score_toc_release, _toc_lookup_mb_releases
+import music_annotator._discover
+from music_annotator._discover import DiscoverUI, _format_candidate, _score_toc_release, _toc_lookup_mb_releases
 from music_annotator.models import MBReleaseCandidate
 
 # ---------------------------------------------------------------------------
@@ -467,7 +468,7 @@ class TestSearchReleasesByDir:
             self._raw_release(release_id="r2", score=95),
             self._raw_release(release_id="r3", score=80),
         ]
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": raw_results})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": raw_results})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert [c.release_id for c in candidates] == ["r2", "r3", "r1"]
@@ -480,7 +481,7 @@ class TestSearchReleasesByDir:
         """
         src = Path("/music/empty")
         fs.create_dir(str(src))
-        mocker.patch("music_annotator._search_mb_releases")
+        mocker.patch("music_annotator._discover._search_mb_releases")
 
         with pytest.raises(ValueError, match="no audio files"):
             music_annotator.search_releases_by_dir(src)
@@ -494,7 +495,7 @@ class TestSearchReleasesByDir:
         src = Path("/music/Album")
         fs.create_dir(str(src))
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": []})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": []})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates == []
@@ -510,7 +511,7 @@ class TestSearchReleasesByDir:
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
         raw = [self._raw_release(release_id="r1", score=90, title="Fontane di Roma", tracks_per_medium=4)]
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": raw})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": raw})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert len(candidates) == 1
@@ -549,7 +550,7 @@ class TestSearchReleasesByDir:
                 "label-info-list": [],
             }
         ]
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": raw})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": raw})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates[0].tracks == 18
@@ -577,7 +578,7 @@ class TestSearchReleasesByDir:
                 "label-info-list": [],
             }
         ]
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": raw})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": raw})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates[0].label == ""
@@ -594,7 +595,7 @@ class TestSearchReleasesByDir:
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
         mocker.patch(
-            "music_annotator._search_mb_releases",
+            "music_annotator._discover._search_mb_releases",
             return_value={"release-list": ["not-a-dict", self._raw_release(release_id="r1")]},
         )
 
@@ -625,7 +626,7 @@ class TestSearchReleasesByDir:
                 "label-info-list": [],
             }
         ]
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": raw})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": raw})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates[0].tracks == 3
@@ -656,7 +657,7 @@ class TestSearchReleasesByDir:
                 "label-info-list": [],
             }
         ]
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": raw})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": raw})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates[0].format == "Vinyl"
@@ -671,7 +672,7 @@ class TestSearchReleasesByDir:
         fs.create_dir(str(src))
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator._search_mb_releases", return_value={})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates == []
@@ -686,7 +687,7 @@ class TestSearchReleasesByDir:
         fs.create_dir(str(src))
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": "invalid"})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": "invalid"})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates == []
@@ -714,7 +715,7 @@ class TestSearchReleasesByDir:
                 "label-info-list": [],
             }
         ]
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": raw})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": raw})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates[0].tracks == 0
@@ -743,7 +744,7 @@ class TestSearchReleasesByDir:
                 "label-info-list": [],
             }
         ]
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": raw})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": raw})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates[0].tracks == 0
@@ -759,7 +760,7 @@ class TestSearchReleasesByDir:
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
         mock_search = mocker.patch(
-            "music_annotator._search_mb_releases",
+            "music_annotator._discover._search_mb_releases",
             return_value={"release-list": []},
         )
 
@@ -789,7 +790,7 @@ class TestSearchReleasesByDir:
                 "label-info-list": [],
             }
         ]
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": raw})
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": raw})
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates[0].mb_url == ""
@@ -806,7 +807,7 @@ class TestSearchReleasesByDir:
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
         mock_search = mocker.patch(
-            "music_annotator._search_mb_releases",
+            "music_annotator._discover._search_mb_releases",
             return_value={"release-list": []},
         )
 
@@ -821,11 +822,11 @@ class TestSearchReleasesByDir:
         :param mocker: pytest-mock fixture.
         """
         mock_mb_search = mocker.patch(
-            "music_annotator.mb.search_releases",
+            "music_annotator._discover.mb.search_releases",
             return_value={"release-list": []},
         )
 
-        result = music_annotator._search_mb_releases("Respighi", 0, 10)  # pylint: disable=protected-access
+        result = music_annotator._discover._search_mb_releases("Respighi", 0, 10)  # pylint: disable=protected-access
         assert result == {"release-list": []}
         mock_mb_search.assert_called_once_with("Respighi", limit=10)
 
@@ -835,11 +836,11 @@ class TestSearchReleasesByDir:
         :param mocker: pytest-mock fixture.
         """
         mock_mb_search = mocker.patch(
-            "music_annotator.mb.search_releases",
+            "music_annotator._discover.mb.search_releases",
             return_value={"release-list": []},
         )
 
-        result = music_annotator._search_mb_releases("Respighi", 12, 5)  # pylint: disable=protected-access
+        result = music_annotator._discover._search_mb_releases("Respighi", 12, 5)  # pylint: disable=protected-access
         assert result == {"release-list": []}
         mock_mb_search.assert_called_once_with("Respighi", limit=5, tracks=12)
 
@@ -855,7 +856,7 @@ class TestSearchReleasesByDir:
         fs.create_file(str(src / "00 - disc info.yaml"), contents=_SINGLE_RECORD_YAML)
 
         mock_search = mocker.patch(
-            "music_annotator._search_mb_releases",
+            "music_annotator._discover._search_mb_releases",
             return_value={"release-list": []},
         )
 
@@ -876,7 +877,7 @@ class TestSearchReleasesByDir:
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
         mock_search = mocker.patch(
-            "music_annotator._search_mb_releases",
+            "music_annotator._discover._search_mb_releases",
             return_value={"release-list": []},
         )
 
@@ -936,9 +937,9 @@ class TestDiscover:
         :param candidates: Candidate list to return from search_releases_by_dir.
         :returns: The mock for music_annotator.run.
         """
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.search_releases_by_dir", return_value=candidates)
-        return mocker.patch("music_annotator.run")
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=candidates)
+        return mocker.patch("music_annotator._discover.run")
 
     def test_numeric_choice_invokes_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Selecting a candidate by number causes run() to be called with its release_id.
@@ -1056,9 +1057,9 @@ class TestDiscover:
         src = Path("/music/Album")
         fs.create_dir(str(src))
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.search_releases_by_dir", side_effect=ValueError("no audio files"))
-        mock_run = mocker.patch("music_annotator.run")
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", side_effect=ValueError("no audio files"))
+        mock_run = mocker.patch("music_annotator._discover.run")
         mock_input = mocker.patch("builtins.input")
 
         music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
@@ -1075,9 +1076,9 @@ class TestDiscover:
         fs.create_dir(str(src))
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.search_releases_by_dir", return_value=[_candidate()])
-        mocker.patch("music_annotator.run", side_effect=RuntimeError("network failure"))
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[_candidate()])
+        mocker.patch("music_annotator._discover.run", side_effect=RuntimeError("network failure"))
         mocker.patch("builtins.input", return_value="1")
 
         # Should not raise
@@ -1095,9 +1096,9 @@ class TestDiscover:
             fs.create_dir(str(src))
             fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        search_mock = mocker.patch("music_annotator.search_releases_by_dir", return_value=[_candidate()])
-        mock_run = mocker.patch("music_annotator.run")
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        search_mock = mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[_candidate()])
+        mock_run = mocker.patch("music_annotator._discover.run")
         mocker.patch("builtins.input", return_value="1")
 
         music_annotator.discover(src_dirs=[src1, src2], dest_root=Path("/dest"), user_agent="Test/1.0")
@@ -1229,14 +1230,45 @@ class TestDiscover:
         fs.create_dir(str(src))
         fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.search_releases_by_dir", return_value=[_candidate()])
-        mocker.patch("music_annotator.run", side_effect=RuntimeError("oops"))
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[_candidate()])
+        mocker.patch("music_annotator._discover.run", side_effect=RuntimeError("oops"))
         mock_input = mocker.patch("builtins.input", side_effect=["1"])
 
         music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
         assert mock_input.call_count == 1
         assert src.exists()
+
+    def test_custom_ui_used_when_provided(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When a custom DiscoverUI is passed, it is used instead of creating a TerminalDiscoverUI.
+
+        Verifies the ``ui is not None`` branch so ``TerminalDiscoverUI()`` is never instantiated.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[_candidate()])
+        mock_run = mocker.patch("music_annotator._discover.run")
+
+        class _StubUI:
+            """Stub DiscoverUI that always selects the first candidate."""
+
+            def choose_release(self, _src_dir: object, candidates: list[MBReleaseCandidate]) -> str | None:
+                """Return first candidate MBID unconditionally."""
+                return candidates[0].release_id if candidates else None
+
+            def confirm_delete(self, _src_dir: object) -> bool:
+                """Always decline deletion."""
+                return False
+
+        stub: DiscoverUI = _StubUI()
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0", ui=stub)
+        mock_run.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -1544,7 +1576,7 @@ class TestTocLookupMbReleases:
         """
         releases = [self._toc_release("r1"), self._toc_release("r2")]
         mocker.patch(
-            "music_annotator.mb.get_releases_by_discid",
+            "music_annotator._discover.mb.get_releases_by_discid",
             return_value={"release-list": releases, "release-count": 2},
         )
         result = _toc_lookup_mb_releases("1 4 15000 150 5000 10000 15000", 10)
@@ -1557,7 +1589,7 @@ class TestTocLookupMbReleases:
         """
         releases = [self._toc_release("r1")]
         mocker.patch(
-            "music_annotator.mb.get_releases_by_discid",
+            "music_annotator._discover.mb.get_releases_by_discid",
             return_value={"disc": {"release-list": releases}},
         )
         result = _toc_lookup_mb_releases("1 1 15000 150", 10)
@@ -1569,7 +1601,7 @@ class TestTocLookupMbReleases:
         :param mocker: pytest-mock fixture.
         """
         mocker.patch(
-            "music_annotator.mb.get_releases_by_discid",
+            "music_annotator._discover.mb.get_releases_by_discid",
             side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
         )
         result = _toc_lookup_mb_releases("1 1 15000 150", 10)
@@ -1581,7 +1613,7 @@ class TestTocLookupMbReleases:
         :param mocker: pytest-mock fixture.
         """
         mocker.patch(
-            "music_annotator.mb.get_releases_by_discid",
+            "music_annotator._discover.mb.get_releases_by_discid",
             side_effect=mb.ResponseError(cause=Exception("400 Bad Request")),
         )
         with pytest.raises(mb.ResponseError):
@@ -1594,7 +1626,7 @@ class TestTocLookupMbReleases:
         """
         releases = [self._toc_release(f"r{i}") for i in range(20)]
         mocker.patch(
-            "music_annotator.mb.get_releases_by_discid",
+            "music_annotator._discover.mb.get_releases_by_discid",
             return_value={"release-list": releases},
         )
         result = _toc_lookup_mb_releases("1 4 15000 150 5000 10000 15000", 5)
@@ -1606,7 +1638,7 @@ class TestTocLookupMbReleases:
         :param mocker: pytest-mock fixture.
         """
         mocker.patch(
-            "music_annotator.mb.get_releases_by_discid",
+            "music_annotator._discover.mb.get_releases_by_discid",
             return_value={"release-list": ["not-a-dict", self._toc_release("r1")]},
         )
         result = _toc_lookup_mb_releases("1 1 15000 150", 10)
@@ -1619,7 +1651,7 @@ class TestTocLookupMbReleases:
         :param mocker: pytest-mock fixture.
         """
         mocker.patch(
-            "music_annotator.mb.get_releases_by_discid",
+            "music_annotator._discover.mb.get_releases_by_discid",
             return_value={"release-list": []},
         )
         result = _toc_lookup_mb_releases("1 1 15000 150", 10)
@@ -1631,7 +1663,7 @@ class TestTocLookupMbReleases:
         :param mocker: pytest-mock fixture.
         """
         mocker.patch(
-            "music_annotator.mb.get_releases_by_discid",
+            "music_annotator._discover.mb.get_releases_by_discid",
             return_value={"disc": {"release-list": []}},
         )
         result = _toc_lookup_mb_releases("1 1 15000 150", 10)
@@ -1643,7 +1675,7 @@ class TestTocLookupMbReleases:
         :param mocker: pytest-mock fixture.
         """
         mocker.patch(
-            "music_annotator.mb.get_releases_by_discid",
+            "music_annotator._discover.mb.get_releases_by_discid",
             return_value={"something-else": []},
         )
         result = _toc_lookup_mb_releases("1 1 15000 150", 10)
@@ -1656,7 +1688,7 @@ class TestTocLookupMbReleases:
         """
         releases = [self._toc_release("r1")]
         mocker.patch(
-            "music_annotator.mb.get_releases_by_discid",
+            "music_annotator._discover.mb.get_releases_by_discid",
             return_value={"disc": {"release-list": None}, "release-list": releases},
         )
         result = _toc_lookup_mb_releases("1 1 15000 150", 10)
@@ -1669,7 +1701,7 @@ class TestTocLookupMbReleases:
         :param mocker: pytest-mock fixture.
         """
         mocker.patch(
-            "music_annotator.mb.get_releases_by_discid",
+            "music_annotator._discover.mb.get_releases_by_discid",
             return_value={"release-list": "invalid"},
         )
         result = _toc_lookup_mb_releases("1 1 15000 150", 10)
@@ -1738,10 +1770,10 @@ class TestSearchReleasesByDirToc:
         """
         src = self._make_src(fs, n_tracks=4)
         mock_toc = mocker.patch(
-            "music_annotator._toc_lookup_mb_releases",
+            "music_annotator._discover._toc_lookup_mb_releases",
             return_value=[self._toc_release("r1", track_count=4)],
         )
-        mocker.patch("music_annotator._search_mb_releases")
+        mocker.patch("music_annotator._discover._search_mb_releases")
 
         candidates = music_annotator.search_releases_by_dir(src)
         mock_toc.assert_called_once()
@@ -1756,7 +1788,7 @@ class TestSearchReleasesByDirToc:
         src = self._make_src(fs, n_tracks=4)
         # Single-disc release matching 4 tracks → score should be 100.
         mocker.patch(
-            "music_annotator._toc_lookup_mb_releases",
+            "music_annotator._discover._toc_lookup_mb_releases",
             return_value=[self._toc_release("r1", track_count=4)],
         )
 
@@ -1782,7 +1814,7 @@ class TestSearchReleasesByDirToc:
             "label-info-list": [],
         }
         r2 = self._toc_release("r2", track_count=4)
-        mocker.patch("music_annotator._toc_lookup_mb_releases", return_value=[r1, r2])
+        mocker.patch("music_annotator._discover._toc_lookup_mb_releases", return_value=[r1, r2])
 
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates[0].release_id == "r2"
@@ -1801,9 +1833,9 @@ class TestSearchReleasesByDirToc:
             "record:\n- preferred: true\n  track_info:\n    DTITLE: 'Composer / Work'\n"
         )
         (src / "00 - disc info.yaml").write_text(src2_yaml)
-        mocker.patch("music_annotator._toc_lookup_mb_releases", return_value=[])
+        mocker.patch("music_annotator._discover._toc_lookup_mb_releases", return_value=[])
         mock_text = mocker.patch(
-            "music_annotator._search_mb_releases",
+            "music_annotator._discover._search_mb_releases",
             return_value={
                 "release-list": [
                     {
@@ -1832,8 +1864,8 @@ class TestSearchReleasesByDirToc:
         :param fs: pyfakefs fixture.
         """
         src = self._make_src(fs, n_tracks=2)
-        mock_toc = mocker.patch("music_annotator._toc_lookup_mb_releases", return_value=[])
-        mocker.patch("music_annotator._search_mb_releases", return_value={"release-list": []})
+        mock_toc = mocker.patch("music_annotator._discover._toc_lookup_mb_releases", return_value=[])
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": []})
 
         music_annotator.search_releases_by_dir(src)
         toc_arg: str = mock_toc.call_args[0][0]
@@ -1852,7 +1884,7 @@ class TestSearchReleasesByDirToc:
         """
         src = self._make_src(fs, n_tracks=4)
         mocker.patch(
-            "music_annotator._toc_lookup_mb_releases",
+            "music_annotator._discover._toc_lookup_mb_releases",
             return_value=[self._toc_release("r1", track_count=4)],
         )
 
@@ -1867,7 +1899,7 @@ class TestSearchReleasesByDirToc:
         """
         src = self._make_src(fs, n_tracks=4)
         mocker.patch(
-            "music_annotator._toc_lookup_mb_releases",
+            "music_annotator._discover._toc_lookup_mb_releases",
             return_value=[self._toc_release("r1", track_count=4, label_name="DG", cat_num="449 724-2")],
         )
 

@@ -193,9 +193,9 @@ def _patch_mb(mocker: MockerFixture, release: MBRelease) -> None:
     :param mocker: pytest-mock fixture.
     :param release: The MBRelease model to return from fetch_release.
     """
-    mocker.patch("music_annotator.mb.set_useragent")
-    mocker.patch("music_annotator.fetch_release", return_value=release)
-    mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+    mocker.patch("music_annotator._mb_api.mb.set_useragent")
+    mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+    mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
     def _rec_detail(rec_id: str) -> MBRecording:
         titles = {
@@ -204,8 +204,8 @@ def _patch_mb(mocker: MockerFixture, release: MBRelease) -> None:
         }
         return _make_recording_detail(rec_id, titles.get(rec_id, "Unknown"))
 
-    mocker.patch("music_annotator.fetch_recording_detail", side_effect=_rec_detail)
-    mocker.patch("music_annotator.fetch_work_detail", return_value=_make_work_detail())
+    mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_rec_detail)
+    mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
 
 
 # ---------------------------------------------------------------------------
@@ -293,11 +293,11 @@ class TestRunNoFetchRels:
         dest_root = Path("/dest2")
         fs.create_dir(str(dest_root))
 
-        mocker.patch("music_annotator.mb.set_useragent")
-        mocker.patch("music_annotator.fetch_release", return_value=_make_release())
-        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release())
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
         # fetch_recording_detail should NOT be called
-        spy = mocker.patch("music_annotator.fetch_recording_detail")
+        spy = mocker.patch("music_annotator._pipeline.fetch_recording_detail")
 
         music_annotator.run(
             release_id="rel-1",
