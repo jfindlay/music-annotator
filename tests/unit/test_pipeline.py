@@ -31,6 +31,7 @@ from music_annotator import (
 from music_annotator.models import (
     JSON,
     CoverArt,
+    CoverImage,
     MBRecording,
     MBRelease,
     MBTrack,
@@ -766,7 +767,7 @@ class TestApplyTagsFlac:
         fs.create_dir("/out")
         fs.create_file(str(dest), contents=_MINIMAL_FLAC)
         tags = TrackTags(title="Track")
-        cover = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")
+        cover = CoverArt(front=[CoverImage(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")])
         apply_tags_flac(dest, tags, cover)
 
     def test_no_cover_no_error(self, fs: FakeFilesystem) -> None:
@@ -834,7 +835,7 @@ class TestApplyTagsMp3:
         fs.create_dir("/out")
         fs.create_file(str(dest), contents=_MINIMAL_MP3)
         tags = TrackTags(title="Track")
-        cover = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")
+        cover = CoverArt(front=[CoverImage(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")])
         apply_tags_mp3(dest, tags, cover)
 
     def test_no_cover_no_error(self, fs: FakeFilesystem) -> None:
@@ -1051,7 +1052,7 @@ class TestRunFullPipeline:
         jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 100
         mocker.patch(
             "music_annotator.fetch_cover_art",
-            return_value=CoverArt(data=jpeg, mime="image/jpeg"),
+            return_value=CoverArt(front=[CoverImage(data=jpeg, mime="image/jpeg")]),
         )
         mocker.patch("music_annotator.apply_tags_flac")
 
@@ -2114,7 +2115,7 @@ class TestVerifyCopy:
         fs.create_file(str(src), contents=_MINIMAL_FLAC)
         shutil.copy2(str(src), str(dest))
         tags = TrackTags(title="T")
-        cover = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")
+        cover = CoverArt(front=[CoverImage(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")])
         apply_tags_flac(dest, tags, cover)
         mtime = src.stat().st_mtime
         os.utime(dest, (mtime, mtime))
@@ -2132,7 +2133,7 @@ class TestVerifyCopy:
         fs.create_file(str(src), contents=_MINIMAL_MP3)
         shutil.copy2(str(src), str(dest))
         tags = TrackTags(title="T")
-        cover = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")
+        cover = CoverArt(front=[CoverImage(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")])
         apply_tags_mp3(dest, tags, cover)
         mtime = src.stat().st_mtime
         os.utime(dest, (mtime, mtime))
@@ -2169,11 +2170,12 @@ class TestVerifyCopy:
         fs.create_file(str(src), contents=_MINIMAL_FLAC)
         shutil.copy2(str(src), str(dest))
         tags = TrackTags(title="T")
-        cover_written = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")
+        cover_written = CoverArt(front=[CoverImage(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")])
         apply_tags_flac(dest, tags, cover_written)
         mtime = src.stat().st_mtime
         os.utime(dest, (mtime, mtime))
-        wrong_cover = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x01" * 100, mime="image/jpeg")
+        # wrong_cover has different bytes — _verify_copy should detect the mismatch.
+        wrong_cover = CoverArt(front=[CoverImage(data=b"\xff\xd8\xff\xe0" + b"\x01" * 100, mime="image/jpeg")])
         with pytest.raises(RuntimeError, match="cover art verification failure"):
             _verify_copy(src, dest, tags, wrong_cover, mtime)
 
@@ -2189,11 +2191,12 @@ class TestVerifyCopy:
         fs.create_file(str(src), contents=_MINIMAL_MP3)
         shutil.copy2(str(src), str(dest))
         tags = TrackTags(title="T")
-        cover_written = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")
+        cover_written = CoverArt(front=[CoverImage(data=b"\xff\xd8\xff\xe0" + b"\x00" * 100, mime="image/jpeg")])
         apply_tags_mp3(dest, tags, cover_written)
         mtime = src.stat().st_mtime
         os.utime(dest, (mtime, mtime))
-        wrong_cover = CoverArt(data=b"\xff\xd8\xff\xe0" + b"\x01" * 100, mime="image/jpeg")
+        # wrong_cover has different bytes — _verify_copy should detect the mismatch.
+        wrong_cover = CoverArt(front=[CoverImage(data=b"\xff\xd8\xff\xe0" + b"\x01" * 100, mime="image/jpeg")])
         with pytest.raises(RuntimeError, match="cover art verification failure"):
             _verify_copy(src, dest, tags, wrong_cover, mtime)
 

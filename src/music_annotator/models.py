@@ -674,22 +674,65 @@ class MBReleaseCandidate(BaseModel):
     mb_url: str = ""
 
 
-class CoverArt(BaseModel):
-    """Cover art image bytes and inferred MIME type.
+class CoverImage(BaseModel):
+    """A single cover art image with its raw bytes and inferred MIME type.
 
-    Important attributes: ``data`` (raw image bytes, ``b""`` when unavailable), ``mime`` (MIME type string).
+    Used as the element type for the multi-image lists on :class:`CoverArt`.
+
+    Important attributes: ``data`` (raw image bytes), ``mime`` (MIME type string, e.g. ``"image/jpeg"``).
     """
 
     data: bytes = b""
     mime: str = ""
 
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class CoverArt(BaseModel):
+    """All cover art images fetched from the Cover Art Archive for a release.
+
+    Each CAA image type maps to a field holding a list of :class:`CoverImage` instances (because some types, notably
+    booklet pages, may have multiple images).  The ``front`` list is used for the primary front cover; ``back`` for the
+    rear packaging; ``booklet`` for all booklet / liner-notes pages; ``medium`` for disc-label images.
+
+    The legacy ``data`` / ``mime`` shortcut properties expose the first front-cover image for backward compatibility with
+    code that previously used ``CoverArt.data`` directly.
+
+    Important attributes: ``front``, ``back``, ``booklet``, ``medium`` (each a ``list[CoverImage]``).
+    """
+
+    front: list[CoverImage] = []
+    back: list[CoverImage] = []
+    booklet: list[CoverImage] = []
+    medium: list[CoverImage] = []
+
     @property
     def available(self) -> bool:
-        """Return ``True`` if image data is present.
+        """Return ``True`` if at least one image of any type is present.
 
-        :returns: ``True`` when ``data`` is non-empty.
+        :returns: ``True`` when any of ``front``, ``back``, ``booklet``, or ``medium`` is non-empty.
         """
-        return len(self.data) > 0
+        return bool(self.front or self.back or self.booklet or self.medium)
+
+    @property
+    def data(self) -> bytes:
+        """Raw bytes of the first front-cover image, or ``b""`` if none is present.
+
+        Provided for backward compatibility with call sites that previously used ``cover.data`` directly.
+
+        :returns: ``front[0].data`` when ``front`` is non-empty, else ``b""``.
+        """
+        return self.front[0].data if self.front else b""
+
+    @property
+    def mime(self) -> str:
+        """MIME type of the first front-cover image, or ``""`` if none is present.
+
+        Provided for backward compatibility with call sites that previously used ``cover.mime`` directly.
+
+        :returns: ``front[0].mime`` when ``front`` is non-empty, else ``""``.
+        """
+        return self.front[0].mime if self.front else ""
 
     model_config = {"arbitrary_types_allowed": True}
 

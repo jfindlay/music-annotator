@@ -198,82 +198,189 @@ class TestFetchRecordingDetail:
 # ---------------------------------------------------------------------------
 
 
+def _make_listing(*entries: tuple[str, str]) -> dict[str, Any]:
+    """Build a fake CAA image-list response dict.
+
+    :param entries: Pairs of (image_id, type_string), e.g. ``("111", "Front")``.
+    :returns: A dict matching the shape of ``mb.get_image_list`` JSON output.
+    """
+    return {
+        "images": [
+            {"id": img_id, "types": [img_type], "front": img_type == "Front", "back": img_type == "Back"}
+            for img_id, img_type in entries
+        ]
+    }
+
+
 class TestFetchCoverArt:
     """Tests for fetch_cover_art."""
 
-    def test_returns_jpeg_cover_art(self, mocker: MockerFixture) -> None:
-        """Returns CoverArt with image/jpeg when data starts with FF D8.
+    def test_returns_jpeg_front(self, mocker: MockerFixture) -> None:
+        """Front image with JPEG magic bytes is placed in CoverArt.front with mime image/jpeg.
 
         :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 100
-        mocker.patch("music_annotator.mb.get_image_front", return_value=jpeg_bytes)
+        mocker.patch("music_annotator.mb.get_image_list", return_value=_make_listing(("111", "Front")))
+        mocker.patch("music_annotator.mb.get_image", return_value=jpeg_bytes)
         result = fetch_cover_art("rel-1")
         assert result.available
+        assert len(result.front) == 1
         assert result.mime == "image/jpeg"
 
-    def test_returns_png_cover_art(self, mocker: MockerFixture) -> None:
-        """Returns CoverArt with image/png when data starts with 89PNG.
+    def test_returns_png_front(self, mocker: MockerFixture) -> None:
+        """Front image with PNG magic bytes gets mime image/png.
 
         :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-        mocker.patch("music_annotator.mb.get_image_front", return_value=png_bytes)
+        mocker.patch("music_annotator.mb.get_image_list", return_value=_make_listing(("222", "Front")))
+        mocker.patch("music_annotator.mb.get_image", return_value=png_bytes)
         result = fetch_cover_art("rel-1")
         assert result.available
         assert result.mime == "image/png"
 
-    def test_falls_back_to_release_group_on_404(self, mocker: MockerFixture) -> None:
-        """Falls back to release-group art when release returns 404.
+    def test_infer_mime_fallback_to_jpeg(self, mocker: MockerFixture) -> None:
+        """Unknown magic bytes default to image/jpeg MIME type.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.time.sleep")
+        bmp_bytes = b"BM" + b"\x00" * 100
+        mocker.patch("music_annotator.mb.get_image_list", return_value=_make_listing(("333", "Front")))
+        mocker.patch("music_annotator.mb.get_image", return_value=bmp_bytes)
+        result = fetch_cover_art("rel-1")
+        assert result.available
+        assert result.mime == "image/jpeg"
+
+    def test_all_four_types_collected(self, mocker: MockerFixture) -> None:
+        """Front, Back, Booklet, and Medium images are each placed in the correct list.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.time.sleep")
+        jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 10
+        mocker.patch(
+            "music_annotator.mb.get_image_list",
+            return_value=_make_listing(("1", "Front"), ("2", "Back"), ("3", "Booklet"), ("4", "Medium")),
+        )
+        mocker.patch("music_annotator.mb.get_image", return_value=jpeg)
+        result = fetch_cover_art("rel-1")
+        assert len(result.front) == 1
+        assert len(result.back) == 1
+        assert len(result.booklet) == 1
+        assert len(result.medium) == 1
+
+    def test_multiple_booklet_pages(self, mocker: MockerFixture) -> None:
+        """Multiple Booklet images are all collected into result.booklet.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.time.sleep")
+        jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 10
+        mocker.patch(
+            "music_annotator.mb.get_image_list",
+            return_value=_make_listing(("10", "Booklet"), ("11", "Booklet"), ("12", "Booklet")),
+        )
+        mocker.patch("music_annotator.mb.get_image", return_value=jpeg)
+        result = fetch_cover_art("rel-1")
+        assert len(result.booklet) == 3
+        assert not result.front
+
+    def test_unknown_type_skipped(self, mocker: MockerFixture) -> None:
+        """Images whose types do not include Front/Back/Booklet/Medium are skipped.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.time.sleep")
+        mocker.patch(
+            "music_annotator.mb.get_image_list",
+            return_value=_make_listing(("99", "Spine"), ("100", "Tray")),
+        )
+        mock_get = mocker.patch("music_annotator.mb.get_image")
+        result = fetch_cover_art("rel-1")
+        mock_get.assert_not_called()
+        assert not result.available
+
+    def test_image_fetch_error_skipped(self, mocker: MockerFixture) -> None:
+        """A ResponseError on a single image fetch is logged and that image is skipped.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator.mb.get_image_list", return_value=_make_listing(("55", "Front")))
+        mocker.patch(
+            "music_annotator.mb.get_image",
+            side_effect=mb.ResponseError(cause=Exception("503 error")),
+        )
+        result = fetch_cover_art("rel-1")
+        assert not result.available
+
+    def test_image_fetch_returns_empty_bytes_skipped(self, mocker: MockerFixture) -> None:
+        """An image that returns empty bytes is not added to the result.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator.mb.get_image_list", return_value=_make_listing(("66", "Front")))
+        mocker.patch("music_annotator.mb.get_image", return_value=b"")
+        result = fetch_cover_art("rel-1")
+        assert not result.available
+
+    def test_listing_404_falls_back_to_release_group(self, mocker: MockerFixture) -> None:
+        """When the release has no CAA listing (404), falls back to release-group front.
 
         :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 100
         mocker.patch(
-            "music_annotator.mb.get_image_front",
+            "music_annotator.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
         )
         mocker.patch("music_annotator.mb.get_release_group_image_front", return_value=jpeg_bytes)
         result = fetch_cover_art("rel-1", release_group_id="rg-1")
         assert result.available
+        assert len(result.front) == 1
 
-    def test_returns_empty_on_non_404_error(self, mocker: MockerFixture) -> None:
-        """Returns empty CoverArt when release returns a non-404 error.
-
-        :param mocker: pytest-mock fixture.
-        """
-        mocker.patch("music_annotator.time.sleep")
-        mocker.patch(
-            "music_annotator.mb.get_image_front",
-            side_effect=mb.ResponseError(cause=Exception("500 Internal Server Error")),
-        )
-        result = fetch_cover_art("rel-1")
-        assert not result.available
-
-    def test_returns_empty_when_no_release_group_id(self, mocker: MockerFixture) -> None:
-        """Returns empty CoverArt when 404 and no release_group_id provided.
+    def test_listing_404_no_release_group_returns_empty(self, mocker: MockerFixture) -> None:
+        """When the release has no CAA listing and no release_group_id, returns empty.
 
         :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_image_front",
+            "music_annotator.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
         )
         result = fetch_cover_art("rel-1", release_group_id="")
         assert not result.available
 
-    def test_returns_empty_when_release_group_also_fails(self, mocker: MockerFixture) -> None:
-        """Returns empty CoverArt when both release and release-group art fail.
+    def test_listing_non_404_error_returns_empty(self, mocker: MockerFixture) -> None:
+        """A non-404 listing error returns empty CoverArt (no fallback attempted).
 
         :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
-        err = mb.ResponseError(cause=Exception("404 Not Found"))
-        mocker.patch("music_annotator.mb.get_image_front", side_effect=err)
+        mocker.patch(
+            "music_annotator.mb.get_image_list",
+            side_effect=mb.ResponseError(cause=Exception("500 Internal Server Error")),
+        )
+        result = fetch_cover_art("rel-1")
+        assert not result.available
+
+    def test_release_group_fallback_fails_returns_empty(self, mocker: MockerFixture) -> None:
+        """When both release listing and release-group fallback fail, returns empty.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.time.sleep")
+        mocker.patch(
+            "music_annotator.mb.get_image_list",
+            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+        )
         mocker.patch(
             "music_annotator.mb.get_release_group_image_front",
             side_effect=mb.ResponseError(cause=Exception("500 error")),
@@ -281,44 +388,75 @@ class TestFetchCoverArt:
         result = fetch_cover_art("rel-1", release_group_id="rg-1")
         assert not result.available
 
-    def test_returns_empty_when_raw_is_falsy(self, mocker: MockerFixture) -> None:
-        """Returns empty CoverArt when get_image_front returns empty bytes.
-
-        :param mocker: pytest-mock fixture.
-        """
-        mocker.patch("music_annotator.time.sleep")
-        mocker.patch("music_annotator.mb.get_image_front", return_value=b"")
-        result = fetch_cover_art("rel-1")
-        assert not result.available
-
-    def test_infer_mime_fallback_to_jpeg(self, mocker: MockerFixture) -> None:
-        """Returns CoverArt with image/jpeg MIME when image data is not JPEG or PNG.
-
-        The _infer_mime helper defaults to 'image/jpeg' for unknown image types.
-
-        :param mocker: pytest-mock fixture.
-        """
-        mocker.patch("music_annotator.time.sleep")
-        # Data starts with neither b'\xff\xd8' (JPEG) nor b'\x89PNG' (PNG)
-        bmp_bytes = b"BM" + b"\x00" * 100
-        mocker.patch("music_annotator.mb.get_image_front", return_value=bmp_bytes)
-        result = fetch_cover_art("rel-1")
-        assert result.available
-        assert result.mime == "image/jpeg"
-
-    def test_release_group_returns_empty_raw(self, mocker: MockerFixture) -> None:
-        """Returns empty CoverArt when release-group image fetch returns empty bytes.
+    def test_release_group_fallback_returns_empty_bytes(self, mocker: MockerFixture) -> None:
+        """When release-group fallback returns empty bytes, result is empty.
 
         :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator.time.sleep")
         mocker.patch(
-            "music_annotator.mb.get_image_front",
+            "music_annotator.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
         )
         mocker.patch("music_annotator.mb.get_release_group_image_front", return_value=b"")
         result = fetch_cover_art("rel-1", release_group_id="rg-1")
         assert not result.available
+
+    def test_listing_missing_id_skipped(self, mocker: MockerFixture) -> None:
+        """Image entries with no 'id' field are silently skipped.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.time.sleep")
+        listing = {"images": [{"types": ["Front"], "front": True, "back": False}]}
+        mocker.patch("music_annotator.mb.get_image_list", return_value=listing)
+        mock_get = mocker.patch("music_annotator.mb.get_image")
+        result = fetch_cover_art("rel-1")
+        mock_get.assert_not_called()
+        assert not result.available
+
+    def test_listing_non_list_images_returns_empty(self, mocker: MockerFixture) -> None:
+        """A listing response where 'images' is not a list returns empty CoverArt.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.time.sleep")
+        mocker.patch("music_annotator.mb.get_image_list", return_value={"images": "bad"})
+        result = fetch_cover_art("rel-1")
+        assert not result.available
+
+    def test_image_entry_with_non_list_types_skipped(self, mocker: MockerFixture) -> None:
+        """An image entry where the 'types' field is not a list is silently skipped.
+
+        This covers the ``continue`` branch at the isinstance(types_raw, list) guard.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.time.sleep")
+        listing = {"images": [{"id": "77", "types": "Front", "front": True}]}
+        mocker.patch("music_annotator.mb.get_image_list", return_value=listing)
+        mock_get = mocker.patch("music_annotator.mb.get_image")
+        result = fetch_cover_art("rel-1")
+        mock_get.assert_not_called()
+        assert not result.available
+
+    def test_back_booklet_medium_fetch_returns_empty_skipped(self, mocker: MockerFixture) -> None:
+        """When back/booklet/medium image fetches return empty bytes, those entries are skipped.
+
+        This covers the ``if image:`` False branches for back, booklet, and medium.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.time.sleep")
+        mocker.patch(
+            "music_annotator.mb.get_image_list",
+            return_value=_make_listing(("2", "Back"), ("3", "Booklet"), ("4", "Medium")),
+        )
+        mocker.patch("music_annotator.mb.get_image", return_value=b"")
+        result = fetch_cover_art("rel-1")
+        assert not result.back
+        assert not result.booklet
+        assert not result.medium
 
 
 # ---------------------------------------------------------------------------

@@ -101,6 +101,7 @@ from music_annotator.models import (
     ArtistEntry,
     CeaPerformers,
     CoverArt,
+    CoverImage,
     CwpTags,
     MBArtistCredit,
     MBAttribute,
@@ -138,6 +139,7 @@ __all__ = [
     "fetch_release",
     "fetch_recording_detail",
     "fetch_cover_art",
+    "CoverImage",
     "fetch_work_detail",
     "is_ensemble",
     "is_choir",
@@ -415,21 +417,28 @@ def fetch_recording_detail(recording_id: str) -> MBRecording:
 
 
 def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
-    """Download the front cover art for a release from the Cover Art Archive.
+    """Download all available cover art for a release from the Cover Art Archive.
 
     Strategy:
 
-    1. Try the release's own CAA entry via ``mb.get_image_front()``.
-    2. On HTTP 404, try the release-group front via ``mb.get_release_group_image_front()``.
-    3. On any remaining error, return an empty :class:`~music_annotator.models.CoverArt`.
+    1. Call ``mb.get_image_list(release_id)`` to obtain the full CAA image listing for the release.
+    2. For each image entry in the listing, classify it by its ``types`` list into one of: ``front``
+       (``"Front"``), ``back`` (``"Back"``), ``booklet`` (``"Booklet"``), or ``medium`` (``"Medium"``).
+       Images whose types do not include any of these four strings are skipped.
+    3. Fetch the binary data for each classified image via ``mb.get_image(release_id, coverid, size="500")``,
+       sleeping 1 second after each network call to respect the 1 req/s rate limit.
+    4. If the release has no CAA listing (HTTP 404) and ``release_group_id`` is provided, fall back to
+       fetching the release-group front image via ``mb.get_release_group_image_front()`` and place it in
+       ``front`` only.
 
-    The MIME type is inferred from image magic bytes: ``\\xff\\xd8`` → ``image/jpeg``; ``\\x89PNG`` → ``image/png``.
+    The MIME type for each image is inferred from magic bytes: ``\\xff\\xd8`` → ``image/jpeg``;
+    ``\\x89PNG`` → ``image/png``; anything else defaults to ``image/jpeg``.
 
     :param release_id: The MusicBrainz release MBID.
-    :param release_group_id: The MusicBrainz release-group MBID used as a fallback.  Pass an empty string to skip the
-        fallback.
-    :returns: A :class:`~music_annotator.models.CoverArt` instance whose ``data`` is non-empty on success, or whose
-        ``data`` is ``b""`` when no art was found.
+    :param release_group_id: The MusicBrainz release-group MBID used as a fallback when the release has no
+        CAA listing.  Pass an empty string to skip the fallback.
+    :returns: A :class:`~music_annotator.models.CoverArt` instance populated with all retrieved images, or
+        an empty :class:`~music_annotator.models.CoverArt` when nothing could be fetched.
     """
 
     def _infer_mime(data: bytes) -> str:
@@ -439,33 +448,94 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
             return "image/png"
         return "image/jpeg"
 
+    def _fetch_image(rel_id: str, coverid: str | int) -> CoverImage | None:
+        """Fetch a single image by cover ID; return a CoverImage or None on error."""
+        try:
+            raw = mb.get_image(rel_id, coverid, size="500")
+            time.sleep(1)
+            if raw:
+                data = bytes(raw)
+                return CoverImage(data=data, mime=_infer_mime(data))
+        except mb.ResponseError as exc:
+            log.warning("cover_art_image_error", coverid=str(coverid), code=str(exc)[:40])
+        return None
+
     log.info("fetch_cover_art", release_id=release_id)
+
+    # Attempt to get the full image listing for this release.
+    listing: list[dict[str, JSON]] = []
+    has_release_listing = False
     try:
-        raw = mb.get_image_front(release_id, size="500")
-        time.sleep(1)
-        if raw:
-            data = bytes(raw)
-            return CoverArt(data=data, mime=_infer_mime(data))
+        result = mb.get_image_list(release_id)
+        images = result.get("images", [])
+        if isinstance(images, list):
+            listing = [img for img in images if isinstance(img, dict)]
+        has_release_listing = True
     except mb.ResponseError as exc:
         code = str(exc)
         match code:
             case s if "404" in s:
-                log.info("cover_art_no_release_entry", release_id=release_id)
+                log.info("cover_art_no_release_listing", release_id=release_id)
             case _:
-                log.warning("cover_art_release_error", code=code[:40])
+                log.warning("cover_art_listing_error", code=code[:40])
 
-    if release_group_id:
+    front: list[CoverImage] = []
+    back: list[CoverImage] = []
+    booklet: list[CoverImage] = []
+    medium: list[CoverImage] = []
+
+    if has_release_listing:
+        for img in listing:
+            types_raw = img.get("types", [])
+            if not isinstance(types_raw, list):
+                continue
+            types = [t for t in types_raw if isinstance(t, str)]
+            coverid = img.get("id", "")
+            if not coverid:
+                continue
+            match types:
+                case t if "Front" in t:
+                    image = _fetch_image(release_id, str(coverid))
+                    if image:
+                        front.append(image)
+                case t if "Back" in t:
+                    image = _fetch_image(release_id, str(coverid))
+                    if image:
+                        back.append(image)
+                case t if "Booklet" in t:
+                    image = _fetch_image(release_id, str(coverid))
+                    if image:
+                        booklet.append(image)
+                case t if "Medium" in t:
+                    image = _fetch_image(release_id, str(coverid))
+                    if image:
+                        medium.append(image)
+                case _:
+                    log.debug("cover_art_skipped_type", types=types, coverid=str(coverid))
+
+    # If no release listing was available, fall back to the release-group front image.
+    if not has_release_listing and release_group_id:
         try:
             raw = mb.get_release_group_image_front(release_group_id, size="500")
             time.sleep(1)
             if raw:
                 data = bytes(raw)
-                return CoverArt(data=data, mime=_infer_mime(data))
+                front.append(CoverImage(data=data, mime=_infer_mime(data)))
         except mb.ResponseError as exc:
             log.warning("cover_art_release_group_error", code=str(exc)[:40])
 
-    log.warning("cover_art_unavailable", release_id=release_id)
-    return CoverArt()
+    result_art = CoverArt(front=front, back=back, booklet=booklet, medium=medium)
+    if result_art.available:
+        log.info(
+            "cover_art_fetched",
+            front=len(front),
+            back=len(back),
+            booklet=len(booklet),
+            medium=len(medium),
+        )
+    else:
+        log.warning("cover_art_unavailable", release_id=release_id)
+    return result_art
 
 
 @_mb_retry
@@ -1317,29 +1387,47 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
 
 
 def apply_tags_flac(dest_file: Path, tags: TrackTags, cover: CoverArt | None = None) -> None:
-    """Write Vorbis Comment tags and optional cover art to a FLAC file.
+    """Write Vorbis Comment tags and all available cover art pictures to a FLAC file.
 
-    Clears any existing tags, writes all non-internal non-empty fields from ``tags`` as lowercase Vorbis Comment keys,
-    and (if provided) embeds ``cover`` as a type-3 (front cover) PICTURE block.
+    Clears any existing tags and PICTURE blocks, writes all non-internal non-empty fields from ``tags`` as lowercase
+    Vorbis Comment keys, then embeds every image in ``cover`` as a FLAC PICTURE block using the appropriate
+    ``PictureType`` value for each CAA image category:
+
+    - ``front`` images → ``PictureType.COVER_FRONT`` (3)
+    - ``back`` images → ``PictureType.COVER_BACK`` (4)
+    - ``booklet`` images → ``PictureType.LEAFLET_PAGE`` (5)
+    - ``medium`` images → ``PictureType.MEDIA`` (6)
+
+    All images within a category are embedded in listing order.  When multiple images share the same ``PictureType``,
+    each gets a unique ``desc`` suffixed with its 1-based index (e.g. ``"Booklet 1"``, ``"Booklet 2"``).
 
     :param dest_file: Path to the destination FLAC file (must already exist).
     :param tags: The :class:`~music_annotator.models.TrackTags` instance to write.
-    :param cover: Optional :class:`~music_annotator.models.CoverArt`; when ``cover.available`` is ``True`` the image is
-        embedded as a type-3 (front cover) PICTURE block.
+    :param cover: Optional :class:`~music_annotator.models.CoverArt`; all available images are embedded when provided.
     :raises mutagen.MutagenError: If the file cannot be read or written.
     """
     audio = FLAC(str(dest_file))
     audio.clear()
     for key, value in tags.to_file_dict().items():
         audio[key.lower()] = value
+
     if cover and cover.available:
-        pic = FLACPicture()  # type: ignore[no-untyped-call]
-        pic.type = 3  # front cover
-        pic.mime = cover.mime or "image/jpeg"
-        pic.desc = "Cover"
-        pic.width = pic.height = pic.depth = pic.colors = 0
-        pic.data = cover.data
-        audio.add_picture(pic)  # type: ignore[no-untyped-call]
+        _pic_groups: list[tuple[int, str, list[CoverImage]]] = [
+            (3, "Cover", cover.front),
+            (4, "Back", cover.back),
+            (5, "Booklet", cover.booklet),
+            (6, "Medium", cover.medium),
+        ]
+        for pic_type, label, images in _pic_groups:
+            for idx, img in enumerate(images, start=1):
+                pic = FLACPicture()  # type: ignore[no-untyped-call]
+                pic.type = pic_type
+                pic.mime = img.mime or "image/jpeg"
+                pic.desc = f"{label} {idx}" if len(images) > 1 else label
+                pic.width = pic.height = pic.depth = pic.colors = 0
+                pic.data = img.data
+                audio.add_picture(pic)  # type: ignore[no-untyped-call]
+
     audio.save()
     log.debug("tagged_flac", path=str(dest_file))
 
@@ -1411,15 +1499,24 @@ _MP3_TXXX_MAP: dict[str, str] = {
 
 
 def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = None) -> None:
-    """Write ID3v2.4 tags and optional cover art to an MP3 file.
+    """Write ID3v2.4 tags and all available cover art pictures to an MP3 file.
 
     Deletes any existing ID3 tags, writes standard text frames (``TIT2``, ``TPE1``, etc.) and ``TXXX`` frames for all
-    non-internal non-empty fields, and (if provided) adds an ``APIC`` frame for the cover image.
+    non-internal non-empty fields, then embeds every image in ``cover`` as an ``APIC`` frame using the appropriate
+    ID3 picture type for each CAA image category:
+
+    - ``front`` images → APIC type 3 (``COVER_FRONT``)
+    - ``back`` images → APIC type 4 (``COVER_BACK``)
+    - ``booklet`` images → APIC type 5 (``LEAFLET_PAGE``)
+    - ``medium`` images → APIC type 6 (``MEDIA``)
+
+    All images within a category are embedded in listing order.  When multiple images share the same APIC type, each
+    gets a unique ``desc`` suffixed with its 1-based index (e.g. ``"Booklet 1"``, ``"Booklet 2"``) so that ID3 frames,
+    which are keyed by ``(type, desc)``, remain distinct.
 
     :param dest_file: Path to the destination MP3 file (must already exist).
     :param tags: The :class:`~music_annotator.models.TrackTags` instance to write.
-    :param cover: Optional :class:`~music_annotator.models.CoverArt`; when ``cover.available`` is ``True`` the image is
-        embedded as APIC type 3 (front cover).
+    :param cover: Optional :class:`~music_annotator.models.CoverArt`; all available images are embedded when provided.
     :raises mutagen.MutagenError: If the file cannot be read or written.
     """
     try:
@@ -1465,15 +1562,23 @@ def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = No
         txxx(txxx_desc, file_dict.get(meta_key, ""))
 
     if cover and cover.available:
-        id3_tags.add(  # type: ignore[no-untyped-call]
-            APIC(  # type: ignore[no-untyped-call]
-                encoding=3,
-                mime=cover.mime or "image/jpeg",
-                type=3,
-                desc="Cover",
-                data=cover.data,
-            )
-        )
+        _apic_groups: list[tuple[int, str, list[CoverImage]]] = [
+            (3, "Cover", cover.front),
+            (4, "Back", cover.back),
+            (5, "Booklet", cover.booklet),
+            (6, "Medium", cover.medium),
+        ]
+        for apic_type, label, images in _apic_groups:
+            for idx, img in enumerate(images, start=1):
+                id3_tags.add(  # type: ignore[no-untyped-call]
+                    APIC(  # type: ignore[no-untyped-call]
+                        encoding=3,
+                        mime=img.mime or "image/jpeg",
+                        type=apic_type,
+                        desc=f"{label} {idx}" if len(images) > 1 else label,
+                        data=img.data,
+                    )
+                )
 
     id3_tags.save(str(dest_file), v2_version=4)
     log.debug("tagged_mp3", path=str(dest_file))
@@ -1677,19 +1782,35 @@ def _verify_copy(
             f"missing={list(missing)}, extra={list(extra)}, wrong={list(wrong)}"
         )
 
-    # 2. Cover art
+    # 2. Cover art — build expected (pic_type, data) pairs from all CoverArt fields then compare to file.
     if cover and cover.available:
+        expected_pics: list[tuple[int, bytes]] = []
+        _cov_groups: list[tuple[int, list[CoverImage]]] = [
+            (3, cover.front),
+            (4, cover.back),
+            (5, cover.booklet),
+            (6, cover.medium),
+        ]
+        for pic_type, images in _cov_groups:
+            for img in images:
+                expected_pics.append((pic_type, img.data))
+
         match ext:
             case ".flac":
-                pics = FLAC(str(dest_file)).pictures
-                cover_ok = bool(pics) and pics[0].data == cover.data
+                actual_pics = [(p.type, p.data) for p in FLAC(str(dest_file)).pictures]
             case ".mp3":
-                apic_frames = ID3(str(dest_file)).getall("APIC")  # type: ignore[no-untyped-call]
-                cover_ok = bool(apic_frames) and apic_frames[0].data == cover.data
+                actual_pics = [
+                    (f.type, f.data)
+                    for f in ID3(str(dest_file)).getall("APIC")  # type: ignore[no-untyped-call]
+                ]
             case _:  # pragma: no cover
-                cover_ok = True
-        if not cover_ok:
-            raise RuntimeError(f"cover art verification failure for '{dest_file.name}'")
+                actual_pics = list(expected_pics)
+
+        if actual_pics != expected_pics:
+            raise RuntimeError(
+                f"cover art verification failure for '{dest_file.name}': "
+                f"expected {len(expected_pics)} picture(s), got {len(actual_pics)}"
+            )
 
     # 3. mtime
     dest_mtime = dest_file.stat().st_mtime
@@ -1758,14 +1879,12 @@ def run(
         for track in medium.track_list:
             all_track_pairs.append((track, medium.position))
 
-    # Fetch cover art once for the whole release
+    # Fetch all cover art once for the whole release
     rg_id = release.release_group.id
     cover = CoverArt()
     if not dry_run:
         cover = fetch_cover_art(release_id, rg_id)
-        if cover.available:
-            log.info("cover_art_fetched", size=len(cover.data), mime=cover.mime)
-        else:
+        if not cover.available:
             log.warning("cover_art_not_available", release_id=release_id)
 
     src_files = find_source_files(src_dir)

@@ -8,6 +8,7 @@ from music_annotator.models import (
     ArtistEntry,
     CeaPerformers,
     CoverArt,
+    CoverImage,
     CwpTags,
     MBArtist,
     MBLabelInfo,
@@ -278,21 +279,70 @@ class TestTrackTagsToFileDict:
 # ---------------------------------------------------------------------------
 
 
-class TestCoverArt:
-    """Tests for CoverArt.available property."""
+class TestCoverImage:
+    """Tests for the CoverImage leaf model."""
 
-    def test_available_true_with_data(self) -> None:
-        """available is True when data is non-empty bytes."""
-        c = CoverArt(data=b"\xff\xd8\xff\xe0", mime="image/jpeg")
+    def test_fields(self) -> None:
+        """data and mime are stored as provided."""
+        img = CoverImage(data=b"\xff\xd8\xff\xe0", mime="image/jpeg")
+        assert img.data == b"\xff\xd8\xff\xe0"
+        assert img.mime == "image/jpeg"
+
+    def test_defaults_empty(self) -> None:
+        """data and mime default to empty."""
+        img = CoverImage()
+        assert img.data == b""
+        assert img.mime == ""
+
+
+class TestCoverArt:
+    """Tests for CoverArt and its backward-compatible properties."""
+
+    def test_available_true_with_front(self) -> None:
+        """available is True when front list is non-empty."""
+        img = CoverImage(data=b"\xff\xd8\xff\xe0", mime="image/jpeg")
+        c = CoverArt(front=[img])
+        assert c.available is True
+
+    def test_available_true_with_back_only(self) -> None:
+        """available is True when only back images are present."""
+        c = CoverArt(back=[CoverImage(data=b"\x89PNG", mime="image/png")])
+        assert c.available is True
+
+    def test_available_true_with_booklet_only(self) -> None:
+        """available is True when only booklet images are present."""
+        c = CoverArt(booklet=[CoverImage(data=b"\xff\xd8", mime="image/jpeg")])
+        assert c.available is True
+
+    def test_available_true_with_medium_only(self) -> None:
+        """available is True when only medium images are present."""
+        c = CoverArt(medium=[CoverImage(data=b"\xff\xd8", mime="image/jpeg")])
         assert c.available is True
 
     def test_available_false_empty(self) -> None:
-        """available is False when data is empty bytes (default)."""
+        """available is False when all lists are empty (default)."""
         c = CoverArt()
         assert c.available is False
 
-    def test_default_mime_empty(self) -> None:
-        """mime defaults to empty string."""
+    def test_data_property_returns_first_front(self) -> None:
+        """data compat property returns first front image bytes."""
+        img = CoverImage(data=b"\xff\xd8\xff\xe0", mime="image/jpeg")
+        c = CoverArt(front=[img])
+        assert c.data == b"\xff\xd8\xff\xe0"
+
+    def test_data_property_empty_when_no_front(self) -> None:
+        """data compat property returns b'' when front list is empty."""
+        c = CoverArt()
+        assert c.data == b""
+
+    def test_mime_property_returns_first_front(self) -> None:
+        """mime compat property returns MIME of first front image."""
+        img = CoverImage(data=b"\xff\xd8\xff\xe0", mime="image/jpeg")
+        c = CoverArt(front=[img])
+        assert c.mime == "image/jpeg"
+
+    def test_mime_property_empty_when_no_front(self) -> None:
+        """mime compat property returns '' when front list is empty."""
         c = CoverArt()
         assert c.mime == ""
 
