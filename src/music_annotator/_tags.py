@@ -306,11 +306,14 @@ def build_track_tags(
         extract_work_artist_rels(w, role_buckets)
     cwp = build_cwp_tags(work_hierarchy, role_buckets)
 
-    # Direct work link from recording
+    # Fallback work identity used only when work_hierarchy is empty (no work detail was fetched).
+    # In that case cwp.work_top and cwp.levels are both empty, so direct_work_id / direct_work_title
+    # provide a minimal WORK tag and MUSICBRAINZ_WORKID from the first performance relation stub.
+    # When work_hierarchy is non-empty these values are shadowed by cwp fields and never used.
     direct_work_id = ""
     direct_work_title = ""
     for rel in recording_detail.work_relation_list:
-        if rel.type == "performance":
+        if rel.type == "performance" and rel.work.id:
             direct_work_id = rel.work.id
             direct_work_title = rel.work.title
             break
