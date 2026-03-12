@@ -21,7 +21,7 @@ import yaml
 from music_annotator._console import _console
 from music_annotator._mb_api import _mb_retry, init_mb
 from music_annotator._pipeline import CollisionPolicy, run
-from music_annotator._pipeline_io import find_source_files
+from music_annotator._pipeline_io import _DISC_INFO_FILENAME, find_source_files
 from music_annotator.models import JSON, MBReleaseCandidate
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
@@ -40,9 +40,6 @@ _BRACKET_RE: re.Pattern[str] = re.compile(r"\s*\[[^\]]*\]")
 
 #: MB base URL for release pages.
 _MB_RELEASE_URL = "https://musicbrainz.org/release/"
-
-#: Filename of the FreeDB disc-info YAML file written alongside ripped tracks.
-_DISC_INFO_FILENAME = "00 - disc info.yaml"
 
 
 class DiscoverUI(Protocol):

@@ -32,6 +32,7 @@ from music_annotator import (
     fetch_acoustid_id,
     find_source_files,
 )
+from music_annotator._pipeline_io import _DISC_INFO_FILENAME, _DISC_TOC_FILENAME
 from music_annotator.models import (
     JSON,
     CoverArt,
@@ -782,6 +783,37 @@ class TestFindSourceFiles:
             fs.create_file(str(src / f"track{ext}"))
         result = find_source_files(src)
         assert len(result) == 5
+
+    def test_excludes_disc_toc_flac(self, fs: FakeFilesystem) -> None:
+        """The CD table-of-contents FLAC (``00 - disc TOC.flac``) is excluded from results.
+
+        Even though ``00 - disc TOC.flac`` has a ``.flac`` extension, it must never be counted
+        as a source track because it causes a track-count mismatch against the MB release.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01 - track.flac"))
+        fs.create_file(str(src / _DISC_TOC_FILENAME))
+        result = find_source_files(src)
+        assert [p.name for p in result] == ["01 - track.flac"]
+
+    def test_excludes_disc_info_yaml(self, fs: FakeFilesystem) -> None:
+        """The FreeDB disc-info YAML (``00 - disc info.yaml``) is excluded from results.
+
+        ``00 - disc info.yaml`` does not have an audio extension so it would already be filtered
+        by the extension check; this test confirms the name-based exclusion also covers it in
+        case :data:`AUDIO_EXTENSIONS` is ever extended to include ``.yaml``.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01 - track.flac"))
+        fs.create_file(str(src / _DISC_INFO_FILENAME))
+        result = find_source_files(src)
+        assert [p.name for p in result] == ["01 - track.flac"]
 
 
 # ---------------------------------------------------------------------------

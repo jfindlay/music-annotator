@@ -25,19 +25,32 @@ AUDIO_EXTENSIONS: frozenset[str] = frozenset({".flac", ".mp3", ".ogg", ".m4a", "
 #: Filename of the JSON transaction journal written inside the destination root.
 JOURNAL_FILENAME: str = "music_annotator_journal.json"
 
+#: CD table-of-contents audio file written by some rippers alongside the real tracks.  It has a
+#: ``.flac`` extension and would otherwise be picked up as a source track.
+_DISC_TOC_FILENAME: str = "00 - disc TOC.flac"
+
+#: FreeDB disc-info YAML file written alongside ripped tracks by some rippers.
+_DISC_INFO_FILENAME: str = "00 - disc info.yaml"
+
+#: Set of filenames that must never be treated as source audio tracks.
+_EXCLUDED_FILENAMES: frozenset[str] = frozenset({_DISC_TOC_FILENAME, _DISC_INFO_FILENAME})
+
 
 def find_source_files(src_dir: Path) -> list[Path]:
-    """Return a sorted list of audio files in ``src_dir``.
+    """Return a sorted list of audio files in ``src_dir``, excluding ripper metadata files.
 
-    Only the immediate children of ``src_dir`` are checked (not recursive).  Files are included when their lowercased
-    suffix appears in :data:`AUDIO_EXTENSIONS`.
+    Only the immediate children of ``src_dir`` are checked (not recursive).  A file is included
+    when its lowercased suffix appears in :data:`AUDIO_EXTENSIONS` **and** its name is not in
+    :data:`_EXCLUDED_FILENAMES`.  This prevents CD table-of-contents FLAC files (e.g.
+    ``00 - disc TOC.flac``) from being counted as source tracks and causing a track-count mismatch
+    against the MusicBrainz release.
 
     :param src_dir: Directory to scan.
     :returns: A list of :class:`~pathlib.Path` objects for all matching files, sorted by filename.
     :raises OSError: If ``src_dir`` does not exist or is not readable.
     """
     return sorted(
-        (p for p in src_dir.iterdir() if p.suffix.lower() in AUDIO_EXTENSIONS),
+        (p for p in src_dir.iterdir() if p.suffix.lower() in AUDIO_EXTENSIONS and p.name not in _EXCLUDED_FILENAMES),
         key=lambda p: p.name,
     )
 
