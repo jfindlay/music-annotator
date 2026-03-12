@@ -48,7 +48,7 @@ All quality checks are driven by tox via the project-local venv:
 | Env | Command | Requirement |
 |---|---|---|
 | `build` | setuptools wheel | must succeed |
-| `test` | pytest | 489 tests pass; **100% branch coverage** |
+| `test` | pytest | 510 tests pass; **100% branch coverage** |
 | `check_type` | mypy (strict) | **zero errors** |
 | `check_format` | ruff check + ruff format --check | **zero warnings** |
 | `check_lint` | pylint | **10.00/10** |
@@ -141,6 +141,32 @@ All mock return values for `fetch_release`, `fetch_recording_detail`, and `fetch
   `music_annotator._pipeline.apply_tags_flac` (where it is imported), not `music_annotator._tagger.apply_tags_flac`.
 - Minimal real FLAC/MP3 byte sequences are embedded as constants in `test_pipeline.py` and `test_integration.py` for testing
   mutagen tagging without actual audio files.
+
+## Invariants that must never be broken
+
+### Transaction journal and user confirmation provenance
+
+The `action="copied"` entries in `journal_entries` (and therefore in the on-disk journal) and the "Verified OK" console message
+printed to the user at the end of `run()` **must always derive exclusively from in-memory program state that was populated only
+after all verification checks passed** for that file.  The ordering in `_pipeline.py` is the definition of this invariant:
+
+1. SHA-256 of source captured before copy.
+2. `shutil.copy2` executed.
+3. SHA-256 of destination checked equal to source — `raise RuntimeError` on mismatch (no journal entry).
+4. `apply_tags_flac` / `apply_tags_mp3` executed.
+5. `_verify_copy` checks tag round-trip, cover art bytes, and mtime — `raise RuntimeError` on any mismatch (no journal entry).
+6. Only on reaching step 6 is `journal_entries.append(..., action="copied")` executed.
+
+The user-facing confirmation is then derived by filtering `journal_entries` to `action == "copied"` — it is **not** a re-read
+of the journal file, and it is **not** derived from any other source.  This guarantees that the message "It is safe to delete
+the source directory" is backed by the same evidence as the journal record.
+
+Any future change that touches the copy/tag/verify loop or the post-loop confirmation message **must preserve this provenance
+chain**.  Specifically:
+- Do not append a `"copied"` journal entry before `_verify_copy` returns successfully.
+- Do not derive the confirmation message from the journal file on disk, from the plan list, or from any other source that is
+  not gated on successful verification.
+- Do not swallow `RuntimeError` from `_verify_copy` without removing or preventing the corresponding journal entry.
 
 ## Common pitfalls
 

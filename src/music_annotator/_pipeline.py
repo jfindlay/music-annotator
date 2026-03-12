@@ -416,6 +416,16 @@ def run(
     if not dry_run:
         write_transaction_log(dest_root / JOURNAL_FILENAME, journal_entries)
 
+        # Count copied (not skipped/dry-run) entries and print a confirmation message so the user
+        # knows it is safe to delete the source directory before they do so.
+        copied = [e for e in journal_entries if e.action == "copied"]
+        dest_dirs = sorted({Path(e.destination).parent for e in copied})
+        if copied:
+            _console.print(f"\n[bold green]Verified OK:[/] {len(copied)} file(s) written and confirmed to:")
+            for d in dest_dirs:
+                _console.print(f"  [green]{d}[/]")
+            _console.print("[bold]It is safe to delete the source directory.[/]\n")
+
     log.info("run_complete", dest=str(dest_root))
 
 
