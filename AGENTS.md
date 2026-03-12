@@ -29,8 +29,8 @@ music-annotator/
       test_models.py      ← Pydantic model tests
       test_pipeline.py    ← build_cea_performers, build_track_tags, apply_tags_*, run()
       test_discover.py    ← discover(), search_releases_by_dir, parse_disc_*, _format_candidate
-    example/
-      test_example.py     ← full-pipeline integration smoke tests
+    integration/
+      test_integration.py ← full-pipeline integration tests
   pyproject.toml      ← all config (mypy, pylint, ruff, tox, coverage)
   uv.lock             ← uv lockfile (not tracked for local dev)
 ```
@@ -48,7 +48,7 @@ All quality checks are driven by tox via the project-local venv:
 | Env | Command | Requirement |
 |---|---|---|
 | `build` | setuptools wheel | must succeed |
-| `test` | pytest | 471 tests pass; **100% branch coverage** |
+| `test` | pytest | 489 tests pass; **100% branch coverage** |
 | `check_type` | mypy (strict) | **zero errors** |
 | `check_format` | ruff check + ruff format --check | **zero warnings** |
 | `check_lint` | pylint | **10.00/10** |
@@ -107,6 +107,11 @@ Never skip the full `tox -m analyze` run before declaring a task done.
 
 ## Testing conventions
 
+### Integration tests
+- Integration tests in `tests/integration/` exercise the full public API end-to-end with all network and filesystem boundaries
+  mocked (via `pytest-mock` and `pyfakefs`).  They do not patch internal helpers such as `apply_tags_flac` or `_verify_copy`,
+  so the real mutagen write-and-read-back path executes.
+
 ### Helpers
 Each test module defines typed factory helpers:
 
@@ -134,8 +139,8 @@ All mock return values for `fetch_release`, `fetch_recording_detail`, and `fetch
   `music_annotator._mb_api.urllib.request.urlopen` (used by `fetch_acoustid_id`) are mocked via `pytest-mock`.
 - Patch targets must use the submodule where the name is bound, not where it originates. For example, patch
   `music_annotator._pipeline.apply_tags_flac` (where it is imported), not `music_annotator._tagger.apply_tags_flac`.
-- Minimal real FLAC/MP3 byte sequences are embedded as constants in `test_pipeline.py` and `test_example.py` for testing mutagen
-  tagging without actual audio files.
+- Minimal real FLAC/MP3 byte sequences are embedded as constants in `test_pipeline.py` and `test_integration.py` for testing
+  mutagen tagging without actual audio files.
 
 ## Common pitfalls
 

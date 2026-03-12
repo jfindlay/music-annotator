@@ -58,7 +58,6 @@ _MP3_STD_KEYS: frozenset[str] = frozenset(
 #: :func:`_read_tags_mp3` so that the same table drives both writing and read-back verification.
 _MP3_TXXX_MAP: dict[str, str] = {
     "MUSICBRAINZ_ALBUMID": "MusicBrainz Album Id",
-    "MUSICBRAINZ_TRACKID": "MusicBrainz Release Track Id",
     "MUSICBRAINZ_RECORDINGID": "MusicBrainz Track Id",
     "MUSICBRAINZ_RELEASEGROUPID": "MusicBrainz Release Group Id",
     "MUSICBRAINZ_ALBUMARTISTID": "MusicBrainz Album Artist Id",

@@ -532,6 +532,7 @@ def discover(
     dry_run: bool = False,
     fetch_rels: bool = True,
     limit: int = 10,
+    collision_policy: CollisionPolicy = CollisionPolicy.ASK,
     ui: DiscoverUI | None = None,
 ) -> None:
     """Search MusicBrainz for releases matching each source directory, prompt for confirmation, then apply tags.
@@ -549,6 +550,7 @@ def discover(
     :param dry_run: When ``True``, pass through to :func:`run` without writing files; the delete prompt is suppressed.
     :param fetch_rels: When ``False``, skip per-recording relation lookups in :func:`run`.
     :param limit: Maximum number of search candidates to display per directory.
+    :param collision_policy: Policy for handling destination file collisions; forwarded to :func:`run`.
     :param ui: A :class:`DiscoverUI` instance for user interaction.  Defaults to :class:`TerminalDiscoverUI`.
     """
     if ui is None:
@@ -586,7 +588,7 @@ def discover(
                 user_agent=user_agent,
                 dry_run=dry_run,
                 fetch_rels=fetch_rels,
-                collision_policy=CollisionPolicy.ASK,
+                collision_policy=collision_policy,
             )
         except (ValueError, mb.WebServiceError, RuntimeError, OSError) as exc:
             log.error("discover_run_error", release_id=release_id, error=str(exc), exc_info=True)
