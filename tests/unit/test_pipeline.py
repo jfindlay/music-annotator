@@ -9,8 +9,10 @@ import json
 import os
 import shutil
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
+from mutagen._util import MutagenError
 from mutagen.id3 import ID3, TXXX  # type: ignore[attr-defined]
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
@@ -26,6 +28,7 @@ from music_annotator import (
     apply_tags_mp3,
     build_cea_performers,
     build_track_tags,
+    fetch_acoustid_id,
     find_source_files,
 )
 from music_annotator.models import (
@@ -140,6 +143,47 @@ def _make_release(n_tracks: int = 1) -> MBRelease:
             "label-info-list": [{"label": {"id": "l1", "name": "Label X"}, "catalog-number": "CAT-001"}],
             "text-representation": {"script": "Latn", "language": "eng"},
             "medium-list": [{"position": 1, "format": "CD", "track-list": tracks}],
+        }
+    )
+
+
+def _make_multi_disc_release(tracks_per_disc: list[int]) -> MBRelease:
+    """Build a minimal multi-disc release model.
+
+    Each element in ``tracks_per_disc`` specifies the number of tracks on that medium (disc).
+    Medium positions are 1-based.
+
+    :param tracks_per_disc: List of per-medium track counts.
+    :returns: An :class:`~music_annotator.models.MBRelease` instance with multiple mediums.
+    """
+    mediums: list[JSON] = []
+    for disc_idx, n_tracks in enumerate(tracks_per_disc, start=1):
+        tracks: list[JSON] = []
+        for trk_idx in range(1, n_tracks + 1):
+            tracks.append(
+                {
+                    "id": f"trk-d{disc_idx}-{trk_idx}",
+                    "position": trk_idx,
+                    "recording": {
+                        "id": f"rec-d{disc_idx}-{trk_idx}",
+                        "title": f"Disc {disc_idx} Track {trk_idx}",
+                        "artist-credit": [],
+                    },
+                }
+            )
+        mediums.append({"position": disc_idx, "format": "CD", "track-list": tracks})
+    return MBRelease.model_validate(
+        {
+            "id": "rel-multi",
+            "title": "Multi-Disc Album",
+            "date": "2000",
+            "status": "Official",
+            "barcode": "",
+            "artist-credit": [],
+            "release-group": {"id": "rg-1", "primary-type": "Album", "first-release-date": "2000"},
+            "label-info-list": [],
+            "text-representation": {"script": "Latn", "language": "eng"},
+            "medium-list": mediums,
         }
     )
 
@@ -972,7 +1016,7 @@ class TestRunFullPipeline:
 
         release = _make_release(n_tracks=1)
         self._patch_mb(mocker, release)
-        mocker.patch("music_annotator.apply_tags_flac", side_effect=RuntimeError("tag boom"))
+        mocker.patch("music_annotator.apply_tags_flac", side_effect=MutagenError("tag boom"))
 
         # Should not raise
         music_annotator.run(
@@ -2037,7 +2081,13 @@ class TestReadTagsMp3:
         fs.create_dir("/out")
         fs.create_file(str(path), contents=_MINIMAL_MP3)
         apply_tags_mp3(path, TrackTags())
-        assert _read_tags_mp3(path) == {"IS_CLASSICAL": "1", "GENRE": "Classical"}
+        assert _read_tags_mp3(path) == {
+            "IS_CLASSICAL": "1",
+            "GENRE": "Classical",
+            "CWP_PART_LEVELS": "0",
+            "CWP_WORK_PART_LEVELS": "0",
+            "CWP_SINGLE_WORK_ALBUM": "0",
+        }
 
     def test_unknown_txxx_desc_ignored(self, fs: FakeFilesystem) -> None:
         """TXXX frames with descriptions not in _MP3_TXXX_MAP are silently ignored.
@@ -2259,6 +2309,270 @@ class TestRunCopyIntegrity:
         with pytest.raises(RuntimeError, match="copy integrity failure"):
             music_annotator.run(
                 release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=False,
+            )
+
+
+# ---------------------------------------------------------------------------
+# fetch_acoustid_id
+# ---------------------------------------------------------------------------
+
+
+class TestFetchAcoustidId:
+    """Tests for fetch_acoustid_id covering all response-parsing branches."""
+
+    def _make_resp(self, mocker: MockerFixture, body: bytes) -> None:
+        """Patch urllib.request.urlopen to return a context-manager that yields ``body``.
+
+        Uses a MagicMock configured as a context manager so that ``with urlopen(...) as resp:``
+        enters the mock and ``resp.read()`` returns ``body``.
+
+        :param mocker: pytest-mock fixture.
+        :param body: Raw bytes to return from resp.read().
+        """
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=ctx)
+        ctx.__exit__ = MagicMock(return_value=False)
+        ctx.read = MagicMock(return_value=body)
+        mocker.patch("music_annotator.urllib.request.urlopen", return_value=ctx)
+
+    def test_valid_response_returns_id(self, mocker: MockerFixture) -> None:
+        """A well-formed AcoustID response returns the first track id.
+
+        :param mocker: pytest-mock fixture.
+        """
+        self._make_resp(mocker, b'{"tracks": [{"id": "acoustid-uuid-123"}]}')
+        assert fetch_acoustid_id("rec-mbid") == "acoustid-uuid-123"
+
+    def test_non_dict_response_returns_empty(self, mocker: MockerFixture) -> None:
+        """A non-dict JSON response (e.g. a list) returns an empty string.
+
+        :param mocker: pytest-mock fixture.
+        """
+        self._make_resp(mocker, b'["unexpected"]')
+        assert fetch_acoustid_id("rec-mbid") == ""
+
+    def test_missing_tracks_key_returns_empty(self, mocker: MockerFixture) -> None:
+        """A response dict with no 'tracks' key returns an empty string.
+
+        :param mocker: pytest-mock fixture.
+        """
+        self._make_resp(mocker, b'{"status": "ok"}')
+        assert fetch_acoustid_id("rec-mbid") == ""
+
+    def test_empty_tracks_list_returns_empty(self, mocker: MockerFixture) -> None:
+        """A response with an empty 'tracks' list returns an empty string.
+
+        :param mocker: pytest-mock fixture.
+        """
+        self._make_resp(mocker, b'{"tracks": []}')
+        assert fetch_acoustid_id("rec-mbid") == ""
+
+    def test_non_dict_first_track_returns_empty(self, mocker: MockerFixture) -> None:
+        """A response where the first track element is not a dict returns an empty string.
+
+        :param mocker: pytest-mock fixture.
+        """
+        self._make_resp(mocker, b'{"tracks": ["not-a-dict"]}')
+        assert fetch_acoustid_id("rec-mbid") == ""
+
+    def test_empty_track_id_returns_empty(self, mocker: MockerFixture) -> None:
+        """A response where the first track has an empty 'id' value returns an empty string.
+
+        :param mocker: pytest-mock fixture.
+        """
+        self._make_resp(mocker, b'{"tracks": [{"id": ""}]}')
+        assert fetch_acoustid_id("rec-mbid") == ""
+
+    def test_network_error_returns_empty(self, mocker: MockerFixture) -> None:
+        """A network exception is caught and an empty string is returned.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.urllib.request.urlopen", side_effect=OSError("network failure"))
+        assert fetch_acoustid_id("rec-mbid") == ""
+
+
+# ---------------------------------------------------------------------------
+# run() — multi-disc medium selection
+# ---------------------------------------------------------------------------
+
+
+class TestRunMultiDisc:
+    """Tests for run() multi-disc medium selection logic."""
+
+    def _patch_mb_multi(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API calls for a multi-disc run.
+
+        :param mocker: pytest-mock fixture.
+        :param release: Release model to return from fetch_release.
+        """
+        mocker.patch("music_annotator.mb.set_useragent")
+        mocker.patch("music_annotator.fetch_release", return_value=release)
+        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
+            )
+
+        mocker.patch("music_annotator.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator.apply_tags_flac")
+        mocker.patch("music_annotator._verify_copy")  # pylint: disable=protected-access
+
+    def test_single_matching_medium_selected(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When exactly one medium matches the source file count, it is selected automatically.
+
+        Two-disc release (3 tracks + 2 tracks); source dir has 2 files → disc 2 selected.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_multi_disc_release([3, 2])
+        self._patch_mb_multi(mocker, release)
+        mock_tag = mocker.patch("music_annotator.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        assert mock_tag.call_count == 2
+
+    def test_multiple_matching_mediums_disc_hint_resolves(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When multiple mediums match and the directory name contains a disc hint, it is used.
+
+        Two-disc release each with 1 track; source dir is named "disc2" → medium position 2 selected.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/albums/disc2")
+        dest = Path("/dest")
+        fs.create_dir("/albums")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_multi_disc_release([1, 1])
+        self._patch_mb_multi(mocker, release)
+        mock_tag = mocker.patch("music_annotator.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        # disc2 → position 2 medium selected; only 1 track on that medium
+        assert mock_tag.call_count == 1
+
+    def test_multiple_matching_mediums_no_hint_uses_first(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When multiple mediums match and there is no disc hint, the first matching medium is used.
+
+        Two-disc release each with 1 track; source dir has no disc suffix → first medium used.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_multi_disc_release([1, 1])
+        self._patch_mb_multi(mocker, release)
+        mock_tag = mocker.patch("music_annotator.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        assert mock_tag.call_count == 1
+
+    def test_no_matching_medium_raises_value_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When no medium matches the source file count, ValueError is raised with a helpful message.
+
+        Two-disc release (3 + 4 tracks); source dir has 2 files → no match → ValueError.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_multi_disc_release([3, 4])
+        self._patch_mb_multi(mocker, release)
+
+        with pytest.raises(ValueError, match="track count mismatch"):
+            music_annotator.run(
+                release_id="rel-multi",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=True,
+            )
+
+    def test_empty_medium_list_raises_value_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When the release has no mediums at all, ValueError is raised.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = MBRelease.model_validate(
+            {
+                "id": "rel-empty",
+                "title": "Empty Release",
+                "date": "2000",
+                "status": "Official",
+                "barcode": "",
+                "artist-credit": [],
+                "release-group": {"id": "rg-1", "primary-type": "Album", "first-release-date": "2000"},
+                "label-info-list": [],
+                "text-representation": {"script": "Latn", "language": "eng"},
+                "medium-list": [],
+            }
+        )
+        mocker.patch("music_annotator.mb.set_useragent")
+        mocker.patch("music_annotator.fetch_release", return_value=release)
+        mocker.patch("music_annotator.fetch_cover_art", return_value=CoverArt())
+
+        with pytest.raises(ValueError, match="has no mediums"):
+            music_annotator.run(
+                release_id="rel-empty",
                 src_dir=src,
                 dest_root=dest,
                 user_agent="Test/1.0",

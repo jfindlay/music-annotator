@@ -331,11 +331,16 @@ class RoleBuckets(BaseModel):
     Each list holds deduplicated :class:`ArtistEntry` objects for that role.  Deduplication is by MBID so the same person
     credited at multiple levels of a work hierarchy (movement → symphonic poem → collection) appears only once.
 
-    Important attributes: ``composers``, ``lyricists``, ``librettists``, ``translators``, ``arrangers``, ``orchestrators``,
-    ``reconstructors``, ``revisors``.
+    CE distinguishes ``writers`` (the MB ``"writer"`` relation type, a generic creative attribution) from ``composers``
+    (the MB ``"composer"`` relation type).  Both populate the standard ``COMPOSER`` host tag, but CE exposes them separately
+    as ``CWP_WRITERS`` / ``CWP_COMPOSERS`` so library software can display the distinction.
+
+    Important attributes: ``composers``, ``writers``, ``lyricists``, ``librettists``, ``translators``, ``arrangers``,
+    ``orchestrators``, ``reconstructors``, ``revisors``.
     """
 
     composers: list[ArtistEntry] = Field(default_factory=list)
+    writers: list[ArtistEntry] = Field(default_factory=list)
     lyricists: list[ArtistEntry] = Field(default_factory=list)
     librettists: list[ArtistEntry] = Field(default_factory=list)
     translators: list[ArtistEntry] = Field(default_factory=list)
@@ -429,14 +434,20 @@ class CwpTags(BaseModel):
 
     This model is constructed after the full work hierarchy is resolved and movement numbers are computed across the release.
 
-    Important attributes: ``work_top``, ``workid_top``, ``part_levels``, ``part``, ``work``, ``groupheading``,
-    ``inter_work``, ``movt_num``, ``movt_tot``, ``single_work_album``, ``levels`` (per-level :class:`WorkHierarchyLevel`
-    list), plus all artist role and date string fields.
+    ``work_part_levels`` mirrors the CE ``_cwp_work_part_levels`` variable: the maximum hierarchy depth among all tracks
+    sharing the same top-level work on this release (equivalently: the depth of the top-level work's subtree).  In
+    music-annotator, which processes one medium at a time, this equals ``part_levels`` because no cross-disc state is
+    accumulated; it is stored as a separate field so the tag is explicitly present and matches CE output.
+
+    Important attributes: ``work_top``, ``workid_top``, ``part_levels``, ``work_part_levels``, ``part``, ``work``,
+    ``groupheading``, ``inter_work``, ``movt_num``, ``movt_tot``, ``single_work_album``, ``levels`` (per-level
+    :class:`WorkHierarchyLevel` list), plus all artist role and date string fields.
     """
 
     work_top: str = ""
     workid_top: str = ""
     part_levels: int = 0
+    work_part_levels: int = 0
     part: str = ""
     work: str = ""
     groupheading: str = ""
@@ -452,8 +463,11 @@ class CwpTags(BaseModel):
     composers: str = ""
     composers_sort: str = ""
     composer_lastnames: str = ""
+    writers: str = ""
+    writers_sort: str = ""
     arrangers: str = ""
     arrangers_sort: str = ""
+    arranger_names: str = ""
     orchestrators: str = ""
     orchestrators_sort: str = ""
     reconstructors: str = ""
@@ -574,13 +588,30 @@ class TrackTags(BaseModel):
 
     # CEA tags
     cea_recording_artist: str = ""
+    cea_recording_artists: str = ""
+    cea_recording_artists_sort: str = ""
+    cea_mb_artists: str = ""
     cea_soloists: str = ""
     cea_soloist_names: str = ""
+    cea_soloists_sort: str = ""
     cea_vocalists: str = ""
+    cea_vocalist_names: str = ""
     cea_instrumentalists: str = ""
+    cea_instrumentalist_names: str = ""
     cea_other_soloists: str = ""
     cea_ensembles: str = ""
     cea_ensemble_names: str = ""
+    cea_ensembles_sort: str = ""
+    cea_album_soloists: str = ""
+    cea_album_soloists_sort: str = ""
+    cea_album_conductors: str = ""
+    cea_album_conductors_sort: str = ""
+    cea_album_ensembles: str = ""
+    cea_album_ensembles_sort: str = ""
+    cea_album_composers: str = ""
+    cea_album_composers_sort: str = ""
+    cea_support_performers: str = ""
+    cea_support_performers_sort: str = ""
     cea_conductors: str = ""
     cea_composers: str = ""
     cea_composer_lastnames: str = ""
@@ -590,11 +621,13 @@ class TrackTags(BaseModel):
     cea_chorusmasters: str = ""
     cea_leaders: str = ""
     cea_instruments: str = ""
+    cea_instruments_all: str = ""
 
     # CWP tags
     cwp_work_top: str = ""
     cwp_workid_top: str = ""
     cwp_part_levels: str = "0"
+    cwp_work_part_levels: str = "0"
     cwp_part: str = ""
     cwp_work: str = ""
     cwp_groupheading: str = ""
@@ -605,10 +638,17 @@ class TrackTags(BaseModel):
     cwp_composers: str = ""
     cwp_composers_sort: str = ""
     cwp_composer_lastnames: str = ""
+    cwp_writers: str = ""
+    cwp_writers_sort: str = ""
     cwp_arrangers: str = ""
     cwp_arrangers_sort: str = ""
+    cwp_arranger_names: str = ""
     cwp_orchestrators: str = ""
     cwp_orchestrators_sort: str = ""
+    cwp_reconstructors: str = ""
+    cwp_reconstructors_sort: str = ""
+    cwp_revisors: str = ""
+    cwp_revisors_sort: str = ""
     cwp_lyricists: str = ""
     cwp_lyricists_sort: str = ""
     cwp_librettists: str = ""
@@ -620,6 +660,7 @@ class TrackTags(BaseModel):
     cwp_published_dates: str = ""
     cwp_premiered_dates: str = ""
     cwp_worktype_genres: str = ""
+    acoustid_id: str = ""
 
     # Per-level work/workid/part tags are stored as extra fields
     model_config = {"extra": "allow"}

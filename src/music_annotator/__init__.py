@@ -30,22 +30,39 @@ Tags written (Vorbis Comments for FLAC, ID3v2.4 for MP3):
         CWP_WORK_0 … CWP_WORK_N, CWP_WORKID_0 … CWP_WORKID_N
         CWP_WORK_TOP, CWP_WORKID_TOP
         CWP_PART_0 … CWP_PART_N
-        CWP_PART_LEVELS, CWP_SINGLE_WORK_ALBUM
+        CWP_PART_LEVELS, CWP_WORK_PART_LEVELS, CWP_SINGLE_WORK_ALBUM
         CWP_WORK, CWP_GROUPHEADING, CWP_PART, CWP_INTER_WORK
         CWP_MOVT_NUM, CWP_MOVT_TOT
         CWP_COMPOSERS, CWP_COMPOSERS_SORT, CWP_COMPOSER_LASTNAMES
-        CWP_ARRANGERS, CWP_ORCHESTRATORS, CWP_RECONSTRUCTORS, CWP_REVISORS
-        CWP_LYRICISTS, CWP_LIBRETTISTS, CWP_TRANSLATORS
+        CWP_WRITERS, CWP_WRITERS_SORT
+        CWP_ARRANGERS, CWP_ARRANGERS_SORT, CWP_ARRANGER_NAMES
+        CWP_ORCHESTRATORS, CWP_ORCHESTRATORS_SORT
+        CWP_RECONSTRUCTORS, CWP_RECONSTRUCTORS_SORT
+        CWP_REVISORS, CWP_REVISORS_SORT
+        CWP_LYRICISTS, CWP_LYRICISTS_SORT
+        CWP_LIBRETTISTS, CWP_LIBRETTISTS_SORT
+        CWP_TRANSLATORS, CWP_TRANSLATORS_SORT
         CWP_KEYS, CWP_COMPOSED_DATES, CWP_PUBLISHED_DATES, CWP_PREMIERED_DATES
 
     Classical Extras _cea_ variables (stored as tags, prefix CEA_):
-        CEA_RECORDING_ARTIST, CEA_RECORDING_ARTISTS
-        CEA_SOLOISTS, CEA_SOLOIST_NAMES
-        CEA_VOCALISTS, CEA_INSTRUMENTALISTS, CEA_OTHER_SOLOISTS
-        CEA_ENSEMBLES, CEA_ENSEMBLE_NAMES
+        CEA_RECORDING_ARTIST, CEA_RECORDING_ARTISTS, CEA_RECORDING_ARTISTS_SORT
+        CEA_MB_ARTISTS
+        CEA_SOLOISTS, CEA_SOLOIST_NAMES, CEA_SOLOISTS_SORT
+        CEA_VOCALISTS, CEA_VOCALIST_NAMES
+        CEA_INSTRUMENTALISTS, CEA_INSTRUMENTALIST_NAMES
+        CEA_OTHER_SOLOISTS
+        CEA_ENSEMBLES, CEA_ENSEMBLE_NAMES, CEA_ENSEMBLES_SORT
+        CEA_ALBUM_SOLOISTS, CEA_ALBUM_SOLOISTS_SORT
+        CEA_ALBUM_CONDUCTORS, CEA_ALBUM_CONDUCTORS_SORT
+        CEA_ALBUM_ENSEMBLES, CEA_ALBUM_ENSEMBLES_SORT
+        CEA_ALBUM_COMPOSERS, CEA_ALBUM_COMPOSERS_SORT
+        CEA_SUPPORT_PERFORMERS, CEA_SUPPORT_PERFORMERS_SORT
         CEA_CONDUCTORS, CEA_COMPOSERS, CEA_COMPOSER_LASTNAMES, CEA_PERFORMERS
         CEA_ARRANGERS, CEA_ORCHESTRATORS, CEA_CHORUSMASTERS, CEA_LEADERS
-        CEA_INSTRUMENTS, CEA_INSTRUMENTS_CREDITED
+        CEA_INSTRUMENTS, CEA_INSTRUMENTS_ALL
+
+    AcoustID tag:
+        ACOUSTID_ID
 
 Usage::
 
@@ -67,6 +84,7 @@ import os
 import re
 import shutil
 import time
+import urllib.request
 from collections import defaultdict
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -75,6 +93,7 @@ from typing import ParamSpec, TypeVar
 import musicbrainzngs as mb
 import structlog
 import yaml
+from mutagen._util import MutagenError
 from mutagen.flac import FLAC
 from mutagen.flac import Picture as FLACPicture
 from mutagen.id3 import (  # type: ignore[attr-defined]
@@ -141,6 +160,7 @@ __all__ = [
     "fetch_cover_art",
     "CoverImage",
     "fetch_work_detail",
+    "fetch_acoustid_id",
     "is_ensemble",
     "is_choir",
     "is_orchestra",
@@ -576,16 +596,52 @@ def fetch_work_detail(work_id: str) -> MBWork:
     return work
 
 
+def fetch_acoustid_id(recording_mbid: str) -> str:
+    """Look up the AcoustID track ID (UUID) for a MusicBrainz recording MBID.
+
+    Calls ``https://api.acoustid.org/v2/track/list_by_mbid`` with the recording MBID and returns the first AcoustID track ID
+    UUID from the response.  The AcoustID track ID is a cluster identifier that groups all crowd-sourced Chromaprint fingerprint
+    submissions for the same track.  It is stored in the ``ACOUSTID_ID`` tag (Vorbis Comment) / TXXX ``"Acoustid Id"`` frame
+    (ID3), matching the convention used by MusicBrainz Picard.
+
+    No API key is required for this endpoint.  The call uses a 10-second socket timeout and returns ``""`` on any network or
+    parse error so that the rest of the annotation pipeline is never blocked by AcoustID being unavailable.
+
+    :param recording_mbid: The MusicBrainz recording MBID (UUID string).
+    :returns: The first AcoustID track ID UUID string, or ``""`` when none is found or the request fails.
+    """
+    log.debug("fetch_acoustid_id", recording_mbid=recording_mbid)
+    try:
+        # No retry/backoff: if this fails, we move on without it.  Perhaps this could be revisited later
+        with urllib.request.urlopen(
+            f"https://api.acoustid.org/v2/track/list_by_mbid?mbid={recording_mbid}&format=json", timeout=10
+        ) as resp:
+            raw = resp.read()
+        data: JSON = json.loads(raw)
+        if not isinstance(data, dict):
+            return ""
+        tracks = data.get("tracks")
+        if not isinstance(tracks, list) or not tracks:
+            return ""
+        first = tracks[0]
+        if not isinstance(first, dict):
+            return ""
+        track_id = first.get("id", "")
+        return str(track_id) if track_id else ""
+    except (OSError, json.JSONDecodeError):
+        log.warning("acoustid_lookup_failed", recording_mbid=recording_mbid)
+        return ""
+
+
 def _get_bottom_work(embedded: MBWork) -> MBWork:
     """Return the bottom work for a performance relation, using inlined data when available.
 
-    When ``musicbrainzngs`` is called with the ``work-level-rels`` include, the MB API inlines the
-    full work detail (including its own ``artist-relation-list`` and ``work-relation-list``) directly
-    inside the recording response.  In that case ``embedded`` already carries all the data needed and
-    no extra network round-trip is required.
+    When ``musicbrainzngs`` is called with the ``work-level-rels`` include, the MB API inlines the full work detail (including
+    its own ``artist-relation-list`` and ``work-relation-list``) directly inside the recording response.  In that case
+    ``embedded`` already carries all the data needed and no extra network round-trip is required.
 
-    If ``embedded`` has empty relation lists (stub shape — ``work-level-rels`` was absent or the
-    library did not parse the inlined data), fall back to :func:`fetch_work_detail`.
+    If ``embedded`` has empty relation lists (stub shape — ``work-level-rels`` was absent or the library did not parse the
+    inlined data), fall back to :func:`fetch_work_detail`.
 
     :param embedded: The :class:`~music_annotator.models.MBWork` extracted from the recording's
         performance ``work-relation-list`` entry.
@@ -795,8 +851,10 @@ def extract_work_artist_rels(work: MBWork, role_buckets: RoleBuckets) -> None:
     for rel in work.artist_relation_list:
         entry = ArtistEntry(name=rel.artist.name, sort=rel.artist.sort_name or rel.artist.name, mbid=rel.artist.id)
         match rel.type:
-            case "composer" | "writer":
+            case "composer":
                 role_buckets.add_unique("composers", entry)
+            case "writer":
+                role_buckets.add_unique("writers", entry)
             case "lyricist":
                 role_buckets.add_unique("lyricists", entry)
             case "librettist":
@@ -908,7 +966,7 @@ def build_cea_performers(recording_detail: MBRecording) -> CeaPerformers:
             case "orchestrator":
                 cea.orchestrators.append(entry)
             case "composer" | "writer":
-                cea.composers.append(entry)
+                cea.composers.append(entry)  # recording-level: CE merges both into composer host tag
             case "producer":
                 cea.producers.append(entry)
             case "balance":
@@ -1026,11 +1084,27 @@ def build_cwp_tags(
         cwp.composers = "; ".join(e.name for e in role_buckets.composers)
         cwp.composers_sort = "; ".join(e.sort for e in role_buckets.composers)
         cwp.composer_lastnames = "; ".join(last_name(e.sort) for e in role_buckets.composers)
+    if role_buckets.writers:
+        cwp.writers = "; ".join(e.name for e in role_buckets.writers)
+        cwp.writers_sort = "; ".join(e.sort for e in role_buckets.writers)
     for role_name in ("arrangers", "orchestrators", "reconstructors", "revisors", "lyricists", "librettists", "translators"):
         bucket: list[ArtistEntry] = getattr(role_buckets, role_name)
         if bucket:
             setattr(cwp, role_name, "; ".join(e.name for e in bucket))
             setattr(cwp, f"{role_name}_sort", "; ".join(e.sort for e in bucket))
+    # Plain (un-annotated) arranger names — parallel to cwp.arrangers but without instrument/role annotations.
+    # Merges work-level arrangers and orchestrators into a single de-duplicated list of display names.
+    arranger_name_seen: set[str] = set()
+    arranger_name_parts: list[str] = []
+    for e in role_buckets.arrangers + role_buckets.orchestrators:
+        if e.name not in arranger_name_seen:
+            arranger_name_seen.add(e.name)
+            arranger_name_parts.append(e.name)
+    if arranger_name_parts:
+        cwp.arranger_names = "; ".join(arranger_name_parts)
+
+    # work_part_levels: equals part_levels for a single-medium run; stored explicitly to match CE tag output.
+    cwp.work_part_levels = cwp.part_levels
 
     return cwp
 
@@ -1157,6 +1231,51 @@ def build_track_tags(
         recording_artist_names += [e.name for e in cea.conductors]
     cea_recording_artist = "; ".join(recording_artist_names) or rec_artist_phrase
 
+    # CEA_RECORDING_ARTISTS (multi-value equivalent) and sort names — same data as cea_recording_artist but
+    # stored so downstream tag-mapping scripts can access the raw list.
+    cea_recording_artists = cea_recording_artist
+    cea_recording_artists_sort = "; ".join(e.sort for e in all_soloists + cea.ensembles + cea.conductors) or rec_artist_sort
+
+    # CEA_MB_ARTISTS: raw MB recording artist-credit phrase, preserved before any replacement.
+    cea_mb_artists = rec_artist_phrase
+
+    # CEA plain-name variants (without instrument/voice in brackets).
+    cea_vocalist_names = "; ".join(e.name for e in cea.vocalists)
+    cea_instrumentalist_names = "; ".join(e.name for e in cea.instrumentalists)
+
+    # CEA sort names
+    cea_soloists_sort = "; ".join(e.sort for e in all_soloists)
+    cea_ensembles_sort = "; ".join(e.sort for e in cea.ensembles)
+
+    # CEA_INSTRUMENTS_ALL: instruments from recording-level soloists only; work-level instruments are in
+    # cwp_keys / cwp_worktype_genres.  CE defines this as the union of recording and work instrument tags; for
+    # music-annotator (which stores work-level role names as CWP tags, not instrument names) this is identical
+    # to the recording-level instruments string.
+    instruments_all_str = instruments_str
+
+    # CEA_ALBUM_* and CEA_SUPPORT_PERFORMERS.
+    # "Album artist" means: credited at the release level in MB (release.artist_credit).
+    release_artist_names: set[str] = {
+        c.artist.name for c in release.artist_credit if isinstance(c, MBArtistCredit) and c.artist.name
+    }
+    release_artist_sorts: set[str] = {
+        c.artist.sort_name for c in release.artist_credit if isinstance(c, MBArtistCredit) and c.artist.sort_name
+    }
+
+    def _is_album_artist(entry: ArtistEntry) -> bool:
+        """Return True when ``entry`` is credited at the MB release level."""
+        return entry.name in release_artist_names or entry.sort in release_artist_sorts
+
+    album_soloists = [e for e in all_soloists if _is_album_artist(e)]
+    album_conductors = [e for e in cea.conductors if _is_album_artist(e)]
+    album_ensembles = [e for e in cea.ensembles if _is_album_artist(e)]
+    # For composers: use work-level role_buckets; fall back to cea.composers if no work link.
+    all_composers = role_buckets.composers or cea.composers
+    album_composers = [e for e in all_composers if _is_album_artist(e)]
+
+    # Support performers: soloists and ensembles who are NOT album artists (conductors excluded per CE).
+    support_performers = [e for e in all_soloists + cea.ensembles if not _is_album_artist(e)]
+
     # Final work/movement tags
     _level0_title = cwp.levels[0].work_id and cwp.levels[0].work_title if cwp.levels else ""
     work_tag = cwp.work_top or _level0_title or direct_work_title or ""
@@ -1230,13 +1349,30 @@ def build_track_tags(
         musicbrainz_composerid=composer_id,
         musicbrainz_releasetrackid=track.id,
         cea_recording_artist=cea_recording_artist,
+        cea_recording_artists=cea_recording_artists,
+        cea_recording_artists_sort=cea_recording_artists_sort,
+        cea_mb_artists=cea_mb_artists,
         cea_soloists=soloist_str,
         cea_soloist_names="; ".join(soloist_names),
+        cea_soloists_sort=cea_soloists_sort,
         cea_vocalists=vocalist_str,
+        cea_vocalist_names=cea_vocalist_names,
         cea_instrumentalists=instrumentalist_str,
+        cea_instrumentalist_names=cea_instrumentalist_names,
         cea_other_soloists="; ".join(e.name for e in cea.other_soloists),
         cea_ensembles=ensemble_str,
         cea_ensemble_names="; ".join(ensemble_names),
+        cea_ensembles_sort=cea_ensembles_sort,
+        cea_album_soloists="; ".join(e.name for e in album_soloists),
+        cea_album_soloists_sort="; ".join(e.sort for e in album_soloists),
+        cea_album_conductors="; ".join(e.name for e in album_conductors),
+        cea_album_conductors_sort="; ".join(e.sort for e in album_conductors),
+        cea_album_ensembles="; ".join(e.name for e in album_ensembles),
+        cea_album_ensembles_sort="; ".join(e.sort for e in album_ensembles),
+        cea_album_composers="; ".join(e.name for e in album_composers),
+        cea_album_composers_sort="; ".join(e.sort for e in album_composers),
+        cea_support_performers="; ".join(f"{e.name} ({e.instrument})" if e.instrument else e.name for e in support_performers),
+        cea_support_performers_sort="; ".join(e.sort for e in support_performers),
         cea_conductors=conductor_name,
         cea_composers=cwp.composers or composer_name,
         cea_composer_lastnames=cwp.composer_lastnames or last_name(composer_sort),
@@ -1246,9 +1382,11 @@ def build_track_tags(
         cea_chorusmasters=chorusmaster,
         cea_leaders=leader,
         cea_instruments=instruments_str,
+        cea_instruments_all=instruments_all_str,
         cwp_work_top=cwp.work_top,
         cwp_workid_top=cwp.workid_top,
         cwp_part_levels=str(cwp.part_levels),
+        cwp_work_part_levels=str(cwp.work_part_levels),
         cwp_part=cwp.part,
         cwp_work=cwp.work,
         cwp_groupheading=cwp.groupheading,
@@ -1256,10 +1394,17 @@ def build_track_tags(
         cwp_composers=cwp.composers,
         cwp_composers_sort=cwp.composers_sort,
         cwp_composer_lastnames=cwp.composer_lastnames,
+        cwp_writers=cwp.writers,
+        cwp_writers_sort=cwp.writers_sort,
         cwp_arrangers=cwp.arrangers,
         cwp_arrangers_sort=cwp.arrangers_sort,
+        cwp_arranger_names=cwp.arranger_names,
         cwp_orchestrators=cwp.orchestrators,
         cwp_orchestrators_sort=cwp.orchestrators_sort,
+        cwp_reconstructors=cwp.reconstructors,
+        cwp_reconstructors_sort=cwp.reconstructors_sort,
+        cwp_revisors=cwp.revisors,
+        cwp_revisors_sort=cwp.revisors_sort,
         cwp_lyricists=cwp.lyricists,
         cwp_lyricists_sort=cwp.lyricists_sort,
         cwp_librettists=cwp.librettists,
@@ -1483,17 +1628,99 @@ _MP3_TXXX_MAP: dict[str, str] = {
     "RELEASESTATUS": "MusicBrainz Album Status",
     "SOLOISTS": "SOLOISTS",
     "ENSEMBLE": "ENSEMBLE",
+    "BAND": "BAND",
+    "VOCALISTS": "VOCALISTS",
+    "INSTRUMENTALISTS": "INSTRUMENTALISTS",
+    "INSTRUMENT": "INSTRUMENT",
+    "LYRICIST": "LYRICIST",
+    "TRANSLATOR": "TRANSLATOR",
+    "ARRANGER": "ARRANGER",
+    "CHORUSMASTER": "CHORUSMASTER",
+    "LEADER": "LEADER",
+    "PRODUCER": "PRODUCER",
+    "ENGINEER": "ENGINEER",
+    "TOTALTRACKS": "TOTALTRACKS",
+    "ARTISTS": "ARTISTS",
+    "ARTISTSORT": "ARTISTSORT",
+    "ALBUMARTISTSORT": "ALBUMARTISTSORT",
+    "COMPOSERSORT": "COMPOSERSORT",
+    "SUBTITLE": "SUBTITLE",
+    "PUBLISHED_DATE": "PUBLISHED_DATE",
+    "PREMIERED_DATE": "PREMIERED_DATE",
+    "MUSICBRAINZ_RELEASETRACKID": "MusicBrainz Release Track Id",
+    "ACOUSTID_ID": "Acoustid Id",
+    # CEA tags
     "CEA_RECORDING_ARTIST": "CEA_RECORDING_ARTIST",
+    "CEA_RECORDING_ARTISTS": "CEA_RECORDING_ARTISTS",
+    "CEA_RECORDING_ARTISTS_SORT": "CEA_RECORDING_ARTISTS_SORT",
+    "CEA_MB_ARTISTS": "CEA_MB_ARTISTS",
     "CEA_SOLOISTS": "CEA_SOLOISTS",
+    "CEA_SOLOIST_NAMES": "CEA_SOLOIST_NAMES",
+    "CEA_SOLOISTS_SORT": "CEA_SOLOISTS_SORT",
+    "CEA_VOCALISTS": "CEA_VOCALISTS",
+    "CEA_VOCALIST_NAMES": "CEA_VOCALIST_NAMES",
+    "CEA_INSTRUMENTALISTS": "CEA_INSTRUMENTALISTS",
+    "CEA_INSTRUMENTALIST_NAMES": "CEA_INSTRUMENTALIST_NAMES",
+    "CEA_OTHER_SOLOISTS": "CEA_OTHER_SOLOISTS",
     "CEA_ENSEMBLES": "CEA_ENSEMBLES",
+    "CEA_ENSEMBLE_NAMES": "CEA_ENSEMBLE_NAMES",
+    "CEA_ENSEMBLES_SORT": "CEA_ENSEMBLES_SORT",
+    "CEA_ALBUM_SOLOISTS": "CEA_ALBUM_SOLOISTS",
+    "CEA_ALBUM_SOLOISTS_SORT": "CEA_ALBUM_SOLOISTS_SORT",
+    "CEA_ALBUM_CONDUCTORS": "CEA_ALBUM_CONDUCTORS",
+    "CEA_ALBUM_CONDUCTORS_SORT": "CEA_ALBUM_CONDUCTORS_SORT",
+    "CEA_ALBUM_ENSEMBLES": "CEA_ALBUM_ENSEMBLES",
+    "CEA_ALBUM_ENSEMBLES_SORT": "CEA_ALBUM_ENSEMBLES_SORT",
+    "CEA_ALBUM_COMPOSERS": "CEA_ALBUM_COMPOSERS",
+    "CEA_ALBUM_COMPOSERS_SORT": "CEA_ALBUM_COMPOSERS_SORT",
+    "CEA_SUPPORT_PERFORMERS": "CEA_SUPPORT_PERFORMERS",
+    "CEA_SUPPORT_PERFORMERS_SORT": "CEA_SUPPORT_PERFORMERS_SORT",
     "CEA_CONDUCTORS": "CEA_CONDUCTORS",
     "CEA_COMPOSERS": "CEA_COMPOSERS",
+    "CEA_COMPOSER_LASTNAMES": "CEA_COMPOSER_LASTNAMES",
+    "CEA_PERFORMERS": "CEA_PERFORMERS",
+    "CEA_ARRANGERS": "CEA_ARRANGERS",
+    "CEA_ORCHESTRATORS": "CEA_ORCHESTRATORS",
+    "CEA_CHORUSMASTERS": "CEA_CHORUSMASTERS",
+    "CEA_LEADERS": "CEA_LEADERS",
+    "CEA_INSTRUMENTS": "CEA_INSTRUMENTS",
+    "CEA_INSTRUMENTS_ALL": "CEA_INSTRUMENTS_ALL",
+    # CWP tags
     "CWP_WORK_TOP": "CWP_WORK_TOP",
+    "CWP_WORKID_TOP": "CWP_WORKID_TOP",
+    "CWP_PART_LEVELS": "CWP_PART_LEVELS",
+    "CWP_WORK_PART_LEVELS": "CWP_WORK_PART_LEVELS",
     "CWP_GROUPHEADING": "CWP_GROUPHEADING",
     "CWP_PART": "CWP_PART",
+    "CWP_WORK": "CWP_WORK",
+    "CWP_INTER_WORK": "CWP_INTER_WORK",
+    "CWP_MOVT_NUM": "CWP_MOVT_NUM",
+    "CWP_MOVT_TOT": "CWP_MOVT_TOT",
+    "CWP_SINGLE_WORK_ALBUM": "CWP_SINGLE_WORK_ALBUM",
     "CWP_COMPOSERS": "CWP_COMPOSERS",
+    "CWP_COMPOSERS_SORT": "CWP_COMPOSERS_SORT",
+    "CWP_COMPOSER_LASTNAMES": "CWP_COMPOSER_LASTNAMES",
+    "CWP_WRITERS": "CWP_WRITERS",
+    "CWP_WRITERS_SORT": "CWP_WRITERS_SORT",
+    "CWP_ARRANGERS": "CWP_ARRANGERS",
+    "CWP_ARRANGERS_SORT": "CWP_ARRANGERS_SORT",
+    "CWP_ARRANGER_NAMES": "CWP_ARRANGER_NAMES",
+    "CWP_ORCHESTRATORS": "CWP_ORCHESTRATORS",
+    "CWP_ORCHESTRATORS_SORT": "CWP_ORCHESTRATORS_SORT",
+    "CWP_RECONSTRUCTORS": "CWP_RECONSTRUCTORS",
+    "CWP_RECONSTRUCTORS_SORT": "CWP_RECONSTRUCTORS_SORT",
+    "CWP_REVISORS": "CWP_REVISORS",
+    "CWP_REVISORS_SORT": "CWP_REVISORS_SORT",
+    "CWP_LYRICISTS": "CWP_LYRICISTS",
+    "CWP_LYRICISTS_SORT": "CWP_LYRICISTS_SORT",
+    "CWP_LIBRETTISTS": "CWP_LIBRETTISTS",
+    "CWP_LIBRETTISTS_SORT": "CWP_LIBRETTISTS_SORT",
+    "CWP_TRANSLATORS": "CWP_TRANSLATORS",
+    "CWP_TRANSLATORS_SORT": "CWP_TRANSLATORS_SORT",
     "CWP_KEYS": "CWP_KEYS",
     "CWP_COMPOSED_DATES": "CWP_COMPOSED_DATES",
+    "CWP_PUBLISHED_DATES": "CWP_PUBLISHED_DATES",
+    "CWP_PREMIERED_DATES": "CWP_PREMIERED_DATES",
     "CWP_WORKTYPE_GENRES": "CWP_WORKTYPE_GENRES",
 }
 
@@ -1523,7 +1750,7 @@ def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = No
         audio = MP3(str(dest_file))
         if audio.tags:
             audio.tags.delete(str(dest_file))
-    except Exception:  # noqa: BLE001
+    except (MutagenError, OSError):
         pass
 
     id3_tags = ID3()  # type: ignore[no-untyped-call]
@@ -1853,7 +2080,8 @@ def run(
 
     :param release_id: The MusicBrainz release MBID.
     :param src_dir: Directory containing the source audio files.  Files are matched to release tracks by sorted filename
-        order.  A count mismatch between source files and release tracks is logged as a warning but does not abort.
+        order.  For multi-medium releases the medium whose track count matches ``len(src_files)`` is selected
+        automatically; when no medium matches a :exc:`ValueError` is raised listing the available options.
     :param dest_root: Root directory of the destination music library.
     :param user_agent: User-agent string passed to :func:`init_mb`.
     :param dry_run: When ``True``, log planned operations without copying or writing any files.  MB API calls for the
@@ -1864,6 +2092,7 @@ def run(
     :raises mb.ResponseError: On a non-retryable MusicBrainz API error.
     :raises RuntimeError: If all retry attempts are exhausted for any API call, or if post-copy verification fails (copy
         integrity, tag round-trip, cover art, or mtime mismatch).
+    :raises ValueError: If no medium in the release matches the source file count for a multi-medium release.
     :raises OSError: If source files cannot be read or destination files cannot be written.
     :raises SystemExit: With code 1 if the user chooses to abort when collisions are detected.
     """
@@ -1873,11 +2102,60 @@ def run(
     release = fetch_release(release_id)
     log.info("fetch_release_done", title=release.title, date=release.date)
 
-    # Flatten all tracks to (MBTrack, medium_pos) pairs
-    all_track_pairs: list[tuple[MBTrack, int]] = []
-    for medium in release.medium_list:
-        for track in medium.track_list:
-            all_track_pairs.append((track, medium.position))
+    # Select the correct medium for this source directory.
+    #
+    # A single-medium release: use that medium directly.
+    # A multi-medium release: pick the one medium whose track count matches len(src_files).
+    # If multiple mediums match (unlikely but possible), prefer the one whose position matches any
+    # disc-number hint found in the directory name (e.g. "(Disc 1)").
+    # If no medium matches and the release has only one medium, fall back to that medium with a warning.
+    # If still no match, raise ValueError so the user can supply the correct --release-id for that disc.
+    src_files = find_source_files(src_dir)
+    log.info("source_files", count=len(src_files))
+
+    mediums = release.medium_list
+    selected_medium = mediums[0] if mediums else None
+
+    if len(mediums) > 1:
+        n_src = len(src_files)
+        matching = [m for m in mediums if len(m.track_list) == n_src]
+        if len(matching) == 1:
+            selected_medium = matching[0]
+            log.info("multi_disc_medium_selected", position=selected_medium.position, tracks=n_src)
+        elif len(matching) > 1:
+            # Multiple mediums with the same track count: try to resolve via disc-number hint in dir name.
+            disc_hint_match = _DISC_SUFFIX_RE.search(src_dir.name)
+            if disc_hint_match:
+                hint_digits = re.search(r"\d+", disc_hint_match.group())
+                hint_pos = int(hint_digits.group()) if hint_digits else 0
+                hinted = [m for m in matching if m.position == hint_pos]
+                selected_medium = hinted[0] if hinted else matching[0]
+            else:
+                selected_medium = matching[0]
+            log.info("multi_disc_medium_selected", position=selected_medium.position, tracks=n_src)
+        else:
+            # No exact track-count match — list available mediums and abort.
+            medium_info = [(m.position, len(m.track_list)) for m in mediums]
+            raise ValueError(
+                f"track count mismatch: source directory has {n_src} file(s) but no medium in "
+                f"release '{release.title}' matches. Available mediums (position, tracks): {medium_info}. "
+                "Re-run with the correct --release-id for this disc, or ensure the source directory "
+                "contains exactly the tracks for one medium."
+            )
+
+    if selected_medium is None:
+        raise ValueError(f"release '{release.title}' has no mediums")
+
+    medium_pos = selected_medium.position
+    all_track_pairs: list[tuple[MBTrack, int]] = [(t, medium_pos) for t in selected_medium.track_list]
+    log.info("release_tracks", count=len(all_track_pairs), disc=medium_pos)
+
+    if len(src_files) != len(all_track_pairs):
+        log.warning(
+            "track_count_mismatch",
+            src_files=len(src_files),
+            release_tracks=len(all_track_pairs),
+        )
 
     # Fetch all cover art once for the whole release
     rg_id = release.release_group.id
@@ -1886,17 +2164,6 @@ def run(
         cover = fetch_cover_art(release_id, rg_id)
         if not cover.available:
             log.warning("cover_art_not_available", release_id=release_id)
-
-    src_files = find_source_files(src_dir)
-    log.info("source_files", count=len(src_files))
-    log.info("release_tracks", count=len(all_track_pairs))
-
-    if len(src_files) != len(all_track_pairs):
-        log.warning(
-            "track_count_mismatch",
-            src_files=len(src_files),
-            release_tracks=len(all_track_pairs),
-        )
 
     # Pair each source file with its (MBTrack, medium_pos)
     file_track_pairs = list(zip(src_files, all_track_pairs))
@@ -1921,6 +2188,7 @@ def run(
                     break
 
             tags_map[idx] = build_track_tags(release, track, medium_pos, rec_detail, work_hierarchy)
+            tags_map[idx].acoustid_id = fetch_acoustid_id(rec_id)
 
         # Compute movement numbers grouped by top work MBID
         top_work_groups: dict[str, list[int]] = defaultdict(list)
@@ -2063,7 +2331,7 @@ def run(
                     apply_tags_mp3(dest_file, final_tags, cover)
                 case _:
                     log.warning("unsupported_format", ext=ext, file=dest_file.name)
-        except Exception as exc:  # noqa: BLE001
+        except MutagenError as exc:
             log.error("tag_error", file=dest_file.name, error=str(exc))
 
         os.utime(dest_file, src_times)
@@ -2598,7 +2866,7 @@ def discover(
                 dry_run=dry_run,
                 fetch_rels=fetch_rels,
             )
-        except Exception as exc:  # noqa: BLE001
+        except (ValueError, mb.WebServiceError, RuntimeError, OSError) as exc:
             log.error("discover_run_error", release_id=release_id, error=str(exc), exc_info=True)
             continue
 

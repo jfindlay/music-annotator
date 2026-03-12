@@ -8,9 +8,9 @@ project.
 ```
 music-annotator/
   src/music_annotator/
-    __init__.py       ← all business logic (1 700 lines)
+    __init__.py       ← all business logic (~2 900 lines)
     __main__.py       ← CLI entry point
-    models.py         ← Pydantic models for MB API + tag output
+    models.py         ← Pydantic models for MB API + tag output (~800 lines)
     py.typed          ← PEP 561 marker
   tests/
     unit/
@@ -22,8 +22,7 @@ music-annotator/
     example/
       test_example.py     ← full-pipeline integration smoke tests
   pyproject.toml      ← all config (mypy, pylint, ruff, tox, coverage)
-  venv/               ← project-local venv; contains tox + tox-uv; recreate with `virtualenv venv` if needed; not tracked in
-                        git
+  uv.lock             ← uv lockfile (not tracked for local dev)
 ```
 
 ## Tooling
@@ -31,15 +30,15 @@ music-annotator/
 All quality checks are driven by tox via the project-local venv:
 
 ```sh
-venv/bin/tox -m analyze   # build + test + check_type + check_format + check_lint + check_upgrade
-venv/bin/tox -e test      # tests + coverage only
-venv/bin/tox -m edit      # auto-fix formatting in place
+~/.local/bin/tox -m analyze   # build + test + check_type + check_format + check_lint + check_upgrade
+~/.local/bin/tox -e test      # tests + coverage only
+~/.local/bin/tox -m edit      # auto-fix formatting in place
 ```
 
 | Env | Command | Requirement |
 |---|---|---|
 | `build` | setuptools wheel | must succeed |
-| `test` | pytest | 251 tests pass; **100% branch coverage** |
+| `test` | pytest | 469 tests pass; **100% branch coverage** |
 | `check_type` | mypy (strict) | **zero errors** |
 | `check_format` | ruff check + ruff format --check | **zero warnings** |
 | `check_lint` | pylint | **10.00/10** |
@@ -73,6 +72,7 @@ Never skip the full `tox -m analyze` run before declaring a task done.
 
 ### Models (`models.py`)
 - All MusicBrainz API response types are Pydantic `BaseModel` subclasses.
+- Additional models are based on the conventions in the Classical Extras Picard plugin.
 - Hyphenated MB field names use `Field(alias="...")` + `model_config = {"populate_by_name": True}`.
 - Every field defaults to `""` or `[]` — callers must never guard against `KeyError` or `AttributeError`.
 - `MBArtistRelation.attribute_list` and `MBWork.attribute_list` are both `list[MBAttribute | str]` so Pydantic coerces raw
@@ -92,7 +92,7 @@ Never skip the full `tox -m analyze` run before declaring a task done.
   unreachable-branch coverage warnings from coverage.py.
 
 ### Imports
-- Import order is enforced by `ruff` (rule set `"I"`). Run `venv/bin/tox -m edit` to auto-fix; never hand-edit import order.
+- Import order is enforced by `ruff` (rule set `"I"`). Run `~/.local/bin/tox -m edit` to auto-fix; never hand-edit import order.
 - `from __future__ import annotations` is present in every source file.
 
 ## Testing conventions
@@ -102,11 +102,13 @@ Each test module defines typed factory helpers:
 
 | Helper | Returns | Used in |
 |---|---|---|
-| `_w(d)` | `MBWork` | test_annotator.py |
+| `_w(d)` | `MBWork` | test_annotator.py, test_pipeline.py |
 | `_rec(d)` | `MBRecording` | test_annotator.py, test_pipeline.py |
 | `_rel(d)` | `MBRelease` | test_annotator.py, test_pipeline.py |
 | `_trk(d)` | `MBTrack` | test_annotator.py |
 | `_ac(items)` | `list[MBArtistCredit \| str]` | test_annotator.py |
+| `_make_release(n_tracks)` | `MBRelease` | test_pipeline.py |
+| `_make_multi_disc_release(tracks_per_disc)` | `MBRelease` | test_pipeline.py |
 
 All mock return values for `fetch_release`, `fetch_recording_detail`, and `fetch_work_detail` must return typed model instances
 (`MBRelease`, `MBRecording`, `MBWork`), not raw dicts.
@@ -118,7 +120,8 @@ All mock return values for `fetch_release`, `fetch_recording_detail`, and `fetch
   `test`, `check_type`, and `check_lint` environments.
 
 ### Test isolation
-- Tests must not make real network calls. All `musicbrainzngs.*` functions and `fetch_*` functions are mocked via `pytest-mock`.
+- Tests must not make real network calls. All `musicbrainzngs.*` functions, `fetch_*` functions, and
+  `music_annotator.urllib.request.urlopen` (used by `fetch_acoustid_id`) are mocked via `pytest-mock`.
 - Minimal real FLAC/MP3 byte sequences are embedded as constants in `test_pipeline.py` and `test_example.py` for testing mutagen
   tagging without actual audio files.
 

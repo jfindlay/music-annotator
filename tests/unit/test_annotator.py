@@ -560,6 +560,23 @@ class TestExtractWorkArtistRels:
         extract_work_artist_rels(_w({"artist-relation-list": [rel]}), rb)
         assert len(rb.composers) == 1
 
+    def test_writer_added(self) -> None:
+        """Writer relation is added to role_buckets.writers (separate from composers)."""
+        rb = RoleBuckets()
+        extract_work_artist_rels(
+            _w(
+                {
+                    "artist-relation-list": [
+                        {"type": "writer", "artist": {"id": "w1", "name": "Librettist W", "sort-name": "W, Librettist"}},
+                    ]
+                }
+            ),
+            rb,
+        )
+        assert len(rb.writers) == 1
+        assert rb.writers[0].name == "Librettist W"
+        assert not rb.composers
+
     def test_unknown_type_ignored(self) -> None:
         """Unknown relation type does not add to any bucket."""
         rb = RoleBuckets()
@@ -716,6 +733,28 @@ class TestBuildCwpTags:
         )
         assert cwp.part_levels == 2
         assert cwp.inter_work != ""
+
+    def test_writers_populated(self) -> None:
+        """A RoleBuckets with writers populates cwp.writers and cwp.writers_sort."""
+        rb = RoleBuckets()
+        rb.add_unique("writers", ArtistEntry(name="Poet P", sort="P, Poet", mbid="p1"))
+        cwp = build_cwp_tags(
+            [_w({"id": "w1", "title": "Song", "work-relation-list": [], "attribute-list": [], "tag-list": []})],
+            rb,
+        )
+        assert cwp.writers == "Poet P"
+        assert cwp.writers_sort == "P, Poet"
+
+    def test_arranger_deduplication(self) -> None:
+        """Duplicate arranger names from arrangers + orchestrators appear only once in arranger_names."""
+        rb = RoleBuckets()
+        rb.add_unique("arrangers", ArtistEntry(name="Orch A", sort="A, Orch", mbid="o1"))
+        rb.add_unique("orchestrators", ArtistEntry(name="Orch A", sort="A, Orch", mbid="o1"))
+        cwp = build_cwp_tags(
+            [_w({"id": "w1", "title": "Piece", "work-relation-list": [], "attribute-list": [], "tag-list": []})],
+            rb,
+        )
+        assert cwp.arranger_names == "Orch A"
 
 
 # ---------------------------------------------------------------------------

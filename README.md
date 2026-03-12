@@ -83,8 +83,11 @@ music-annotator \
 ## How it works
 
 1. **Fetch release** — full track list, artists, labels, disc structure, cover art.
-2. **Match files** — source files are sorted by name and zipped with tracks in release order. A count mismatch logs a warning
-   but does not abort.
+2. **Select medium** — for a single-disc release the sole medium is used. For multi-disc releases the medium whose track count
+   matches the number of source files is selected automatically; if several mediums tie, a disc-number hint in the directory
+   name (e.g. `disc2`) breaks the tie. A total mismatch raises an error asking the caller to supply the correct
+   `--release-id` for that disc. After selection, source files are sorted by name and zipped with tracks in medium order; a
+   remaining count mismatch logs a warning but does not abort.
 3. **Per-track** (skipped with `--no-fetch-rels`):
    - Fetch recording artist relations (conductor, soloists, ensembles, …).
    - Resolve the work linked via a `"performance"` relation.
