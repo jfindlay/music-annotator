@@ -5,3 +5,4 @@
 - Add execution mode to update the directory/file names+tags+cover art+etc. with updated MusicBrainz, Cover Art Archive,
   Discogs, etc. data.  Ask the user to confirm the diff.  Should the tracks keep an internal journal of metadata, like a git
   repo?  Probably not?
+  - Make sure to check cover art image size in tracks is set to original size and replace it if not.

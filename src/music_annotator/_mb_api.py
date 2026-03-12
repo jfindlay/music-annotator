@@ -159,11 +159,12 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     2. For each image entry in the listing, classify it by its ``types`` list into one of: ``front``
        (``"Front"``), ``back`` (``"Back"``), ``booklet`` (``"Booklet"``), or ``medium`` (``"Medium"``).
        Images whose types do not include any of these four strings are skipped.
-    3. Fetch the binary data for each classified image via ``mb.get_image(release_id, coverid, size="500")``,
-       sleeping 1 second after each network call to respect the 1 req/s rate limit.
+    3. Fetch the binary data for each classified image via ``mb.get_image(release_id, coverid)`` at
+       original resolution (no ``size`` argument), sleeping 1 second after each network call to respect
+       the 1 req/s rate limit.
     4. If the release has no CAA listing (HTTP 404) and ``release_group_id`` is provided, fall back to
-       fetching the release-group front image via ``mb.get_release_group_image_front()`` and place it in
-       ``front`` only.
+       fetching the release-group front image via ``mb.get_release_group_image_front()`` at original
+       resolution and place it in ``front`` only.
 
     The MIME type for each image is inferred from magic bytes: ``\\xff\\xd8`` → ``image/jpeg``;
     ``\\x89PNG`` → ``image/png``; anything else defaults to ``image/jpeg``.
@@ -185,7 +186,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     def _fetch_image(rel_id: str, coverid: str | int) -> CoverImage | None:
         """Fetch a single image by cover ID; return a CoverImage or None on error."""
         try:
-            raw = mb.get_image(rel_id, coverid, size="500")
+            raw = mb.get_image(rel_id, coverid)
             time.sleep(1)
             if raw:
                 data = bytes(raw)
@@ -250,7 +251,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     # If no release listing was available, fall back to the release-group front image.
     if not has_release_listing and release_group_id:
         try:
-            raw = mb.get_release_group_image_front(release_group_id, size="500")
+            raw = mb.get_release_group_image_front(release_group_id)
             time.sleep(1)
             if raw:
                 data = bytes(raw)
