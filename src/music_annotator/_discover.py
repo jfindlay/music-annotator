@@ -84,8 +84,8 @@ class TerminalDiscoverUI:
             _console.print(_format_candidate(i, candidate))
             _console.print()
 
-        _console.print(f"  [bold]Enter a number (1–{len(candidates)}), a raw MBID, or 's' to skip:[/]")
-        _console.print("  [bold]>[/] ", end="")
+        _console.print(f"  [dim]Enter a number (1–{len(candidates)}), a raw MBID, or 's' to skip[/]")
+        _console.print("\n[bold cyan]>[/] ", end="")
         choice = input("").strip()
 
         if choice.lower() in {"s", "skip", ""}:
@@ -95,7 +95,7 @@ class TerminalDiscoverUI:
             idx = int(choice) - 1
             if 0 <= idx < len(candidates):
                 return candidates[idx].release_id
-            _console.print(f"  [yellow]Invalid selection '{choice}', skipping.[/]")
+            _console.print(f"  [bold yellow]Invalid selection '{choice}', skipping.[/]")
             return None
 
         # Treat as raw MBID
@@ -107,7 +107,8 @@ class TerminalDiscoverUI:
         :param src_dir: The source directory to potentially delete.
         :returns: ``True`` when the user answers ``y`` or ``yes``.
         """
-        _console.print(f"\n  [bold]Delete original directory[/] [bold red]{src_dir}[/][bold]?[/] [dim](y/n)[/] ", end="")
+        _console.print(f"\n[bold red]Delete original directory[/] [red]{src_dir}[/][bold red]?[/] [dim](y/n)[/]")
+        _console.print("\n[bold cyan]>[/] ", end="")
         return input("").strip().lower() in {"y", "yes"}
 
 
@@ -564,11 +565,11 @@ def discover(
             candidates = search_releases_by_dir(src_dir, limit=limit)
         except ValueError as exc:
             log.warning("discover_skip", reason=str(exc))
-            _console.print(f"  [yellow]Skipped:[/] {exc}")
+            _console.print(f"  [bold yellow]Skipped:[/] [yellow]{exc}[/]")
             continue
 
         if not candidates:
-            _console.print("  [yellow]No candidates found.[/]")
+            _console.print("  [bold yellow]No candidates found.[/]")
             continue
 
         release_id = ui.choose_release(src_dir, candidates)

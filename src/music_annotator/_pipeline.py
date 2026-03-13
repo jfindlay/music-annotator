@@ -125,11 +125,11 @@ def _prompt_collision_policy(collisions: list[Path]) -> CollisionPolicy:
     for p in collisions:
         _console.print(f"  [red]{p}[/]")
     _console.print("\n[bold]Choose an action:[/]")
-    _console.print("  [bold red]\\[a] abort[/]      — quit without copying anything")
-    _console.print("  [bold yellow]\\[s] skip[/]       — copy only new files, leave existing untouched")
-    _console.print("  [bold green]\\[o] overwrite[/]  — replace all existing files")
+    _console.print("  [bold red]\\[a] abort[/]     — quit without copying anything")
+    _console.print("  [bold yellow]\\[s] skip[/]      — copy only new files, leave existing untouched")
+    _console.print("  [bold green]\\[o] overwrite[/] — replace all existing files")
     while True:
-        _console.print("[bold]Your choice \\[a/s/o]:[/] ", end="")
+        _console.print("\n[bold cyan]>[/] ", end="")
         choice = input("").strip().lower()
         match choice:
             case "o" | "overwrite":
@@ -421,10 +421,10 @@ def run(
         copied = [e for e in journal_entries if e.action == "copied"]
         dest_dirs = sorted({Path(e.destination).parent for e in copied})
         if copied:
-            _console.print(f"\n[bold green]Verified OK:[/] {len(copied)} file(s) written and confirmed to:")
+            _console.print(f"\n[bold green]Verified OK:[/] [green]{len(copied)} file(s) written and confirmed to:[/]")
             for d in dest_dirs:
                 _console.print(f"  [green]{d}[/]")
-            _console.print("[bold]It is safe to delete the source directory.[/]\n")
+            _console.print("[bold green]It is safe to delete the source directory.[/]\n")
 
     log.info("run_complete", dest=str(dest_root))
 
