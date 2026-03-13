@@ -246,7 +246,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
                     if image:
                         medium.append(image)
                 case _:
-                    log.debug("cover_art_skipped_type", types=types, coverid=str(coverid))
+                    log.warning("cover_art_skipped_type", types=types, coverid=str(coverid))
 
     # If no release listing was available, fall back to the release-group front image.
     if not has_release_listing and release_group_id:
