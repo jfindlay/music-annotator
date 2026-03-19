@@ -163,11 +163,32 @@ class MBLifeSpan(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class MBAlias(BaseModel):
+    """A single alias entry from the MusicBrainz ``alias-list`` on a work.
+
+    MusicBrainz stores one or more aliases per work covering different locales, scripts, and name types.
+    Each alias carries an optional ``locale`` (ISO 639-1 language code, e.g. ``"en"``, ``"ru"``), an optional
+    ``type`` (e.g. ``"Work name"``, ``"Search hint"``), and an optional ``primary`` marker (the string
+    ``"primary"`` when the alias is the primary form for its locale, ``None`` otherwise).
+
+    Important attributes: ``name``, ``locale``, ``type``, ``primary``.
+    """
+
+    name: str = ""
+    sort_name: str = Field(default="", alias="sort-name")
+    locale: str | None = None
+    type: str = ""
+    primary: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+
 class MBWork(BaseModel):
     """A MusicBrainz work entity with all fields used by the annotator.
 
     Important attributes: ``id`` (MBID), ``title``, ``type`` (e.g. ``"Symphony"``), ``language``, ``key``,
-    ``artist_relation_list``, ``work_relation_list``, ``tag_list``, ``attribute_list``, ``life_span``.
+    ``artist_relation_list``, ``work_relation_list``, ``tag_list``, ``attribute_list``, ``life_span``,
+    ``alias_list``.
     """
 
     id: str = ""
@@ -180,6 +201,7 @@ class MBWork(BaseModel):
     tag_list: list[MBTag] = Field(default_factory=list, alias="tag-list")
     attribute_list: list[MBAttribute | str] = Field(default_factory=list, alias="attribute-list")
     life_span: MBLifeSpan = Field(default_factory=MBLifeSpan, alias="life-span")
+    alias_list: list[MBAlias] = Field(default_factory=list, alias="alias-list")
 
     model_config = {"populate_by_name": True}
 
@@ -461,6 +483,8 @@ class WorkHierarchyLevel(BaseModel):
     work_title: str
     part_title: str = ""  # stripped movement/part name (cwp_part_N)
     ordering_key: int = 0  # MB ordering-key from the parts/backward relation to this level's parent
+    work_en: str = ""  # English "Work name" alias for this level (cwp_work_N_en)
+    work_alt: str = ""  # semicolon-joined unlocaled aliases for this level (cwp_work_N_alt)
 
 
 class CwpTags(BaseModel):
@@ -473,13 +497,16 @@ class CwpTags(BaseModel):
     music-annotator, which processes one medium at a time, this equals ``part_levels`` because no cross-disc state is
     accumulated; it is stored as a separate field so the tag is explicitly present and matches CE output.
 
-    Important attributes: ``work_top``, ``workid_top``, ``part_levels``, ``work_part_levels``, ``part``, ``work``,
-    ``groupheading``, ``inter_work``, ``movt_num``, ``movt_tot``, ``single_work_album``, ``levels`` (per-level
-    :class:`WorkHierarchyLevel` list), plus all artist role and date string fields.
+    Important attributes: ``work_top``, ``workid_top``, ``work_top_en``, ``work_top_alt``, ``part_levels``,
+    ``work_part_levels``, ``part``, ``work``, ``groupheading``, ``inter_work``, ``movt_num``, ``movt_tot``,
+    ``single_work_album``, ``levels`` (per-level :class:`WorkHierarchyLevel` list), plus all artist role
+    and date string fields.
     """
 
     work_top: str = ""
     workid_top: str = ""
+    work_top_en: str = ""  # English "Work name" alias for the root work (CWP_WORK_TOP_EN)
+    work_top_alt: str = ""  # semicolon-joined unlocaled aliases for the root work (CWP_WORK_TOP_ALT)
     part_levels: int = 0
     work_part_levels: int = 0
     part: str = ""
@@ -660,6 +687,8 @@ class TrackTags(BaseModel):
     # CWP tags
     cwp_work_top: str = ""
     cwp_workid_top: str = ""
+    cwp_work_top_en: str = ""  # English "Work name" alias for the root work
+    cwp_work_top_alt: str = ""  # semicolon-joined unlocaled aliases for the root work
     cwp_part_levels: str = "0"
     cwp_work_part_levels: str = "0"
     cwp_part: str = ""

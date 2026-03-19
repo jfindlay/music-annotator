@@ -28,7 +28,9 @@ Tags written (Vorbis Comments for FLAC, ID3v2.4 for MP3):
 
     Classical Extras _cwp_ variables (stored as tags, prefix CWP_):
         CWP_WORK_0 … CWP_WORK_N, CWP_WORKID_0 … CWP_WORKID_N
-        CWP_WORK_TOP, CWP_WORKID_TOP
+        CWP_WORK_0_EN … CWP_WORK_N_EN  (English alias, when available)
+        CWP_WORK_0_ALT … CWP_WORK_N_ALT  (unlocaled aliases, semicolon-joined)
+        CWP_WORK_TOP, CWP_WORKID_TOP, CWP_WORK_TOP_EN, CWP_WORK_TOP_ALT
         CWP_PART_0 … CWP_PART_N
         CWP_PART_LEVELS, CWP_WORK_PART_LEVELS, CWP_SINGLE_WORK_ALBUM
         CWP_WORK, CWP_GROUPHEADING, CWP_PART, CWP_INTER_WORK
@@ -140,6 +142,7 @@ from music_annotator._tagger import (
 from music_annotator._tags import (
     _SAFE_RE,
     _rec_title,
+    _work_aliases,
     build_cea_performers,
     build_cwp_tags,
     build_dest_path,
@@ -234,4 +237,5 @@ _reexports = (
     _search_mb_releases,
     _select_medium,
     _toc_lookup_mb_releases,
+    _work_aliases,
 )

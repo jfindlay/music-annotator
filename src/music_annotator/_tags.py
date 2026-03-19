@@ -42,6 +42,44 @@ from music_annotator.models import (
     WorkHierarchyLevel,
 )
 
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _work_aliases(work: MBWork) -> tuple[str, str]:
+    """Extract the English alias and unlocaled aliases from a work's ``alias-list``.
+
+    Returns two strings for use as companion tags alongside the canonical work title:
+
+    - **english**: the first alias with ``locale == "en"`` and ``type == "Work name"``, or ``""`` if none.
+    - **alt**: all aliases with ``locale is None``, deduplicated and excluding any that equal the
+      canonical ``work.title``, joined with ``"; "``.  These cover search hints, legal names, and
+      alternate spellings that MB has not attributed to a specific locale.
+
+    The canonical ``work.title`` is never repeated in either companion string — it is already the
+    primary value of ``CWP_WORK_TOP`` / ``CWP_WORK_{i}``.
+
+    :param work: The :class:`~music_annotator.models.MBWork` instance.
+    :returns: A ``(english, alt)`` tuple of strings, either of which may be ``""``.
+    """
+    english = ""
+    for alias in work.alias_list:
+        if alias.locale == "en" and alias.type == "Work name" and alias.name:
+            english = alias.name
+            break
+
+    seen: set[str] = set()
+    alt_parts: list[str] = []
+    for alias in work.alias_list:
+        if alias.locale is None and alias.name and alias.name != work.title:
+            if alias.name not in seen:
+                seen.add(alias.name)
+                alt_parts.append(alias.name)
+
+    return english, "; ".join(alt_parts)
+
+
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
 #: Regex matching filesystem-unsafe characters for :func:`safe_name`.
@@ -193,7 +231,7 @@ def build_cwp_tags(
         )
         ordering_keys[i] = parent_rel.ordering_key if parent_rel is not None else 0
 
-    # Assemble levels list
+    # Assemble levels list, populating alias companion strings for each level.
     cwp.levels = [
         WorkHierarchyLevel(
             index=i,
@@ -201,9 +239,14 @@ def build_cwp_tags(
             work_title=work_names[i],
             part_title=part_names[i],
             ordering_key=ordering_keys[i],
+            work_en=_work_aliases(work_hierarchy[i])[0],
+            work_alt=_work_aliases(work_hierarchy[i])[1],
         )
         for i in range(n_levels)
     ]
+
+    # Store root-level alias companions directly on cwp for top-level tag fields.
+    cwp.work_top_en, cwp.work_top_alt = _work_aliases(work_hierarchy[-1])
 
     if n_levels == 1:
         cwp.work = work_names[0]
@@ -540,6 +583,8 @@ def build_track_tags(
         cea_instruments_all=instruments_all_str,
         cwp_work_top=cwp.work_top,
         cwp_workid_top=cwp.workid_top,
+        cwp_work_top_en=cwp.work_top_en,
+        cwp_work_top_alt=cwp.work_top_alt,
         cwp_part_levels=str(cwp.part_levels),
         cwp_work_part_levels=str(cwp.work_part_levels),
         cwp_part=cwp.part,
@@ -580,6 +625,8 @@ def build_track_tags(
         tags.model_extra[f"cwp_workid_{i}"] = level.work_id  # type: ignore[index]
         tags.model_extra[f"cwp_part_{i}"] = level.part_title  # type: ignore[index]
         tags.model_extra[f"cwp_ordering_key_{i}"] = str(level.ordering_key)  # type: ignore[index]
+        tags.model_extra[f"cwp_work_{i}_en"] = level.work_en  # type: ignore[index]
+        tags.model_extra[f"cwp_work_{i}_alt"] = level.work_alt  # type: ignore[index]
 
     return tags
 

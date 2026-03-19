@@ -31,10 +31,12 @@ from music_annotator import (
     safe_name,
     strip_common_prefix,
 )
+from music_annotator._tags import _work_aliases
 from music_annotator._works import _score_top_work, select_primary_performance_work
 from music_annotator.models import (
     JSON,
     ArtistEntry,
+    MBAlias,
     MBArtistCredit,
     MBRecording,
     MBRelease,
@@ -2011,3 +2013,301 @@ class TestBuildDestPathIntermediateDirs:
         assert any("Act I" in p for p in parts)
         assert any("Scene I" in p for p in parts)
         assert result.name.startswith("03")
+
+
+# ---------------------------------------------------------------------------
+# MBAlias model
+# ---------------------------------------------------------------------------
+
+
+class TestMBAlias:
+    """Tests for the MBAlias model."""
+
+    def test_parses_full_alias(self) -> None:
+        """MBAlias parses all fields from a raw MB API dict."""
+        alias = MBAlias.model_validate(
+            {
+                "name": "Serenade for Strings",
+                "sort-name": "Serenade for Strings",
+                "locale": "en",
+                "type": "Work name",
+                "primary": "primary",
+            }
+        )
+        assert alias.name == "Serenade for Strings"
+        assert alias.sort_name == "Serenade for Strings"
+        assert alias.locale == "en"
+        assert alias.type == "Work name"
+        assert alias.primary == "primary"
+
+    def test_defaults_when_fields_absent(self) -> None:
+        """MBAlias defaults all optional fields to empty/None when absent."""
+        alias = MBAlias.model_validate({"name": "Alt title"})
+        assert alias.locale is None
+        assert alias.type == ""
+        assert alias.primary is None
+        assert alias.sort_name == ""
+
+    def test_locale_none_when_not_set(self) -> None:
+        """locale is None (not empty string) when absent from the MB response."""
+        alias = MBAlias.model_validate({})
+        assert alias.locale is None
+
+    def test_mbwork_alias_list_populated(self) -> None:
+        """MBWork.alias_list is populated from alias-list in MB API response."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "Серенада для струнного оркестра",
+                "alias-list": [
+                    {
+                        "name": "Serenade for Strings in C major, op. 48",
+                        "locale": "en",
+                        "type": "Work name",
+                        "primary": "primary",
+                    },
+                    {"name": "Sérénade pour cordes", "locale": "fr", "type": "Work name"},
+                ],
+            }
+        )
+        assert len(work.alias_list) == 2
+        assert work.alias_list[0].locale == "en"
+        assert work.alias_list[1].locale == "fr"
+
+    def test_mbwork_alias_list_defaults_to_empty(self) -> None:
+        """MBWork.alias_list defaults to [] when alias-list is absent."""
+        work = _w({"id": "w1", "title": "Work"})
+        assert work.alias_list == []
+
+
+# ---------------------------------------------------------------------------
+# _work_aliases helper
+# ---------------------------------------------------------------------------
+
+
+class TestWorkAliases:
+    """Tests for the _work_aliases helper."""
+
+    def test_english_alias_selected(self) -> None:
+        """English Work name alias is returned as the first element."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "Серенада для струнного оркестра",
+                "alias-list": [
+                    {"name": "Serenade for Strings", "locale": "en", "type": "Work name"},
+                    {"name": "Sérénade pour cordes", "locale": "fr", "type": "Work name"},
+                ],
+            }
+        )
+        english, _ = _work_aliases(work)
+        assert english == "Serenade for Strings"
+
+    def test_no_english_alias_returns_empty(self) -> None:
+        """Returns empty string when no English Work name alias exists."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "Серенада",
+                "alias-list": [{"name": "Sérénade", "locale": "fr", "type": "Work name"}],
+            }
+        )
+        english, _ = _work_aliases(work)
+        assert english == ""
+
+    def test_non_work_name_type_english_not_selected(self) -> None:
+        """English alias with type != 'Work name' is not selected as the English alias."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "Серенада",
+                "alias-list": [{"name": "Serenade", "locale": "en", "type": "Search hint"}],
+            }
+        )
+        english, _ = _work_aliases(work)
+        assert english == ""
+
+    def test_unlocaled_aliases_collected(self) -> None:
+        """Aliases with locale=None are collected into the alt string."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "Серенада",
+                "alias-list": [
+                    {"name": "Serenade Op. 48"},
+                    {"name": "String Serenade"},
+                    {"name": "Sérénade", "locale": "fr", "type": "Work name"},
+                ],
+            }
+        )
+        _, alt = _work_aliases(work)
+        assert "Serenade Op. 48" in alt
+        assert "String Serenade" in alt
+        assert "Sérénade" not in alt
+
+    def test_canonical_title_excluded_from_alt(self) -> None:
+        """The canonical work.title is not repeated in the alt string."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "Серенада",
+                "alias-list": [{"name": "Серенада"}, {"name": "Alt form"}],
+            }
+        )
+        _, alt = _work_aliases(work)
+        assert "Серенада" not in alt
+        assert "Alt form" in alt
+
+    def test_unlocaled_aliases_deduplicated(self) -> None:
+        """Duplicate unlocaled alias names appear only once in alt."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "Work",
+                "alias-list": [{"name": "Dupe"}, {"name": "Dupe"}, {"name": "Other"}],
+            }
+        )
+        _, alt = _work_aliases(work)
+        assert alt.count("Dupe") == 1
+
+    def test_empty_alias_list_returns_empty_strings(self) -> None:
+        """Empty alias-list returns ('', '')."""
+        work = _w({"id": "w1", "title": "Work"})
+        assert _work_aliases(work) == ("", "")
+
+    def test_all_unlocaled_aliases_stored(self) -> None:
+        """All unlocaled aliases are stored, not capped at any limit."""
+        aliases: list[JSON] = [{"name": f"Alt {i}"} for i in range(10)]
+        work = _w({"id": "w1", "title": "Work", "alias-list": aliases})
+        _, alt = _work_aliases(work)
+        for i in range(10):
+            assert f"Alt {i}" in alt
+
+    def test_empty_alias_name_skipped(self) -> None:
+        """Aliases with empty name are not included in alt."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "Work",
+                "alias-list": [{"name": ""}, {"name": "Valid"}],
+            }
+        )
+        _, alt = _work_aliases(work)
+        assert alt == "Valid"
+
+
+# ---------------------------------------------------------------------------
+# build_cwp_tags — work_top_en and work_top_alt populated
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCwpTagsAliases:
+    """Tests for work_top_en and work_top_alt in build_cwp_tags."""
+
+    def test_work_top_en_populated_from_root_work(self) -> None:
+        """cwp.work_top_en is set from the English alias of the root work."""
+        rb = RoleBuckets()
+        movement = _w({"id": "mov", "title": "I. Allegro", "work-relation-list": [], "attribute-list": [], "tag-list": []})
+        symphony = _w(
+            {
+                "id": "sym",
+                "title": "Симфония № 5",
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+                "alias-list": [{"name": "Symphony No. 5", "locale": "en", "type": "Work name"}],
+            }
+        )
+        cwp = build_cwp_tags([movement, symphony], rb)
+        assert cwp.work_top_en == "Symphony No. 5"
+
+    def test_work_top_en_empty_when_no_english_alias(self) -> None:
+        """cwp.work_top_en is empty when root work has no English alias."""
+        rb = RoleBuckets()
+        work = _w({"id": "w1", "title": "Симфония", "work-relation-list": [], "attribute-list": [], "tag-list": []})
+        cwp = build_cwp_tags([work], rb)
+        assert cwp.work_top_en == ""
+
+    def test_work_top_alt_populated_from_root_work(self) -> None:
+        """cwp.work_top_alt contains unlocaled aliases of the root work."""
+        rb = RoleBuckets()
+        work = _w(
+            {
+                "id": "w1",
+                "title": "Серенада",
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+                "alias-list": [{"name": "Serenade Op. 48"}, {"name": "String Serenade"}],
+            }
+        )
+        cwp = build_cwp_tags([work], rb)
+        assert "Serenade Op. 48" in cwp.work_top_alt
+        assert "String Serenade" in cwp.work_top_alt
+
+    def test_per_level_work_en_and_alt_in_model_extra(self) -> None:
+        """cwp_work_{i}_en and cwp_work_{i}_alt appear in TrackTags.to_file_dict()."""
+        movement = _w(
+            {
+                "id": "mov",
+                "title": "I. Allegro",
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+                "alias-list": [{"name": "Movement Alt"}],
+            }
+        )
+        symphony = _w(
+            {
+                "id": "sym",
+                "title": "Симфония",
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+                "alias-list": [{"name": "Symphony No. 5", "locale": "en", "type": "Work name"}],
+            }
+        )
+        tags = build_track_tags(
+            _rel(
+                {
+                    "id": "r1",
+                    "title": "Album",
+                    "date": "2000",
+                    "status": "Official",
+                    "barcode": "",
+                    "artist-credit": [],
+                    "release-group": {"id": "rg1", "primary-type": "", "first-release-date": "1970"},
+                    "label-info-list": [],
+                    "text-representation": {"script": "", "language": ""},
+                    "medium-list": [{"position": 1, "format": "CD", "track-list": []}],
+                }
+            ),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro", "artist-credit": []}}),
+            1,
+            _rec(
+                {"id": "rec1", "title": "I. Allegro", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
+            ),
+            [movement, symphony],
+        )
+        file_dict = tags.to_file_dict()
+        # Level 1 (symphony root) has English alias
+        assert file_dict.get("CWP_WORK_1_EN") == "Symphony No. 5"
+        # Level 0 (movement) has unlocaled alias
+        assert file_dict.get("CWP_WORK_0_ALT") == "Movement Alt"
+        # Top-level fields
+        assert file_dict.get("CWP_WORK_TOP_EN") == "Symphony No. 5"
+
+    def test_cwp_work_top_en_in_to_file_dict(self) -> None:
+        """CWP_WORK_TOP_EN appears in to_file_dict() output when populated."""
+        tags = TrackTags(
+            cwp_work_top="Симфония",
+            cwp_work_top_en="Symphony No. 5",
+            cwp_work_top_alt="Alt form",
+            movementnumber="1",
+            movementtotal="4",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        file_dict = tags.to_file_dict()
+        assert file_dict.get("CWP_WORK_TOP_EN") == "Symphony No. 5"
+        assert file_dict.get("CWP_WORK_TOP_ALT") == "Alt form"

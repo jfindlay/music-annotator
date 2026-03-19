@@ -142,6 +142,15 @@ disambiguation logic needed for now.
 
 ---
 
+## Completed — non-lossy alias storage for work titles
+
+- `MBAlias` model added; `MBWork.alias_list` now populated (aliases were fetched but discarded before).
+- `_work_aliases(work)` helper returns `(english_alias, alt_aliases)` for any work.
+- `CWP_WORK_TOP_EN` / `CWP_WORK_TOP_ALT` written to every track; per-level `CWP_WORK_{i}_EN` /
+  `CWP_WORK_{i}_ALT` also written.
+- Primary work title unchanged (MB canonical `title`); native-language primary selection deferred.
+- 545 tests, 100% branch coverage.
+
 ## Open design question — native language / native script
 
 **Decision in principle:** names and titles should use native language and native alphabet where
