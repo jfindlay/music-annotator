@@ -33,7 +33,7 @@ as of the current session.  It is intended as a durable reference for resuming w
 
 ---
 
-## Next implementation block — directory and filename restructuring
+## Completed — directory and filename restructuring
 
 ### 1. Intermediate compositional-division directories
 

@@ -182,6 +182,17 @@ def build_cwp_tags(
         parent_name = work_names.get(i + 1, "") if i < n_levels - 1 else ""
         part_names[i] = strip_common_prefix(work_names[i], parent_name)
 
+    # Extract the MB ordering-key for each level: the integer from the parts/backward relation
+    # connecting that level to its parent.  Level n-1 (root) has no parent within the hierarchy
+    # so its ordering_key stays 0.
+    ordering_keys: dict[int, int] = {}
+    for i, w in enumerate(work_hierarchy):
+        parent_rel = next(
+            (r for r in w.work_relation_list if r.direction == "backward" and r.type in ("parts", "part of")),
+            None,
+        )
+        ordering_keys[i] = parent_rel.ordering_key if parent_rel is not None else 0
+
     # Assemble levels list
     cwp.levels = [
         WorkHierarchyLevel(
@@ -189,6 +200,7 @@ def build_cwp_tags(
             work_id=work_ids[i],
             work_title=work_names[i],
             part_title=part_names[i],
+            ordering_key=ordering_keys[i],
         )
         for i in range(n_levels)
     ]
@@ -567,6 +579,7 @@ def build_track_tags(
         tags.model_extra[f"cwp_work_{i}"] = level.work_title  # type: ignore[index]
         tags.model_extra[f"cwp_workid_{i}"] = level.work_id  # type: ignore[index]
         tags.model_extra[f"cwp_part_{i}"] = level.part_title  # type: ignore[index]
+        tags.model_extra[f"cwp_ordering_key_{i}"] = str(level.ordering_key)  # type: ignore[index]
 
     return tags
 
@@ -574,15 +587,31 @@ def build_track_tags(
 def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: TrackTags) -> Path:
     """Compute the destination path (without extension) for one annotated track.
 
-    Layout::
+    Layout (2-level work hierarchy — e.g. symphony with movements)::
 
         <dest_root>/
           <Composer last names> - <Conductor; Ensemble>/
-            <Work title> (<work MBID>)/
+            <Work title> [YYYY]/
               <nn> - <movement title>
 
-    The numeric prefix is the movement number within the work (not the album track number).  Width is 2 digits normally;
-    3 digits when the work contains more than 99 movements.
+    Layout (3-level — e.g. opera with acts and numbers)::
+
+        <dest_root>/
+          <Composer last names> - <Conductor; Ensemble>/
+            <Work title> [YYYY]/
+              <nn> - <Act title>/
+                <nn> - <number title>
+
+    One intermediate directory is introduced for each compositional subdivision level between the
+    root work and the leaf (i.e. when ``CWP_PART_LEVELS`` ≥ 2).  All ``nn`` prefixes are
+    directory-scoped zero-padded integers derived from the MB ``ordering-key`` (stored as
+    ``CWP_ORDERING_KEY_{i}``), falling back to ``MOVEMENTNUMBER``, then ``track.position``.
+
+    ``MOVEMENTNUMBER`` in the tag/title string is the composer's global numbering across the whole
+    work (e.g. No. 39 in the Handel Messiah) and is distinct from the directory-local ``nn`` prefix.
+
+    ``YYYY`` is the year from ``ORIGINALDATE`` (``release_group.first_release_date``), falling back
+    to ``DATE`` (``release.date``).  Omitted entirely when neither is known.
 
     :param dest_root: The root destination directory.
     :param release: The :class:`~music_annotator.models.MBRelease` from :func:`fetch_release`.
@@ -622,20 +651,57 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     else:
         performers = file_dict.get("CEA_ENSEMBLE_NAMES") or file_dict.get("ARTIST", "Unknown Performers")
 
-    # Work directory component
+    # Work directory component — title + [YYYY] recording-year suffix
     work_title = file_dict.get("CWP_WORK_TOP") or file_dict.get("WORK", "")
-    work_mbid = file_dict.get("CWP_WORKID_TOP") or file_dict.get("MUSICBRAINZ_WORKID", "")
     work_dir = safe_name(work_title)
-    if work_mbid:
-        work_dir = f"{work_dir} ({work_mbid})"
+    raw_year = file_dict.get("ORIGINALDATE") or file_dict.get("DATE", "")
+    year = raw_year[:4] if len(raw_year) >= 4 and raw_year[:4].isdigit() else ""
+    if year:
+        work_dir = f"{work_dir} [{year}]"
 
-    # Movement number prefix
-    movt_num = int(file_dict.get("MOVEMENTNUMBER") or str(track.position))
+    # Hierarchy depth: CWP_PART_LEVELS = n_levels - 1, so >=2 means 3+ levels total.
+    part_levels = int(file_dict.get("CWP_PART_LEVELS") or "0")
+
+    # Movement number prefix width (leaf level, scoped to work or nearest parent)
     movt_tot = int(file_dict.get("MOVEMENTTOTAL") or "1")
     width = 3 if movt_tot > 99 else 2
-    track_num = str(movt_num).zfill(width)
+
+    def _nn(ordering_key_str: str, fallback: int, w: int = 2) -> str:
+        """Return zero-padded ``nn`` from MB ordering-key, or fallback integer.
+
+        :param ordering_key_str: String value of ``CWP_ORDERING_KEY_{i}`` (``"0"`` when absent).
+        :param fallback: 1-based ordinal used when the ordering-key is zero/absent.
+        :param w: Zero-pad width.
+        :returns: Zero-padded string.
+        """
+        key = int(ordering_key_str) if ordering_key_str.isdigit() else 0
+        return str(key if key > 0 else fallback).zfill(w)
 
     top_dir = safe_name(f"{composer} - {performers}")
     track_title = safe_name(file_dict.get("TITLE") or _rec_title(track))
 
+    if part_levels >= 2:
+        # Build intermediate directory path components for levels 1 … part_levels-1
+        # (level 0 = leaf, level part_levels = root/top — already the work_dir).
+        intermediate: list[str] = []
+        for i in range(part_levels - 1, 0, -1):
+            # Levels are stored innermost-first (index 0 = leaf), so level i is the i-th ancestor.
+            part_title = file_dict.get(f"CWP_PART_{i}", "") or file_dict.get(f"CWP_WORK_{i}", "")
+            ok_str = file_dict.get(f"CWP_ORDERING_KEY_{i}", "0")
+            nn = _nn(ok_str, i)
+            intermediate.append(safe_name(f"{nn} - {part_title}") if part_title else nn)
+
+        # Leaf nn: from ordering-key of level 0, then MOVEMENTNUMBER, then track position
+        leaf_ok = file_dict.get("CWP_ORDERING_KEY_0", "0")
+        leaf_fallback = int(file_dict.get("MOVEMENTNUMBER") or str(track.position))
+        leaf_nn = _nn(leaf_ok, leaf_fallback, width)
+
+        path: Path = dest_root / top_dir / work_dir
+        for d in intermediate:
+            path = path / d
+        return path / f"{leaf_nn} - {track_title}"
+
+    # 1- or 2-level hierarchy: single work directory + leaf file
+    movt_num = int(file_dict.get("MOVEMENTNUMBER") or str(track.position))
+    track_num = str(movt_num).zfill(width)
     return dest_root / top_dir / work_dir / f"{track_num} - {track_title}"

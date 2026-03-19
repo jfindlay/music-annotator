@@ -40,6 +40,7 @@ from music_annotator.models import (
     MBRelease,
     MBTrack,
     MBWork,
+    MBWorkRelation,
     RoleBuckets,
     TrackTags,
 )
@@ -1626,3 +1627,387 @@ class TestBuildTrackTagsNonPerformanceRel:
             [],
         )
         assert tags.musicbrainz_workid == ""
+
+
+# ---------------------------------------------------------------------------
+# MBWorkRelation — ordering_key coercion
+# ---------------------------------------------------------------------------
+
+
+class TestMBWorkRelationOrderingKey:
+    """Tests for ordering_key field on MBWorkRelation."""
+
+    def test_ordering_key_string_coerced_to_int(self) -> None:
+        """MB API returns ordering-key as a string; Pydantic coerces it to int."""
+        rel = MBWorkRelation.model_validate({"type": "parts", "direction": "backward", "ordering-key": "8"})
+        assert rel.ordering_key == 8
+
+    def test_ordering_key_absent_defaults_to_zero(self) -> None:
+        """ordering_key defaults to 0 when the field is absent."""
+        rel = MBWorkRelation.model_validate({"type": "parts", "direction": "backward"})
+        assert rel.ordering_key == 0
+
+    def test_ordering_key_none_defaults_to_zero(self) -> None:
+        """ordering_key defaults to 0 when the field is None."""
+        rel = MBWorkRelation.model_validate({"type": "parts", "direction": "backward", "ordering-key": None})
+        assert rel.ordering_key == 0
+
+
+# ---------------------------------------------------------------------------
+# build_cwp_tags — ordering_key propagated into WorkHierarchyLevel
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCwpTagsOrderingKey:
+    """Tests for ordering_key propagation in build_cwp_tags."""
+
+    def test_ordering_key_from_backward_relation_populated(self) -> None:
+        """WorkHierarchyLevel.ordering_key is set from the parts/backward relation."""
+        rb = RoleBuckets()
+        movement = _w(
+            {
+                "id": "mov",
+                "title": "I. Allegro",
+                "work-relation-list": [{"type": "parts", "direction": "backward", "ordering-key": "2", "work": {"id": "sym"}}],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        symphony = _w({"id": "sym", "title": "Symphony No. 5", "work-relation-list": [], "attribute-list": [], "tag-list": []})
+        cwp = music_annotator.build_cwp_tags([movement, symphony], rb)
+        assert cwp.levels[0].ordering_key == 2
+        assert cwp.levels[1].ordering_key == 0  # root has no parent in hierarchy
+
+    def test_ordering_key_zero_when_no_backward_relation(self) -> None:
+        """WorkHierarchyLevel.ordering_key is 0 when no parts/backward relation exists."""
+        rb = RoleBuckets()
+        work = _w({"id": "w1", "title": "Work", "work-relation-list": [], "attribute-list": [], "tag-list": []})
+        cwp = music_annotator.build_cwp_tags([work], rb)
+        assert cwp.levels[0].ordering_key == 0
+
+    def test_cwp_ordering_key_in_model_extra(self) -> None:
+        """cwp_ordering_key_{i} is written to TrackTags model_extra via build_track_tags."""
+        movement = _w(
+            {
+                "id": "mov",
+                "title": "I. Allegro",
+                "work-relation-list": [{"type": "parts", "direction": "backward", "ordering-key": "3", "work": {"id": "sym"}}],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        symphony = _w({"id": "sym", "title": "Symphony", "work-relation-list": [], "attribute-list": [], "tag-list": []})
+        tags = build_track_tags(
+            _rel(
+                {
+                    "id": "r1",
+                    "title": "Album",
+                    "date": "2000",
+                    "status": "Official",
+                    "barcode": "",
+                    "artist-credit": [],
+                    "release-group": {"id": "rg1", "primary-type": "", "first-release-date": "1970"},
+                    "label-info-list": [],
+                    "text-representation": {"script": "", "language": ""},
+                    "medium-list": [{"position": 1, "format": "CD", "track-list": []}],
+                }
+            ),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro", "artist-credit": []}}),
+            1,
+            _rec(
+                {"id": "rec1", "title": "I. Allegro", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
+            ),
+            [movement, symphony],
+        )
+        file_dict = tags.to_file_dict()
+        assert file_dict.get("CWP_ORDERING_KEY_0") == "3"
+        assert file_dict.get("CWP_ORDERING_KEY_1") == "0"
+
+
+# ---------------------------------------------------------------------------
+# build_dest_path — [YYYY] recording year suffix
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDestPathYear:
+    """Tests for the recording-year [YYYY] suffix in build_dest_path."""
+
+    def _make_rel(self, first_release_date: str = "", date: str = "") -> MBRelease:
+        """Build a minimal MBRelease with configurable dates.
+
+        :param first_release_date: release-group first-release-date string.
+        :param date: release date string.
+        :returns: An MBRelease instance.
+        """
+        return _rel(
+            {
+                "id": "r1",
+                "title": "Album",
+                "date": date,
+                "status": "Official",
+                "barcode": "",
+                "artist-credit": [],
+                "release-group": {"id": "rg1", "primary-type": "", "first-release-date": first_release_date},
+                "label-info-list": [],
+                "text-representation": {"script": "", "language": ""},
+                "medium-list": [{"position": 1, "format": "CD", "track-list": []}],
+            }
+        )
+
+    def _make_tags(self, originaldate: str = "", date: str = "") -> TrackTags:
+        """Build minimal TrackTags with configurable date fields.
+
+        :param originaldate: ORIGINALDATE tag value.
+        :param date: DATE tag value.
+        :returns: A TrackTags instance.
+        """
+        return TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony No. 1",
+            cwp_composer_lastnames="Beethoven",
+            originaldate=originaldate,
+            date=date,
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+
+    def test_year_from_originaldate_appended(self, fs: FakeFilesystem) -> None:
+        """[YYYY] suffix uses ORIGINALDATE when available.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_tags(originaldate="1963-05-01")
+        result = build_dest_path(
+            dest_root, self._make_rel(), _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}), tags
+        )
+        assert "[1963]" in str(result)
+
+    def test_year_from_date_when_originaldate_absent(self, fs: FakeFilesystem) -> None:
+        """[YYYY] falls back to DATE when ORIGINALDATE is absent.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_tags(date="2003")
+        result = build_dest_path(
+            dest_root, self._make_rel(), _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}), tags
+        )
+        assert "[2003]" in str(result)
+
+    def test_no_year_suffix_when_both_dates_absent(self, fs: FakeFilesystem) -> None:
+        """No [YYYY] suffix when neither ORIGINALDATE nor DATE is present.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_tags()
+        result = build_dest_path(
+            dest_root, self._make_rel(), _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}), tags
+        )
+        assert "[" not in str(result)
+
+    def test_mbid_no_longer_in_path(self, fs: FakeFilesystem) -> None:
+        """Full MBID UUID is not present in the path (replaced by [YYYY]).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = TrackTags(
+            title="T",
+            movementnumber="1",
+            movementtotal="1",
+            cwp_work_top="Work",
+            cwp_workid_top="abc123de-f456-7890-abcd-ef1234567890",
+            cwp_composer_lastnames="Composer",
+            originaldate="1970",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        result = build_dest_path(
+            dest_root, self._make_rel(), _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}), tags
+        )
+        assert "abc123de" not in str(result)
+        assert "[1970]" in str(result)
+
+
+# ---------------------------------------------------------------------------
+# build_dest_path — intermediate directories for 3-level hierarchy
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDestPathIntermediateDirs:
+    """Tests for intermediate directory generation when part_levels >= 2."""
+
+    def _make_tags_3level(
+        self,
+        act_part: str = "Atto I",
+        act_ordering_key: str = "2",
+        leaf_ordering_key: str = "4",
+        movementnumber: str = "17",
+    ) -> TrackTags:
+        """Build TrackTags simulating a 3-level opera hierarchy.
+
+        Level 0 = aria (leaf), level 1 = act (intermediate), level 2 = opera (root/top).
+
+        :param act_part: Stripped part title for the act (level 1).
+        :param act_ordering_key: MB ordering-key for the act within the opera.
+        :param leaf_ordering_key: MB ordering-key for the aria within the act.
+        :param movementnumber: Global MOVEMENTNUMBER tag (composer's numbering).
+        :returns: A TrackTags instance with cwp_part_levels=2 and all per-level extras set.
+        """
+        tags = TrackTags(
+            title="No. 17 - Esultate!",
+            movementnumber=movementnumber,
+            movementtotal="52",
+            cwp_work_top="Otello",
+            cwp_composer_lastnames="Verdi",
+            originaldate="1978",
+            cwp_part_levels="2",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        tags.model_extra["cwp_part_0"] = "Esultate!"  # type: ignore[index]
+        tags.model_extra["cwp_ordering_key_0"] = leaf_ordering_key  # type: ignore[index]
+        tags.model_extra["cwp_part_1"] = act_part  # type: ignore[index]
+        tags.model_extra["cwp_ordering_key_1"] = act_ordering_key  # type: ignore[index]
+        tags.model_extra["cwp_work_1"] = f"Otello: {act_part}"  # type: ignore[index]
+        return tags
+
+    def _make_rel(self) -> MBRelease:
+        """Build a minimal release.
+
+        :returns: An MBRelease instance.
+        """
+        return _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []})
+
+    def test_intermediate_dir_created_for_act(self, fs: FakeFilesystem) -> None:
+        """3-level hierarchy produces an intermediate act directory.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_tags_3level()
+        result = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "Esultate!"}}),
+            tags,
+        )
+        parts = result.parts
+        # parts: ['/', 'lib', 'Verdi - Unknown Performers', 'Otello [1978]', '02 - Atto I', '04 - Esultate!']
+        assert any("Atto I" in p for p in parts)
+        assert any(p.startswith("02") for p in parts)  # act ordering-key=2
+
+    def test_leaf_nn_from_ordering_key(self, fs: FakeFilesystem) -> None:
+        """Leaf filename nn uses ordering-key of the aria within its act.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_tags_3level(leaf_ordering_key="4")
+        result = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+            tags,
+        )
+        assert result.name.startswith("04")
+
+    def test_leaf_nn_falls_back_to_movementnumber_when_ordering_key_zero(self, fs: FakeFilesystem) -> None:
+        """Leaf nn falls back to MOVEMENTNUMBER when ordering-key is 0.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_tags_3level(leaf_ordering_key="0", movementnumber="17")
+        result = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+            tags,
+        )
+        assert result.name.startswith("17")
+
+    def test_intermediate_nn_falls_back_to_ordinal_when_ordering_key_zero(self, fs: FakeFilesystem) -> None:
+        """Intermediate directory nn falls back to 1-based ordinal when ordering-key is 0.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_tags_3level(act_ordering_key="0")
+        result = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+            tags,
+        )
+        parts = result.parts
+        # ordinal fallback: level 1 → ordinal=1 → "01 - Atto I"
+        assert any(p.startswith("01") and "Atto I" in p for p in parts)
+
+    def test_global_movementnumber_in_title_not_directory_prefix(self, fs: FakeFilesystem) -> None:
+        """MOVEMENTNUMBER appears in the title portion of the filename, not as the only prefix.
+
+        The leaf nn prefix comes from ordering-key; the composer's global number
+        appears in the TITLE tag and therefore in the track title portion.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_tags_3level(leaf_ordering_key="4", movementnumber="17")
+        result = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+            tags,
+        )
+        # File starts with "04 - " (ordering-key), title contains "No. 17"
+        assert result.name.startswith("04")
+        assert "No. 17" in result.name
+
+    def test_4level_hierarchy_two_intermediate_dirs(self, fs: FakeFilesystem) -> None:
+        """4-level hierarchy (e.g. opera → act → scene → number) produces two intermediate dirs.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = TrackTags(
+            title="Aria",
+            movementnumber="5",
+            movementtotal="40",
+            cwp_work_top="Opera",
+            cwp_composer_lastnames="Composer",
+            originaldate="1985",
+            cwp_part_levels="3",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        tags.model_extra["cwp_part_0"] = "Aria"  # type: ignore[index]
+        tags.model_extra["cwp_ordering_key_0"] = "3"  # type: ignore[index]
+        tags.model_extra["cwp_part_1"] = "Scene I"  # type: ignore[index]
+        tags.model_extra["cwp_ordering_key_1"] = "1"  # type: ignore[index]
+        tags.model_extra["cwp_part_2"] = "Act I"  # type: ignore[index]
+        tags.model_extra["cwp_ordering_key_2"] = "2"  # type: ignore[index]
+        result = build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "Aria"}}),
+            tags,
+        )
+        parts = result.parts
+        assert any("Act I" in p for p in parts)
+        assert any("Scene I" in p for p in parts)
+        assert result.name.startswith("03")

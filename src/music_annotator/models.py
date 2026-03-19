@@ -97,11 +97,16 @@ class MBWorkRelation(BaseModel):
     """An entry in a ``work-relation-list`` on a recording or work.
 
     Important attributes: ``type`` (relation type, e.g. ``"parts"`` or ``"performance"``), ``direction``
-    (``"forward"``/``"backward"``), ``work`` (:class:`MBWork`).
+    (``"forward"``/``"backward"``), ``ordering_key`` (integer sort position of the child within its parent,
+    as returned by the MB API ``ordering-key`` field; ``0`` when absent), ``work`` (:class:`MBWork`).
 
     When the recording was fetched with the ``work-level-rels`` include, ``work`` is a fully populated
     :class:`MBWork` (with its own ``artist_relation_list`` and ``work_relation_list``).  Without that
     include it contains only ``id`` and ``title``.
+
+    The ``ordering-key`` field is present on ``parts``/``part of`` relations and gives an explicit integer
+    ordering for child works within their parent (e.g. Act I = 1, Act II = 2).  musicbrainzngs returns it as
+    a string; Pydantic coerces it to ``int`` automatically.  It is ``0`` when absent or unpopulated in MB.
 
     .. note::
         Because :class:`MBWork` is defined after this class, Pydantic's forward-reference resolution is
@@ -111,11 +116,28 @@ class MBWorkRelation(BaseModel):
 
     type: str = ""
     direction: str = ""
+    ordering_key: int = Field(default=0, alias="ordering-key")
     work_id: str = Field(default="", alias="work-id")
     work_title: str = Field(default="", alias="work-title")
     work: MBWork = Field(default_factory=lambda: MBWork())  # pylint: disable=unnecessary-lambda
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("ordering_key", mode="before")
+    @classmethod
+    def coerce_ordering_key(cls, v: str | int | None) -> int:
+        """Normalise the ``ordering-key`` field from the MB API.
+
+        The MB API returns ``ordering-key`` as a string (e.g. ``"8"``), an integer, or ``null`` when
+        the field is unpopulated.  This validator converts all three cases to a plain ``int``, with
+        ``None`` mapping to ``0``.
+
+        :param v: Raw value for ``ordering-key`` from the API response.
+        :returns: An integer ordering key, or ``0`` when the value is ``None`` or absent.
+        """
+        if v is None:
+            return 0
+        return int(v)
 
 
 class MBTag(BaseModel):
@@ -425,14 +447,20 @@ class WorkHierarchyLevel(BaseModel):
     Level 0 is the recording's direct (bottom) work; higher indices are parent works toward the root.  These map to the
     ``cwp_work_0`` … ``cwp_work_N`` tag convention.
 
+    ``ordering_key`` is the MB ``ordering-key`` integer from the ``parts/backward`` relation connecting this level to its
+    parent.  It gives the position of this work among its siblings (e.g. Act I = 1, Act II = 2) and is used as the ``nn``
+    prefix on intermediate directories and leaf filenames in :func:`~music_annotator._tags.build_dest_path`.  It is ``0``
+    when MB has not populated the field; callers fall back to 1-based ordinal position in that case.
+
     Important attributes: ``index``, ``work_id``, ``work_title``, ``part_title`` (stripped movement/part name for
-    ``cwp_part_N``).
+    ``cwp_part_N``), ``ordering_key``.
     """
 
     index: int
     work_id: str
     work_title: str
     part_title: str = ""  # stripped movement/part name (cwp_part_N)
+    ordering_key: int = 0  # MB ordering-key from the parts/backward relation to this level's parent
 
 
 class CwpTags(BaseModel):
