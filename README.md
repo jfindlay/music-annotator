@@ -26,49 +26,67 @@ pip install music-annotator
 ## Usage
 
 ```
-music-annotator --release-id <MBID> --src-dir <path> --dest-dir <path> [options]
+music-annotator apply  <src_dir> <dest_dir> --release-id <MBID> --user-agent-email <EMAIL> [options]
+music-annotator search <src_dir> <dest_dir> --user-agent-email <EMAIL> [options]
+music-annotator prune  <src_dir> <dest_dir> [-y]
 ```
 
-### Required arguments
+### `apply` — copy and tag for a known release MBID
 
 | Argument | Description |
 |---|---|
+| `src_dir` | Directory containing source audio files |
+| `dest_dir` | Root destination directory |
 | `--release-id MBID` | MusicBrainz release MBID (UUID) |
-| `--src-dir DIR` | Directory containing source audio files |
-| `--dest-dir DIR` | Root destination directory |
+| `--user-agent-email EMAIL` | Contact e-mail for the MB API user-agent |
+| `--user-agent-app STRING` | App token (`AppName/Version`, default: `MusicAnnotator/<version>`) |
+| `--dry-run` | Log planned operations without writing files |
+| `--no-fetch-rels` | Skip per-recording lookups; produce minimal tags |
+| `-d / --delete` | After a successful copy, prompt to delete the source directory |
+| `-v / --verbose` | Enable DEBUG-level logging (must come before the subcommand) |
 
-### Optional arguments
+### `search` — search MusicBrainz, confirm, and apply
 
-| Argument | Default | Description |
-|---|---|---|
-| `--user-agent STRING` | `MusicAnnotator/0.1 music-annotator@example.com` | MB API user-agent (`"AppName/Version contact"`) |
-| `--dry-run` | off | Log planned operations without writing files |
-| `--no-fetch-rels` | off | Skip per-recording lookups; produce minimal tags |
-| `-v / --verbose` | off | Enable DEBUG-level logging |
+Same positional arguments and options as `apply`, minus `--release-id`, plus `--limit N` (default 10).
+
+### `prune` — verify journal and delete annotated source directory
+
+| Argument | Description |
+|---|---|
+| `src_dir` | Source directory to inspect and potentially delete |
+| `dest_dir` | Root destination directory (journal is read from here) |
+| `-y / --yes` | Skip confirmation prompt and delete immediately |
+
+Reads `<dest_dir>/music_annotator_journal.json`, performs exact presence checks on source and destination
+files, then offers to delete `src_dir`.
 
 ### Examples
 
 ```sh
-# Full annotation
-music-annotator \
+# Annotate with a known MBID
+music-annotator apply \
+  ~/Music/source/beethoven-9 ~/Music/tagged \
   --release-id 1c1e6a95-7b43-4a62-b2b9-2c2a3e0e8b0e \
-  --src-dir ~/Music/source/beethoven-9 \
-  --dest-dir ~/Music/tagged \
-  --user-agent "MyTagger/1.0 me@example.com"
+  --user-agent-email me@example.com
 
-# Quick run — basic Picard tags only, no work lookups
-music-annotator \
+# Annotate and offer to delete the source when done
+music-annotator apply \
+  ~/Music/source/beethoven-9 ~/Music/tagged \
   --release-id 1c1e6a95-7b43-4a62-b2b9-2c2a3e0e8b0e \
-  --src-dir ~/Music/source/beethoven-9 \
-  --dest-dir ~/Music/tagged \
-  --no-fetch-rels
+  --user-agent-email me@example.com --delete
 
-# Preview what would happen without touching files
-music-annotator \
-  --release-id 1c1e6a95-7b43-4a62-b2b9-2c2a3e0e8b0e \
-  --src-dir ~/Music/source/beethoven-9 \
-  --dest-dir ~/Music/tagged \
-  --dry-run --verbose
+# Search MB for a matching release, confirm, and apply
+music-annotator search \
+  ~/Music/source/beethoven-9 ~/Music/tagged \
+  --user-agent-email me@example.com
+
+# Prune a source directory after confirming journal entries
+music-annotator prune \
+  ~/Music/source/beethoven-9 ~/Music/tagged
+
+# Prune without interactive confirmation
+music-annotator prune \
+  ~/Music/source/beethoven-9 ~/Music/tagged --yes
 ```
 
 # Destination directory layout

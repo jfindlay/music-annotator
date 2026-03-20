@@ -1168,7 +1168,7 @@ class TestDiscover:
         self._patch_mb_and_run(mocker, [_candidate()])
         mocker.patch("builtins.input", side_effect=["1", "y"])
 
-        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0", delete=True)
         assert not src.exists()
 
     def test_delete_prompt_yes_removes_src_dir(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -1184,7 +1184,7 @@ class TestDiscover:
         self._patch_mb_and_run(mocker, [_candidate()])
         mocker.patch("builtins.input", side_effect=["1", "yes"])
 
-        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0", delete=True)
         assert not src.exists()
 
     def test_delete_prompt_n_keeps_src_dir(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -1200,7 +1200,7 @@ class TestDiscover:
         self._patch_mb_and_run(mocker, [_candidate()])
         mocker.patch("builtins.input", side_effect=["1", "n"])
 
-        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0", delete=True)
         assert src.exists()
 
     def test_delete_prompt_suppressed_on_dry_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:

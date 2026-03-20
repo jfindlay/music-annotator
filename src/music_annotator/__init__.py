@@ -107,6 +107,8 @@ from music_annotator._discover import (
     parse_dir_hint,
     parse_disc_info_yaml,
     parse_disc_toc,
+    prompt_delete_src,
+    prune_sources,
     search_releases_by_dir,
 )
 from music_annotator._mb_api import (
@@ -132,6 +134,7 @@ from music_annotator._pipeline_io import (
     _sha256_file,
     _verify_copy,
     find_source_files,
+    read_journal,
     write_transaction_log,
 )
 from music_annotator._tagger import (
@@ -203,6 +206,9 @@ __all__ = [
     "parse_dir_hint",
     "search_releases_by_dir",
     "discover",
+    "prompt_delete_src",
+    "prune_sources",
+    "read_journal",
     "write_transaction_log",
     "JOURNAL_FILENAME",
 ]

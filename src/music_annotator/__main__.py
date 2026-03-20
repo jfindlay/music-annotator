@@ -1,27 +1,31 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes two subcommands:
+Configures structlog for human-friendly console output and exposes three subcommands:
 
-* ``apply`` — copy and tag a directory of tracks for a known MusicBrainz release MBID.
-* ``search`` — search MusicBrainz for releases matching one or more source directories, prompt for confirmation, then apply tags
-  interactively.
+* ``apply``  — copy and tag a directory of tracks for a known MusicBrainz release MBID.
+* ``search`` — search MusicBrainz for a release matching a source directory, prompt for
+  confirmation, then apply tags.
+* ``prune``  — read the journal, verify source and destination file presence, and prompt to
+  delete the source directory.
 
 Usage::
 
     music-annotator apply \\
+        <src_dir> <dest_dir> \\
         --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
-        --src-dir "/path/to/source/album" \\
-        --dest-dir /tmp/music_library \\
         --user-agent-email contact@example.com \\
         [--user-agent-app "MyApp/1.0"] \\
-        [--dry-run] [--no-fetch-rels]
+        [--dry-run] [--no-fetch-rels] [--delete]
 
     music-annotator search \\
-        --dest-dir /tmp/music_library \\
+        <src_dir> <dest_dir> \\
         --user-agent-email contact@example.com \\
-        /path/to/album1 /path/to/album2 \\
         [--user-agent-app "MyApp/1.0"] \\
-        [--limit 10] [--dry-run] [--no-fetch-rels]
+        [--limit 10] [--dry-run] [--no-fetch-rels] [--delete]
+
+    music-annotator prune \\
+        <src_dir> <dest_dir> \\
+        [-y/--yes]
 """
 
 from __future__ import annotations
@@ -105,20 +109,14 @@ class _Formatter(
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
-    """Add arguments shared by both the ``apply`` and ``search`` subcommands.
+    """Add arguments shared by the ``apply`` and ``search`` subcommands.
 
-    Shared arguments are: ``--dest-dir``, ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``, and
-    ``--no-fetch-rels``.  ``-v``/``--verbose`` lives on the top-level parser so it must appear before the subcommand token.
+    Shared arguments are: ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``,
+    ``--no-fetch-rels``, and ``-d``/``--delete``.  ``-v``/``--verbose`` lives on the top-level
+    parser so it must appear before the subcommand token.
 
     :param parser: The subcommand parser to which the arguments are added.
     """
-    parser.add_argument(
-        "--dest-dir",
-        required=True,
-        metavar="DIR",
-        type=_resolve_path,
-        help="Root destination directory for the annotated music library.",
-    )
     parser.add_argument(
         "--user-agent-app",
         default=_DEFAULT_USER_AGENT_APP,
@@ -144,15 +142,21 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
             "and Classical Extras tags will be absent."
         ),
     )
+    parser.add_argument(
+        "-d",
+        "--delete",
+        action="store_true",
+        help="After a successful copy, prompt to delete the source directory.",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Build and return the top-level CLI argument parser with ``apply`` and ``search`` subcommands.
+    """Build and return the top-level CLI argument parser with ``apply``, ``search``, and ``prune`` subcommands.
 
-    ``-v``/``--verbose`` is registered on the top-level parser and must appear before the subcommand token (e.g.
-    ``music-annotator -v apply ...``).  Both subcommands share ``--dest-dir``, ``--user-agent-app``, ``--user-agent-email``,
-    ``--dry-run``, and ``--no-fetch-rels``.  The ``apply`` subcommand additionally requires ``--release-id`` and ``--src-dir``.
-    The ``search`` subcommand takes one or more positional source directories and an optional ``--limit``.
+    ``-v``/``--verbose`` is registered on the top-level parser and must appear before the subcommand token.
+    All subcommands take ``src_dir`` and ``dest_dir`` as positional arguments.  ``apply`` and ``search``
+    share ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``, ``--no-fetch-rels``, and
+    ``--delete`` via :func:`_add_common_args`.  ``prune`` only adds ``-y``/``--yes``.
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -192,32 +196,35 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=textwrap.dedent("""\
             Examples:
               music-annotator apply \\
+                  "/mnt/music/Respighi - Pini di Roma" /tmp/music_library \\
                   --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
-                  --src-dir "/mnt/music/Respighi - Pini di Roma" \\
-                  --dest-dir /tmp/music_library \\
                   --user-agent-email tagger@example.com
 
               music-annotator apply \\
+                  "/mnt/music/Respighi - Pini di Roma" /tmp/music_library \\
                   --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
-                  --src-dir "/mnt/music/Respighi - Pini di Roma" \\
-                  --dest-dir /tmp/music_library \\
                   --user-agent-email tagger@example.com \\
                   --user-agent-app "MyTagger/1.0" \\
-                  --dry-run
+                  --dry-run --delete
             """),
+    )
+    apply_parser.add_argument(
+        "src_dir",
+        metavar="src_dir",
+        type=_resolve_path,
+        help="Directory containing the source audio files to copy and tag.",
+    )
+    apply_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root destination directory for the annotated music library.",
     )
     apply_parser.add_argument(
         "--release-id",
         required=True,
         metavar="MBID",
         help="MusicBrainz release MBID (UUID) to fetch metadata for.",
-    )
-    apply_parser.add_argument(
-        "--src-dir",
-        required=True,
-        metavar="DIR",
-        type=_resolve_path,
-        help="Directory containing the source audio files to copy and tag.",
     )
     _add_common_args(apply_parser)
 
@@ -226,44 +233,86 @@ def _build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     search_parser = subparsers.add_parser(
         "search",
-        help="Search MusicBrainz for releases matching source directories, confirm, and apply.",
+        help="Search MusicBrainz for a release matching a source directory, confirm, and apply.",
         formatter_class=_Formatter,
         epilog=textwrap.dedent("""\
             Examples:
               music-annotator search \\
-                  --dest-dir /tmp/music_library \\
-                  --user-agent-email tagger@example.com \\
-                  "/mnt/music/Respighi - Pini di Roma" \\
-                  "/mnt/music/Brahms - Symphonies"
+                  "/mnt/music/Respighi - Pini di Roma" /tmp/music_library \\
+                  --user-agent-email tagger@example.com
 
               music-annotator search \\
-                  --dest-dir /tmp/music_library \\
+                  "/mnt/music/Brahms - Symphonies" /tmp/music_library \\
                   --user-agent-email tagger@example.com \\
-                  --limit 5 --dry-run \\
-                  /mnt/music/untagged/*
+                  --limit 5 --dry-run --delete
             """),
     )
     search_parser.add_argument(
-        "src_dirs",
-        nargs="+",
-        metavar="DIR",
+        "src_dir",
+        metavar="src_dir",
         type=_resolve_path,
-        help="One or more source directories to search and tag.",
+        help="Source directory to search and tag.",
+    )
+    search_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root destination directory for the annotated music library.",
     )
     search_parser.add_argument(
         "--limit",
         type=int,
         default=10,
         metavar="N",
-        help="Maximum number of MusicBrainz search candidates to display per directory.",
+        help="Maximum number of MusicBrainz search candidates to display.",
     )
     _add_common_args(search_parser)
+
+    # ------------------------------------------------------------------
+    # prune subcommand
+    # ------------------------------------------------------------------
+    prune_parser = subparsers.add_parser(
+        "prune",
+        help="Verify journal entries and prompt to delete an already-annotated source directory.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Reads the journal at <dest_dir>/music_annotator_journal.json, checks that all source
+            and destination files for <src_dir> are present and exactly as recorded, then offers
+            to delete the source directory.
+
+            Examples:
+              music-annotator prune \\
+                  "/mnt/music/Respighi - Pini di Roma" /tmp/music_library
+
+              music-annotator prune \\
+                  "/mnt/music/Respighi - Pini di Roma" /tmp/music_library \\
+                  --yes
+            """),
+    )
+    prune_parser.add_argument(
+        "src_dir",
+        metavar="src_dir",
+        type=_resolve_path,
+        help="Source directory to inspect and potentially delete.",
+    )
+    prune_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root destination directory where the journal lives.",
+    )
+    prune_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt and delete the source directory immediately.",
+    )
 
     return parser
 
 
 def main() -> None:
-    """Parse CLI arguments, configure logging, and dispatch to ``apply`` or ``search``.
+    """Parse CLI arguments, configure logging, and dispatch to ``apply``, ``search``, or ``prune``.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating and converts any unhandled exception or keyboard interrupt into a logged error with exit code 1.
@@ -277,13 +326,12 @@ def main() -> None:
 
     log = structlog.get_logger(__name__)
 
-    user_agent = f"{args.user_agent_app} {args.user_agent_email}"
-
     match args.subcommand:
         case "apply":
             if not args.src_dir.is_dir():
                 log.error("src_dir_not_found", path=str(args.src_dir))
                 sys.exit(1)
+            user_agent = f"{args.user_agent_app} {args.user_agent_email}"
             try:
                 music_annotator.run(
                     release_id=args.release_id,
@@ -299,21 +347,37 @@ def main() -> None:
             except Exception as exc:  # noqa: BLE001
                 log.error("fatal_error", error=str(exc), exc_info=True)
                 sys.exit(1)
+            if args.delete and not args.dry_run:
+                music_annotator.prompt_delete_src(args.src_dir)
 
         case "search":
-            missing = [str(d) for d in args.src_dirs if not d.is_dir()]
-            if missing:
-                for path in missing:
-                    log.error("src_dir_not_found", path=path)
+            if not args.src_dir.is_dir():
+                log.error("src_dir_not_found", path=str(args.src_dir))
                 sys.exit(1)
+            user_agent = f"{args.user_agent_app} {args.user_agent_email}"
             try:
                 music_annotator.discover(
-                    src_dirs=args.src_dirs,
+                    src_dirs=[args.src_dir],
                     dest_root=args.dest_dir,
                     user_agent=user_agent,
                     dry_run=args.dry_run,
                     fetch_rels=not args.no_fetch_rels,
                     limit=args.limit,
+                    delete=args.delete,
+                )
+            except KeyboardInterrupt:
+                log.warning("interrupted")
+                sys.exit(1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("fatal_error", error=str(exc), exc_info=True)
+                sys.exit(1)
+
+        case "prune":
+            try:
+                music_annotator.prune_sources(
+                    src_dir=args.src_dir,
+                    dest_root=args.dest_dir,
+                    yes=args.yes,
                 )
             except KeyboardInterrupt:
                 log.warning("interrupted")

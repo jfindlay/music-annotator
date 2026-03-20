@@ -87,6 +87,33 @@ def write_transaction_log(journal_path: Path, new_entries: list[TransactionEntry
     log.info("journal_written", path=str(journal_path), total=len(combined.entries))
 
 
+def read_journal(journal_path: Path) -> TransactionLog:
+    """Read and parse the JSON transaction journal at ``journal_path``.
+
+    Returns an empty :class:`~music_annotator.models.TransactionLog` when the file is absent (logged
+    at INFO level, as the source directory may simply have been pruned already) or when the file
+    cannot be parsed (logged at WARNING level, as this indicates unexpected corruption).
+
+    :param journal_path: Absolute path of the journal file (typically
+        ``<dest_root>/music_annotator_journal.json``).
+    :returns: A :class:`~music_annotator.models.TransactionLog` with all persisted entries, or an
+        empty one if the file is absent or unreadable.
+    """
+    if not journal_path.exists():
+        log.info("journal_not_found", path=str(journal_path))
+        return TransactionLog()
+    try:
+        raw = journal_path.read_text(encoding="utf-8")
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return TransactionLog(entries=[TransactionEntry.model_validate(e) for e in parsed])
+        log.warning("journal_invalid_format", path=str(journal_path))
+        return TransactionLog()
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        log.warning("journal_read_error", path=str(journal_path), error=str(exc))
+        return TransactionLog()
+
+
 def _check_collisions(dest_files: list[Path]) -> list[Path]:
     """Return the subset of ``dest_files`` that already exist on disk.
 

@@ -21,7 +21,7 @@ import yaml
 from music_annotator._console import _console
 from music_annotator._mb_api import _mb_retry, init_mb
 from music_annotator._pipeline import CollisionPolicy, run
-from music_annotator._pipeline_io import _DISC_INFO_FILENAME, find_source_files
+from music_annotator._pipeline_io import _DISC_INFO_FILENAME, JOURNAL_FILENAME, find_source_files, read_journal
 from music_annotator.models import JSON, MBReleaseCandidate
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
@@ -523,6 +523,110 @@ def _format_candidate(index: int, candidate: MBReleaseCandidate) -> str:
     return "\n".join(lines)
 
 
+def prompt_delete_src(src_dir: Path, ui: DiscoverUI | None = None) -> None:
+    """Prompt the user to confirm deletion of ``src_dir`` and delete it if confirmed.
+
+    Used by the ``apply`` CLI subcommand after a successful copy when ``--delete`` is supplied, and
+    internally by :func:`discover` when ``delete=True``.  Logs the outcome in both cases.
+
+    :param src_dir: The source directory to potentially delete.
+    :param ui: A :class:`DiscoverUI` instance for interaction.  Defaults to :class:`TerminalDiscoverUI`.
+    """
+    if ui is None:
+        ui = TerminalDiscoverUI()
+    if ui.confirm_delete(src_dir):
+        shutil.rmtree(src_dir)
+        log.info("deleted_src", path=str(src_dir))
+    else:
+        log.info("kept_src", path=str(src_dir))
+
+
+def prune_sources(
+    src_dir: Path,
+    dest_root: Path,
+    yes: bool = False,
+    ui: DiscoverUI | None = None,
+) -> None:
+    """Check journal entries for ``src_dir`` and, after exact presence validation, delete it.
+
+    Reads the transaction journal at ``dest_root / JOURNAL_FILENAME`` and filters to entries with
+    ``action == "copied"`` whose ``source`` path is under ``src_dir``.  Performs exact presence
+    checks on both the source and destination sides before offering the user a deletion prompt.
+
+    Source-side checks:
+
+    - If ``src_dir`` does not exist: log at INFO level (already deleted) and return.
+    - If ``src_dir`` is not a directory: log error and return.
+    - If no journal entries are found for ``src_dir``: log warning and return.
+    - The set of audio files in ``src_dir`` (via :func:`find_source_files`, which excludes disc-TOC
+      and disc-info files) must exactly match the set of source paths in the matched journal entries.
+      Any discrepancy is logged as an error and the function returns without deleting.
+
+    Destination-side checks:
+
+    - For each matched journal entry, the full destination file path must exist on disk.  Any missing
+      destination file is logged as an error and the function returns without deleting.
+
+    If all checks pass, a summary of the source directory and its destination paths is printed, and
+    the user is asked to confirm deletion (or it is performed immediately if ``yes=True``).
+
+    :param src_dir: The source directory to inspect and potentially delete.
+    :param dest_root: Root destination directory; the journal is read from here.
+    :param yes: When ``True``, skip the confirmation prompt and delete immediately.
+    :param ui: A :class:`DiscoverUI` instance for interaction.  Defaults to :class:`TerminalDiscoverUI`.
+    """
+    if ui is None:
+        ui = TerminalDiscoverUI()
+
+    # Step 1 — source directory existence
+    if not src_dir.exists():
+        log.info("prune_src_already_deleted", path=str(src_dir))
+        return
+    if not src_dir.is_dir():
+        log.error("prune_src_not_a_directory", path=str(src_dir))
+        return
+
+    # Step 2 — journal lookup
+    journal = read_journal(dest_root / JOURNAL_FILENAME)
+    src_prefix = str(src_dir) + "/"
+    matched = [e for e in journal.entries if e.action == "copied" and e.source.startswith(src_prefix)]
+    if not matched:
+        log.warning("prune_no_journal_entries", src_dir=str(src_dir))
+        return
+
+    # Step 3 — source-side exact presence check
+    expected_src = {Path(e.source) for e in matched}
+    actual_src = set(find_source_files(src_dir))
+    missing_src = expected_src - actual_src
+    extra_src = actual_src - expected_src
+    if missing_src or extra_src:
+        for p in sorted(missing_src):
+            log.error("prune_src_file_missing", path=str(p))
+        for p in sorted(extra_src):
+            log.error("prune_src_unexpected_file", path=str(p))
+        return
+
+    # Step 4 — destination-side exact presence check (per-file full path)
+    for entry in matched:
+        dest_file = Path(entry.destination)
+        if not dest_file.exists():
+            log.error("prune_dest_file_missing", path=str(dest_file))
+            return
+
+    # Step 5 — summary, confirmation, delete
+    dest_dirs = sorted({Path(e.destination).parent for e in matched})
+    _console.print(f"\n[bold]Source:[/] [cyan]{src_dir}[/]")
+    _console.print("[bold]Annotated tracks written to:[/]")
+    for d in dest_dirs:
+        _console.print(f"  [green]{d}[/]")
+
+    if yes:
+        shutil.rmtree(src_dir)
+        log.info("prune_deleted", path=str(src_dir))
+    else:
+        prompt_delete_src(src_dir, ui=ui)
+
+
 def discover(
     src_dirs: list[Path],
     dest_root: Path,
@@ -531,6 +635,7 @@ def discover(
     fetch_rels: bool = True,
     limit: int = 10,
     collision_policy: CollisionPolicy = CollisionPolicy.ASK,
+    delete: bool = False,
     ui: DiscoverUI | None = None,
 ) -> None:
     """Search MusicBrainz for releases matching each source directory, prompt for confirmation, then apply tags.
@@ -540,7 +645,8 @@ def discover(
     1. Searches MB using :func:`search_releases_by_dir` and presents a numbered candidate list.
     2. Prompts the user to enter a candidate number, a raw MBID, or ``s`` to skip.
     3. If a valid selection is made, calls :func:`run` to copy and tag that directory.
-    4. After a successful copy (unless ``dry_run`` is set), prompts the user to delete the original source directory.
+    4. After a successful copy (unless ``dry_run`` is set and ``delete`` is ``True``), prompts the
+       user to delete the original source directory.
 
     :param src_dirs: List of source directories to process in order.
     :param dest_root: Root destination directory for the annotated music library.
@@ -549,6 +655,7 @@ def discover(
     :param fetch_rels: When ``False``, skip per-recording relation lookups in :func:`run`.
     :param limit: Maximum number of search candidates to display per directory.
     :param collision_policy: Policy for handling destination file collisions; forwarded to :func:`run`.
+    :param delete: When ``True`` and not ``dry_run``, prompt the user to delete each successfully copied source directory.
     :param ui: A :class:`DiscoverUI` instance for user interaction.  Defaults to :class:`TerminalDiscoverUI`.
     """
     if ui is None:
@@ -592,9 +699,5 @@ def discover(
             log.error("discover_run_error", release_id=release_id, error=str(exc), exc_info=True)
             continue
 
-        if not dry_run:
-            if ui.confirm_delete(src_dir):
-                shutil.rmtree(src_dir)
-                log.info("discover_deleted_src", path=str(src_dir))
-            else:
-                log.info("discover_kept_src", path=str(src_dir))
+        if not dry_run and delete:
+            prompt_delete_src(src_dir, ui=ui)

@@ -808,6 +808,7 @@ class TestDiscoverEndToEnd:
             user_agent="Test/1.0",
             dry_run=False,
             fetch_rels=True,
+            delete=True,
             ui=stub,
         )
 

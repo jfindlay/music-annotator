@@ -12,6 +12,9 @@
 
 ## Deferred
 
+- Add support for source directories containing tracks downloaded from PrestoMusic.  These dirs will potentially contain their
+  own coverart and booklet.  These arts should supplant whatever is in MusicBrainz, but in copying them from `src_dir` to
+  `dst_dir`, music-annotator should still try to query MusicBrainz for a tag comparison and enrichment.
 - Native work title primary selection — consult Wikipedia / IMSLP for authoritative
   urtext strings; until then MB canonical title is primary, aliases stored as companions
 - Playlist generation for collection/cycle groupings (Ring cycle, symphony cycles, etc.)
