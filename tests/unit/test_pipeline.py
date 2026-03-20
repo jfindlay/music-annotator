@@ -979,6 +979,7 @@ class TestRunFullPipeline:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
     def test_files_copied_to_dest(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -1468,6 +1469,7 @@ class TestRunWithWorkHierarchy:
             ),
         )
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
@@ -1511,6 +1513,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
@@ -1555,6 +1558,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
@@ -1613,6 +1617,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
@@ -1663,6 +1668,7 @@ class TestRunWithWorkHierarchy:
             return_value=_w({"id": "w1", "title": "The Work", "work-relation-list": [], "artist-relation-list": []}),
         )
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
@@ -1757,6 +1763,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
         mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
@@ -1808,6 +1815,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
         music_annotator.run(
@@ -1858,6 +1866,7 @@ def _setup_single_track_run(mocker: MockerFixture, fs: FakeFilesystem, src: Path
 
     mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
     mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+    mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
     mocker.patch("music_annotator._pipeline.apply_tags_flac")
     mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
@@ -2013,6 +2022,7 @@ class TestRunCollisionAndJournal:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
@@ -2553,6 +2563,7 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'{"tracks": [{"id": "acoustid-uuid-123"}]}')
+        mocker.patch("music_annotator._mb_api.time.sleep")
         assert fetch_acoustid_id("rec-mbid") == "acoustid-uuid-123"
 
     def test_non_dict_response_returns_empty(self, mocker: MockerFixture) -> None:
@@ -2561,6 +2572,7 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'["unexpected"]')
+        mocker.patch("music_annotator._mb_api.time.sleep")
         assert fetch_acoustid_id("rec-mbid") == ""
 
     def test_missing_tracks_key_returns_empty(self, mocker: MockerFixture) -> None:
@@ -2569,6 +2581,7 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'{"status": "ok"}')
+        mocker.patch("music_annotator._mb_api.time.sleep")
         assert fetch_acoustid_id("rec-mbid") == ""
 
     def test_empty_tracks_list_returns_empty(self, mocker: MockerFixture) -> None:
@@ -2577,6 +2590,7 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'{"tracks": []}')
+        mocker.patch("music_annotator._mb_api.time.sleep")
         assert fetch_acoustid_id("rec-mbid") == ""
 
     def test_non_dict_first_track_returns_empty(self, mocker: MockerFixture) -> None:
@@ -2585,6 +2599,7 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'{"tracks": ["not-a-dict"]}')
+        mocker.patch("music_annotator._mb_api.time.sleep")
         assert fetch_acoustid_id("rec-mbid") == ""
 
     def test_empty_track_id_returns_empty(self, mocker: MockerFixture) -> None:
@@ -2593,15 +2608,57 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'{"tracks": [{"id": ""}]}')
+        mocker.patch("music_annotator._mb_api.time.sleep")
         assert fetch_acoustid_id("rec-mbid") == ""
 
     def test_network_error_returns_empty(self, mocker: MockerFixture) -> None:
-        """A network exception is caught and an empty string is returned.
+        """All three retry attempts fail with OSError; returns empty string.
 
         :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=OSError("network failure"))
+        mocker.patch("music_annotator._mb_api.time.sleep")
         assert fetch_acoustid_id("rec-mbid") == ""
+
+    def test_network_error_retried_succeeds(self, mocker: MockerFixture) -> None:
+        """OSError on first attempt is retried; succeeds on the second attempt.
+
+        :param mocker: pytest-mock fixture.
+        """
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=ctx)
+        ctx.__exit__ = MagicMock(return_value=False)
+        ctx.read = MagicMock(return_value=b'{"tracks": [{"id": "acoustid-uuid-456"}]}')
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[OSError("timeout"), ctx],
+        )
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        assert fetch_acoustid_id("rec-mbid") == "acoustid-uuid-456"
+
+    def test_json_decode_error_not_retried(self, mocker: MockerFixture) -> None:
+        """A JSONDecodeError causes immediate return without retrying.
+
+        :param mocker: pytest-mock fixture.
+        """
+        ctx = MagicMock()
+        ctx.__enter__ = MagicMock(return_value=ctx)
+        ctx.__exit__ = MagicMock(return_value=False)
+        ctx.read = MagicMock(return_value=b"not valid json {{{")
+        mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen", return_value=ctx)
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        assert fetch_acoustid_id("rec-mbid") == ""
+        assert mock_urlopen.call_count == 1  # not retried
+
+    def test_success_sleeps_one_second(self, mocker: MockerFixture) -> None:
+        """A successful response is followed by a 1-second polite delay.
+
+        :param mocker: pytest-mock fixture.
+        """
+        self._make_resp(mocker, b'{"tracks": [{"id": "acoustid-uuid-789"}]}')
+        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+        fetch_acoustid_id("rec-mbid")
+        mock_sleep.assert_called_once_with(1)
 
 
 # ---------------------------------------------------------------------------
@@ -2629,6 +2686,7 @@ class TestRunMultiDisc:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 

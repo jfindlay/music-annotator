@@ -74,6 +74,21 @@ def _mb_retry(fn: Callable[_P, _T]) -> Callable[_P, _T]:
     return _wrapper
 
 
+def _mb_call(fn: Callable[[], _T]) -> _T:
+    """Call ``fn()`` and sleep 1 second to respect the MB / CAA 1 req/s rate limit.
+
+    Consolidates the repeated ``result = api_call(); time.sleep(1)`` pattern that appears at every
+    non-retry MB or Cover Art Archive call site.  The backoff sleep inside :func:`_mb_retry` is
+    intentionally separate and not affected by this helper.
+
+    :param fn: A zero-argument callable that performs exactly one MB or CAA network request.
+    :returns: The return value of ``fn()``.
+    """
+    result = fn()
+    time.sleep(1)
+    return result
+
+
 @_mb_retry
 def _get_release_by_id(release_id: str) -> dict[str, JSON]:
     """Thin typed wrapper around ``mb.get_release_by_id`` decorated with ``@_mb_retry``.
@@ -112,8 +127,7 @@ def fetch_release(release_id: str) -> MBRelease:
     :raises RuntimeError: If all retry attempts are exhausted.
     """
     log.info("fetch_release", release_id=release_id)
-    result = _get_release_by_id(release_id)
-    time.sleep(1)
+    result = _mb_call(lambda: _get_release_by_id(release_id))
     return MBRelease.model_validate(result.get("release", {}))
 
 
@@ -145,8 +159,7 @@ def fetch_recording_detail(recording_id: str) -> MBRecording:
     :raises RuntimeError: If all retry attempts are exhausted.
     """
     log.debug("fetch_recording", recording_id=recording_id)
-    result = _get_recording_by_id(recording_id)
-    time.sleep(1)
+    result = _mb_call(lambda: _get_recording_by_id(recording_id))
     return MBRecording.model_validate(result.get("recording", {}))
 
 
@@ -186,8 +199,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     def _fetch_image(rel_id: str, coverid: str | int) -> CoverImage | None:
         """Fetch a single image by cover ID; return a CoverImage or None on error."""
         try:
-            raw = mb.get_image(rel_id, coverid)
-            time.sleep(1)
+            raw = _mb_call(lambda: mb.get_image(rel_id, coverid))
             if raw:
                 data = bytes(raw)
                 return CoverImage(data=data, mime=_infer_mime(data))
@@ -251,8 +263,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     # If no release listing was available, fall back to the release-group front image.
     if not has_release_listing and release_group_id:
         try:
-            raw = mb.get_release_group_image_front(release_group_id)
-            time.sleep(1)
+            raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id))
             if raw:
                 data = bytes(raw)
                 front.append(CoverImage(data=data, mime=_infer_mime(data)))
@@ -304,8 +315,7 @@ def fetch_work_detail(work_id: str) -> MBWork:
         log.debug("fetch_work_cache_hit", work_id=work_id)
         return _WORK_CACHE[work_id]
     log.debug("fetch_work", work_id=work_id)
-    result = _get_work_by_id(work_id)
-    time.sleep(1)
+    result = _mb_call(lambda: _get_work_by_id(work_id))
     work = MBWork.model_validate(result.get("work", {}))
     _WORK_CACHE[work_id] = work
     return work
@@ -319,33 +329,41 @@ def fetch_acoustid_id(recording_mbid: str) -> str:
     submissions for the same track.  It is stored in the ``ACOUSTID_ID`` tag (Vorbis Comment) / TXXX ``"Acoustid Id"`` frame
     (ID3), matching the convention used by MusicBrainz Picard.
 
-    No API key is required for this endpoint.  The call uses a 10-second socket timeout and returns ``""`` on any network or
-    parse error so that the rest of the annotation pipeline is never blocked by AcoustID being unavailable.
+    No API key is required for this endpoint.  The call uses a 10-second socket timeout.  Up to three attempts are made on
+    transient network errors (``OSError``), sleeping ``2 ** attempt`` seconds between retries.  A ``JSONDecodeError`` (malformed
+    response) is not retried because the response content is unlikely to change.  The function always returns ``""`` on failure
+    so that the rest of the annotation pipeline is never blocked by AcoustID being unavailable.  On success a 1-second polite
+    delay is observed before returning.
 
     :param recording_mbid: The MusicBrainz recording MBID (UUID string).
     :returns: The first AcoustID track ID UUID string, or ``""`` when none is found or the request fails.
     """
     log.debug("fetch_acoustid_id", recording_mbid=recording_mbid)
-    try:
-        # No retry/backoff: if this fails, we move on without it.  Perhaps this could be revisited later
-        with urllib.request.urlopen(
-            f"https://api.acoustid.org/v2/track/list_by_mbid?mbid={recording_mbid}&format=json", timeout=10
-        ) as resp:
-            raw = resp.read()
-        data: JSON = json.loads(raw)
-        if not isinstance(data, dict):
+    url = f"https://api.acoustid.org/v2/track/list_by_mbid?mbid={recording_mbid}&format=json"
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                raw = resp.read()
+            time.sleep(1)
+            data: JSON = json.loads(raw)
+            if not isinstance(data, dict):
+                return ""
+            tracks = data.get("tracks")
+            if not isinstance(tracks, list) or not tracks:
+                return ""
+            first = tracks[0]
+            if not isinstance(first, dict):
+                return ""
+            track_id = first.get("id", "")
+            return str(track_id) if track_id else ""
+        except json.JSONDecodeError:
+            log.warning("acoustid_parse_failed", recording_mbid=recording_mbid)
             return ""
-        tracks = data.get("tracks")
-        if not isinstance(tracks, list) or not tracks:
-            return ""
-        first = tracks[0]
-        if not isinstance(first, dict):
-            return ""
-        track_id = first.get("id", "")
-        return str(track_id) if track_id else ""
-    except (OSError, json.JSONDecodeError):
-        log.warning("acoustid_lookup_failed", recording_mbid=recording_mbid)
-        return ""
+        except OSError as exc:
+            wait = 2**attempt
+            log.warning("acoustid_lookup_failed", recording_mbid=recording_mbid, attempt=attempt, wait_s=wait, error=str(exc))
+            time.sleep(wait)
+    return ""
 
 
 def _get_bottom_work(embedded: MBWork) -> MBWork:

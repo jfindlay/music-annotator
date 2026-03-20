@@ -19,7 +19,7 @@ from music_annotator import (
     fetch_work_detail,
     write_transaction_log,
 )
-from music_annotator._mb_api import _mb_retry
+from music_annotator._mb_api import _mb_call, _mb_retry
 from music_annotator._pipeline_io import _check_collisions
 from music_annotator.models import TransactionEntry
 
@@ -679,3 +679,46 @@ class TestWriteTransactionLog:
         write_transaction_log(journal, [entry])
         data = json.loads(journal.read_text(encoding="utf-8"))
         assert data[0]["action"] == "dry_run"
+
+
+# ---------------------------------------------------------------------------
+# _mb_call
+# ---------------------------------------------------------------------------
+
+
+class TestMbCall:
+    """Tests for the _mb_call rate-limit helper."""
+
+    def test_calls_fn_and_returns_result(self, mocker: MockerFixture) -> None:
+        """_mb_call invokes fn() and returns its result.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        fn = mocker.MagicMock(return_value={"key": "value"})
+        result = _mb_call(fn)
+        fn.assert_called_once()
+        assert result == {"key": "value"}
+
+    def test_sleeps_one_second_after_call(self, mocker: MockerFixture) -> None:
+        """_mb_call sleeps exactly 1 second after fn() returns.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+        _mb_call(lambda: None)
+        mock_sleep.assert_called_once_with(1)
+
+    def test_propagates_exception_without_sleeping(self, mocker: MockerFixture) -> None:
+        """_mb_call propagates exceptions from fn() and does not sleep.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+
+        def _boom() -> None:
+            raise ValueError("api error")
+
+        with pytest.raises(ValueError, match="api error"):
+            _mb_call(_boom)
+        mock_sleep.assert_not_called()
