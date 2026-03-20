@@ -1,31 +1,30 @@
-# music-annotator — Development Plan
+# music-annotator — Plan
 
-# Deferred / longer-term items
+## Next up
 
-## Playlist generation for collections/cycles
-The Ring cycle, Beethoven symphony cycles, etc. should be realised as **playlists** rather than
-filesystem directories.  A collection-level directory layer was explicitly rejected.  Playlist
-format (M3U, XSPF, or other) and generation logic TBD.
+- Factor `mb.get*() ; time.sleep(1)` into a single rate-limited helper in `_mb_api.py`
 
-## Re-annotation / update mode
-A mode to diff existing library tracks against updated MB / CAA / Discogs data and apply changes
-with user confirmation.  Should check that embedded cover art is at original resolution and
-replace thumbnails if found.
+---
 
-## Whipper integration
-A mode that calls whipper (CD ripper) and passes the output directly into the annotation pipeline.
-Journal events added for rip operations.
+## Open questions (decision needed before implementation)
 
-## Discogs integration
-Fallback search and release creation support when MB has no entry.  Journal events added.
+---
 
-## AcoustID retry/backoff
-The raw `urlopen()` in `fetch_acoustid_id` has no retry logic.  Should use `_mb_retry` or an
-equivalent.
+## Deferred
 
-## `mb.get*() ; time.sleep()` consolidation
-Factor the repeated `call ; sleep(1)` pattern into a single helper.
+- Native work title primary selection — consult Wikipedia / IMSLP for authoritative
+  urtext strings; until then MB canonical title is primary, aliases stored as companions
+- Playlist generation for collection/cycle groupings (Ring cycle, symphony cycles, etc.)
+- Re-annotation / update mode: diff library against updated MB / CAA / Discogs data,
+  replace thumbnail cover art with original-resolution
+- Whipper integration (rip → annotate pipeline)
+- Discogs integration (fallback search and release creation)
+- AcoustID `urlopen()` retry/backoff
+- Audit CE-derived tags: every field populated or explicitly `""`
+- Performer cardinality: add soloists to top-level directory for concerto-type works
 
-## Verify all CE-derived tags are always written
-Audit that no MB-derived or CE-derived tag fields are silently dropped when their source data
-is absent.  Every field should either be populated or explicitly set to `""`.
+---
+
+## Backlog
+
+- `musicbrainzngs` → `musicbrainzngs2` migration (fork is new; may contribute upstream)

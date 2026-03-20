@@ -1,7 +1,7 @@
 # Agent Guide — music-annotator
 
 This document describes the codebase conventions, tooling, and workflow that an AI coding agent must follow when working on this
-project.
+project.  For outstanding tasks, open design questions, and the backlog see `PLAN.md`.
 
 ## Repository layout
 
@@ -10,7 +10,7 @@ music-annotator/
   src/music_annotator/
     __init__.py         ← thin re-export layer; defines __all__ and public API surface
     __main__.py         ← CLI entry point
-    models.py           ← Pydantic models for MB API + tag output (~800 lines)
+    models.py           ← Pydantic models for MB API + tag output (~900 lines)
     py.typed            ← PEP 561 marker
     _console.py         ← shared rich Console instance and configure_color()
     _mb_api.py          ← MB API wrappers: _mb_retry, fetch_*, init_mb, _get_bottom_work, _WORK_CACHE

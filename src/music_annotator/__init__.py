@@ -6,9 +6,10 @@ Implements the Classical Extras Picard plugin conventions
 Directory layout produced::
 
     <dest>/
-      <Composer sort-name> - <Performers>/
-        <Work title> (<work MBID>)/
-          <nn> - <movement title>.<ext>
+      <Composer lastnames> - <Conductor; Ensemble>/
+        <Work title> [YYYY]/
+          [nn - <Intermediate division>/]
+            nn - <movement title>.<ext>
 
 Tags written (Vorbis Comments for FLAC, ID3v2.4 for MP3):
 
