@@ -71,14 +71,26 @@ music-annotator \
   --dry-run --verbose
 ```
 
-## Destination layout
+# Destination directory layout
 
 ```
-<dest_dir>/
-  <Composer last names> - <Conductor; Ensemble>/
-    <Work title> (<work MBID>)/
-      <nn> - <movement title>.<ext>
+<dest_root>/
+  <Composer lastnames> - <Conductor; Ensemble>/          ← Latin or native script
+    <Work title> [YYYY]/                                 ← year from release_group.first_release_date
+      [nn - <Intermediate division>/]                    ← only when hierarchy depth ≥ 3
+        [nn - <Sub-intermediate division>/]              ← only when hierarchy depth ≥ 4
+          nn - <Movement title>.<ext>
 ```
+
+- `nn`: zero-padded 2 digits (3 if >99 siblings), directory-scoped, derived from MB `ordering-key`
+  → `MOVEMENTNUMBER` → `track.position`.
+- `MOVEMENTNUMBER` in tag and title string: composer's global numbering across the whole work
+  (e.g. No. 39 in the Handel Messiah).  Distinct from the directory-local `nn` prefix.
+- Performer component: conductor + ensemble names only (soloists excluded for now).
+- Collection/cycle wrappers (Ring cycle, symphony cycles): excluded from filesystem, deferred to
+  playlist generation.
+- `[YYYY]` always present when a year is known; omitted if both `release_group.first_release_date`
+  and `release.date` are absent.
 
 ## How it works
 

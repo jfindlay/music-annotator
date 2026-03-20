@@ -9,10 +9,7 @@
 - User prompts should be more consistent in layout and coloring
 - Factor `mb.get*() ; time.sleep()` into single statement?
 - Don't encode release structures in the filesystem layout: they can be considered for playlist construction though
-- Language, alphabet:
+- Do these in a later implementation that consults wikipedia+imslp:
   - Composer, Conductor, soloist, ensemble, etc. names in their native language and native alphabet preferred if known
   - Work titles should be as the composer wrote them, for example Capriccio espagnole by Ри́мский-Ко́рсаков should be Каприччио на испанские темы, the composer's own title.  If a composer names a work with a different alphabet/language different from their native, for example, "II. Valse. Moderato. Tempo di Valse" from the Чайковского "Серенада для струнного оркестра", those are the title strings that should be used for the movement and work, respectively.
-- Top level dir cardinality increase on rotation of extra performers for isolated works in a composer's corpus from same
-  conductor/ensemble
-- Also multiple recordings from the same performers of the same work are only separated by MBID
-- All MB source+CE derived tags always added to tracks, no data dropped?
+- replace musicbrainzngs dependency with musicbrainzngs2
