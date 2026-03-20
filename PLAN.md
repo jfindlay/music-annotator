@@ -8,10 +8,6 @@ _(nothing immediately queued)_
 
 ## Open questions (decision needed before implementation)
 
-- **Directory composer last-name in native script:** choose between alias-based lookup
-  (correct for all scripts, extra MB call per artist) vs. split-last-word heuristic
-  (simple, wrong for CJK) vs. hybrid.
-
 ---
 
 ## Backlog
@@ -22,11 +18,17 @@ _(nothing immediately queued)_
 
 ## Deferred
 
+- **Native language / native script (hybrid approach):** Use split-last-word of the canonical
+  `name` field for Latin-script composers (no extra API call); for non-Latin-script composers
+  (detected via Unicode block, e.g. Cyrillic, CJK), fetch the locale-tagged primary
+  `"Artist name"` alias from MB and extract the last name from its native sort-name.  Fallback
+  when no alias exists: use the full `name` as-is.  Covers composer directory component,
+  work titles, and performer names consistently.  Depends on the Wikipedia / IMSLP phase for
+  authoritative urtext work title strings; until then MB canonical title is primary and English +
+  unlocaled aliases are stored as companion tags (`CWP_WORK_TOP_EN`, `CWP_WORK_TOP_ALT`).
 - Add support for source directories containing tracks downloaded from PrestoMusic.  These dirs will potentially contain their
   own coverart and booklet.  These arts should supplant whatever is in MusicBrainz, but in copying them from `src_dir` to
   `dst_dir`, music-annotator should still try to query MusicBrainz for a tag comparison and enrichment.
-- Native work title primary selection — consult Wikipedia / IMSLP for authoritative urtext strings; until then MB canonical
-  title is primary, aliases stored as companions
 - Playlist generation for collection/cycle groupings (Ring cycle, symphony cycles, etc.)
 - Re-annotation / update mode: diff library against updated MB / CAA / Discogs data, replace thumbnail cover art with
   original-resolution
