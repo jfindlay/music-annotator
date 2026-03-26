@@ -27,8 +27,8 @@ pip install music-annotator
 
 ```
 music-annotator apply  <src_dir> <dest_dir> --release-id <MBID> --user-agent-email <EMAIL> [options]
-music-annotator search <src_dir> <dest_dir> --user-agent-email <EMAIL> [options]
-music-annotator prune  <src_dir> <dest_dir> [-y]
+music-annotator search <src_dir> [<src_dir> ...] <dest_dir> --user-agent-email <EMAIL> [options]
+music-annotator prune  <src_dir> [<src_dir> ...] <dest_dir> [-y]
 ```
 
 ### `apply` — copy and tag for a known release MBID
@@ -47,13 +47,14 @@ music-annotator prune  <src_dir> <dest_dir> [-y]
 
 ### `search` — search MusicBrainz, confirm, and apply
 
-Same positional arguments and options as `apply`, minus `--release-id`, plus `--limit N` (default 10).
+Same options as `apply`, minus `--release-id`, plus `--limit N` (default 10). Accepts one or more
+`src_dir` positionals; all are processed in sequence against the same `dest_dir`.
 
-### `prune` — verify journal and delete annotated source directory
+### `prune` — verify journal and delete annotated source directories
 
 | Argument | Description |
 |---|---|
-| `src_dir` | Source directory to inspect and potentially delete |
+| `src_dir [src_dir ...]` | One or more source directories to inspect and potentially delete |
 | `dest_dir` | Root destination directory (journal is read from here) |
 | `-y / --yes` | Skip confirmation prompt and delete immediately |
 
@@ -84,9 +85,11 @@ music-annotator search \
 music-annotator prune \
   ~/Music/source/beethoven-9 ~/Music/tagged
 
-# Prune without interactive confirmation
+# Prune multiple source directories at once without interactive confirmation
 music-annotator prune \
-  ~/Music/source/beethoven-9 ~/Music/tagged --yes
+  ~/Music/source/beethoven-9 \
+  ~/Music/source/brahms-1 \
+  ~/Music/tagged --yes
 ```
 
 # Destination directory layout

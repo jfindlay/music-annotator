@@ -154,9 +154,11 @@ def _build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level CLI argument parser with ``apply``, ``search``, and ``prune`` subcommands.
 
     ``-v``/``--verbose`` is registered on the top-level parser and must appear before the subcommand token.
-    All subcommands take ``src_dir`` and ``dest_dir`` as positional arguments.  ``apply`` and ``search``
-    share ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``, ``--no-fetch-rels``, and
-    ``--delete`` via :func:`_add_common_args`.  ``prune`` only adds ``-y``/``--yes``.
+    ``apply`` takes a single ``src_dir`` positional (one release per invocation, paired with ``--release-id``).
+    ``search`` and ``prune`` accept one or more ``src_dir`` positionals so an entire staging area can be
+    processed in a single invocation.  ``dest_dir`` is always singular — all sources share the same library
+    root.  ``apply`` and ``search`` share ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``,
+    ``--no-fetch-rels``, and ``--delete`` via :func:`_add_common_args`.  ``prune`` only adds ``-y``/``--yes``.
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -242,16 +244,19 @@ def _build_parser() -> argparse.ArgumentParser:
                   --user-agent-email tagger@example.com
 
               music-annotator search \\
-                  "/mnt/music/Brahms - Symphonies" /tmp/music_library \\
+                  "/mnt/music/Brahms - Sym 1" \\
+                  "/mnt/music/Brahms - Sym 2" \\
+                  /tmp/music_library \\
                   --user-agent-email tagger@example.com \\
                   --limit 5 --dry-run --delete
             """),
     )
     search_parser.add_argument(
-        "src_dir",
+        "src_dirs",
         metavar="src_dir",
         type=_resolve_path,
-        help="Source directory to search and tag.",
+        nargs="+",
+        help="One or more source directories to search and tag.",
     )
     search_parser.add_argument(
         "dest_dir",
@@ -277,23 +282,26 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=_Formatter,
         epilog=textwrap.dedent("""\
             Reads the journal at <dest_dir>/music_annotator_journal.json, checks that all source
-            and destination files for <src_dir> are present and exactly as recorded, then offers
-            to delete the source directory.
+            and destination files for each <src_dir> are present and exactly as recorded, then
+            offers to delete each source directory in turn.
 
             Examples:
               music-annotator prune \\
                   "/mnt/music/Respighi - Pini di Roma" /tmp/music_library
 
               music-annotator prune \\
-                  "/mnt/music/Respighi - Pini di Roma" /tmp/music_library \\
+                  "/mnt/music/Respighi - Pini di Roma" \\
+                  "/mnt/music/Brahms - Sym 1" \\
+                  /tmp/music_library \\
                   --yes
             """),
     )
     prune_parser.add_argument(
-        "src_dir",
+        "src_dirs",
         metavar="src_dir",
         type=_resolve_path,
-        help="Source directory to inspect and potentially delete.",
+        nargs="+",
+        help="One or more source directories to inspect and potentially delete.",
     )
     prune_parser.add_argument(
         "dest_dir",
@@ -351,13 +359,14 @@ def main() -> None:
                 music_annotator.prompt_delete_src(args.src_dir)
 
         case "search":
-            if not args.src_dir.is_dir():
-                log.error("src_dir_not_found", path=str(args.src_dir))
-                sys.exit(1)
+            for src in args.src_dirs:
+                if not src.is_dir():
+                    log.error("src_dir_not_found", path=str(src))
+                    sys.exit(1)
             user_agent = f"{args.user_agent_app} {args.user_agent_email}"
             try:
                 music_annotator.discover(
-                    src_dirs=[args.src_dir],
+                    src_dirs=args.src_dirs,
                     dest_root=args.dest_dir,
                     user_agent=user_agent,
                     dry_run=args.dry_run,
@@ -373,18 +382,18 @@ def main() -> None:
                 sys.exit(1)
 
         case "prune":
-            try:
-                music_annotator.prune_sources(
-                    src_dir=args.src_dir,
-                    dest_root=args.dest_dir,
-                    yes=args.yes,
-                )
-            except KeyboardInterrupt:
-                log.warning("interrupted")
-                sys.exit(1)
-            except Exception as exc:  # noqa: BLE001
-                log.error("fatal_error", error=str(exc), exc_info=True)
-                sys.exit(1)
+            for src in args.src_dirs:
+                try:
+                    music_annotator.prune_sources(
+                        src_dir=src,
+                        dest_root=args.dest_dir,
+                        yes=args.yes,
+                    )
+                except KeyboardInterrupt:
+                    log.warning("interrupted")
+                    sys.exit(1)
+                except Exception as exc:  # noqa: BLE001
+                    log.error("prune_error", src_dir=str(src), error=str(exc), exc_info=True)
 
         case _:  # pragma: no cover
             parser.print_help()

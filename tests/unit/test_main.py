@@ -291,11 +291,11 @@ class TestBuildParser:
     # ------------------------------------------------------------------
 
     def test_search_parses_positional_args(self) -> None:
-        """search accepts src_dir and dest_dir as positional arguments."""
+        """search accepts one or more src_dir positionals and a dest_dir positional."""
         parser = _build_parser()
         ns = parser.parse_args(self._SEARCH_BASE)
         assert ns.subcommand == "search"
-        assert ns.src_dir == Path("/src")
+        assert ns.src_dirs == [Path("/src")]
         assert ns.dest_dir == Path("/dest")
         assert ns.limit == 10
         assert not ns.dry_run
@@ -357,11 +357,11 @@ class TestBuildParser:
     # ------------------------------------------------------------------
 
     def test_prune_parses_positional_args(self) -> None:
-        """prune accepts src_dir and dest_dir as positional arguments."""
+        """prune accepts one or more src_dir positionals and a dest_dir positional."""
         parser = _build_parser()
         ns = parser.parse_args(self._PRUNE_BASE)
         assert ns.subcommand == "prune"
-        assert ns.src_dir == Path("/src")
+        assert ns.src_dirs == [Path("/src")]
         assert ns.dest_dir == Path("/dest")
         assert not ns.yes
 
@@ -699,7 +699,7 @@ class TestMain:
         assert kwargs["user_agent"] == "MyApp/2.0 me@example.com"
 
     def test_search_src_dir_passed_as_list(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """search src_dir is forwarded to discover() as a single-element list.
+        """A single search src_dir is forwarded to discover() as a one-element list.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -711,6 +711,35 @@ class TestMain:
             main()
         _, kwargs = mock_discover.call_args
         assert kwargs["src_dirs"] == [Path("/src")]
+
+    def test_search_multiple_src_dirs_passed_to_discover(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Multiple search src_dirs are all forwarded to discover() in order.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        fs.create_dir("/src1")
+        fs.create_dir("/src2")
+        mock_discover = mocker.patch("music_annotator.discover")
+        with patch.object(sys, "argv", ["music-annotator", "search", "/src1", "/src2", "/d", "--user-agent-email", "t@x.com"]):
+            main()
+        _, kwargs = mock_discover.call_args
+        assert kwargs["src_dirs"] == [Path("/src1"), Path("/src2")]
+
+    def test_search_exits_1_when_any_src_dir_missing(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() search exits with code 1 when any src_dir does not exist.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        fs.create_dir("/src1")
+        # /src2 does not exist
+        with patch.object(sys, "argv", ["music-annotator", "search", "/src1", "/src2", "/d", "--user-agent-email", "t@x.com"]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
 
     def test_search_delete_passed_to_discover(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """search --delete passes delete=True to discover().
@@ -782,7 +811,7 @@ class TestMain:
         mock_prune = mocker.patch("music_annotator.prune_sources")
         with patch.object(sys, "argv", self._PRUNE_ARGV):
             main()
-        mock_prune.assert_called_once_with(src_dir=Path("/src"), dest_root=Path("/d"), yes=False)
+        mock_prune.assert_called_once_with(src_dir=Path("/src"), dest_root=Path("/d"), yes=False)  # single src
 
     def test_prune_yes_flag_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
         """main() prune -y passes yes=True to prune_sources.
@@ -797,8 +826,10 @@ class TestMain:
         _, kwargs = mock_prune.call_args
         assert kwargs["yes"] is True
 
-    def test_prune_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
-        """main() prune exits with code 1 when prune_sources raises.
+    def test_prune_logs_error_and_continues_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() prune logs the error and completes normally (no exit 1) when prune_sources raises.
+
+        Each src_dir is processed independently; an error on one does not abort the others.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -806,9 +837,7 @@ class TestMain:
         self._patch_common(mocker)
         mocker.patch("music_annotator.prune_sources", side_effect=RuntimeError("boom"))
         with patch.object(sys, "argv", self._PRUNE_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
-        assert exc.value.code == 1
+            main()  # should not raise or sys.exit(1)
 
     def test_prune_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
         """main() prune exits with code 1 on KeyboardInterrupt.
@@ -822,6 +851,55 @@ class TestMain:
             with pytest.raises(SystemExit) as exc:
                 main()
         assert exc.value.code == 1
+
+    def test_prune_multiple_src_dirs_calls_prune_sources_for_each(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() prune calls prune_sources once per src_dir.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_prune = mocker.patch("music_annotator.prune_sources")
+        with patch.object(sys, "argv", ["music-annotator", "prune", "/src1", "/src2", "/d"]):
+            main()
+        assert mock_prune.call_count == 2
+        calls = mock_prune.call_args_list
+        assert calls[0].kwargs["src_dir"] == Path("/src1")
+        assert calls[1].kwargs["src_dir"] == Path("/src2")
+        assert calls[0].kwargs["dest_root"] == Path("/d")
+        assert calls[1].kwargs["dest_root"] == Path("/d")
+
+    def test_prune_continues_after_error_on_first_src(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() prune logs error and continues to next src_dir when one raises.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_prune = mocker.patch(
+            "music_annotator.prune_sources",
+            side_effect=[RuntimeError("boom"), None],
+        )
+        with patch.object(sys, "argv", ["music-annotator", "prune", "/src1", "/src2", "/d"]):
+            main()  # should not raise or exit 1
+        assert mock_prune.call_count == 2
+
+    def test_parser_search_multiple_src_dirs(self) -> None:
+        """search parser stores multiple src_dirs as a list.
+
+        :param fs: pyfakefs fixture.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["search", "/a", "/b", "/c", "/dest", "--user-agent-email", "t@x.com"])
+        assert ns.src_dirs == [Path("/a"), Path("/b"), Path("/c")]
+        assert ns.dest_dir == Path("/dest")
+
+    def test_parser_prune_multiple_src_dirs(self) -> None:
+        """prune parser stores multiple src_dirs as a list."""
+        parser = _build_parser()
+        ns = parser.parse_args(["prune", "/a", "/b", "/dest"])
+        assert ns.src_dirs == [Path("/a"), Path("/b")]
+        assert ns.dest_dir == Path("/dest")
 
 
 # ---------------------------------------------------------------------------
