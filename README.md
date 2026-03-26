@@ -97,7 +97,7 @@ music-annotator prune \
 ```
 <dest_root>/
   <Composer lastnames> - <Conductor; Ensemble>/          ← Latin or native script
-    <Work title> [YYYY]/                                 ← year from release_group.first_release_date
+    <Work title> [rec YYYY] or [rel YYYY]/               ← recording or release year
       [nn - <Intermediate division>/]                    ← only when hierarchy depth ≥ 3
         [nn - <Sub-intermediate division>/]              ← only when hierarchy depth ≥ 4
           nn - <Movement title>.<ext>
@@ -110,8 +110,9 @@ music-annotator prune \
 - Performer component: conductor + ensemble names only (soloists excluded for now).
 - Collection/cycle wrappers (Ring cycle, symphony cycles): excluded from filesystem, deferred to
   playlist generation.
-- `[YYYY]` always present when a year is known; omitted if both `release_group.first_release_date`
-  and `release.date` are absent.
+- `[rec YYYY]`: year from `recording.first-release-date` (when this audio was first commercially
+  released).  Falls back to `[rel YYYY]` from `release_group.first_release_date` or `release.date`.
+  Omitted when no date is known.
 
 ## How it works
 

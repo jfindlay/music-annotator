@@ -337,12 +337,19 @@ class MBRelease(BaseModel):
 class MBRecording(BaseModel):
     """Recording entity with artist and work relationships, as returned by ``musicbrainzngs.get_recording_by_id``.
 
-    Important attributes: ``id`` (recording MBID), ``title``, ``artist_credit``, ``artist_relation_list``,
-    ``work_relation_list``.
+    Important attributes: ``id`` (recording MBID), ``title``, ``first_release_date``, ``artist_credit``,
+    ``artist_relation_list``, ``work_relation_list``.
+
+    ``first_release_date`` is the year (or full date) this specific audio was first commercially released.
+    It is populated by the ``_patched_parse_recording`` workaround in ``_mb_api.py``, which recovers
+    the ``first-release-date`` field that the musicbrainzngs XML parser currently discards.  It is distinct
+    from ``release_group.first_release_date`` (album publication year) — for reissues of older recordings it
+    will be earlier.
     """
 
     id: str = ""
     title: str = ""
+    first_release_date: str = Field(default="", alias="first-release-date")
     artist_credit: list[MBArtistCredit | str] = Field(default_factory=list, alias="artist-credit")
     artist_relation_list: list[MBArtistRelation] = Field(default_factory=list, alias="artist-relation-list")
     work_relation_list: list[MBWorkRelation] = Field(default_factory=list, alias="work-relation-list")
@@ -579,6 +586,7 @@ class TrackTags(BaseModel):
     discnumber: str = ""
     date: str = ""
     originaldate: str = ""
+    recording_first_release_date: str = ""  # recording.first-release-date: year this audio was first released
     media: str = "CD"
     script: str = ""
     language: str = ""

@@ -1727,12 +1727,12 @@ class TestBuildCwpTagsOrderingKey:
 
 
 # ---------------------------------------------------------------------------
-# build_dest_path — [YYYY] recording year suffix
+# build_dest_path — [rec YYYY] / [rel YYYY] year suffix
 # ---------------------------------------------------------------------------
 
 
 class TestBuildDestPathYear:
-    """Tests for the recording-year [YYYY] suffix in build_dest_path."""
+    """Tests for the [rec YYYY] / [rel YYYY] year suffix in build_dest_path."""
 
     def _make_rel(self, first_release_date: str = "", date: str = "") -> MBRelease:
         """Build a minimal MBRelease with configurable dates.
@@ -1756,11 +1756,12 @@ class TestBuildDestPathYear:
             }
         )
 
-    def _make_tags(self, originaldate: str = "", date: str = "") -> TrackTags:
+    def _make_tags(self, originaldate: str = "", date: str = "", recording_first_release_date: str = "") -> TrackTags:
         """Build minimal TrackTags with configurable date fields.
 
-        :param originaldate: ORIGINALDATE tag value.
-        :param date: DATE tag value.
+        :param originaldate: ORIGINALDATE tag value (release group publication year).
+        :param date: DATE tag value (release publication date).
+        :param recording_first_release_date: RECORDING_FIRST_RELEASE_DATE tag value.
         :returns: A TrackTags instance.
         """
         return TrackTags(
@@ -1771,51 +1772,75 @@ class TestBuildDestPathYear:
             cwp_composer_lastnames="Beethoven",
             originaldate=originaldate,
             date=date,
+            recording_first_release_date=recording_first_release_date,
             cea_conductors_list=[],
             cea_ensembles_list=[],
         )
 
-    def test_year_from_originaldate_appended(self, fs: FakeFilesystem) -> None:
-        """[YYYY] suffix uses ORIGINALDATE when available.
+    def _dest(self, tags: TrackTags, fs: FakeFilesystem) -> str:
+        """Run build_dest_path and return the string result.
 
+        :param tags: TrackTags to pass to build_dest_path.
         :param fs: pyfakefs fixture.
+        :returns: String representation of the resulting path.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        tags = self._make_tags(originaldate="1963-05-01")
-        result = build_dest_path(
-            dest_root, self._make_rel(), _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}), tags
+        return str(
+            build_dest_path(
+                dest_root,
+                self._make_rel(),
+                _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+                tags,
+            )
         )
-        assert "[1963]" in str(result)
 
-    def test_year_from_date_when_originaldate_absent(self, fs: FakeFilesystem) -> None:
-        """[YYYY] falls back to DATE when ORIGINALDATE is absent.
+    def test_rec_year_from_recording_first_release_date(self, fs: FakeFilesystem) -> None:
+        """[rec YYYY] suffix uses RECORDING_FIRST_RELEASE_DATE when available.
 
         :param fs: pyfakefs fixture.
         """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-        tags = self._make_tags(date="2003")
-        result = build_dest_path(
-            dest_root, self._make_rel(), _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}), tags
-        )
-        assert "[2003]" in str(result)
+        assert "[rec 1963]" in self._dest(self._make_tags(recording_first_release_date="1963"), fs)
 
-    def test_no_year_suffix_when_both_dates_absent(self, fs: FakeFilesystem) -> None:
-        """No [YYYY] suffix when neither ORIGINALDATE nor DATE is present.
+    def test_rec_year_full_date_truncated_to_year(self, fs: FakeFilesystem) -> None:
+        """[rec YYYY] truncates a full date string to 4-digit year.
 
         :param fs: pyfakefs fixture.
         """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-        tags = self._make_tags()
-        result = build_dest_path(
-            dest_root, self._make_rel(), _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}), tags
-        )
-        assert "[" not in str(result)
+        assert "[rec 1990]" in self._dest(self._make_tags(recording_first_release_date="1990-04-03"), fs)
+
+    def test_rec_year_takes_precedence_over_rel_year(self, fs: FakeFilesystem) -> None:
+        """[rec YYYY] is used when both recording and release dates are present.
+
+        :param fs: pyfakefs fixture.
+        """
+        result = self._dest(self._make_tags(recording_first_release_date="1963", originaldate="2003"), fs)
+        assert "[rec 1963]" in result
+        assert "[rel" not in result
+
+    def test_rel_year_from_originaldate_when_no_rec_date(self, fs: FakeFilesystem) -> None:
+        """[rel YYYY] suffix uses ORIGINALDATE when RECORDING_FIRST_RELEASE_DATE is absent.
+
+        :param fs: pyfakefs fixture.
+        """
+        assert "[rel 1963]" in self._dest(self._make_tags(originaldate="1963-05-01"), fs)
+
+    def test_rel_year_from_date_when_originaldate_absent(self, fs: FakeFilesystem) -> None:
+        """[rel YYYY] falls back to DATE when ORIGINALDATE is also absent.
+
+        :param fs: pyfakefs fixture.
+        """
+        assert "[rel 2003]" in self._dest(self._make_tags(date="2003"), fs)
+
+    def test_no_year_suffix_when_all_dates_absent(self, fs: FakeFilesystem) -> None:
+        """No year suffix when no date fields are present.
+
+        :param fs: pyfakefs fixture.
+        """
+        assert "[" not in self._dest(self._make_tags(), fs)
 
     def test_mbid_no_longer_in_path(self, fs: FakeFilesystem) -> None:
-        """Full MBID UUID is not present in the path (replaced by [YYYY]).
+        """Full MBID UUID is not present in the path (replaced by [rec/rel YYYY]).
 
         :param fs: pyfakefs fixture.
         """
@@ -1836,7 +1861,7 @@ class TestBuildDestPathYear:
             dest_root, self._make_rel(), _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}), tags
         )
         assert "abc123de" not in str(result)
-        assert "[1970]" in str(result)
+        assert "[rel 1970]" in str(result)
 
 
 # ---------------------------------------------------------------------------

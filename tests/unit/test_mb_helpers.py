@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
 import musicbrainzngs as mb
+import musicbrainzngs.mbxml as _mbxml
 import pytest
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
@@ -19,9 +21,9 @@ from music_annotator import (
     fetch_work_detail,
     write_transaction_log,
 )
-from music_annotator._mb_api import _mb_call, _mb_retry
+from music_annotator._mb_api import _mb_call, _mb_retry, _patched_parse_recording
 from music_annotator._pipeline_io import _check_collisions
-from music_annotator.models import TransactionEntry
+from music_annotator.models import MBRecording, TransactionEntry
 
 # ---------------------------------------------------------------------------
 # _mb_retry
@@ -722,3 +724,74 @@ class TestMbCall:
         with pytest.raises(ValueError, match="api error"):
             _mb_call(_boom)
         mock_sleep.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _patch_mbxml_parse_recording  (musicbrainzngs workaround)
+# ---------------------------------------------------------------------------
+
+
+class TestPatchMbxmlParseRecording:
+    """Tests for the _patch_mbxml_parse_recording workaround that recovers first-release-date."""
+
+    _NS = "http://musicbrainz.org/ns/mmd-2.0#"
+
+    def _make_recording_element(self, title: str = "Test", first_release_date: str | None = None) -> ET.Element:
+        """Build a minimal <recording> XML element for use with _mbxml.parse_recording.
+
+        :param title: Recording title text.
+        :param first_release_date: If provided, adds a <first-release-date> child element.
+        :returns: An :class:`xml.etree.ElementTree.Element` representing a recording.
+        """
+        rec = ET.Element(f"{{{self._NS}}}recording")
+        rec.set("id", "test-id")
+        title_el = ET.SubElement(rec, f"{{{self._NS}}}title")
+        title_el.text = title
+        if first_release_date is not None:
+            frd_el = ET.SubElement(rec, f"{{{self._NS}}}first-release-date")
+            frd_el.text = first_release_date
+        return rec
+
+    def test_first_release_date_extracted_when_present(self) -> None:
+        """The patch recovers first-release-date from the XML element when present."""
+        rec_el = self._make_recording_element(first_release_date="1990")
+        result = _patched_parse_recording(rec_el)
+        assert result.get("first-release-date") == "1990"
+
+    def test_first_release_date_full_date_extracted(self) -> None:
+        """The patch recovers a full date string (not just year) verbatim."""
+        rec_el = self._make_recording_element(first_release_date="1990-04-03")
+        result = _patched_parse_recording(rec_el)
+        assert result.get("first-release-date") == "1990-04-03"
+
+    def test_first_release_date_absent_when_not_in_xml(self) -> None:
+        """first-release-date is absent from the result when not in the XML."""
+        rec_el = self._make_recording_element()
+        result = _patched_parse_recording(rec_el)
+        assert "first-release-date" not in result
+
+    def test_original_fields_still_parsed(self) -> None:
+        """The patch does not break existing fields like title."""
+        rec_el = self._make_recording_element(title="Symphony No. 5", first_release_date="1963")
+        result = _patched_parse_recording(rec_el)
+        assert result.get("title") == "Symphony No. 5"
+        assert result.get("first-release-date") == "1963"
+
+
+# ---------------------------------------------------------------------------
+# MBRecording.first_release_date
+# ---------------------------------------------------------------------------
+
+
+class TestMBRecordingFirstReleaseDate:
+    """Tests for the first_release_date field on MBRecording."""
+
+    def test_first_release_date_populated_from_dict(self) -> None:
+        """MBRecording.first_release_date is populated from the first-release-date key."""
+        rec = MBRecording.model_validate({"id": "r1", "title": "T", "first-release-date": "1963"})
+        assert rec.first_release_date == "1963"
+
+    def test_first_release_date_defaults_to_empty(self) -> None:
+        """MBRecording.first_release_date defaults to empty string when absent."""
+        rec = MBRecording.model_validate({"id": "r1", "title": "T"})
+        assert rec.first_release_date == ""

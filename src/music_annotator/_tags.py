@@ -497,6 +497,7 @@ def build_track_tags(
         discnumber=str(medium_pos),
         date=release.date,
         originaldate=release.release_group.first_release_date,
+        recording_first_release_date=recording_detail.first_release_date,
         media="CD",
         script=release.text_representation.script,
         language=release.text_representation.language,
@@ -657,8 +658,11 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     ``MOVEMENTNUMBER`` in the tag/title string is the composer's global numbering across the whole
     work (e.g. No. 39 in the Handel Messiah) and is distinct from the directory-local ``nn`` prefix.
 
-    ``YYYY`` is the year from ``ORIGINALDATE`` (``release_group.first_release_date``), falling back
-    to ``DATE`` (``release.date``).  Omitted entirely when neither is known.
+    The year suffix uses ``[rec YYYY]`` when ``RECORDING_FIRST_RELEASE_DATE``
+    (``recording.first-release-date``) is known — the year this specific audio was first
+    commercially released.  Falls back to ``[rel YYYY]`` using ``ORIGINALDATE``
+    (``release_group.first_release_date``) or ``DATE`` (``release.date``) when the
+    recording-level date is absent.  Omitted entirely when no date is available.
 
     :param dest_root: The root destination directory.
     :param release: The :class:`~music_annotator.models.MBRelease` from :func:`fetch_release`.
@@ -698,13 +702,29 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     else:
         performers = file_dict.get("CEA_ENSEMBLE_NAMES") or file_dict.get("ARTIST", "Unknown Performers")
 
-    # Work directory component — title + [YYYY] recording-year suffix
+    # Work directory component — title + [rec YYYY] or [rel YYYY] year suffix.
+    # Priority: recording.first-release-date (year the audio was first commercially released,
+    # labelled [rec]) → release_group.first_release_date / release.date (album publication year,
+    # labelled [rel]).  Both are publication-era years; [rec] is more granular and tracks the
+    # specific audio rather than the album packaging.
     work_title = file_dict.get("CWP_WORK_TOP") or file_dict.get("WORK", "")
     work_dir = safe_name(work_title)
-    raw_year = file_dict.get("ORIGINALDATE") or file_dict.get("DATE", "")
-    year = raw_year[:4] if len(raw_year) >= 4 and raw_year[:4].isdigit() else ""
-    if year:
-        work_dir = f"{work_dir} [{year}]"
+
+    def _extract_year(raw: str) -> str:
+        """Return the 4-digit year prefix of ``raw``, or ``""`` if absent or non-numeric.
+
+        :param raw: A date string such as ``"1963"`` or ``"1963-05-01"``.
+        :returns: A 4-digit year string, or ``""`` when unavailable.
+        """
+        return raw[:4] if len(raw) >= 4 and raw[:4].isdigit() else ""
+
+    rec_year = _extract_year(file_dict.get("RECORDING_FIRST_RELEASE_DATE", ""))
+    rel_year = _extract_year(file_dict.get("ORIGINALDATE") or file_dict.get("DATE", ""))
+
+    if rec_year:
+        work_dir = f"{work_dir} [rec {rec_year}]"
+    elif rel_year:
+        work_dir = f"{work_dir} [rel {rel_year}]"
 
     # Hierarchy depth: CWP_PART_LEVELS = n_levels - 1, so >=2 means 3+ levels total.
     part_levels = int(file_dict.get("CWP_PART_LEVELS") or "0")

@@ -10,13 +10,55 @@ import functools
 import json
 import time
 import urllib.request
+import xml.etree.ElementTree as _ET
 from collections.abc import Callable
 from typing import ParamSpec, TypeVar
 
 import musicbrainzngs as mb
+import musicbrainzngs.mbxml as _mbxml
 import structlog
 
 from music_annotator.models import JSON, CoverArt, CoverImage, MBRecording, MBRelease, MBWork
+
+# ---------------------------------------------------------------------------
+# Workaround for a musicbrainzngs bug: parse_recording omits "first-release-date"
+# from its elements list, so the field is present in the MB XML response but
+# silently discarded.  The patch below re-reads it directly from the XML element
+# after the original parser runs.
+#
+# Upstream fix: add "first-release-date" to the elements list in mbxml.parse_recording.
+# Remove this patch once musicbrainzngs (or its successor musicbrainzngs2) ships the fix.
+# ---------------------------------------------------------------------------
+
+
+_MBXML_NS = "http://musicbrainz.org/ns/mmd-2.0#"
+
+# Capture the original unpatched function before we replace it below.
+_mbxml_original_parse_recording = _mbxml.parse_recording  # noqa: N816
+
+
+def _patched_parse_recording(recording: _ET.Element) -> dict[str, JSON]:
+    """Replacement for ``musicbrainzngs.mbxml.parse_recording`` that recovers ``first-release-date``.
+
+    musicbrainzngs omits ``"first-release-date"`` from its ``parse_recording`` elements list,
+    so the field is present in the MB XML response but silently discarded.  This wrapper calls
+    the original parser and then reads the field directly from the XML element, adding it to
+    the result dict when present and non-empty.
+
+    Remove this function once musicbrainzngs (or its successor musicbrainzngs2) ships the fix
+    (add ``"first-release-date"`` to the elements list in ``mbxml.parse_recording``).
+
+    :param recording: The ``<recording>`` XML element from the MB API response.
+    :returns: Parsed recording dict, augmented with ``first-release-date`` when present.
+    """
+    result: dict[str, JSON] = _mbxml_original_parse_recording(recording)
+    frd = recording.find(f"{{{_MBXML_NS}}}first-release-date")
+    if frd is not None and frd.text:
+        result["first-release-date"] = frd.text
+    return result
+
+
+_mbxml.parse_recording = _patched_parse_recording
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
