@@ -21,6 +21,29 @@ _(nothing immediately queued)_
 - **`[rec YYYY]` session-date label:** The `rec_year` hook in `build_dest_path` is reserved for a
   future data source (Discogs / Wikipedia / IMSLP) that provides actual studio or concert session
   dates.  All three MB date fields are publication-era years and produce `[rel YYYY]`.
+- **Work title authenticity — composer intent vs. reception history:** The principle is that
+  work titles and subtitles should reflect the composer's own stated intent, not names added
+  later by performers, impresarios, publishers, or reception history.  Concrete cases that will
+  need resolution during the Wikipedia / IMSLP consultation phase:
+
+  - Bach *Six concerts avec plusieurs instruments*, BWV 1046–1051: the French title is
+    correct — Bach wrote it himself on the 1721 manuscript.  "Brandenburgische Konzerte" is
+    a later German colloquial name and should not displace the composer's own title.  MB's
+    canonical title (French) is therefore correct, and music-annotator's current behaviour
+    is right.
+
+  - Mahler Symphony no. 8, subtitle "Sinfonie der Tausend": added by impresario Emil Gutmann
+    as a marketing description for the 1910 premiere.  Mahler did not give the work this
+    subtitle; it is not a composer-sanctioned title element and should be excluded.
+
+  - Schubert Symphony no. 8, subtitle "Unvollendete" (Unfinished): a posthumous descriptive
+    title reflecting the incomplete state of the manuscript.  Whether Schubert intended the
+    work to remain in two movements is disputed; investigate with IMSLP autograph evidence
+    before deciding whether to include or exclude the subtitle.
+
+  Implementation depends on the Wikipedia / IMSLP consultation phase for authoritative
+  manuscript and critical-edition evidence.
+
 - **Native language / native script (hybrid approach):** Use split-last-word of the canonical
   `name` field for Latin-script composers (no extra API call); for non-Latin-script composers
   (detected via Unicode block, e.g. Cyrillic, CJK), fetch the locale-tagged primary
