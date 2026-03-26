@@ -163,6 +163,7 @@ from music_annotator._tags import (
 from music_annotator._works import (
     PERIOD_MAP,
     WORKTYPE_GENRES,
+    _date_range,
     build_work_hierarchy,
     collect_work_dates,
     collect_work_tags_and_key,
@@ -255,6 +256,7 @@ _reexports = (
     _parse_release_item,
     _SESSION_REL_TYPES,
     _sidecar_filename,
+    _date_range,
     collect_work_urls,
     _rec_title,
     _score_toc_release,

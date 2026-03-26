@@ -1485,6 +1485,38 @@ class TestApplyTagsMp3NewFrames:
 # ---------------------------------------------------------------------------
 
 
+class TestBuildTrackTagsSessionDateRange:
+    """Tests for RECORDING_DATE ISO 8601 interval when session spans different dates."""
+
+    def test_multi_date_range_stored_as_iso_interval(self) -> None:
+        """RECORDING_DATE is stored as 'begin/end' when begin and end differ."""
+        rec = _rec(
+            {
+                "id": "rec-1",
+                "title": "T",
+                "artist-credit": [],
+                "artist-relation-list": [
+                    {
+                        "type": "conductor",
+                        "direction": "backward",
+                        "begin": "1983-12-20",
+                        "end": "1984-01-05",
+                        "artist": {"id": "karajan-1", "name": "Karajan", "sort-name": "Karajan, Herbert von"},
+                    },
+                ],
+                "work-relation-list": [],
+            }
+        )
+        tags = build_track_tags(
+            _make_release(),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec-1", "title": "T", "artist-credit": []}}),
+            1,
+            rec,
+            [],
+        )
+        assert tags.recording_date == "1983-12-20/1984-01-05"
+
+
 class TestBuildTrackTagsCreditedName:
     """Tests for the cea_performers_credited companion field."""
 

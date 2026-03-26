@@ -272,17 +272,43 @@ def extract_work_artist_rels(work: MBWork, role_buckets: RoleBuckets) -> None:
                 role_buckets.add_unique("choreographers", entry)
 
 
+def _date_range(begin: str, end: str) -> str:
+    """Format a begin/end date pair as a CE-compatible year or year-range string.
+
+    Uses the Classical Extras convention: a single ``"YYYY"`` when begin and end fall in the same
+    year (or end is absent), or ``"YYYY-YYYY"`` when they span different years.  Only the 4-digit
+    year prefix of each date is used so that full ISO dates (``"1984-01-27"``) and year-only
+    values (``"1984"``) are both handled consistently.
+
+    :param begin: ISO date string for the start of the range (e.g. ``"1822"`` or ``"1822-06-01"``).
+    :param end: ISO date string for the end of the range, or ``""`` when absent.
+    :returns: A formatted date or range string, or ``""`` when ``begin`` is empty.
+    """
+    if not begin:
+        return ""
+    start_year = begin[:4]
+    end_year = end[:4] if end else ""
+    if end_year and end_year != start_year:
+        return f"{start_year}-{end_year}"
+    return start_year
+
+
 def collect_work_dates(work: MBWork) -> WorkDates:
     """Extract composed, published, and premiered dates from a work's attributes and relations.
 
     Checks three sources in priority order:
 
     1. ``attribute-list`` — typed date attributes (``"Composed"``, ``"Published"``, ``"Premiered"``).
-    2. Artist/label/place relations — CE-compatible date extraction:
-       - Composed: earliest ``begin`` on ``"composer"`` artist relations.
-       - Published: ``begin`` on ``"publishing"`` label relations (requires ``label-rels`` in includes).
-       - Premiered: ``begin`` on ``"premiere"`` place relations (requires ``place-rels`` in includes).
-    3. ``life-span.begin`` — MB life-span fallback for composed date.
+       The value is stored verbatim; if the MB editor entered a range it is preserved as-is.
+    2. Artist/label/place relations — CE-compatible date extraction using begin **and** end:
+       - Composed: range across all ``"composer"`` artist relations (``min(begin)``–``max(end)``).
+       - Published: begin–end from the first ``"publishing"`` label relation.
+       - Premiered: begin–end from the first ``"premiere"`` place relation.
+    3. ``life-span.begin``/``end`` — MB life-span fallback for composed date.
+
+    Ranges are formatted using the CE convention (``"YYYY"`` or ``"YYYY-YYYY"`` via
+    :func:`_date_range`) so that ``CWP_COMPOSED_DATES`` etc. are consistent with the Classical
+    Extras Picard plugin output.
 
     :param work: The :class:`~music_annotator.models.MBWork` instance.
     :returns: A :class:`~music_annotator.models.WorkDates` instance with any dates found.  Fields default to empty
@@ -290,7 +316,8 @@ def collect_work_dates(work: MBWork) -> WorkDates:
     """
     composed = published = premiered = ""
 
-    # Source 1: attribute-list
+    # Source 1: attribute-list (verbatim — CE convention does not apply here since
+    # MBAttribute.value is a single opaque string; MB may or may not encode a range within it).
     for attr in work.attribute_list:
         if not isinstance(attr, MBAttribute):
             continue
@@ -304,29 +331,33 @@ def collect_work_dates(work: MBWork) -> WorkDates:
             case s if "premiered" in s or "premiere" in s:
                 premiered = val
 
-    # Source 2a: composed date from composer artist relation begin dates
+    # Source 2a: composed date from composer artist relation begin/end dates.
+    # Use the earliest begin and latest end across all composer relations.
     if not composed:
-        composer_begins = [rel.begin for rel in work.artist_relation_list if rel.type == "composer" and rel.begin]
-        if composer_begins:
-            composed = min(composer_begins)
+        composer_rels = [rel for rel in work.artist_relation_list if rel.type == "composer" and rel.begin]
+        if composer_rels:
+            earliest = min(rel.begin for rel in composer_rels)
+            ends = [rel.end for rel in composer_rels if rel.end]
+            latest = max(ends) if ends else ""
+            composed = _date_range(earliest, latest)
 
-    # Source 2b: published date from publishing label relation begin dates
+    # Source 2b: published date from publishing label relation begin/end dates.
     if not published:
         for lrel in work.label_relation_list:
             if lrel.type == "publishing" and lrel.begin:
-                published = lrel.begin
+                published = _date_range(lrel.begin, lrel.end)
                 break
 
-    # Source 2c: premiered date from premiere place relation begin dates
+    # Source 2c: premiered date from premiere place relation begin/end dates.
     if not premiered:
         for prel in work.place_relation_list:
             if prel.type == "premiere" and prel.begin:
-                premiered = prel.begin
+                premiered = _date_range(prel.begin, prel.end)
                 break
 
-    # Source 3: life-span.begin fallback for composed date
+    # Source 3: life-span.begin/end fallback for composed date.
     if not composed and work.life_span.begin:
-        composed = work.life_span.begin[:4]
+        composed = _date_range(work.life_span.begin, work.life_span.end)
 
     return WorkDates(composed=composed, published=published, premiered=premiered)
 

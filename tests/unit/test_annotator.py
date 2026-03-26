@@ -33,7 +33,7 @@ from music_annotator import (
 )
 from music_annotator._mb_api import _extract_session_date
 from music_annotator._tags import _work_aliases
-from music_annotator._works import _score_top_work, select_primary_performance_work
+from music_annotator._works import _date_range, _score_top_work, select_primary_performance_work
 from music_annotator.models import (
     JSON,
     ArtistEntry,
@@ -1870,6 +1870,147 @@ class TestBuildDestPathYear:
 
 
 # ---------------------------------------------------------------------------
+# _date_range helper
+# ---------------------------------------------------------------------------
+
+
+class TestDateRange:
+    """Tests for _date_range."""
+
+    def test_single_year_when_no_end(self) -> None:
+        """Returns single year when end is empty."""
+
+        assert _date_range("1822", "") == "1822"
+
+    def test_single_year_when_same_year(self) -> None:
+        """Returns single year when begin and end are in the same year."""
+
+        assert _date_range("1824-03-01", "1824-09-30") == "1824"
+
+    def test_year_range_when_different_years(self) -> None:
+        """Returns YYYY-YYYY when begin and end span different years."""
+
+        assert _date_range("1822", "1824") == "1822-1824"
+
+    def test_full_dates_truncated_to_years(self) -> None:
+        """Full ISO dates are truncated to 4-digit years in the output."""
+
+        assert _date_range("1983-12-20", "1984-01-05") == "1983-1984"
+
+    def test_empty_begin_returns_empty(self) -> None:
+        """Returns empty string when begin is empty."""
+
+        assert _date_range("", "1824") == ""
+
+
+# ---------------------------------------------------------------------------
+# build_dest_path — [rec YYYY-YYYY] multi-year range
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDestPathRecRange:
+    """Tests for [rec YYYY-YYYY] multi-year range in build_dest_path."""
+
+    def _dest(self, recording_date: str, fs: FakeFilesystem) -> str:
+        """Run build_dest_path with a given RECORDING_DATE and return the path string.
+
+        :param recording_date: Value for the RECORDING_DATE tag.
+        :param fs: pyfakefs fixture.
+        :returns: String representation of the result path.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = TrackTags(
+            title="T",
+            movementnumber="1",
+            movementtotal="1",
+            cwp_work_top="Symphony",
+            cwp_composer_lastnames="Beethoven",
+            recording_date=recording_date,
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        return str(
+            build_dest_path(
+                dest_root,
+                _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+                _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+                tags,
+            )
+        )
+
+    def test_multi_year_range_produces_rec_yyyy_yyyy(self, fs: FakeFilesystem) -> None:
+        """RECORDING_DATE spanning two years produces [rec YYYY-YYYY].
+
+        :param fs: pyfakefs fixture.
+        """
+        result = self._dest("1983-12-20/1984-01-05", fs)
+        assert "[rec 1983-1984]" in result
+
+    def test_same_year_range_produces_rec_yyyy(self, fs: FakeFilesystem) -> None:
+        """RECORDING_DATE where begin and end are in the same year produces [rec YYYY].
+
+        :param fs: pyfakefs fixture.
+        """
+        result = self._dest("1984-01-27/1984-02-21", fs)
+        assert "[rec 1984]" in result
+        assert "-1984" not in result  # no range suffix
+
+    def test_single_date_no_slash_produces_rec_yyyy(self, fs: FakeFilesystem) -> None:
+        """RECORDING_DATE without a slash (single begin date) produces [rec YYYY].
+
+        :param fs: pyfakefs fixture.
+        """
+        result = self._dest("1984-01-27", fs)
+        assert "[rec 1984]" in result
+
+    def test_slash_with_empty_end_year_produces_rec_yyyy(self, fs: FakeFilesystem) -> None:
+        """RECORDING_DATE with slash but missing end year produces [rec YYYY].
+
+        :param fs: pyfakefs fixture.
+        """
+        result = self._dest("1984/", fs)
+        assert "[rec 1984]" in result
+
+    def test_slash_with_invalid_begin_year_produces_no_label(self, fs: FakeFilesystem) -> None:
+        """RECORDING_DATE with slash but unparseable begin year produces no [rec] label.
+
+        :param fs: pyfakefs fixture.
+        """
+        result = self._dest("/1984", fs)
+        assert "[rec" not in result
+
+    def test_rec_takes_precedence_over_rel(self, fs: FakeFilesystem) -> None:
+        """[rec] label takes precedence over [rel] when RECORDING_DATE is present.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = TrackTags(
+            title="T",
+            movementnumber="1",
+            movementtotal="1",
+            cwp_work_top="Symphony",
+            cwp_composer_lastnames="Beethoven",
+            recording_date="1983-12-20/1984-01-05",
+            originaldate="1986",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        result = str(
+            build_dest_path(
+                dest_root,
+                _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+                _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+                tags,
+            )
+        )
+        assert "[rec 1983-1984]" in result
+        assert "[rel" not in result
+
+
+# ---------------------------------------------------------------------------
 # build_dest_path — intermediate directories for 3-level hierarchy
 # ---------------------------------------------------------------------------
 
@@ -2352,7 +2493,7 @@ class TestCollectWorkDatesFromRelations:
     """Tests for the relation-based date extraction in collect_work_dates."""
 
     def test_composed_date_from_composer_relation_begin(self) -> None:
-        """Composed date is extracted from composer artist relation begin when no attribute."""
+        """Composed date includes both begin and end years when they differ."""
         work = _w(
             {
                 "id": "w1",
@@ -2364,6 +2505,45 @@ class TestCollectWorkDatesFromRelations:
                         "begin": "1822",
                         "end": "1824",
                         "artist": {"id": "a1", "name": "Beethoven", "sort-name": "Beethoven"},
+                    }
+                ],
+            }
+        )
+        dates = music_annotator.collect_work_dates(work)
+        assert dates.composed == "1822-1824"
+
+    def test_composed_date_single_year_when_begin_equals_end(self) -> None:
+        """Composed date is a single year when begin and end year are the same."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "T",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "direction": "backward",
+                        "begin": "1824-03-01",
+                        "end": "1824-09-30",
+                        "artist": {"id": "a1", "name": "B", "sort-name": "B"},
+                    }
+                ],
+            }
+        )
+        dates = music_annotator.collect_work_dates(work)
+        assert dates.composed == "1824"
+
+    def test_composed_date_begin_only_when_no_end(self) -> None:
+        """Composed date is the begin year only when no end date is present."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "T",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "direction": "backward",
+                        "begin": "1822",
+                        "artist": {"id": "a1", "name": "B", "sort-name": "B"},
                     }
                 ],
             }
@@ -2404,8 +2584,7 @@ class TestCollectWorkDatesFromRelations:
         assert dates.published == "1827"
 
     def test_premiered_date_from_place_relation_begin(self) -> None:
-        """Premiered date extracted from premiere place relation begin."""
-
+        """Premiered date extracted from premiere place relation begin (single-day event: no range)."""
         work = _w({"id": "w1", "title": "T"})
         work.place_relation_list = [
             MBPlaceRelation.model_validate(
@@ -2413,7 +2592,24 @@ class TestCollectWorkDatesFromRelations:
             )
         ]
         dates = music_annotator.collect_work_dates(work)
-        assert dates.premiered == "1824-05-07"
+        assert dates.premiered == "1824"
+
+    def test_published_date_range_from_label_relation(self) -> None:
+        """Published date captures begin–end range from label publishing relation."""
+        work = _w({"id": "w1", "title": "T"})
+        work.label_relation_list = [
+            MBLabelRelation.model_validate(
+                {
+                    "type": "publishing",
+                    "direction": "backward",
+                    "begin": "1827",
+                    "end": "1828",
+                    "label": {"id": "l1", "name": "Breitkopf"},
+                }
+            )
+        ]
+        dates = music_annotator.collect_work_dates(work)
+        assert dates.published == "1827-1828"
 
     def test_non_publishing_label_relation_ignored(self) -> None:
         """Label relation with type != 'publishing' does not set published date."""
@@ -2488,11 +2684,10 @@ class TestCollectWorkUrls:
 
 
 class TestExtractSessionDate:
-    """Tests for _extract_session_date."""
+    """Tests for _extract_session_date — returns (begin, end) tuple."""
 
-    def test_session_date_from_conductor_begin(self) -> None:
-        """Session date is extracted from conductor relation begin."""
-
+    def test_begin_and_end_returned(self) -> None:
+        """Both begin and end are returned when present."""
         rels = [
             MBArtistRelation.model_validate(
                 {
@@ -2504,17 +2699,17 @@ class TestExtractSessionDate:
                 }
             )
         ]
-        assert _extract_session_date(rels) == "1984-01-27"
+        assert _extract_session_date(rels) == ("1984-01-27", "1984-02-21")
 
-    def test_minimum_begin_returned_for_multiple(self) -> None:
-        """Minimum begin date is returned when multiple session relations exist."""
-
+    def test_minimum_begin_maximum_end_for_multiple(self) -> None:
+        """Min begin and max end are returned across multiple session relations."""
         rels = [
             MBArtistRelation.model_validate(
                 {
                     "type": "conductor",
                     "direction": "backward",
                     "begin": "1984-02-01",
+                    "end": "1984-02-10",
                     "artist": {"id": "a1", "name": "K", "sort-name": "K"},
                 }
             ),
@@ -2523,31 +2718,60 @@ class TestExtractSessionDate:
                     "type": "balance",
                     "direction": "backward",
                     "begin": "1984-01-27",
+                    "end": "1984-02-21",
                     "artist": {"id": "a2", "name": "H", "sort-name": "H"},
                 }
             ),
         ]
-        assert _extract_session_date(rels) == "1984-01-27"
+        assert _extract_session_date(rels) == ("1984-01-27", "1984-02-21")
+
+    def test_no_end_returns_empty_end(self) -> None:
+        """When no end dates exist, the end component is empty string."""
+        rels = [
+            MBArtistRelation.model_validate(
+                {
+                    "type": "conductor",
+                    "direction": "backward",
+                    "begin": "1984-01-27",
+                    "artist": {"id": "a1", "name": "K", "sort-name": "K"},
+                }
+            )
+        ]
+        assert _extract_session_date(rels) == ("1984-01-27", "")
 
     def test_non_session_type_excluded(self) -> None:
-        """Non-session relation types do not contribute to session date."""
-
+        """Non-session relation types do not contribute to session dates."""
         rels = [
             MBArtistRelation.model_validate(
                 {
                     "type": "composer",
                     "direction": "backward",
                     "begin": "1800",
+                    "end": "1827",
                     "artist": {"id": "a1", "name": "B", "sort-name": "B"},
                 }
             )
         ]
-        assert _extract_session_date(rels) == ""
+        assert _extract_session_date(rels) == ("", "")
 
-    def test_empty_list_returns_empty(self) -> None:
-        """Empty relation list returns empty string."""
+    def test_empty_list_returns_empty_tuple(self) -> None:
+        """Empty relation list returns ('', '')."""
+        assert _extract_session_date([]) == ("", "")
 
-        assert _extract_session_date([]) == ""
+    def test_multi_year_range(self) -> None:
+        """Sessions spanning a calendar year boundary return correct begin and end."""
+        rels = [
+            MBArtistRelation.model_validate(
+                {
+                    "type": "conductor",
+                    "direction": "backward",
+                    "begin": "1983-12-20",
+                    "end": "1984-01-05",
+                    "artist": {"id": "a1", "name": "K", "sort-name": "K"},
+                }
+            )
+        ]
+        assert _extract_session_date(rels) == ("1983-12-20", "1984-01-05")
 
 
 # ---------------------------------------------------------------------------

@@ -166,20 +166,22 @@ _SESSION_REL_TYPES: frozenset[str] = frozenset(
 )
 
 
-def _extract_session_date(artist_relation_list: list[MBArtistRelation]) -> str:
-    """Extract the earliest session begin date from a recording's artist relations.
+def _extract_session_date(artist_relation_list: list[MBArtistRelation]) -> tuple[str, str]:
+    """Extract the session begin and end dates from a recording's artist relations.
 
-    The recording session date is stored as the ``begin`` field on artist-level relations such as
-    ``"conductor"``, ``"performing orchestra"``, ``"balance"``, ``"engineer"``, etc.  For a given
-    recording session all such relations carry the same ``begin`` date; this function returns the
-    minimum (earliest) begin date found, which is the session start.
+    The recording session date range is stored as the ``begin`` / ``end`` fields on artist-level
+    relations such as ``"conductor"``, ``"performing orchestra"``, ``"balance"``, ``"engineer"``,
+    etc.  All qualifying relations for a given session should carry the same dates.
 
     :param artist_relation_list: The recording's artist relations as parsed by musicbrainzngs.
-    :returns: The earliest session begin date string (e.g. ``"1984-01-27"``), or ``""`` when no
-        session-type relation with a non-empty begin date is present.
+    :returns: A ``(begin, end)`` tuple of ISO date strings.  ``begin`` is the minimum (earliest)
+        begin date across all session-type relations with a non-empty begin.  ``end`` is the
+        maximum (latest) end date across all session-type relations with a non-empty end.  Either
+        component may be ``""`` when not present.
     """
     begins = [rel.begin for rel in artist_relation_list if rel.type in _SESSION_REL_TYPES and rel.begin]
-    return min(begins) if begins else ""
+    ends = [rel.end for rel in artist_relation_list if rel.type in _SESSION_REL_TYPES and rel.end]
+    return (min(begins) if begins else "", max(ends) if ends else "")
 
 
 def fetch_release(release_id: str) -> MBRelease:

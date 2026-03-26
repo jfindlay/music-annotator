@@ -363,8 +363,14 @@ def build_track_tags(
         extract_work_artist_rels(w, role_buckets)
     cwp = build_cwp_tags(work_hierarchy, role_buckets)
 
-    # Session date from artist relations (conductor/engineer begin dates)
-    session_date = _extract_session_date(recording_detail.artist_relation_list)
+    # Session date range from artist relations (conductor/engineer begin/end dates).
+    # Stored as ISO 8601 interval ("1984-01-27/1984-02-21") when begin ≠ end, or as the
+    # single begin date ("1984-01-27") when begin == end or no end is available.
+    session_begin, session_end = _extract_session_date(recording_detail.artist_relation_list)
+    if session_begin and session_end and session_begin != session_end:
+        session_date = f"{session_begin}/{session_end}"
+    else:
+        session_date = session_begin
 
     # Work-level URL relations (IMSLP, Wikidata, etc.) — use bottom work if available
     _work_for_urls = work_hierarchy[0] if work_hierarchy else None
@@ -785,18 +791,35 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
         """
         return raw[:4] if len(raw) >= 4 and raw[:4].isdigit() else ""
 
-    # rec_year: session date from artist relation begin dates (conductor/engineer/etc.).
-    # Falls back to empty string when no session date is known; only activates [rec YYYY] when
-    # a structured session date is available (not a publication year).
-    rec_year = _extract_year(file_dict.get("RECORDING_DATE", ""))
+    # Recording session date label.
+    # RECORDING_DATE stores an ISO 8601 date or interval (e.g. "1984-01-27/1984-02-21").
+    # The directory label uses CE-convention year or year-range:
+    #   - Single year:    [rec 1984]
+    #   - Multi-year:     [rec 1983-1984]
+    # rel_year falls back to publication-era MB fields when no session date is known.
+    rec_date = file_dict.get("RECORDING_DATE", "")
+    rec_label = ""
+    if rec_date:
+        if "/" in rec_date:
+            parts = rec_date.split("/", 1)
+            begin_y = _extract_year(parts[0])
+            end_y = _extract_year(parts[1])
+            if begin_y and end_y and begin_y != end_y:
+                rec_label = f"[rec {begin_y}-{end_y}]"
+            elif begin_y:
+                rec_label = f"[rec {begin_y}]"
+        else:
+            y = _extract_year(rec_date)
+            rec_label = f"[rec {y}]" if y else ""
+
     rel_year = (
         _extract_year(file_dict.get("RECORDING_FIRST_RELEASE_DATE", ""))
         or _extract_year(file_dict.get("ORIGINALDATE", ""))
         or _extract_year(file_dict.get("DATE", ""))
     )
 
-    if rec_year:  # pragma: no cover  (reserved for future session-date data source)
-        work_dir = f"{work_dir} [rec {rec_year}]"
+    if rec_label:
+        work_dir = f"{work_dir} {rec_label}"
     elif rel_year:
         work_dir = f"{work_dir} [rel {rel_year}]"
 
