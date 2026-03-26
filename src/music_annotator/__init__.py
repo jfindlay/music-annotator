@@ -173,6 +173,7 @@ from music_annotator._works import (
     period_for_year,
     strip_common_prefix,
 )
+from music_annotator.models import CopyPlanEntry, DirHint, PeriodEntry, PictureEntry
 
 __all__ = [
     "configure_color",
@@ -258,6 +259,10 @@ _reexports = (
     _sidecar_filename,
     _date_range,
     collect_work_urls,
+    CopyPlanEntry,
+    DirHint,
+    PeriodEntry,
+    PictureEntry,
     _rec_title,
     _score_toc_release,
     _search_mb_releases,

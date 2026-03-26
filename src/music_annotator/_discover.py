@@ -22,7 +22,7 @@ from music_annotator._console import _console
 from music_annotator._mb_api import _mb_retry, init_mb
 from music_annotator._pipeline import CollisionPolicy, run
 from music_annotator._pipeline_io import _DISC_INFO_FILENAME, JOURNAL_FILENAME, find_source_files, read_journal
-from music_annotator.models import JSON, MBReleaseCandidate
+from music_annotator.models import JSON, DirHint, MBReleaseCandidate
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -112,16 +112,16 @@ class TerminalDiscoverUI:
         return input("").strip().lower() in {"y", "yes"}
 
 
-def parse_disc_info_yaml(src_dir: Path) -> tuple[str, str] | None:  # pylint: disable=too-many-return-statements
-    """Extract a ``(query, artist)`` pair from a FreeDB ``00 - disc info.yaml`` file.
+def parse_disc_info_yaml(src_dir: Path) -> DirHint | None:  # pylint: disable=too-many-return-statements
+    """Extract a :class:`~music_annotator.models.DirHint` from a FreeDB ``00 - disc info.yaml`` file.
 
     The file contains a ``record`` list of FreeDB entries for the disc.  Each entry has a ``track_info`` dict with a ``DTITLE``
     key whose value is ``"artist / title"`` — the `` / `` separator is the FreeDB standard.  When multiple records are present
     the one marked ``preferred: true`` is used; if none is marked preferred the first record is used.
 
     :param src_dir: Directory that may contain a ``00 - disc info.yaml`` file.
-    :returns: A ``(query, artist)`` tuple if a usable ``DTITLE`` is found, or ``None`` if the file is absent, the record list is
-        empty, or ``DTITLE`` is missing / blank.
+    :returns: A :class:`~music_annotator.models.DirHint` with ``query`` and ``artist`` populated if a usable ``DTITLE`` is
+        found, or ``None`` if the file is absent, the record list is empty, or ``DTITLE`` is missing / blank.
     :raises yaml.YAMLError: Propagated if the file exists but cannot be parsed.
     """
     yaml_path = src_dir / _DISC_INFO_FILENAME
@@ -160,8 +160,8 @@ def parse_disc_info_yaml(src_dir: Path) -> tuple[str, str] | None:  # pylint: di
     # FreeDB DTITLE format is "artist / title"; fall back to the whole string as the query.
     if " / " in dtitle:
         artist, title = dtitle.split(" / ", 1)
-        return title.strip(), artist.strip()
-    return dtitle, ""
+        return DirHint(query=title.strip(), artist=artist.strip())
+    return DirHint(query=dtitle, artist="")
 
 
 def _parse_disc_id_list(disc_id: list[object]) -> tuple[int, int, list[int]] | None:
@@ -325,8 +325,8 @@ def _score_toc_release(item: Mapping[str, object], expected_tracks: int) -> int:
     return min(raw_score, 100)
 
 
-def parse_dir_hint(src_dir: Path) -> tuple[str, str]:
-    """Extract a ``(query, "")`` pair from a source directory name and its track filenames.
+def parse_dir_hint(src_dir: Path) -> DirHint:
+    """Extract a :class:`~music_annotator.models.DirHint` from a source directory name and its track filenames.
 
     FreeDB directory names follow no consistent ``"artist - album"`` ordering — the same library may have ``"Beethoven
     Symphonies - Karajan"`` next to ``"Karajan - Beethoven Symphonies"``.  Attempting to split on `` - `` produces unreliable
@@ -343,8 +343,8 @@ def parse_dir_hint(src_dir: Path) -> tuple[str, str]:
     track-number prefixes are stripped and the longest remaining stem is used instead.
 
     :param src_dir: Directory containing the source audio files.
-    :returns: A ``(query, artist_hint)`` tuple; ``artist_hint`` is always ``""`` because the naming convention does not reliably
-        distinguish artist from title.
+    :returns: A :class:`~music_annotator.models.DirHint` with the cleaned query and ``artist=""`` because the naming convention
+        does not reliably distinguish artist from title.
     """
     raw = src_dir.name
     query = _FREEDB_HEX_SUFFIX_RE.sub("", raw)
@@ -358,7 +358,7 @@ def parse_dir_hint(src_dir: Path) -> tuple[str, str]:
         if stems:
             query = max(stems, key=len)
 
-    return query, ""
+    return DirHint(query=query, artist="")
 
 
 def _search_mb_releases(query: str, tracks: int, limit: int) -> dict[str, JSON]:
@@ -479,11 +479,11 @@ def search_releases_by_dir(src_dir: Path, limit: int = 10) -> list[MBReleaseCand
     # --- Priority 2: DTITLE text search ---
     hint = parse_disc_info_yaml(src_dir)
     if hint is not None:
-        query, _ = hint
+        query = hint.query
         log.debug("disc_info_yaml_hint", query=query, src_dir=str(src_dir))
     else:
         # --- Priority 3: directory name text search ---
-        query, _ = parse_dir_hint(src_dir)
+        query = parse_dir_hint(src_dir).query
         if not query:  # pragma: no cover
             query = src_dir.name
 

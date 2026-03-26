@@ -39,7 +39,7 @@ from music_annotator._pipeline_io import (
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path, build_track_tags
 from music_annotator._works import build_work_hierarchy, select_primary_performance_work
-from music_annotator.models import CoverArt, CoverImage, MBMedium, MBTrack, MBWork, TrackTags, TransactionEntry
+from music_annotator.models import CopyPlanEntry, CoverArt, CoverImage, MBMedium, MBTrack, MBWork, TrackTags, TransactionEntry
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -351,19 +351,19 @@ def run(
                 barcode=release.barcode,
             )
 
-    # Build the full (src_file, dest_file) plan before touching the filesystem.
-    plan: list[tuple[int, Path, Path]] = []
+    # Build the full copy plan before touching the filesystem.
+    plan: list[CopyPlanEntry] = []
     for idx, (src_file, (track, _medium_pos)) in enumerate(file_track_pairs):
         final_tags = tags_map[idx]
         dest_base = build_dest_path(dest_root, release, track, final_tags)
         dest_file = dest_base.with_suffix(src_file.suffix.lower())
         log.info("copy_track", src=src_file.name, dest=str(dest_file.relative_to(dest_root)))
-        plan.append((idx, src_file, dest_file))
+        plan.append(CopyPlanEntry(idx=idx, src_file=src_file, dest_file=dest_file))
 
     # --- Collision detection and resolution ---
     skip_dest: set[Path] = set()
     if not dry_run:
-        collisions = _check_collisions([dest for _, _, dest in plan])
+        collisions = _check_collisions([e.dest_file for e in plan])
         if collisions:
             policy = collision_policy
             if policy == CollisionPolicy.ASK:
@@ -385,7 +385,8 @@ def run(
     sidecars_written: set[Path] = set()
     now = datetime.datetime.now(datetime.UTC).isoformat()
 
-    for idx, src_file, dest_file in plan:
+    for entry in plan:
+        idx, src_file, dest_file = entry.idx, entry.src_file, entry.dest_file
         final_tags = tags_map[idx]
 
         if dry_run:

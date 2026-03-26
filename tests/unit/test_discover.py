@@ -159,7 +159,7 @@ class TestParseDiscInfoYaml:
         fs.create_file(str(src / "00 - disc info.yaml"), contents=_SINGLE_RECORD_YAML)
         result = music_annotator.parse_disc_info_yaml(src)
         assert result is not None
-        title, artist = result
+        title, artist = result.query, result.artist
         assert title == "Ottorino Respighi - Fontane di Roma"
         assert artist == "Karajan, Berliner Philharmoniker"
 
@@ -173,7 +173,7 @@ class TestParseDiscInfoYaml:
         fs.create_file(str(src / "00 - disc info.yaml"), contents=_TWO_RECORD_YAML)
         result = music_annotator.parse_disc_info_yaml(src)
         assert result is not None
-        title, artist = result
+        title, artist = result.query, result.artist
         assert title == "Beethoven Symphonies"
         assert artist == "Furtwangler"
 
@@ -187,7 +187,7 @@ class TestParseDiscInfoYaml:
         fs.create_file(str(src / "00 - disc info.yaml"), contents=_TWO_RECORD_NO_PREFERRED_YAML)
         result = music_annotator.parse_disc_info_yaml(src)
         assert result is not None
-        title, artist = result
+        title, artist = result.query, result.artist
         assert title == "First Title"
         assert artist == "First Artist"
 
@@ -201,7 +201,7 @@ class TestParseDiscInfoYaml:
         fs.create_file(str(src / "00 - disc info.yaml"), contents=_NO_SLASH_YAML)
         result = music_annotator.parse_disc_info_yaml(src)
         assert result is not None
-        query, artist = result
+        query, artist = result.query, result.artist
         assert query == "Just A Title With No Slash"
         assert artist == ""
 
@@ -271,7 +271,7 @@ class TestParseDiscInfoYaml:
         fs.create_file(str(src / "00 - disc info.yaml"), contents=yaml_content)
         result = music_annotator.parse_disc_info_yaml(src)
         assert result is not None
-        title, artist = result
+        title, artist = result.query, result.artist
         assert title == "Werk"
         assert artist == "Künstler"
 
@@ -307,7 +307,8 @@ class TestParseDirHint:
         """
         src = Path("/music/Respighi - Fontane di Roma")
         fs.create_dir(str(src))
-        query, artist = music_annotator.parse_dir_hint(src)
+        _h = music_annotator.parse_dir_hint(src)
+        query, artist = _h.query, _h.artist
         assert "Fontane di Roma" in query
         assert "Respighi" in query
         assert artist == ""
@@ -319,7 +320,8 @@ class TestParseDirHint:
         """
         src = Path("/music/Fontane di Roma")
         fs.create_dir(str(src))
-        query, artist = music_annotator.parse_dir_hint(src)
+        _h = music_annotator.parse_dir_hint(src)
+        query, artist = _h.query, _h.artist
         assert query == "Fontane di Roma"
         assert artist == ""
 
@@ -330,7 +332,7 @@ class TestParseDirHint:
         """
         src = Path("/music/Respighi - Fontane di Roma.0xe212b212")
         fs.create_dir(str(src))
-        query, _ = music_annotator.parse_dir_hint(src)
+        query = music_annotator.parse_dir_hint(src).query
         assert "0xe212b212" not in query
         assert "Fontane di Roma" in query
 
@@ -341,7 +343,7 @@ class TestParseDirHint:
         """
         src = Path("/music/Karajan :: Respighi - Fontane di Roma.0xe212b212")
         fs.create_dir(str(src))
-        query, _ = music_annotator.parse_dir_hint(src)
+        query = music_annotator.parse_dir_hint(src).query
         assert "::" not in query
         assert "Karajan" in query
 
@@ -352,7 +354,7 @@ class TestParseDirHint:
         """
         src = Path("/music/Brahms Symphonies (Disc 1)")
         fs.create_dir(str(src))
-        query, _ = music_annotator.parse_dir_hint(src)
+        query = music_annotator.parse_dir_hint(src).query
         assert "Disc 1" not in query
         assert "Brahms" in query
 
@@ -363,7 +365,7 @@ class TestParseDirHint:
         """
         src = Path("/music/Beethoven Symphonies - Karajan [1980s]")
         fs.create_dir(str(src))
-        query, _ = music_annotator.parse_dir_hint(src)
+        query = music_annotator.parse_dir_hint(src).query
         assert "[1980s]" not in query
         assert "Beethoven" in query
 
@@ -376,7 +378,8 @@ class TestParseDirHint:
         fs.create_dir(str(src))
         fs.create_file(str(src / "01 - Fontane di Roma movement one.flac"), contents=_MINIMAL_FLAC)
         fs.create_file(str(src / "02 - Short.flac"), contents=_MINIMAL_FLAC)
-        query, artist = music_annotator.parse_dir_hint(src)
+        _h = music_annotator.parse_dir_hint(src)
+        query, artist = _h.query, _h.artist
         assert "Fontane di Roma movement one" in query
         assert artist == ""
 
@@ -387,7 +390,8 @@ class TestParseDirHint:
         """
         src = Path("/music/CD")
         fs.create_dir(str(src))
-        query, artist = music_annotator.parse_dir_hint(src)
+        _h = music_annotator.parse_dir_hint(src)
+        query, artist = _h.query, _h.artist
         assert query == "CD"
         assert artist == ""
 
@@ -399,7 +403,7 @@ class TestParseDirHint:
         src = Path("/music/X")
         fs.create_dir(str(src))
         fs.create_file(str(src / "01 - Very Long Movement Title Here.flac"), contents=_MINIMAL_FLAC)
-        query, _ = music_annotator.parse_dir_hint(src)
+        query = music_annotator.parse_dir_hint(src).query
         assert "Very Long Movement Title Here" in query
 
 

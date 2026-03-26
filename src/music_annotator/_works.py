@@ -11,21 +11,21 @@ import re
 import structlog
 
 from music_annotator._mb_api import fetch_work_detail
-from music_annotator.models import ArtistEntry, MBAttribute, MBWork, MBWorkRelation, RoleBuckets, WorkDates
+from music_annotator.models import ArtistEntry, MBAttribute, MBWork, MBWorkRelation, PeriodEntry, RoleBuckets, WorkDates
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
-#: Classical Extras default period map: (name, start_year_inclusive, end_year_inclusive).
-PERIOD_MAP: list[tuple[str, int, int]] = [
-    ("Early", -3000, 800),
-    ("Medieval", 800, 1400),
-    ("Renaissance", 1400, 1600),
-    ("Baroque", 1600, 1750),
-    ("Classical", 1750, 1820),
-    ("Early Romantic", 1800, 1850),
-    ("Late Romantic", 1850, 1910),
-    ("20th Century", 1910, 1975),
-    ("Contemporary", 1975, 2525),
+#: Classical Extras default period map: each entry gives the period name and its inclusive year range.
+PERIOD_MAP: list[PeriodEntry] = [
+    PeriodEntry(name="Early", start=-3000, end=800),
+    PeriodEntry(name="Medieval", start=800, end=1400),
+    PeriodEntry(name="Renaissance", start=1400, end=1600),
+    PeriodEntry(name="Baroque", start=1600, end=1750),
+    PeriodEntry(name="Classical", start=1750, end=1820),
+    PeriodEntry(name="Early Romantic", start=1800, end=1850),
+    PeriodEntry(name="Late Romantic", start=1850, end=1910),
+    PeriodEntry(name="20th Century", start=1910, end=1975),
+    PeriodEntry(name="Contemporary", start=1975, end=2525),
 ]
 
 #: Mapping from MB work type to genre string (CE worktype_genres logic).
@@ -218,9 +218,9 @@ def period_for_year(year: int | None) -> str:
     """
     if year is None:
         return ""
-    for name, start, end in PERIOD_MAP:
-        if start <= year <= end:
-            return name
+    for entry in PERIOD_MAP:
+        if entry.start <= year <= entry.end:
+            return entry.name
     return ""
 
 

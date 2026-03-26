@@ -7,6 +7,8 @@ logic.  All fields that the MB API may omit default to empty strings or empty li
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
@@ -1279,6 +1281,69 @@ class CoverArt(BaseModel):
         :returns: ``front[0].mime`` when ``front`` is non-empty, else ``""``.
         """
         return self.front[0].mime if self.front else ""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class PeriodEntry(BaseModel):
+    """One entry in the Classical Extras period map, associating a period name with a year range.
+
+    Used in :data:`~music_annotator._works.PERIOD_MAP` which maps composition years to CE period
+    names (``"Baroque"``, ``"Classical"``, ``"Romantic"``, etc.).
+
+    Important attributes: ``name`` (period label), ``start`` (inclusive start year),
+    ``end`` (inclusive end year).
+    """
+
+    name: str
+    start: int
+    end: int
+
+
+class DirHint(BaseModel):
+    """A search query and optional artist hint derived from a source directory.
+
+    Returned by :func:`~music_annotator._discover.parse_disc_info_yaml` and
+    :func:`~music_annotator._discover.parse_dir_hint`.  The ``artist`` field is empty when the
+    naming convention does not reliably separate artist from title (directory-name searches),
+    and populated when a FreeDB ``DTITLE`` ``"artist / title"`` entry is found.
+
+    Important attributes: ``query`` (MB search string), ``artist`` (artist hint, may be ``""``).
+    """
+
+    query: str
+    artist: str = ""
+
+
+class CopyPlanEntry(BaseModel):
+    """One planned file-copy operation in the :func:`~music_annotator.run` pipeline.
+
+    Built from the source–destination mapping before any filesystem operations begin, so that
+    collision detection and the copy loop can both work from the same pre-computed plan.
+
+    Important attributes: ``idx`` (0-based index into the source/tags maps), ``src_file``
+    (absolute source path), ``dest_file`` (absolute destination path including extension).
+    """
+
+    idx: int
+    src_file: Path
+    dest_file: Path
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class PictureEntry(BaseModel):
+    """A single embedded cover-art picture block as read back from a tagged audio file.
+
+    Used in :func:`~music_annotator._pipeline_io._verify_copy` to compare expected and actual
+    embedded PICTURE / APIC data after the tag-write step.
+
+    Important attributes: ``pic_type`` (FLAC/ID3 picture type integer, e.g. ``3`` for COVER_FRONT),
+    ``data`` (raw image bytes).
+    """
+
+    pic_type: int
+    data: bytes
 
     model_config = {"arbitrary_types_allowed": True}
 

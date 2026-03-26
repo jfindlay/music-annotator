@@ -15,7 +15,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 
 from music_annotator._tagger import _MP3_STD_KEYS, _MP3_TXXX_MAP
-from music_annotator.models import JSON, CoverArt, TrackTags, TransactionEntry, TransactionLog
+from music_annotator.models import JSON, CoverArt, PictureEntry, TrackTags, TransactionEntry, TransactionLog
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -259,14 +259,14 @@ def _verify_copy(
     # Back, booklet, medium, and original-resolution front images are written as sidecar files
     # and are not embedded in the audio file; they are not checked here.
     if cover and cover.front:
-        expected_pics: list[tuple[int, bytes]] = [(3, img.data) for img in cover.front]
+        expected_pics: list[PictureEntry] = [PictureEntry(pic_type=3, data=img.data) for img in cover.front]
 
         match ext:
             case ".flac":
-                actual_pics = [(p.type, p.data) for p in FLAC(str(dest_file)).pictures]
+                actual_pics = [PictureEntry(pic_type=p.type, data=p.data) for p in FLAC(str(dest_file)).pictures]
             case ".mp3":
                 actual_pics = [
-                    (f.type, f.data)
+                    PictureEntry(pic_type=f.type, data=f.data)
                     for f in ID3(str(dest_file)).getall("APIC")  # type: ignore[no-untyped-call]
                 ]
             case _:  # pragma: no cover
