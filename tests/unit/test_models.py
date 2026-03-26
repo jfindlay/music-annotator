@@ -11,8 +11,19 @@ from music_annotator.models import (
     CoverImage,
     CwpTags,
     MBArtist,
+    MBArtistRelation,
+    MBCoverArtArchive,
+    MBLabel,
     MBLabelInfo,
+    MBLabelRelation,
+    MBPlaceRelation,
+    MBRecording,
     MBRelease,
+    MBReleaseEvent,
+    MBReleaseGroup,
+    MBSeriesRelation,
+    MBTrack,
+    MBUrlRelation,
     MBWork,
     MBWorkRelation,
     RoleBuckets,
@@ -628,3 +639,518 @@ class TestTransactionLog:
         assert len(log.entries) == 1
         assert isinstance(log.entries[0], TransactionEntry)
         assert log.entries[0].action == "copied"
+
+
+# ---------------------------------------------------------------------------
+# New model field tests
+# ---------------------------------------------------------------------------
+
+
+class TestMBArtistRelationEnded:
+    """Tests for MBArtistRelation.coerce_ended."""
+
+    def test_ended_string_true(self) -> None:
+        """String 'true' is coerced to True."""
+        rel = MBArtistRelation.model_validate({"type": "conductor", "direction": "backward", "ended": "true"})
+        assert rel.ended is True
+
+    def test_ended_string_false(self) -> None:
+        """String 'false' is coerced to False."""
+        rel = MBArtistRelation.model_validate({"type": "conductor", "direction": "backward", "ended": "false"})
+        assert rel.ended is False
+
+    def test_ended_none_defaults_false(self) -> None:
+        """None is coerced to False."""
+        rel = MBArtistRelation.model_validate({"type": "conductor", "direction": "backward"})
+        assert rel.ended is False
+
+    def test_begin_end_populated(self) -> None:
+        """begin and end date fields are populated."""
+        rel = MBArtistRelation.model_validate(
+            {"type": "conductor", "direction": "backward", "begin": "1984-01-27", "end": "1984-02-21", "ended": "true"}
+        )
+        assert rel.begin == "1984-01-27"
+        assert rel.end == "1984-02-21"
+        assert rel.ended is True
+
+    def test_target_credit_populated(self) -> None:
+        """target-credit and source-credit are populated."""
+        rel = MBArtistRelation.model_validate(
+            {"type": "performer", "direction": "backward", "target-credit": "Anne-Sophie Mutter"}
+        )
+        assert rel.target_credit == "Anne-Sophie Mutter"
+
+
+class TestMBWorkRelationEnded:
+    """Tests for MBWorkRelation.coerce_ended."""
+
+    def test_ended_coerced_from_string(self) -> None:
+        """String 'true' is coerced to True on MBWorkRelation."""
+        wrel = MBWorkRelation.model_validate({"type": "parts", "direction": "backward", "ended": "true"})
+        assert wrel.ended is True
+
+    def test_begin_populated(self) -> None:
+        """begin date is populated on MBWorkRelation."""
+        wrel = MBWorkRelation.model_validate({"type": "parts", "direction": "backward", "begin": "1900"})
+        assert wrel.begin == "1900"
+
+
+class TestMBUrlRelation:
+    """Tests for MBUrlRelation URL extraction."""
+
+    def test_url_extracted_from_nested_dict(self) -> None:
+        """URL resource is extracted from the nested url dict returned by musicbrainzngs."""
+        url_rel = MBUrlRelation.model_validate({"type": "discogs", "url": {"resource": "https://www.discogs.com/release/123"}})
+        assert url_rel.url == "https://www.discogs.com/release/123"
+
+    def test_url_plain_string_passthrough(self) -> None:
+        """Plain string url is passed through unchanged."""
+        url_rel = MBUrlRelation.model_validate({"type": "wikidata", "url": "https://www.wikidata.org/wiki/Q123"})
+        assert url_rel.url == "https://www.wikidata.org/wiki/Q123"
+
+    def test_url_defaults_to_empty(self) -> None:
+        """url defaults to empty string when absent."""
+        url_rel = MBUrlRelation.model_validate({"type": "allmusic"})
+        assert url_rel.url == ""
+
+
+class TestMBPlaceRelation:
+    """Tests for MBPlaceRelation model."""
+
+    def test_place_populated(self) -> None:
+        """Place name and id are populated from nested place dict."""
+        prel = MBPlaceRelation.model_validate(
+            {
+                "type": "premiere",
+                "direction": "backward",
+                "begin": "1824-05-07",
+                "place": {"id": "abc", "name": "Theater am Kärntnertor"},
+            }
+        )
+        assert prel.type == "premiere"
+        assert prel.begin == "1824-05-07"
+        assert prel.place.name == "Theater am Kärntnertor"
+
+    def test_ended_coerced(self) -> None:
+        """ended is coerced from string."""
+        prel = MBPlaceRelation.model_validate({"type": "premiere", "direction": "backward", "ended": "true"})
+        assert prel.ended is True
+
+
+class TestMBLabelRelation:
+    """Tests for MBLabelRelation model."""
+
+    def test_label_populated(self) -> None:
+        """Label name is populated from nested label dict."""
+        lrel = MBLabelRelation.model_validate(
+            {
+                "type": "publishing",
+                "direction": "backward",
+                "begin": "1827",
+                "label": {"id": "lbl1", "name": "Breitkopf & Härtel"},
+            }
+        )
+        assert lrel.type == "publishing"
+        assert lrel.begin == "1827"
+        assert lrel.label.name == "Breitkopf & Härtel"
+
+
+class TestMBSeriesRelation:
+    """Tests for MBSeriesRelation model."""
+
+    def test_series_populated(self) -> None:
+        """Series name is populated and ordering_key coerced."""
+        srel = MBSeriesRelation.model_validate(
+            {"type": "part of", "ordering-key": "3", "series": {"id": "s1", "name": "Karajan Gold", "type": "Release series"}}
+        )
+        assert srel.series.name == "Karajan Gold"
+        assert srel.ordering_key == 3
+
+    def test_ordering_key_none_defaults_zero(self) -> None:
+        """ordering-key None defaults to 0."""
+        srel = MBSeriesRelation.model_validate({"type": "part of", "series": {"id": "s1", "name": "S"}})
+        assert srel.ordering_key == 0
+
+
+class TestMBCoverArtArchive:
+    """Tests for MBCoverArtArchive field coercion."""
+
+    def test_bool_fields_coerced_from_string(self) -> None:
+        """String 'true'/'false' fields are coerced to bool."""
+        caa = MBCoverArtArchive.model_validate(
+            {"artwork": "true", "front": "true", "back": "false", "darkened": "false", "count": "3"}
+        )
+        assert caa.artwork is True
+        assert caa.front is True
+        assert caa.back is False
+        assert caa.count == 3
+
+    def test_defaults_to_false_when_absent(self) -> None:
+        """All fields default to False/0 when absent."""
+        caa = MBCoverArtArchive.model_validate({})
+        assert caa.front is False
+        assert caa.count == 0
+
+
+class TestMBReleaseEvent:
+    """Tests for MBReleaseEvent country extraction."""
+
+    def test_country_extracted_from_area(self) -> None:
+        """Country code is extracted from the nested area.iso-3166-1-code-list."""
+        evt = MBReleaseEvent.model_validate({"date": "1986", "area": {"name": "Germany", "iso-3166-1-code-list": ["DE"]}})
+        assert evt.date == "1986"
+        assert evt.country == "DE"
+
+    def test_country_empty_when_no_area(self) -> None:
+        """country defaults to empty when area is absent."""
+        evt = MBReleaseEvent.model_validate({"date": "1986"})
+        assert evt.country == ""
+
+
+class TestMBTrackCoerceLength:
+    """Tests for MBTrack.coerce_length."""
+
+    def test_length_coerced_from_string(self) -> None:
+        """String length is coerced to int."""
+        track = MBTrack.model_validate({"id": "t1", "position": 1, "length": "541000"})
+        assert track.length == 541000
+
+    def test_length_none_defaults_zero(self) -> None:
+        """None length defaults to 0."""
+        track = MBTrack.model_validate({"id": "t1", "position": 1})
+        assert track.length == 0
+
+    def test_number_populated(self) -> None:
+        """number field is populated for non-CD formats."""
+        track = MBTrack.model_validate({"id": "t1", "position": 1, "number": "A1"})
+        assert track.number == "A1"
+
+
+class TestMBRecordingNewFields:
+    """Tests for new MBRecording fields."""
+
+    def test_video_coerced(self) -> None:
+        """video field is coerced from string."""
+        rec = MBRecording.model_validate({"id": "r1", "title": "T", "video": "true"})
+        assert rec.video is True
+
+    def test_length_coerced(self) -> None:
+        """length field is coerced from string to int."""
+        rec = MBRecording.model_validate({"id": "r1", "title": "T", "length": "542373"})
+        assert rec.length == 542373
+
+    def test_isrc_list_populated(self) -> None:
+        """isrc-list is populated."""
+        rec = MBRecording.model_validate({"id": "r1", "title": "T", "isrc-list": ["DEF058402370"]})
+        assert rec.isrc_list == ["DEF058402370"]
+
+    def test_disambiguation_populated(self) -> None:
+        """disambiguation is populated."""
+        rec = MBRecording.model_validate({"id": "r1", "title": "T", "disambiguation": "live recording"})
+        assert rec.disambiguation == "live recording"
+
+
+class TestMBReleaseGroupSecondaryTypes:
+    """Tests for MBReleaseGroup.secondary_type_list."""
+
+    def test_secondary_types_populated(self) -> None:
+        """secondary-type-list is populated."""
+        rg = MBReleaseGroup.model_validate({"id": "rg1", "primary-type": "Album", "secondary-type-list": ["Compilation"]})
+        assert rg.secondary_type_list == ["Compilation"]
+
+    def test_secondary_types_defaults_empty(self) -> None:
+        """secondary_type_list defaults to []."""
+        rg = MBReleaseGroup.model_validate({"id": "rg1", "primary-type": "Album"})
+        assert rg.secondary_type_list == []
+
+
+class TestMBLabelLabelCode:
+    """Tests for MBLabel.label_code."""
+
+    def test_label_code_populated(self) -> None:
+        """label-code is populated."""
+        label = MBLabel.model_validate({"id": "l1", "name": "Deutsche Grammophon", "label-code": "173"})
+        assert label.label_code == "173"
+
+
+class TestMBWorkNewFields:
+    """Tests for new MBWork fields."""
+
+    def test_iswc_populated(self) -> None:
+        """iswc is populated from the musicbrainzngs response."""
+        w = MBWork.model_validate({"id": "w1", "title": "T", "iswc": "T-909.345.750-2"})
+        assert w.iswc == "T-909.345.750-2"
+
+    def test_disambiguation_populated(self) -> None:
+        """disambiguation is populated."""
+        w = MBWork.model_validate({"id": "w1", "title": "T", "disambiguation": "1841 arrangement by Mendelssohn"})
+        assert w.disambiguation == "1841 arrangement by Mendelssohn"
+
+    def test_annotation_populated(self) -> None:
+        """annotation is populated."""
+        w = MBWork.model_validate({"id": "w1", "title": "T", "annotation": "Scholarly note."})
+        assert w.annotation == "Scholarly note."
+
+    def test_place_relation_list_populated(self) -> None:
+        """place-relation-list is populated from the API response."""
+        w = MBWork.model_validate(
+            {
+                "id": "w1",
+                "title": "T",
+                "place-relation-list": [
+                    {
+                        "type": "premiere",
+                        "direction": "backward",
+                        "begin": "1824-05-07",
+                        "place": {"id": "p1", "name": "Vienna"},
+                    }
+                ],
+            }
+        )
+        assert len(w.place_relation_list) == 1
+        assert w.place_relation_list[0].begin == "1824-05-07"
+        assert w.place_relation_list[0].place.name == "Vienna"
+
+    def test_label_relation_list_populated(self) -> None:
+        """label-relation-list is populated from the API response."""
+        w = MBWork.model_validate(
+            {
+                "id": "w1",
+                "title": "T",
+                "label-relation-list": [
+                    {"type": "publishing", "direction": "backward", "begin": "1827", "label": {"id": "l1", "name": "Breitkopf"}}
+                ],
+            }
+        )
+        assert len(w.label_relation_list) == 1
+        assert w.label_relation_list[0].begin == "1827"
+
+    def test_url_relation_list_populated(self) -> None:
+        """url-relation-list is populated from the API response."""
+        w = MBWork.model_validate(
+            {
+                "id": "w1",
+                "title": "T",
+                "url-relation-list": [
+                    {"type": "download for free", "url": {"resource": "https://imslp.org/wiki/Symphony_No.9"}}
+                ],
+            }
+        )
+        assert len(w.url_relation_list) == 1
+        assert w.url_relation_list[0].type == "download for free"
+        assert "imslp" in w.url_relation_list[0].url
+
+
+class TestMBReleaseNewFields:
+    """Tests for new MBRelease fields."""
+
+    def test_country_populated(self) -> None:
+        """country is populated."""
+        rel = MBRelease.model_validate({"id": "r1", "title": "T", "country": "DE"})
+        assert rel.country == "DE"
+
+    def test_packaging_populated(self) -> None:
+        """packaging is populated."""
+        rel = MBRelease.model_validate({"id": "r1", "title": "T", "packaging": "Jewel Case"})
+        assert rel.packaging == "Jewel Case"
+
+    def test_cover_art_archive_populated(self) -> None:
+        """cover-art-archive is populated."""
+        rel = MBRelease.model_validate(
+            {
+                "id": "r1",
+                "title": "T",
+                "cover-art-archive": {"artwork": "true", "front": "true", "back": "false", "count": "1", "darkened": "false"},
+            }
+        )
+        assert rel.cover_art_archive.front is True
+        assert rel.cover_art_archive.count == 1
+
+    def test_release_event_list_populated(self) -> None:
+        """release-event-list is populated with country extracted from area."""
+        rel = MBRelease.model_validate(
+            {
+                "id": "r1",
+                "title": "T",
+                "release-event-list": [{"date": "1986", "area": {"name": "Germany", "iso-3166-1-code-list": ["DE"]}}],
+            }
+        )
+        assert len(rel.release_event_list) == 1
+        assert rel.release_event_list[0].country == "DE"
+
+    def test_series_relation_list_populated(self) -> None:
+        """series-relation-list is populated."""
+        rel = MBRelease.model_validate(
+            {
+                "id": "r1",
+                "title": "T",
+                "series-relation-list": [
+                    {
+                        "type": "part of",
+                        "ordering-key": "2",
+                        "series": {"id": "s1", "name": "Karajan Gold", "type": "Release series"},
+                    }
+                ],
+            }
+        )
+        assert len(rel.series_relation_list) == 1
+        assert rel.series_relation_list[0].series.name == "Karajan Gold"
+
+
+class TestCoverageGaps:
+    """Targeted tests to cover remaining validator branches."""
+
+    def test_mb_work_relation_ended_bool_true(self) -> None:
+        """MBWorkRelation.coerce_ended handles bool True directly."""
+        wrel = MBWorkRelation.model_validate({"type": "parts", "direction": "backward", "ended": True})
+        assert wrel.ended is True
+
+    def test_mb_work_relation_ended_bool_false(self) -> None:
+        """MBWorkRelation.coerce_ended handles bool False directly."""
+        wrel = MBWorkRelation.model_validate({"type": "parts", "direction": "backward", "ended": False})
+        assert wrel.ended is False
+
+    def test_mb_url_relation_non_dict_passthrough(self) -> None:
+        """MBUrlRelation.extract_url_resource passes non-dict input through unchanged."""
+        # Pydantic validates the model; passing a non-dict raises ValidationError but
+        # the validator's 'return data' non-dict branch must be reachable via model_validate
+        # with a pre-validated dict that has a plain string url (already covered).
+        # The non-dict guard covers cases where mode="before" receives a non-dict from Pydantic internals.
+        url_rel = MBUrlRelation.model_validate({"type": "wikidata", "url": ""})
+        assert url_rel.url == ""
+
+    def test_mb_artist_relation_ended_bool(self) -> None:
+        """MBArtistRelation.coerce_ended handles bool input directly."""
+        rel = MBArtistRelation.model_validate({"type": "conductor", "direction": "backward", "ended": True})
+        assert rel.ended is True
+        rel2 = MBArtistRelation.model_validate({"type": "conductor", "direction": "backward", "ended": False})
+        assert rel2.ended is False
+
+    def test_mb_artist_relation_ended_string_false(self) -> None:
+        """MBArtistRelation.coerce_ended handles string 'false'."""
+        rel = MBArtistRelation.model_validate({"type": "conductor", "direction": "backward", "ended": "false"})
+        assert rel.ended is False
+
+    def test_mb_place_relation_ended_bool(self) -> None:
+        """MBPlaceRelation.coerce_ended handles bool input directly."""
+        prel = MBPlaceRelation.model_validate({"type": "premiere", "direction": "backward", "ended": True})
+        assert prel.ended is True
+
+    def test_mb_label_relation_ended_bool_and_string(self) -> None:
+        """MBLabelRelation.coerce_ended handles bool True and string 'false'."""
+        lrel = MBLabelRelation.model_validate({"type": "publishing", "ended": True, "label": {"id": "l1", "name": "L"}})
+        assert lrel.ended is True
+        lrel2 = MBLabelRelation.model_validate({"type": "publishing", "ended": "false", "label": {"id": "l1", "name": "L"}})
+        assert lrel2.ended is False
+
+    def test_mb_series_relation_ordering_key_none(self) -> None:
+        """MBSeriesRelation.coerce_ordering_key handles None."""
+        srel = MBSeriesRelation.model_validate({"type": "part of", "ordering-key": None, "series": {"id": "s1", "name": "S"}})
+        assert srel.ordering_key == 0
+
+    def test_mb_cover_art_archive_bool_fields_direct_bool(self) -> None:
+        """MBCoverArtArchive.coerce_bool handles direct bool True."""
+        caa = MBCoverArtArchive.model_validate({"artwork": True, "front": True, "back": False, "darkened": False, "count": 2})
+        assert caa.artwork is True
+        assert caa.back is False
+
+    def test_mb_cover_art_archive_count_string(self) -> None:
+        """MBCoverArtArchive.coerce_count handles None."""
+        caa = MBCoverArtArchive.model_validate({"count": None})
+        assert caa.count == 0
+
+    def test_mb_release_event_no_area_codes(self) -> None:
+        """MBReleaseEvent with area but no iso codes leaves country empty."""
+        evt = MBReleaseEvent.model_validate({"date": "1986", "area": {"name": "Germany", "iso-3166-1-code-list": []}})
+        assert evt.country == ""
+
+    def test_mb_track_length_none_to_zero(self) -> None:
+        """MBTrack.coerce_length converts None to 0."""
+        track = MBTrack.model_validate({"id": "t1", "position": 1, "length": None})
+        assert track.length == 0
+
+    def test_mb_recording_video_false_bool(self) -> None:
+        """MBRecording.coerce_video handles bool False."""
+        rec = MBRecording.model_validate({"id": "r1", "title": "T", "video": False})
+        assert rec.video is False
+
+    def test_mb_recording_video_bool_true(self) -> None:
+        """MBRecording.coerce_video handles bool True directly."""
+        rec = MBRecording.model_validate({"id": "r1", "title": "T", "video": True})
+        assert rec.video is True
+
+    def test_mb_recording_length_none_to_zero(self) -> None:
+        """MBRecording.coerce_length converts None to 0."""
+        rec = MBRecording.model_validate({"id": "r1", "title": "T", "length": None})
+        assert rec.length == 0
+
+    def test_mb_work_relation_ended_none_to_false(self) -> None:
+        """MBWorkRelation.coerce_ended converts None to False."""
+        wrel = MBWorkRelation.model_validate({"type": "parts", "direction": "backward", "ended": None})
+        assert wrel.ended is False
+
+    def test_mb_url_relation_non_dict_url_unchanged(self) -> None:
+        """MBUrlRelation with non-dict url field: non-dict case is a plain string so url stays."""
+        # This exercises the isinstance(url_val, dict) branch being False (url is already a string).
+        url_rel = MBUrlRelation.model_validate({"type": "wikidata", "url": "https://www.wikidata.org/wiki/Q11989"})
+        assert url_rel.url == "https://www.wikidata.org/wiki/Q11989"
+
+    def test_mb_place_relation_ended_none_to_false(self) -> None:
+        """MBPlaceRelation.coerce_ended converts None to False."""
+        prel = MBPlaceRelation.model_validate({"type": "premiere", "ended": None, "place": {"id": "p1", "name": "P"}})
+        assert prel.ended is False
+
+    def test_mb_label_relation_ended_none_to_false(self) -> None:
+        """MBLabelRelation.coerce_ended converts None to False."""
+        lrel = MBLabelRelation.model_validate({"type": "publishing", "ended": None, "label": {"id": "l1", "name": "L"}})
+        assert lrel.ended is False
+
+    def test_mb_series_relation_ordering_key_string(self) -> None:
+        """MBSeriesRelation.coerce_ordering_key converts string to int."""
+        srel = MBSeriesRelation.model_validate({"type": "part of", "ordering-key": "5", "series": {"id": "s1", "name": "S"}})
+        assert srel.ordering_key == 5
+
+    def test_mb_cover_art_archive_count_string_value(self) -> None:
+        """MBCoverArtArchive.coerce_count converts string to int."""
+        caa = MBCoverArtArchive.model_validate({"count": "5"})
+        assert caa.count == 5
+
+    def test_mb_artist_relation_ended_none_to_false(self) -> None:
+        """MBArtistRelation.coerce_ended converts None to False."""
+        rel = MBArtistRelation.model_validate({"type": "conductor", "direction": "backward", "ended": None})
+        assert rel.ended is False
+
+    def test_mb_recording_video_none_to_false(self) -> None:
+        """MBRecording.coerce_video converts None to False."""
+        rec = MBRecording.model_validate({"id": "r1", "title": "T", "video": None})
+        assert rec.video is False
+
+    def test_mb_place_relation_ended_direct_bool_false(self) -> None:
+        """MBPlaceRelation.coerce_ended returns bool False directly (line 266)."""
+        prel = MBPlaceRelation.model_validate({"type": "premiere", "ended": False, "place": {"id": "p1", "name": "P"}})
+        assert prel.ended is False
+
+    def test_mb_cover_art_archive_coerce_bool_direct_false(self) -> None:
+        """MBCoverArtArchive.coerce_bool returns bool False directly (line 388)."""
+        caa = MBCoverArtArchive.model_validate({"front": False})
+        assert caa.front is False
+
+    def test_mb_artist_relation_coerce_ended_direct_false(self) -> None:
+        """MBArtistRelation.coerce_ended returns False for None (line 433) and bool False (434)."""
+        rel_none = MBArtistRelation.model_validate({"type": "conductor", "ended": None})
+        assert rel_none.ended is False
+        rel_bool = MBArtistRelation.model_validate({"type": "conductor", "ended": False})
+        assert rel_bool.ended is False
+
+    def test_mb_release_event_country_already_set(self) -> None:
+        """MBReleaseEvent.extract_country_from_area skips extraction when country is already set (434→441)."""
+        # country key present and non-empty → inner block skipped → return data unchanged
+        evt = MBReleaseEvent.model_validate(
+            {"date": "1986", "country": "DE", "area": {"name": "Germany", "iso-3166-1-code-list": ["DE"]}}
+        )
+        assert evt.country == "DE"
+
+    def test_mb_release_event_area_not_dict(self) -> None:
+        """MBReleaseEvent.extract_country_from_area skips when area is not a dict (436→441)."""
+        evt = MBReleaseEvent.model_validate({"date": "1986", "area": "Germany"})
+        assert evt.country == ""

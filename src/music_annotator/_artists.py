@@ -62,6 +62,11 @@ ROLE_ANNOTATIONS: dict[str, str] = {
     "chorus master": "choirmaster",
     "concertmaster": "leader",
     "balance": "balance",
+    "engineer": "engineer",
+    "mix": "mix",
+    "recording": "recording",
+    "audio": "audio",
+    "sound": "sound",
     "producer": "producer",
 }
 

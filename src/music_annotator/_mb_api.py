@@ -18,7 +18,7 @@ import musicbrainzngs as mb
 import musicbrainzngs.mbxml as _mbxml
 import structlog
 
-from music_annotator.models import JSON, CoverArt, CoverImage, MBRecording, MBRelease, MBWork
+from music_annotator.models import JSON, CoverArt, CoverImage, MBArtistRelation, MBRecording, MBRelease, MBWork
 
 # ---------------------------------------------------------------------------
 # Workaround for a musicbrainzngs bug: parse_recording omits "first-release-date"
@@ -152,9 +152,34 @@ def _get_release_by_id(release_id: str) -> dict[str, JSON]:
             "artist-credits",
             "work-rels",
             "recording-level-rels",
+            "url-rels",
+            "series-rels",
+            "isrcs",
         ],
     )
     return result
+
+
+#: Relation types on recordings whose ``begin``/``end`` date range indicates the recording session.
+_SESSION_REL_TYPES: frozenset[str] = frozenset(
+    {"conductor", "performing orchestra", "balance", "engineer", "recording", "mix", "audio", "sound"}
+)
+
+
+def _extract_session_date(artist_relation_list: list[MBArtistRelation]) -> str:
+    """Extract the earliest session begin date from a recording's artist relations.
+
+    The recording session date is stored as the ``begin`` field on artist-level relations such as
+    ``"conductor"``, ``"performing orchestra"``, ``"balance"``, ``"engineer"``, etc.  For a given
+    recording session all such relations carry the same ``begin`` date; this function returns the
+    minimum (earliest) begin date found, which is the session start.
+
+    :param artist_relation_list: The recording's artist relations as parsed by musicbrainzngs.
+    :returns: The earliest session begin date string (e.g. ``"1984-01-27"``), or ``""`` when no
+        session-type relation with a non-empty begin date is present.
+    """
+    begins = [rel.begin for rel in artist_relation_list if rel.type in _SESSION_REL_TYPES and rel.begin]
+    return min(begins) if begins else ""
 
 
 def fetch_release(release_id: str) -> MBRelease:
@@ -184,7 +209,7 @@ def _get_recording_by_id(recording_id: str) -> dict[str, JSON]:
     """
     result: dict[str, JSON] = mb.get_recording_by_id(
         recording_id,
-        includes=["artists", "work-rels", "artist-rels", "work-level-rels"],
+        includes=["artists", "work-rels", "artist-rels", "work-level-rels", "isrcs"],
     )
     return result
 
@@ -418,7 +443,7 @@ def _get_work_by_id(work_id: str) -> dict[str, JSON]:
     """
     result: dict[str, JSON] = mb.get_work_by_id(
         work_id,
-        includes=["artist-rels", "work-rels", "url-rels", "tags", "aliases"],
+        includes=["artist-rels", "work-rels", "url-rels", "label-rels", "place-rels", "tags", "aliases", "annotation"],
     )
     return result
 

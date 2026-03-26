@@ -18,10 +18,12 @@ from music_annotator._artists import (
     artist_sort_names,
     last_name,
 )
+from music_annotator._mb_api import _extract_session_date
 from music_annotator._works import (
     WORKTYPE_GENRES,
     collect_work_dates,
     collect_work_tags_and_key,
+    collect_work_urls,
     extract_work_artist_rels,
     parse_year,
     period_for_year,
@@ -146,7 +148,7 @@ def build_cea_performers(recording_detail: MBRecording) -> CeaPerformers:
                 cea.composers.append(entry)  # recording-level: CE merges both into composer host tag
             case "producer":
                 cea.producers.append(entry)
-            case "balance":
+            case "balance" | "engineer" | "mix" | "recording" | "audio" | "sound":
                 cea.engineers.append(entry)
             case "performer" | "instrument" | "vocal" | "performing orchestra":
                 if is_ensemble(name):
@@ -361,6 +363,18 @@ def build_track_tags(
         extract_work_artist_rels(w, role_buckets)
     cwp = build_cwp_tags(work_hierarchy, role_buckets)
 
+    # Session date from artist relations (conductor/engineer begin dates)
+    session_date = _extract_session_date(recording_detail.artist_relation_list)
+
+    # Work-level URL relations (IMSLP, Wikidata, etc.) — use bottom work if available
+    _work_for_urls = work_hierarchy[0] if work_hierarchy else None
+    work_urls = collect_work_urls(_work_for_urls) if _work_for_urls else {}
+    work_imslp_url = work_urls.get("download for free", "")
+    work_wikidata_url = work_urls.get("wikidata", "")
+    work_annotation = _work_for_urls.annotation if _work_for_urls else ""
+    work_disambiguation = _work_for_urls.disambiguation if _work_for_urls else ""
+    work_iswc = _work_for_urls.iswc if _work_for_urls else ""
+
     # Fallback work identity used only when work_hierarchy is empty (no work detail was fetched).
     # In that case cwp.work_top and cwp.levels are both empty, so direct_work_id / direct_work_title
     # provide a minimal WORK tag and MUSICBRAINZ_WORKID from the first performance relation stub.
@@ -482,6 +496,33 @@ def build_track_tags(
     wtype_genre = WORKTYPE_GENRES.get(cwp.worktype_genres, "")
     genre = wtype_genre or "Classical"
 
+    # Track number: use the physical track label for non-CD formats (e.g. "A1" for vinyl),
+    # fall back to the integer position string for CD and unknown formats.
+    tracknumber_str = track.number or str(track.position)
+
+    # Track length in ms: prefer track-specific length, fall back to recording length.
+    track_length_ms = track.length or recording_detail.length
+
+    # Release series membership (semicolon-joined series names).
+    series_names = "; ".join(s.series.name for s in release.series_relation_list if s.series.name)
+
+    # Label code from label-info.
+    label_info_obj = release.label_info_list[0] if release.label_info_list else None
+    label_code_str = label_info_obj.label.label_code if label_info_obj else ""
+    label_mbid = label_info_obj.label.id if label_info_obj else ""
+
+    # Cover art archive availability flags.
+    caa_front_flag = "1" if release.cover_art_archive.front else ""
+    caa_back_flag = "1" if release.cover_art_archive.back else ""
+
+    # Performer credited-as companion: where a performer's credited name differs from canonical.
+    credited_parts: list[str] = []
+    for arel in recording_detail.artist_relation_list:
+        credited_name = arel.target_credit or arel.source_credit
+        if credited_name and credited_name != arel.artist.name:
+            credited_parts.append(f"{arel.artist.name} [as {credited_name}]")
+    cea_performers_credited_str = "; ".join(credited_parts)
+
     tags = TrackTags(
         cea_conductors_list=cea.conductors,
         cea_ensembles_list=cea.ensembles,
@@ -492,21 +533,43 @@ def build_track_tags(
         albumartist=album_artist_phrase,
         albumartistsort=album_artist_sort,
         album=release.title,
-        tracknumber=str(track.position),
+        tracknumber=tracknumber_str,
         totaltracks=total_tracks,
+        totaldiscs=str(len(release.medium_list)),
         discnumber=str(medium_pos),
         date=release.date,
         originaldate=release.release_group.first_release_date,
         recording_first_release_date=recording_detail.first_release_date,
-        media="CD",
+        isrc="; ".join(recording_detail.isrc_list) if recording_detail.isrc_list else "",
+        length=str(track_length_ms) if track_length_ms else "",
+        discsubtitle=medium.title if medium else "",
+        releasecountry=release.country,
+        releasetype_secondary="; ".join(release.release_group.secondary_type_list),
+        media=medium.format or "CD" if medium else "CD",
         script=release.text_representation.script,
         language=release.text_representation.language,
         releasetype=release.release_group.primary_type,
         releasestatus=release.status,
         organization=label_name,
         label=label_name,
+        label_code=label_code_str,
         catalognumber=catalog_number,
         barcode=release.barcode,
+        asin=release.asin,
+        packaging=release.packaging,
+        musicbrainz_labelid=label_mbid,
+        comment=recording_detail.disambiguation,
+        releasedisambiguation=release.disambiguation,
+        recording_date=session_date,
+        iswc=work_iswc,
+        work_disambiguation=work_disambiguation,
+        work_annotation=work_annotation,
+        work_imslp_url=work_imslp_url,
+        work_wikidata_url=work_wikidata_url,
+        musicbrainz_series=series_names,
+        caa_front=caa_front_flag,
+        caa_back=caa_back_flag,
+        cea_performers_credited=cea_performers_credited_str,
         work=work_tag,
         groupheading=groupheading,
         top_work=cwp.work_top or work_tag,
@@ -704,15 +767,13 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
 
     # Work directory component — title + [rec YYYY] or [rel YYYY] year suffix.
     #
-    # All three MB date fields are publication-era years, not recording session dates:
+    # [rec YYYY]: session date derived from artist relation begin dates (conductor/engineer/etc.),
+    #   stored in the RECORDING_DATE tag.  This is the actual studio/concert session date.
+    #
+    # [rel YYYY]: publication-era year from one of three MB fields (most-granular-first):
     #   RECORDING_FIRST_RELEASE_DATE  — year this specific audio first appeared on any release
     #   ORIGINALDATE                  — year the album (release group) was first published
     #   DATE                          — year of this specific pressing
-    #
-    # The [rec YYYY] label is reserved for a future data source (Discogs / Wikipedia / IMSLP)
-    # that provides actual studio/concert session dates.  Until then rec_year stays empty and
-    # all three MB fields are labelled [rel].  The priority order is most-granular-first:
-    # RECORDING_FIRST_RELEASE_DATE > ORIGINALDATE > DATE.
     work_title = file_dict.get("CWP_WORK_TOP") or file_dict.get("WORK", "")
     work_dir = safe_name(work_title)
 
@@ -724,9 +785,10 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
         """
         return raw[:4] if len(raw) >= 4 and raw[:4].isdigit() else ""
 
-    # rec_year: reserved — populate from Discogs/Wikipedia/IMSLP when session date lookup
-    # is implemented (see PLAN.md).  Activating it will automatically enable [rec YYYY] output.
-    rec_year = ""
+    # rec_year: session date from artist relation begin dates (conductor/engineer/etc.).
+    # Falls back to empty string when no session date is known; only activates [rec YYYY] when
+    # a structured session date is available (not a publication year).
+    rec_year = _extract_year(file_dict.get("RECORDING_DATE", ""))
     rel_year = (
         _extract_year(file_dict.get("RECORDING_FIRST_RELEASE_DATE", ""))
         or _extract_year(file_dict.get("ORIGINALDATE", ""))

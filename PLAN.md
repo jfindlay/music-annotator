@@ -18,9 +18,13 @@ _(nothing immediately queued)_
 
 ## Deferred
 
-- **`[rec YYYY]` session-date label:** The `rec_year` hook in `build_dest_path` is reserved for a
-  future data source (Discogs / Wikipedia / IMSLP) that provides actual studio or concert session
-  dates.  All three MB date fields are publication-era years and produce `[rel YYYY]`.
+- **`[rec YYYY]` session-date label — partial:** `[rec YYYY]` is now activated from
+  `RECORDING_DATE`, which is extracted from the `begin` dates on conductor/engineer/balance
+  artist relations on the recording.  This gives the actual studio session date range for most
+  classical recordings (e.g. Beethoven 8, Karajan/BPO 1984).  For recordings where MB has not
+  populated relation begin dates, the label falls back to `[rel YYYY]` as before.  Additional
+  session date sources (Discogs / Wikipedia / IMSLP) can be added to the `rec_year` hook in
+  `build_dest_path` when those integrations are implemented.
 - **Work title authenticity — composer intent vs. reception history:** The principle is that
   work titles and subtitles should reflect the composer's own stated intent, not names added
   later by performers, impresarios, publishers, or reception history.  Concrete cases that will

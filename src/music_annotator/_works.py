@@ -263,19 +263,34 @@ def extract_work_artist_rels(work: MBWork, role_buckets: RoleBuckets) -> None:
                 role_buckets.add_unique("reconstructors", entry)
             case "revised by":
                 role_buckets.add_unique("revisors", entry)
+            case "adapter":
+                # An adapter transforms a work for a different medium; treat as an arranger.
+                role_buckets.add_unique("arrangers", entry)
+            case "dedication":
+                role_buckets.add_unique("dedicatees", entry)
+            case "choreographer":
+                role_buckets.add_unique("choreographers", entry)
 
 
 def collect_work_dates(work: MBWork) -> WorkDates:
-    """Extract composed, published, and premiered dates from a work's attributes.
+    """Extract composed, published, and premiered dates from a work's attributes and relations.
 
-    Checks both the ``attribute-list`` (for typed date attributes) and the ``life-span.begin`` field (used as a
-    composed-date fallback by MB when no explicit composition-date attribute is present).
+    Checks three sources in priority order:
+
+    1. ``attribute-list`` — typed date attributes (``"Composed"``, ``"Published"``, ``"Premiered"``).
+    2. Artist/label/place relations — CE-compatible date extraction:
+       - Composed: earliest ``begin`` on ``"composer"`` artist relations.
+       - Published: ``begin`` on ``"publishing"`` label relations (requires ``label-rels`` in includes).
+       - Premiered: ``begin`` on ``"premiere"`` place relations (requires ``place-rels`` in includes).
+    3. ``life-span.begin`` — MB life-span fallback for composed date.
 
     :param work: The :class:`~music_annotator.models.MBWork` instance.
     :returns: A :class:`~music_annotator.models.WorkDates` instance with any dates found.  Fields default to empty
         strings when not present.
     """
     composed = published = premiered = ""
+
+    # Source 1: attribute-list
     for attr in work.attribute_list:
         if not isinstance(attr, MBAttribute):
             continue
@@ -288,9 +303,49 @@ def collect_work_dates(work: MBWork) -> WorkDates:
                 published = val
             case s if "premiered" in s or "premiere" in s:
                 premiered = val
+
+    # Source 2a: composed date from composer artist relation begin dates
+    if not composed:
+        composer_begins = [rel.begin for rel in work.artist_relation_list if rel.type == "composer" and rel.begin]
+        if composer_begins:
+            composed = min(composer_begins)
+
+    # Source 2b: published date from publishing label relation begin dates
+    if not published:
+        for lrel in work.label_relation_list:
+            if lrel.type == "publishing" and lrel.begin:
+                published = lrel.begin
+                break
+
+    # Source 2c: premiered date from premiere place relation begin dates
+    if not premiered:
+        for prel in work.place_relation_list:
+            if prel.type == "premiere" and prel.begin:
+                premiered = prel.begin
+                break
+
+    # Source 3: life-span.begin fallback for composed date
     if not composed and work.life_span.begin:
         composed = work.life_span.begin[:4]
+
     return WorkDates(composed=composed, published=published, premiered=premiered)
+
+
+def collect_work_urls(work: MBWork) -> dict[str, str]:
+    """Extract notable external URLs from a work's URL relations.
+
+    Returns a dict mapping relation type to URL for well-known relation types:
+    ``"download for free"`` (IMSLP), ``"wikidata"``, ``"allmusic"``, ``"VIAF"``.
+
+    :param work: The :class:`~music_annotator.models.MBWork` instance.
+    :returns: A ``dict[str, str]`` of ``{relation_type: url}``.  Empty when the work has no URL relations.
+    """
+    result: dict[str, str] = {}
+    notable: frozenset[str] = frozenset({"download for free", "wikidata", "allmusic", "VIAF"})
+    for rel in work.url_relation_list:
+        if rel.type in notable and rel.url and rel.type not in result:
+            result[rel.type] = rel.url
+    return result
 
 
 def parse_year(date_str: str) -> int | None:

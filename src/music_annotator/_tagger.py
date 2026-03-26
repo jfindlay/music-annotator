@@ -22,12 +22,15 @@ from mutagen.id3 import (  # type: ignore[attr-defined]
     TDOR,
     TDRC,
     TIT2,
+    TLEN,
     TPE1,
     TPE2,
     TPE3,
     TPOS,
     TPUB,
     TRCK,
+    TSRC,
+    TSST,
     TXXX,
 )
 from mutagen.mp3 import MP3
@@ -51,6 +54,9 @@ _MP3_STD_KEYS: frozenset[str] = frozenset(
         "COMPOSER",
         "CONDUCTOR",
         "ORGANIZATION",
+        "ISRC",
+        "LENGTH",
+        "DISCSUBTITLE",
     }
 )
 
@@ -185,6 +191,26 @@ _MP3_TXXX_MAP: dict[str, str] = {
     "COVERART_BACK_FILE": "COVERART_BACK_FILE",
     "COVERART_BOOKLET_FILES": "COVERART_BOOKLET_FILES",
     "COVERART_MEDIUM_FILES": "COVERART_MEDIUM_FILES",
+    # Standard Picard fields added from MB data
+    "RELEASECOUNTRY": "RELEASECOUNTRY",
+    "TOTALDISCS": "TOTALDISCS",
+    "RELEASETYPE_SECONDARY": "RELEASETYPE_SECONDARY",
+    "PACKAGING": "PACKAGING",
+    "ASIN": "ASIN",
+    "LABEL_CODE": "LABEL_CODE",
+    "MUSICBRAINZ_LABELID": "MusicBrainz Label Id",
+    "COMMENT": "COMMENT",
+    "RELEASEDISAMBIGUATION": "RELEASEDISAMBIGUATION",
+    "RECORDING_DATE": "RECORDING_DATE",
+    "ISWC": "ISWC",
+    "WORK_DISAMBIGUATION": "WORK_DISAMBIGUATION",
+    "WORK_ANNOTATION": "WORK_ANNOTATION",
+    "WORK_IMSLP_URL": "WORK_IMSLP_URL",
+    "WORK_WIKIDATA_URL": "WORK_WIKIDATA_URL",
+    "MUSICBRAINZ_SERIES": "MUSICBRAINZ_SERIES",
+    "CAA_FRONT": "CAA_FRONT",
+    "CAA_BACK": "CAA_BACK",
+    "CEA_PERFORMERS_CREDITED": "CEA_PERFORMERS_CREDITED",
 }
 
 #: Maximum bytes for a single FLAC metadata block (24-bit unsigned = 2^24 - 1 ≈ 16.7 MB).
@@ -296,6 +322,14 @@ def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = No
         id3_tags.add(TPE3(encoding=3, text=file_dict["CONDUCTOR"]))  # type: ignore[no-untyped-call]
     if file_dict.get("ORGANIZATION"):
         id3_tags.add(TPUB(encoding=3, text=file_dict["ORGANIZATION"]))  # type: ignore[no-untyped-call]
+    if file_dict.get("ISRC"):
+        # ISRC: write first ISRC as a dedicated TSRC frame; additional ISRCs go to TXXX.
+        isrc_vals = file_dict["ISRC"].split("; ")
+        id3_tags.add(TSRC(encoding=3, text=isrc_vals[0]))  # type: ignore[no-untyped-call]
+    if file_dict.get("LENGTH"):
+        id3_tags.add(TLEN(encoding=3, text=file_dict["LENGTH"]))  # type: ignore[no-untyped-call]
+    if file_dict.get("DISCSUBTITLE"):
+        id3_tags.add(TSST(encoding=3, text=file_dict["DISCSUBTITLE"]))  # type: ignore[no-untyped-call]
 
     for meta_key, txxx_desc in _MP3_TXXX_MAP.items():
         txxx(txxx_desc, file_dict.get(meta_key, ""))

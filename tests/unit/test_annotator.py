@@ -31,6 +31,7 @@ from music_annotator import (
     safe_name,
     strip_common_prefix,
 )
+from music_annotator._mb_api import _extract_session_date
 from music_annotator._tags import _work_aliases
 from music_annotator._works import _score_top_work, select_primary_performance_work
 from music_annotator.models import (
@@ -38,9 +39,13 @@ from music_annotator.models import (
     ArtistEntry,
     MBAlias,
     MBArtistCredit,
+    MBArtistRelation,
+    MBLabelRelation,
+    MBPlaceRelation,
     MBRecording,
     MBRelease,
     MBTrack,
+    MBUrlRelation,
     MBWork,
     MBWorkRelation,
     RoleBuckets,
@@ -2336,3 +2341,269 @@ class TestBuildCwpTagsAliases:
         file_dict = tags.to_file_dict()
         assert file_dict.get("CWP_WORK_TOP_EN") == "Symphony No. 5"
         assert file_dict.get("CWP_WORK_TOP_ALT") == "Alt form"
+
+
+# ---------------------------------------------------------------------------
+# collect_work_dates — relation-based date sources
+# ---------------------------------------------------------------------------
+
+
+class TestCollectWorkDatesFromRelations:
+    """Tests for the relation-based date extraction in collect_work_dates."""
+
+    def test_composed_date_from_composer_relation_begin(self) -> None:
+        """Composed date is extracted from composer artist relation begin when no attribute."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "T",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "direction": "backward",
+                        "begin": "1822",
+                        "end": "1824",
+                        "artist": {"id": "a1", "name": "Beethoven", "sort-name": "Beethoven"},
+                    }
+                ],
+            }
+        )
+        dates = music_annotator.collect_work_dates(work)
+        assert dates.composed == "1822"
+
+    def test_composed_date_attribute_takes_precedence_over_relation(self) -> None:
+        """Attribute-list composed date takes precedence over relation begin."""
+        work = _w(
+            {
+                "id": "w1",
+                "title": "T",
+                "attribute-list": [{"type": "Composed", "value": "1800"}],
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "direction": "backward",
+                        "begin": "1822",
+                        "artist": {"id": "a1", "name": "B", "sort-name": "B"},
+                    }
+                ],
+            }
+        )
+        dates = music_annotator.collect_work_dates(work)
+        assert dates.composed == "1800"
+
+    def test_published_date_from_label_relation_begin(self) -> None:
+        """Published date extracted from publishing label relation begin."""
+
+        work = _w({"id": "w1", "title": "T"})
+        work.label_relation_list = [
+            MBLabelRelation.model_validate(
+                {"type": "publishing", "direction": "backward", "begin": "1827", "label": {"id": "l1", "name": "Breitkopf"}}
+            )
+        ]
+        dates = music_annotator.collect_work_dates(work)
+        assert dates.published == "1827"
+
+    def test_premiered_date_from_place_relation_begin(self) -> None:
+        """Premiered date extracted from premiere place relation begin."""
+
+        work = _w({"id": "w1", "title": "T"})
+        work.place_relation_list = [
+            MBPlaceRelation.model_validate(
+                {"type": "premiere", "direction": "backward", "begin": "1824-05-07", "place": {"id": "p1", "name": "Vienna"}}
+            )
+        ]
+        dates = music_annotator.collect_work_dates(work)
+        assert dates.premiered == "1824-05-07"
+
+    def test_non_publishing_label_relation_ignored(self) -> None:
+        """Label relation with type != 'publishing' does not set published date."""
+
+        work = _w({"id": "w1", "title": "T"})
+        work.label_relation_list = [
+            MBLabelRelation.model_validate(
+                {"type": "other", "direction": "backward", "begin": "1827", "label": {"id": "l1", "name": "L"}}
+            )
+        ]
+        dates = music_annotator.collect_work_dates(work)
+        assert dates.published == ""
+
+    def test_non_premiere_place_relation_ignored(self) -> None:
+        """Place relation with type != 'premiere' does not set premiered date."""
+
+        work = _w({"id": "w1", "title": "T"})
+        work.place_relation_list = [
+            MBPlaceRelation.model_validate(
+                {"type": "concert", "direction": "backward", "begin": "1824", "place": {"id": "p1", "name": "P"}}
+            )
+        ]
+        dates = music_annotator.collect_work_dates(work)
+        assert dates.premiered == ""
+
+
+# ---------------------------------------------------------------------------
+# collect_work_urls
+# ---------------------------------------------------------------------------
+
+
+class TestCollectWorkUrls:
+    """Tests for collect_work_urls."""
+
+    def test_imslp_url_extracted(self) -> None:
+        """IMSLP URL (type='download for free') is extracted."""
+
+        work = _w({"id": "w1", "title": "T"})
+        work.url_relation_list = [
+            MBUrlRelation.model_validate({"type": "download for free", "url": "https://imslp.org/wiki/Symphony_No.9"})
+        ]
+        urls = music_annotator.collect_work_urls(work)
+        assert urls.get("download for free") == "https://imslp.org/wiki/Symphony_No.9"
+
+    def test_wikidata_url_extracted(self) -> None:
+        """Wikidata URL is extracted."""
+
+        work = _w({"id": "w1", "title": "T"})
+        work.url_relation_list = [
+            MBUrlRelation.model_validate({"type": "wikidata", "url": "https://www.wikidata.org/wiki/Q11989"})
+        ]
+        urls = music_annotator.collect_work_urls(work)
+        assert urls.get("wikidata") == "https://www.wikidata.org/wiki/Q11989"
+
+    def test_non_notable_type_excluded(self) -> None:
+        """URL relations with non-notable types are not included."""
+
+        work = _w({"id": "w1", "title": "T"})
+        work.url_relation_list = [MBUrlRelation.model_validate({"type": "other databases", "url": "https://example.com"})]
+        urls = music_annotator.collect_work_urls(work)
+        assert not urls
+
+    def test_empty_url_list_returns_empty_dict(self) -> None:
+        """Empty url_relation_list returns empty dict."""
+        work = _w({"id": "w1", "title": "T"})
+        assert music_annotator.collect_work_urls(work) == {}
+
+
+# ---------------------------------------------------------------------------
+# _extract_session_date
+# ---------------------------------------------------------------------------
+
+
+class TestExtractSessionDate:
+    """Tests for _extract_session_date."""
+
+    def test_session_date_from_conductor_begin(self) -> None:
+        """Session date is extracted from conductor relation begin."""
+
+        rels = [
+            MBArtistRelation.model_validate(
+                {
+                    "type": "conductor",
+                    "direction": "backward",
+                    "begin": "1984-01-27",
+                    "end": "1984-02-21",
+                    "artist": {"id": "a1", "name": "K", "sort-name": "K"},
+                }
+            )
+        ]
+        assert _extract_session_date(rels) == "1984-01-27"
+
+    def test_minimum_begin_returned_for_multiple(self) -> None:
+        """Minimum begin date is returned when multiple session relations exist."""
+
+        rels = [
+            MBArtistRelation.model_validate(
+                {
+                    "type": "conductor",
+                    "direction": "backward",
+                    "begin": "1984-02-01",
+                    "artist": {"id": "a1", "name": "K", "sort-name": "K"},
+                }
+            ),
+            MBArtistRelation.model_validate(
+                {
+                    "type": "balance",
+                    "direction": "backward",
+                    "begin": "1984-01-27",
+                    "artist": {"id": "a2", "name": "H", "sort-name": "H"},
+                }
+            ),
+        ]
+        assert _extract_session_date(rels) == "1984-01-27"
+
+    def test_non_session_type_excluded(self) -> None:
+        """Non-session relation types do not contribute to session date."""
+
+        rels = [
+            MBArtistRelation.model_validate(
+                {
+                    "type": "composer",
+                    "direction": "backward",
+                    "begin": "1800",
+                    "artist": {"id": "a1", "name": "B", "sort-name": "B"},
+                }
+            )
+        ]
+        assert _extract_session_date(rels) == ""
+
+    def test_empty_list_returns_empty(self) -> None:
+        """Empty relation list returns empty string."""
+
+        assert _extract_session_date([]) == ""
+
+
+# ---------------------------------------------------------------------------
+# extract_work_artist_rels — adapter, dedication, choreographer
+# ---------------------------------------------------------------------------
+
+
+class TestExtractWorkArtistRelsNewTypes:
+    """Tests for adapter/dedication/choreographer relation handling."""
+
+    def test_adapter_routed_to_arrangers(self) -> None:
+        """'adapter' relation is routed to role_buckets.arrangers."""
+        rb = RoleBuckets()
+        extract_work_artist_rels(
+            _w(
+                {
+                    "artist-relation-list": [
+                        {"type": "adapter", "direction": "backward", "artist": {"id": "a1", "name": "A", "sort-name": "A"}}
+                    ]
+                }
+            ),
+            rb,
+        )
+        assert len(rb.arrangers) == 1
+        assert rb.arrangers[0].mbid == "a1"
+
+    def test_dedication_routed_to_dedicatees(self) -> None:
+        """'dedication' relation is routed to role_buckets.dedicatees."""
+        rb = RoleBuckets()
+        extract_work_artist_rels(
+            _w(
+                {
+                    "artist-relation-list": [
+                        {"type": "dedication", "direction": "backward", "artist": {"id": "d1", "name": "D", "sort-name": "D"}}
+                    ]
+                }
+            ),
+            rb,
+        )
+        assert len(rb.dedicatees) == 1
+
+    def test_choreographer_routed_to_choreographers(self) -> None:
+        """'choreographer' relation is routed to role_buckets.choreographers."""
+        rb = RoleBuckets()
+        extract_work_artist_rels(
+            _w(
+                {
+                    "artist-relation-list": [
+                        {
+                            "type": "choreographer",
+                            "direction": "backward",
+                            "artist": {"id": "c1", "name": "C", "sort-name": "C"},
+                        }
+                    ]
+                }
+            ),
+            rb,
+        )
+        assert len(rb.choreographers) == 1

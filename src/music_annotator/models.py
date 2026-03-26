@@ -7,7 +7,7 @@ logic.  All fields that the MB API may omit default to empty strings or empty li
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ---------------------------------------------------------------------------
 # Base types
@@ -25,13 +25,15 @@ type JSON = dict[str, JSON] | list[JSON] | str | float | int | bool | None  # py
 class MBArtist(BaseModel):
     """A single artist entity as returned inside an artist-credit or relation.
 
-    Important attributes: ``id`` (MBID), ``name`` (display name), ``sort_name`` (sortable form), ``type`` (e.g. ``"Person"``).
+    Important attributes: ``id`` (MBID), ``name`` (display name), ``sort_name`` (sortable form), ``type`` (e.g.
+    ``"Person"``), ``disambiguation`` (short comment differentiating artists with the same name).
     """
 
     id: str = ""
     name: str = ""
     sort_name: str = Field(default="", alias="sort-name")
     type: str = ""
+    disambiguation: str = ""
 
     model_config = {"populate_by_name": True}
 
@@ -69,16 +71,44 @@ class MBAttribute(BaseModel):
 class MBArtistRelation(BaseModel):
     """An entry in an ``artist-relation-list`` on a recording or work.
 
-    Important attributes: ``type`` (relation type, e.g. ``"composer"``), ``direction``, ``artist`` (:class:`MBArtist`),
-    ``attribute_list`` (list of :class:`MBAttribute` or plain strings from the MB API).
+    Important attributes: ``type`` (relation type, e.g. ``"composer"``), ``direction``, ``begin`` / ``end`` (ISO date
+    strings for when the relation was active — e.g. the recording session dates on conductor/engineer relations),
+    ``ended`` (whether the relation has ended), ``target_credit`` (how the artist is credited in this specific context,
+    e.g. on liner notes, when it differs from the canonical name), ``artist`` (:class:`MBArtist`), ``attribute_list``
+    (list of :class:`MBAttribute` or plain strings from the MB API).
+
+    The ``begin`` / ``end`` / ``ended`` triplet is the primary source for recording session dates when ``type`` is one of
+    ``"conductor"``, ``"performing orchestra"``, ``"balance"``, ``"engineer"``, etc.
     """
 
     type: str = ""
     direction: str = ""
+    begin: str = ""
+    end: str = ""
+    ended: bool = False
+    target_credit: str = Field(default="", alias="target-credit")
+    source_credit: str = Field(default="", alias="source-credit")
     artist: MBArtist = Field(default_factory=MBArtist)
     attribute_list: list[MBAttribute | str] = Field(default_factory=list, alias="attribute-list")
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("ended", mode="before")
+    @classmethod
+    def coerce_ended(cls, v: str | bool | None) -> bool:
+        """Coerce the ``ended`` field from various MB API representations to a plain ``bool``.
+
+        musicbrainzngs returns ``ended`` as the string ``"true"`` or ``"false"``; the JSON API returns
+        a boolean.  ``None`` is treated as ``False``.
+
+        :param v: Raw value from the API response.
+        :returns: A boolean.
+        """
+        if v is None:
+            return False
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() == "true"
 
 
 class MBWorkStub(BaseModel):
@@ -116,12 +146,29 @@ class MBWorkRelation(BaseModel):
 
     type: str = ""
     direction: str = ""
+    begin: str = ""
+    end: str = ""
+    ended: bool = False
     ordering_key: int = Field(default=0, alias="ordering-key")
     work_id: str = Field(default="", alias="work-id")
     work_title: str = Field(default="", alias="work-title")
     work: MBWork = Field(default_factory=lambda: MBWork())  # pylint: disable=unnecessary-lambda
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("ended", mode="before")
+    @classmethod
+    def coerce_ended(cls, v: str | bool | None) -> bool:
+        """Coerce the ``ended`` field from string/bool/None to a plain ``bool``.
+
+        :param v: Raw value from the API response.
+        :returns: A boolean.
+        """
+        if v is None:
+            return False
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() == "true"
 
     @field_validator("ordering_key", mode="before")
     @classmethod
@@ -148,6 +195,250 @@ class MBTag(BaseModel):
 
     name: str = ""
     count: int = 0
+
+
+class MBLabel(BaseModel):
+    """Label entity used inside ``label-info-list`` and label relations on works.
+
+    Important attributes: ``id`` (label MBID), ``name`` (label display name), ``sort_name``,
+    ``label_code`` (e.g. ``173`` for Deutsche Grammophon), ``type`` (e.g. ``"Imprint"``).
+    """
+
+    id: str = ""
+    name: str = ""
+    sort_name: str = Field(default="", alias="sort-name")
+    label_code: str = Field(default="", alias="label-code")
+    type: str = ""
+
+    model_config = {"populate_by_name": True}
+
+
+class MBPlace(BaseModel):
+    """Minimal place entity embedded in a ``place-relation-list`` entry on a work.
+
+    Important attributes: ``id`` (place MBID), ``name`` (place display name, e.g. ``"Theater am Kärntnertor"``).
+    """
+
+    id: str = ""
+    name: str = ""
+
+    model_config = {"populate_by_name": True}
+
+
+class MBSeries(BaseModel):
+    """Minimal series entity embedded in a ``series-relation-list`` entry on a release.
+
+    Important attributes: ``id`` (series MBID), ``name`` (series name, e.g. ``"Karajan Gold"``), ``type``.
+    """
+
+    id: str = ""
+    name: str = ""
+    type: str = ""
+
+    model_config = {"populate_by_name": True}
+
+
+class MBUrlRelation(BaseModel):
+    """A URL relation on a work or release, linking to external resources such as IMSLP or Discogs.
+
+    Important attributes: ``type`` (relation type, e.g. ``"download for free"``, ``"discogs"``, ``"wikidata"``),
+    ``url`` (the external URL string extracted from the nested ``url`` dict returned by musicbrainzngs —
+    i.e. the value of ``url.resource``).
+    """
+
+    type: str = ""
+    url: str = ""
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def extract_url_resource(cls, data: JSON) -> JSON:
+        """Extract the URL string from the nested ``url`` sub-object returned by musicbrainzngs.
+
+        musicbrainzngs returns URL relations as ``{"type": "...", "url": {"resource": "https://..."}}``.
+        This validator flattens ``url.resource`` into the top-level ``url`` key.
+
+        :param data: Raw relation dict from musicbrainzngs.
+        :returns: Normalised dict with ``url`` as a plain string.
+        """
+        if not isinstance(data, dict):  # pragma: no cover
+            return data  # pragma: no cover
+        url_val = data.get("url", "")
+        if isinstance(url_val, dict):
+            data = dict(data)
+            data["url"] = url_val.get("resource", "")
+        return data
+
+
+class MBPlaceRelation(BaseModel):
+    """A place relation on a work, typically recording a premiere location and date.
+
+    Important attributes: ``type`` (e.g. ``"premiere"``), ``begin`` (ISO date of the event, e.g. premiere date),
+    ``end``, ``ended``, ``place`` (:class:`MBPlace`).
+    """
+
+    type: str = ""
+    direction: str = ""
+    begin: str = ""
+    end: str = ""
+    ended: bool = False
+    place: MBPlace = Field(default_factory=MBPlace)
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("ended", mode="before")
+    @classmethod
+    def coerce_ended(cls, v: str | bool | None) -> bool:
+        """Coerce ``ended`` to bool.
+
+        :param v: Raw value.
+        :returns: Boolean.
+        """
+        if v is None:
+            return False
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() == "true"
+
+
+class MBLabelRelation(BaseModel):
+    """A label relation on a work, typically a publishing credit with a date.
+
+    Important attributes: ``type`` (e.g. ``"publishing"``), ``begin`` (ISO date the publishing started — CE source
+    for ``CWP_PUBLISHED_DATES``), ``end``, ``ended``, ``label`` (:class:`MBLabel`).
+    """
+
+    type: str = ""
+    direction: str = ""
+    begin: str = ""
+    end: str = ""
+    ended: bool = False
+    label: MBLabel = Field(default_factory=MBLabel)
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("ended", mode="before")
+    @classmethod
+    def coerce_ended(cls, v: str | bool | None) -> bool:
+        """Coerce ``ended`` to bool.
+
+        :param v: Raw value.
+        :returns: Boolean.
+        """
+        if v is None:
+            return False
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() == "true"
+
+
+class MBSeriesRelation(BaseModel):
+    """A series relation on a release, indicating membership in a named release series.
+
+    Important attributes: ``type`` (e.g. ``"part of"``), ``ordering_key`` (integer position within the series),
+    ``series`` (:class:`MBSeries`).
+    """
+
+    type: str = ""
+    direction: str = ""
+    ordering_key: int = Field(default=0, alias="ordering-key")
+    series: MBSeries = Field(default_factory=MBSeries)
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("ordering_key", mode="before")
+    @classmethod
+    def coerce_ordering_key(cls, v: str | int | None) -> int:
+        """Coerce ``ordering-key`` to int.
+
+        :param v: Raw value.
+        :returns: Integer, defaulting to 0.
+        """
+        if v is None:
+            return 0
+        return int(v)
+
+
+class MBCoverArtArchive(BaseModel):
+    """Cover art availability summary from the Cover Art Archive, embedded in a release response.
+
+    Useful for pre-checking whether CAA images exist before attempting to fetch them.
+
+    Important attributes: ``artwork`` (any image present), ``front``, ``back``, ``count``, ``darkened`` (DMCA takedown).
+    """
+
+    artwork: bool = False
+    front: bool = False
+    back: bool = False
+    count: int = 0
+    darkened: bool = False
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("artwork", "front", "back", "darkened", mode="before")
+    @classmethod
+    def coerce_bool(cls, v: str | bool | None) -> bool:
+        """Coerce string ``"true"``/``"false"`` from musicbrainzngs XML to ``bool``.
+
+        :param v: Raw value.
+        :returns: Boolean.
+        """
+        if v is None:  # pragma: no cover
+            return False  # pragma: no cover
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() == "true"
+
+    @field_validator("count", mode="before")
+    @classmethod
+    def coerce_count(cls, v: str | int | None) -> int:
+        """Coerce ``count`` from string to int.
+
+        :param v: Raw value.
+        :returns: Integer count, defaulting to 0.
+        """
+        if v is None:
+            return 0
+        return int(v)
+
+
+class MBReleaseEvent(BaseModel):
+    """A single release event (date + country) from a release's ``release-event-list``.
+
+    The ``country`` field is extracted from the nested ``area`` object's ``iso-3166-1-code-list`` via a
+    ``model_validator`` so callers always see a plain string (e.g. ``"DE"``).
+
+    Important attributes: ``date`` (ISO date string), ``country`` (ISO 3166-1 alpha-2 code).
+    """
+
+    date: str = ""
+    country: str = ""
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def extract_country_from_area(cls, data: JSON) -> JSON:
+        """Extract the ISO 3166-1 alpha-2 country code from the nested ``area`` dict.
+
+        musicbrainzngs returns release events as ``{"date": "...", "area": {"name": "...",
+        "iso-3166-1-code-list": ["DE"]}}``.  This validator flattens the country code into the
+        top-level ``country`` key so the model's ``country`` field is populated directly.
+
+        :param data: Raw event dict from musicbrainzngs.
+        :returns: Normalised dict with ``country`` at the top level.
+        """
+        if not isinstance(data, dict):  # pragma: no cover
+            return data  # pragma: no cover
+        if "country" not in data or not data["country"]:
+            area = data.get("area", {})
+            if isinstance(area, dict):
+                codes = area.get("iso-3166-1-code-list", [])
+                if isinstance(codes, list) and codes:
+                    data = dict(data)
+                    data["country"] = codes[0]
+        return data
 
 
 class MBLifeSpan(BaseModel):
@@ -186,18 +477,31 @@ class MBAlias(BaseModel):
 class MBWork(BaseModel):
     """A MusicBrainz work entity with all fields used by the annotator.
 
-    Important attributes: ``id`` (MBID), ``title``, ``type`` (e.g. ``"Symphony"``), ``language``, ``key``,
-    ``artist_relation_list``, ``work_relation_list``, ``tag_list``, ``attribute_list``, ``life_span``,
-    ``alias_list``.
+    Important attributes: ``id`` (MBID), ``title``, ``type`` (e.g. ``"Symphony"``), ``language``, ``iswc``,
+    ``disambiguation``, ``annotation``, ``key``, ``artist_relation_list``, ``work_relation_list``,
+    ``place_relation_list``, ``label_relation_list``, ``url_relation_list``, ``tag_list``, ``attribute_list``,
+    ``life_span``, ``alias_list``.
+
+    ``iswc`` is the International Standard Musical Work Code (ISO 15707), a persistent identifier for the musical work
+    itself (distinct from any recording's ISRC).  ``place_relation_list`` enables CE-compatible premiered-date extraction
+    from ``premiere`` relations.  ``label_relation_list`` enables CE-compatible published-date extraction from
+    ``publishing`` label relations.  ``url_relation_list`` captures IMSLP, Wikidata, AllMusic, and other external URLs.
+    ``annotation`` is the MB free-text annotation (often contains scholarly notes on composition dates, sources, etc.).
     """
 
     id: str = ""
     title: str = ""
     type: str = ""
     language: str = ""
+    iswc: str = ""
+    disambiguation: str = ""
+    annotation: str = ""
     key: str = ""
     artist_relation_list: list[MBArtistRelation] = Field(default_factory=list, alias="artist-relation-list")
     work_relation_list: list[MBWorkRelation] = Field(default_factory=list, alias="work-relation-list")
+    place_relation_list: list[MBPlaceRelation] = Field(default_factory=list, alias="place-relation-list")
+    label_relation_list: list[MBLabelRelation] = Field(default_factory=list, alias="label-relation-list")
+    url_relation_list: list[MBUrlRelation] = Field(default_factory=list, alias="url-relation-list")
     tag_list: list[MBTag] = Field(default_factory=list, alias="tag-list")
     attribute_list: list[MBAttribute | str] = Field(default_factory=list, alias="attribute-list")
     life_span: MBLifeSpan = Field(default_factory=MBLifeSpan, alias="life-span")
@@ -221,20 +525,8 @@ class MBWork(BaseModel):
         return []
 
 
-# MBWorkRelation.work is typed as MBWork (a forward reference resolved here).
+# MBWorkRelation.work is typed as MBWork (forward reference resolved here).
 MBWorkRelation.model_rebuild()
-
-
-class MBLabel(BaseModel):
-    """Minimal label entity used inside ``label-info-list``.
-
-    Important attributes: ``id`` (label MBID), ``name`` (label display name).
-    """
-
-    id: str = ""
-    name: str = ""
-
-    model_config = {"populate_by_name": True}
 
 
 class MBLabelInfo(BaseModel):
@@ -252,12 +544,15 @@ class MBLabelInfo(BaseModel):
 class MBReleaseGroup(BaseModel):
     """Release-group summary embedded in a release response.
 
-    Important attributes: ``id`` (release-group MBID), ``primary_type`` (e.g. ``"Album"``), ``first_release_date``.
+    Important attributes: ``id`` (release-group MBID), ``primary_type`` (e.g. ``"Album"``),
+    ``secondary_type_list`` (e.g. ``["Compilation"]``), ``first_release_date``, ``disambiguation``.
     """
 
     id: str = ""
     primary_type: str = Field(default="", alias="primary-type")
     first_release_date: str = Field(default="", alias="first-release-date")
+    secondary_type_list: list[str] = Field(default_factory=list, alias="secondary-type-list")
+    disambiguation: str = ""
 
     model_config = {"populate_by_name": True}
 
@@ -290,24 +585,45 @@ class MBRecordingStub(BaseModel):
 class MBTrack(BaseModel):
     """One track entry within a medium's ``track-list``.
 
-    Important attributes: ``id`` (track MBID), ``position`` (1-based integer), ``recording`` (:class:`MBRecordingStub`).
+    Important attributes: ``id`` (track MBID), ``position`` (1-based integer), ``number`` (physical track label,
+    e.g. ``"A1"`` for vinyl side A track 1, ``"1"`` for CD — use this for ``TRACKNUMBER`` on non-CD formats),
+    ``length`` (track-specific duration in milliseconds — may differ from ``recording.length`` for partial performances),
+    ``recording`` (:class:`MBRecordingStub`).
     """
 
     id: str = ""
     position: int = 0
+    number: str = ""
+    length: int = 0
+
     recording: MBRecordingStub = Field(default_factory=MBRecordingStub)
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("length", mode="before")
+    @classmethod
+    def coerce_length(cls, v: str | int | None) -> int:
+        """Coerce ``length`` from string/None to int milliseconds.
+
+        :param v: Raw value from the API response.
+        :returns: Integer milliseconds, defaulting to 0.
+        """
+        if v is None:
+            return 0
+        return int(v)
 
 
 class MBMedium(BaseModel):
     """One disc (medium) in a release.
 
-    Important attributes: ``position`` (1-based disc number), ``format`` (e.g. ``"CD"``), ``track_list``.
+    Important attributes: ``position`` (1-based disc number), ``format`` (e.g. ``"CD"``, ``"Vinyl"``,
+    ``"Digital Media"``), ``title`` (disc-specific subtitle, e.g. ``"Act I"`` or ``"Disc 1: Symphonies 1 & 2"``
+    — maps to ``DISCSUBTITLE``), ``track_list``.
     """
 
     position: int = 1
     format: str = ""
+    title: str = ""
     track_list: list[MBTrack] = Field(default_factory=list, alias="track-list")
 
     model_config = {"populate_by_name": True}
@@ -316,8 +632,11 @@ class MBMedium(BaseModel):
 class MBRelease(BaseModel):
     """Top-level release entity as returned by ``musicbrainzngs.get_release_by_id``.
 
-    Important attributes: ``id`` (release MBID), ``title``, ``date``, ``status``, ``barcode``, ``artist_credit``,
-    ``release_group``, ``label_info_list``, ``medium_list``, ``text_representation``.
+    Important attributes: ``id`` (release MBID), ``title``, ``date``, ``status``, ``barcode``, ``country``,
+    ``packaging`` (e.g. ``"Jewel Case"``), ``disambiguation``, ``asin`` (Amazon ASIN), ``artist_credit``,
+    ``release_group``, ``label_info_list``, ``medium_list``, ``text_representation``,
+    ``cover_art_archive`` (:class:`MBCoverArtArchive`), ``release_event_list`` (all release date/country events),
+    ``url_relation_list`` (Discogs, Amazon, etc.), ``series_relation_list`` (box-set series membership).
     """
 
     id: str = ""
@@ -325,11 +644,19 @@ class MBRelease(BaseModel):
     date: str = ""
     status: str = ""
     barcode: str = ""
+    country: str = ""
+    packaging: str = ""
+    disambiguation: str = ""
+    asin: str = ""
     artist_credit: list[MBArtistCredit | str] = Field(default_factory=list, alias="artist-credit")
     release_group: MBReleaseGroup = Field(default_factory=MBReleaseGroup, alias="release-group")
     label_info_list: list[MBLabelInfo] = Field(default_factory=list, alias="label-info-list")
     medium_list: list[MBMedium] = Field(default_factory=list, alias="medium-list")
     text_representation: MBTextRepresentation = Field(default_factory=MBTextRepresentation, alias="text-representation")
+    cover_art_archive: MBCoverArtArchive = Field(default_factory=MBCoverArtArchive, alias="cover-art-archive")
+    release_event_list: list[MBReleaseEvent] = Field(default_factory=list, alias="release-event-list")
+    url_relation_list: list[MBUrlRelation] = Field(default_factory=list, alias="url-relation-list")
+    series_relation_list: list[MBSeriesRelation] = Field(default_factory=list, alias="series-relation-list")
 
     model_config = {"populate_by_name": True}
 
@@ -337,7 +664,9 @@ class MBRelease(BaseModel):
 class MBRecording(BaseModel):
     """Recording entity with artist and work relationships, as returned by ``musicbrainzngs.get_recording_by_id``.
 
-    Important attributes: ``id`` (recording MBID), ``title``, ``first_release_date``, ``artist_credit``,
+    Important attributes: ``id`` (recording MBID), ``title``, ``first_release_date``, ``disambiguation``,
+    ``video`` (``True`` when this is a video recording rather than audio-only), ``length`` (duration in
+    milliseconds), ``isrc_list`` (list of ISRC codes for this recording), ``artist_credit``,
     ``artist_relation_list``, ``work_relation_list``.
 
     ``first_release_date`` is the year (or full date) this specific audio was first commercially released.
@@ -345,16 +674,49 @@ class MBRecording(BaseModel):
     the ``first-release-date`` field that the musicbrainzngs XML parser currently discards.  It is distinct
     from ``release_group.first_release_date`` (album publication year) — for reissues of older recordings it
     will be earlier.
+
+    ``isrc_list`` is only populated when the ``"isrcs"`` include is passed to ``get_recording_by_id``.  ISRCs
+    are not available via the release-level ``"isrcs"`` include for embedded recordings.
     """
 
     id: str = ""
     title: str = ""
     first_release_date: str = Field(default="", alias="first-release-date")
+    disambiguation: str = ""
+    video: bool = False
+    length: int = 0
+    isrc_list: list[str] = Field(default_factory=list, alias="isrc-list")
     artist_credit: list[MBArtistCredit | str] = Field(default_factory=list, alias="artist-credit")
     artist_relation_list: list[MBArtistRelation] = Field(default_factory=list, alias="artist-relation-list")
     work_relation_list: list[MBWorkRelation] = Field(default_factory=list, alias="work-relation-list")
 
     model_config = {"populate_by_name": True}
+
+    @field_validator("video", mode="before")
+    @classmethod
+    def coerce_video(cls, v: str | bool | None) -> bool:
+        """Coerce the ``video`` flag from string/bool/None to a plain ``bool``.
+
+        :param v: Raw value from the API response.
+        :returns: Boolean.
+        """
+        if v is None:
+            return False
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() == "true"
+
+    @field_validator("length", mode="before")
+    @classmethod
+    def coerce_length(cls, v: str | int | None) -> int:
+        """Coerce ``length`` from string/None to int milliseconds.
+
+        :param v: Raw value from the API response.
+        :returns: Integer milliseconds, defaulting to 0.
+        """
+        if v is None:
+            return 0
+        return int(v)
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +767,8 @@ class RoleBuckets(BaseModel):
     orchestrators: list[ArtistEntry] = Field(default_factory=list)
     reconstructors: list[ArtistEntry] = Field(default_factory=list)
     revisors: list[ArtistEntry] = Field(default_factory=list)
+    dedicatees: list[ArtistEntry] = Field(default_factory=list)
+    choreographers: list[ArtistEntry] = Field(default_factory=list)
 
     def seen_ids(self, role: str) -> set[str]:
         """Return the set of MBIDs already present in the named role list.
@@ -593,11 +957,49 @@ class TrackTags(BaseModel):
     releasetype: str = ""
     releasestatus: str = ""
 
+    # Standard Picard fields previously missing
+    isrc: str = ""  # ISRC — International Standard Recording Code
+    length: str = ""  # LENGTH / TLEN — track duration in milliseconds
+    discsubtitle: str = ""  # DISCSUBTITLE / TSST — medium title (e.g. "Act I")
+    releasecountry: str = ""  # RELEASECOUNTRY — ISO 3166-1 alpha-2 country of first release
+    totaldiscs: str = ""  # TOTALDISCS — total number of discs in the release
+    releasetype_secondary: str = ""  # secondary release types (e.g. "Compilation"), semicolon-joined
+
     # Label / catalogue
     organization: str = ""
     label: str = ""
+    label_code: str = ""  # LABEL_CODE — label code (e.g. "173" for Deutsche Grammophon)
     catalognumber: str = ""
     barcode: str = ""
+    asin: str = ""  # ASIN — Amazon Standard Identification Number
+    packaging: str = ""  # PACKAGING — release packaging type (e.g. "Jewel Case")
+    musicbrainz_labelid: str = ""  # label MBID
+
+    # Disambiguation / comments
+    comment: str = ""  # COMMENT — recording disambiguation comment
+    releasedisambiguation: str = ""  # RELEASEDISAMBIGUATION — release disambiguation comment
+
+    # Recording session date
+    recording_date: str = ""  # RECORDING_DATE — session date from artist relation begin dates
+
+    # Performer credited-as companion
+    cea_performers_credited: str = ""  # credited names for performers where they differ from canonical
+
+    # External links from work URL relations
+    work_imslp_url: str = ""  # CWP_WORK_IMSLP_URL — IMSLP link for the work
+    work_wikidata_url: str = ""  # CWP_WORK_WIKIDATA_URL — Wikidata link for the work
+
+    # Work identifiers
+    iswc: str = ""  # ISWC — International Standard Musical Work Code
+    work_disambiguation: str = ""  # CWP_WORK_DISAMBIGUATION
+    work_annotation: str = ""  # CWP_WORK_ANNOTATION
+
+    # Release series membership
+    musicbrainz_series: str = ""  # MUSICBRAINZ_SERIES — release series name(s)
+
+    # Cover art availability (informational)
+    caa_front: str = ""  # CAA_FRONT — "1" if front image available in CAA
+    caa_back: str = ""  # CAA_BACK — "1" if back image available in CAA
 
     # Cover art sidecar file references (relative filenames in the work top directory).
     # These reference the sidecar files written alongside the tracks; no player currently

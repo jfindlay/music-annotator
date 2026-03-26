@@ -1423,8 +1423,100 @@ class TestApplyTagsMp3EdgeCases:
 
 
 # ---------------------------------------------------------------------------
+# apply_tags_mp3 — new TSRC / TLEN / TSST frames
+# ---------------------------------------------------------------------------
+
+
+class TestApplyTagsMp3NewFrames:
+    """Tests for TSRC, TLEN, and TSST ID3 frames added to apply_tags_mp3."""
+
+    def test_isrc_written_as_tsrc_frame(self, fs: FakeFilesystem) -> None:
+        """apply_tags_mp3 writes the first ISRC as a TSRC frame.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/out/track.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(dest), contents=_MINIMAL_MP3)
+        tags = TrackTags(
+            isrc="DEF058402370", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[]
+        )
+        apply_tags_mp3(dest, tags)
+
+        id3 = ID3(str(dest))  # type: ignore[no-untyped-call]
+        assert id3.get("TSRC") is not None  # type: ignore[no-untyped-call]
+        assert id3["TSRC"].text[0] == "DEF058402370"
+
+    def test_length_written_as_tlen_frame(self, fs: FakeFilesystem) -> None:
+        """apply_tags_mp3 writes LENGTH as a TLEN frame.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/out/track.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(dest), contents=_MINIMAL_MP3)
+        tags = TrackTags(length="541000", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[])
+        apply_tags_mp3(dest, tags)
+
+        id3 = ID3(str(dest))  # type: ignore[no-untyped-call]
+        assert id3.get("TLEN") is not None  # type: ignore[no-untyped-call]
+        assert id3["TLEN"].text[0] == "541000"
+
+    def test_discsubtitle_written_as_tsst_frame(self, fs: FakeFilesystem) -> None:
+        """apply_tags_mp3 writes DISCSUBTITLE as a TSST frame.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/out/track.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(dest), contents=_MINIMAL_MP3)
+        tags = TrackTags(
+            discsubtitle="Act I", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[]
+        )
+        apply_tags_mp3(dest, tags)
+
+        id3 = ID3(str(dest))  # type: ignore[no-untyped-call]
+        assert id3.get("TSST") is not None  # type: ignore[no-untyped-call]
+        assert id3["TSST"].text[0] == "Act I"
+
+
+# ---------------------------------------------------------------------------
 # build_track_tags — arranger/orchestrator already in arranger_seen
 # ---------------------------------------------------------------------------
+
+
+class TestBuildTrackTagsCreditedName:
+    """Tests for the cea_performers_credited companion field."""
+
+    def test_credited_name_differs_from_canonical(self) -> None:
+        """When target-credit differs from artist.name, the entry is recorded in cea_performers_credited.
+
+        :param self: Test instance.
+        """
+        rec = _rec(
+            {
+                "id": "rec-1",
+                "title": "T",
+                "artist-credit": [],
+                "artist-relation-list": [
+                    {
+                        "type": "performer",
+                        "direction": "backward",
+                        "target-credit": "Anne-Sophie Mutter",
+                        "artist": {"id": "a1", "name": "Anne‐Sophie Mutter", "sort-name": "Mutter, Anne‐Sophie"},
+                    }
+                ],
+                "work-relation-list": [],
+            }
+        )
+        tags = build_track_tags(
+            _make_release(),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec-1", "title": "T", "artist-credit": []}}),
+            1,
+            rec,
+            [],
+        )
+        assert "as Anne-Sophie Mutter" in tags.cea_performers_credited
 
 
 class TestBuildTrackTagsArrangerDedup:
