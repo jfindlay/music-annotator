@@ -32,7 +32,7 @@ from mutagen.id3 import (  # type: ignore[attr-defined]
 )
 from mutagen.mp3 import MP3
 
-from music_annotator.models import CoverArt, CoverImage, TrackTags
+from music_annotator.models import CoverArt, TrackTags
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -180,7 +180,16 @@ _MP3_TXXX_MAP: dict[str, str] = {
     "CWP_PUBLISHED_DATES": "CWP_PUBLISHED_DATES",
     "CWP_PREMIERED_DATES": "CWP_PREMIERED_DATES",
     "CWP_WORKTYPE_GENRES": "CWP_WORKTYPE_GENRES",
+    # Cover art sidecar file references
+    "COVERART_FRONT_FILE": "COVERART_FRONT_FILE",
+    "COVERART_BACK_FILE": "COVERART_BACK_FILE",
+    "COVERART_BOOKLET_FILES": "COVERART_BOOKLET_FILES",
+    "COVERART_MEDIUM_FILES": "COVERART_MEDIUM_FILES",
 }
+
+#: Maximum bytes for a single FLAC metadata block (24-bit unsigned = 2^24 - 1 ≈ 16.7 MB).
+#: Used as a guard before embedding images; 500 px JPEGs are well under this limit.
+_FLAC_MAX_PICTURE_BYTES: int = 16_000_000
 
 
 def apply_tags_flac(dest_file: Path, tags: TrackTags, cover: CoverArt | None = None) -> None:
@@ -208,22 +217,21 @@ def apply_tags_flac(dest_file: Path, tags: TrackTags, cover: CoverArt | None = N
     for key, value in tags.to_file_dict().items():
         audio[key.lower()] = value
 
-    if cover and cover.available:
-        _pic_groups: list[tuple[int, str, list[CoverImage]]] = [
-            (3, "Cover", cover.front),
-            (4, "Back", cover.back),
-            (5, "Booklet", cover.booklet),
-            (6, "Medium", cover.medium),
-        ]
-        for pic_type, label, images in _pic_groups:
-            for idx, img in enumerate(images, start=1):
-                pic = FLACPicture()  # type: ignore[no-untyped-call]
-                pic.type = pic_type
-                pic.mime = img.mime or "image/jpeg"
-                pic.desc = f"{label} {idx}" if len(images) > 1 else label
-                pic.width = pic.height = pic.depth = pic.colors = 0
-                pic.data = img.data
-                audio.add_picture(pic)  # type: ignore[no-untyped-call]
+    # Embed only the 500 px front cover image (COVER_FRONT = type 3).
+    # All other images (back, booklet, medium, original-resolution front) are written as
+    # sidecar files by _pipeline._write_sidecars and are not embedded in audio files.
+    if cover and cover.front:
+        for idx, img in enumerate(cover.front, start=1):
+            if len(img.data) > _FLAC_MAX_PICTURE_BYTES:
+                log.warning("cover_art_too_large_to_embed", size=len(img.data), limit=_FLAC_MAX_PICTURE_BYTES)
+                continue
+            pic = FLACPicture()  # type: ignore[no-untyped-call]
+            pic.type = 3  # COVER_FRONT
+            pic.mime = img.mime or "image/jpeg"
+            pic.desc = "Cover" if len(cover.front) == 1 else f"Cover {idx}"
+            pic.width = pic.height = pic.depth = pic.colors = 0
+            pic.data = img.data
+            audio.add_picture(pic)  # type: ignore[no-untyped-call]
 
     audio.save()
     log.debug("tagged_flac", path=str(dest_file))
@@ -292,24 +300,18 @@ def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = No
     for meta_key, txxx_desc in _MP3_TXXX_MAP.items():
         txxx(txxx_desc, file_dict.get(meta_key, ""))
 
-    if cover and cover.available:
-        _apic_groups: list[tuple[int, str, list[CoverImage]]] = [
-            (3, "Cover", cover.front),
-            (4, "Back", cover.back),
-            (5, "Booklet", cover.booklet),
-            (6, "Medium", cover.medium),
-        ]
-        for apic_type, label, images in _apic_groups:
-            for idx, img in enumerate(images, start=1):
-                id3_tags.add(  # type: ignore[no-untyped-call]
-                    APIC(  # type: ignore[no-untyped-call]
-                        encoding=3,
-                        mime=img.mime or "image/jpeg",
-                        type=apic_type,
-                        desc=f"{label} {idx}" if len(images) > 1 else label,
-                        data=img.data,
-                    )
+    # Embed only the 500 px front cover image (APIC type 3 = COVER_FRONT).
+    if cover and cover.front:
+        for idx, img in enumerate(cover.front, start=1):
+            id3_tags.add(  # type: ignore[no-untyped-call]
+                APIC(  # type: ignore[no-untyped-call]
+                    encoding=3,
+                    mime=img.mime or "image/jpeg",
+                    type=3,
+                    desc="Cover" if len(cover.front) == 1 else f"Cover {idx}",
+                    data=img.data,
                 )
+            )
 
     id3_tags.save(str(dest_file), v2_version=4)
     log.debug("tagged_mp3", path=str(dest_file))

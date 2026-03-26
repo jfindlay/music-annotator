@@ -97,10 +97,13 @@ music-annotator prune \
 ```
 <dest_root>/
   <Composer lastnames> - <Conductor; Ensemble>/          ← Latin or native script
-    <Work title> [rec YYYY] or [rel YYYY]/               ← recording or release year
+    <Work title> [rel YYYY]/                             ← publication year
+      cover.jpg                                          ← original-resolution front cover (sidecar)
+      back.pdf / back.jpg                                ← back cover sidecar (if available)
+      booklet-1.pdf / booklet-1.jpg …                   ← booklet sidecar(s) (if available)
       [nn - <Intermediate division>/]                    ← only when hierarchy depth ≥ 3
         [nn - <Sub-intermediate division>/]              ← only when hierarchy depth ≥ 4
-          nn - <Movement title>.<ext>
+          nn - <Movement title>.<ext>                    ← 500px front cover embedded in file
 ```
 
 - `nn`: zero-padded 2 digits (3 if >99 siblings), directory-scoped, derived from MB `ordering-key`
@@ -110,9 +113,12 @@ music-annotator prune \
 - Performer component: conductor + ensemble names only (soloists excluded for now).
 - Collection/cycle wrappers (Ring cycle, symphony cycles): excluded from filesystem, deferred to
   playlist generation.
-- `[rec YYYY]`: year from `recording.first-release-date` (when this audio was first commercially
-  released).  Falls back to `[rel YYYY]` from `release_group.first_release_date` or `release.date`.
-  Omitted when no date is known.
+- `[rel YYYY]`: most-granular publication year from MB — `recording.first-release-date` →
+  `release_group.first_release_date` → `release.date`.  Omitted when no date is known.
+  `[rec YYYY]` is reserved for a future data source providing actual session dates.
+- **Cover art**: 500px JPEG front cover embedded in every audio file (PICTURE block / APIC frame).
+  Original-resolution front, back, booklet, and medium images written as sidecar files in the
+  work directory with CAA source URLs recorded in the journal as `action="downloaded"` entries.
 
 ## How it works
 

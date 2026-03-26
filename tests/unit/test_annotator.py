@@ -1795,28 +1795,28 @@ class TestBuildDestPathYear:
             )
         )
 
-    def test_rec_year_from_recording_first_release_date(self, fs: FakeFilesystem) -> None:
-        """[rec YYYY] suffix uses RECORDING_FIRST_RELEASE_DATE when available.
+    def test_recording_first_release_date_labelled_rel(self, fs: FakeFilesystem) -> None:
+        """RECORDING_FIRST_RELEASE_DATE is labelled [rel] — it is a publication year, not a session date.
 
         :param fs: pyfakefs fixture.
         """
-        assert "[rec 1963]" in self._dest(self._make_tags(recording_first_release_date="1963"), fs)
+        assert "[rel 1963]" in self._dest(self._make_tags(recording_first_release_date="1963"), fs)
 
-    def test_rec_year_full_date_truncated_to_year(self, fs: FakeFilesystem) -> None:
-        """[rec YYYY] truncates a full date string to 4-digit year.
+    def test_recording_first_release_date_full_date_truncated(self, fs: FakeFilesystem) -> None:
+        """RECORDING_FIRST_RELEASE_DATE full date string is truncated to 4-digit year.
 
         :param fs: pyfakefs fixture.
         """
-        assert "[rec 1990]" in self._dest(self._make_tags(recording_first_release_date="1990-04-03"), fs)
+        assert "[rel 1990]" in self._dest(self._make_tags(recording_first_release_date="1990-04-03"), fs)
 
-    def test_rec_year_takes_precedence_over_rel_year(self, fs: FakeFilesystem) -> None:
-        """[rec YYYY] is used when both recording and release dates are present.
+    def test_recording_first_release_date_preferred_over_originaldate(self, fs: FakeFilesystem) -> None:
+        """RECORDING_FIRST_RELEASE_DATE takes priority over ORIGINALDATE; both produce [rel].
 
         :param fs: pyfakefs fixture.
         """
         result = self._dest(self._make_tags(recording_first_release_date="1963", originaldate="2003"), fs)
-        assert "[rec 1963]" in result
-        assert "[rel" not in result
+        assert "[rel 1963]" in result
+        assert "[rel 2003]" not in result
 
     def test_rel_year_from_originaldate_when_no_rec_date(self, fs: FakeFilesystem) -> None:
         """[rel YYYY] suffix uses ORIGINALDATE when RECORDING_FIRST_RELEASE_DATE is absent.

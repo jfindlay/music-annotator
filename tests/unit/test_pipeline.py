@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from mutagen._util import MutagenError
+from mutagen.flac import FLAC
 from mutagen.id3 import ID3, TXXX  # type: ignore[attr-defined]
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
@@ -32,7 +33,9 @@ from music_annotator import (
     fetch_acoustid_id,
     find_source_files,
 )
+from music_annotator._pipeline import _write_sidecars
 from music_annotator._pipeline_io import _DISC_INFO_FILENAME, _DISC_TOC_FILENAME
+from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
     JSON,
     CoverArt,
@@ -42,6 +45,7 @@ from music_annotator.models import (
     MBTrack,
     MBWork,
     TrackTags,
+    TransactionEntry,
 )
 
 
@@ -872,6 +876,135 @@ class TestApplyTagsFlac:
 
 
 # ---------------------------------------------------------------------------
+# apply_tags_flac — _FLAC_MAX_PICTURE_BYTES guard
+# ---------------------------------------------------------------------------
+
+
+class TestApplyTagsFlacSizeGuard:
+    """Tests for the FLAC block size guard in apply_tags_flac."""
+
+    def test_oversized_front_image_skipped(self, fs: FakeFilesystem) -> None:
+        """Front images exceeding _FLAC_MAX_PICTURE_BYTES are not embedded.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/dest/01.flac")
+        fs.create_file(str(dest), contents=_MINIMAL_FLAC)
+        tags = TrackTags(title="T", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[])
+        # Oversized image: just over the 16 MB limit
+        oversized = b"\xff\xd8" + b"\x00" * (_FLAC_MAX_PICTURE_BYTES + 1)  # pylint: disable=protected-access
+        cover = CoverArt(front=[CoverImage(data=oversized, mime="image/jpeg")])
+        apply_tags_flac(dest, tags, cover)
+
+        audio = FLAC(str(dest))
+        assert audio.pictures == []  # oversized image was skipped
+
+    def test_normal_front_image_embedded(self, fs: FakeFilesystem) -> None:
+        """Front images within _FLAC_MAX_PICTURE_BYTES are embedded normally.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/dest/01.flac")
+        fs.create_file(str(dest), contents=_MINIMAL_FLAC)
+        tags = TrackTags(title="T", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[])
+        small_jpeg = b"\xff\xd8" + b"\x00" * 100
+        cover = CoverArt(front=[CoverImage(data=small_jpeg, mime="image/jpeg")])
+        apply_tags_flac(dest, tags, cover)
+
+        audio = FLAC(str(dest))
+        assert len(audio.pictures) == 1
+        assert audio.pictures[0].data == small_jpeg
+
+
+# ---------------------------------------------------------------------------
+# _write_sidecars
+# ---------------------------------------------------------------------------
+
+
+class TestWriteSidecars:
+    """Tests for the _write_sidecars helper in _pipeline."""
+
+    def _make_cover(self) -> CoverArt:
+        """Build a minimal CoverArt with sidecar images.
+
+        :returns: A CoverArt with front_full, back, and booklet images.
+        """
+        return CoverArt(
+            front=[CoverImage(data=b"\xff\xd8\x00", mime="image/jpeg")],
+            front_full=[
+                CoverImage(data=b"\xff\xd8\x01" * 100, mime="image/jpeg", filename="cover.jpg", url="https://caa/cover")
+            ],
+            back=[CoverImage(data=b"%PDF-back", mime="application/pdf", filename="back.pdf", url="https://caa/back")],
+            booklet=[
+                CoverImage(data=b"%PDF-book1", mime="application/pdf", filename="booklet-1.pdf", url="https://caa/book1"),
+                CoverImage(data=b"%PDF-book2", mime="application/pdf", filename="booklet-2.pdf", url="https://caa/book2"),
+            ],
+        )
+
+    def test_sidecar_files_written_to_work_top_dir(self, fs: FakeFilesystem) -> None:
+        """Sidecar files are written into the work top directory.
+
+        :param fs: pyfakefs fixture.
+        """
+        work_top = Path("/dest/Composer/Work [rel 1963]")
+        fs.create_dir(str(work_top))
+        sidecars_written: set[Path] = set()
+        journal: list[TransactionEntry] = []
+        _write_sidecars(self._make_cover(), work_top, sidecars_written, journal, "t", "r1")  # pylint: disable=protected-access
+        assert (work_top / "cover.jpg").exists()
+        assert (work_top / "back.pdf").exists()
+        assert (work_top / "booklet-1.pdf").exists()
+        assert (work_top / "booklet-2.pdf").exists()
+
+    def test_journal_entries_created_with_caa_url_as_source(self, fs: FakeFilesystem) -> None:
+        """Each sidecar write produces a journal entry with action='downloaded' and source=CAA URL.
+
+        :param fs: pyfakefs fixture.
+        """
+        work_top = Path("/dest/Composer/Work")
+        fs.create_dir(str(work_top))
+        sidecars_written: set[Path] = set()
+        journal: list[TransactionEntry] = []
+        _write_sidecars(self._make_cover(), work_top, sidecars_written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        actions = [e.action for e in journal]
+        assert all(a == "downloaded" for a in actions)
+        sources = {e.source for e in journal}
+        assert "https://caa/cover" in sources
+        assert "https://caa/back" in sources
+        assert "https://caa/book1" in sources
+
+    def test_second_call_same_dir_is_noop(self, fs: FakeFilesystem) -> None:
+        """_write_sidecars is idempotent: second call for same work_top_dir does nothing.
+
+        :param fs: pyfakefs fixture.
+        """
+        work_top = Path("/dest/Composer/Work")
+        fs.create_dir(str(work_top))
+        sidecars_written: set[Path] = set()
+        journal: list[TransactionEntry] = []
+        _write_sidecars(self._make_cover(), work_top, sidecars_written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        first_count = len(journal)
+        _write_sidecars(self._make_cover(), work_top, sidecars_written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        assert len(journal) == first_count  # no new entries on second call
+
+    def test_images_without_filename_are_skipped(self, fs: FakeFilesystem) -> None:
+        """CoverImages with empty filename in sidecar lists are skipped without writing.
+
+        :param fs: pyfakefs fixture.
+        """
+        work_top = Path("/dest/Composer/Work")
+        fs.create_dir(str(work_top))
+        # An image in front_full with no filename — should be skipped
+        cover = CoverArt(
+            front_full=[CoverImage(data=b"\xff\xd8", mime="image/jpeg", filename="", url="")],
+        )
+        sidecars_written: set[Path] = set()
+        journal: list[TransactionEntry] = []
+        _write_sidecars(cover, work_top, sidecars_written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        assert journal == []
+
+
+# ---------------------------------------------------------------------------
 # apply_tags_mp3
 # ---------------------------------------------------------------------------
 
@@ -1036,8 +1169,10 @@ class TestRunFullPipeline:
         )
         assert mock_tag.call_count == 2
 
-    def test_tag_error_logged_not_raised(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """A tagging error is logged but does not abort the run.
+    def test_tag_error_raises_runtime_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """A MutagenError during tagging is re-raised as RuntimeError (provenance invariant).
+
+        The file must not be journalled as 'copied' when tagging fails.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -1052,15 +1187,15 @@ class TestRunFullPipeline:
         self._patch_mb(mocker, release)
         mocker.patch("music_annotator._pipeline.apply_tags_flac", side_effect=MutagenError("tag boom"))
 
-        # Should not raise
-        music_annotator.run(
-            release_id="rel-1",
-            src_dir=src,
-            dest_root=dest,
-            user_agent="Test/1.0",
-            dry_run=False,
-            fetch_rels=True,
-        )
+        with pytest.raises(RuntimeError, match="tag write failure"):
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=True,
+            )
 
     def test_unsupported_ext_logged_not_raised(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Unsupported audio extension is logged but does not abort the run.

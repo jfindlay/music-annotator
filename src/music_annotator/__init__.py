@@ -116,9 +116,11 @@ from music_annotator._mb_api import (
     _T,
     _WORK_CACHE,
     _get_bottom_work,
+    _infer_mime,
     _mb_call,
     _mb_retry,
     _patched_parse_recording,
+    _sidecar_filename,
     fetch_acoustid_id,
     fetch_cover_art,
     fetch_recording_detail,
@@ -126,7 +128,7 @@ from music_annotator._mb_api import (
     fetch_work_detail,
     init_mb,
 )
-from music_annotator._pipeline import CollisionPolicy, _select_medium, run
+from music_annotator._pipeline import CollisionPolicy, _select_medium, _write_sidecars, run
 from music_annotator._pipeline_io import (
     AUDIO_EXTENSIONS,
     JOURNAL_FILENAME,
@@ -140,6 +142,7 @@ from music_annotator._pipeline_io import (
     write_transaction_log,
 )
 from music_annotator._tagger import (
+    _FLAC_MAX_PICTURE_BYTES,
     _MP3_STD_KEYS,
     _MP3_TXXX_MAP,
     apply_tags_flac,
@@ -229,6 +232,7 @@ _reexports = (
     ROLE_ANNOTATIONS,
     TerminalDiscoverUI,
     WORKTYPE_GENRES,
+    _FLAC_MAX_PICTURE_BYTES,
     _SAFE_RE,
     _MP3_STD_KEYS,
     _MP3_TXXX_MAP,
@@ -239,14 +243,17 @@ _reexports = (
     _console,
     _format_candidate,
     _get_bottom_work,
+    _infer_mime,
     _mb_call,
     _mb_retry,
     _patched_parse_recording,
     _parse_release_item,
+    _sidecar_filename,
     _rec_title,
     _score_toc_release,
     _search_mb_releases,
     _select_medium,
     _toc_lookup_mb_releases,
+    _write_sidecars,
     _work_aliases,
 )

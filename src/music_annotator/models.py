@@ -599,6 +599,14 @@ class TrackTags(BaseModel):
     catalognumber: str = ""
     barcode: str = ""
 
+    # Cover art sidecar file references (relative filenames in the work top directory).
+    # These reference the sidecar files written alongside the tracks; no player currently
+    # reads them but they make the sidecar inventory machine-readable for future tooling.
+    coverart_front_file: str = ""  # COVERART_FRONT_FILE  — original-res front sidecar
+    coverart_back_file: str = ""  # COVERART_BACK_FILE   — back/spine sidecar(s)
+    coverart_booklet_files: str = ""  # COVERART_BOOKLET_FILES — booklet page sidecar(s)
+    coverart_medium_files: str = ""  # COVERART_MEDIUM_FILES  — disc label sidecar(s)
+
     # Work / movement
     work: str = ""
     groupheading: str = ""
@@ -787,15 +795,27 @@ class MBReleaseCandidate(BaseModel):
 
 
 class CoverImage(BaseModel):
-    """A single cover art image with its raw bytes and inferred MIME type.
+    """A single cover art image with its raw bytes, MIME type, sidecar filename, and source URL.
 
     Used as the element type for the multi-image lists on :class:`CoverArt`.
 
-    Important attributes: ``data`` (raw image bytes), ``mime`` (MIME type string, e.g. ``"image/jpeg"``).
+    ``filename`` is the suggested on-disk sidecar filename (e.g. ``"booklet-1.pdf"``), set by
+    :func:`~music_annotator._mb_api.fetch_cover_art` for images that are written as sidecar files
+    rather than embedded in audio tracks.  It is empty for the 500px front images stored in
+    ``CoverArt.front`` (those are embedded, not written to disk as sidecars).
+
+    ``url`` is the canonical Cover Art Archive URL for this image (e.g.
+    ``"https://coverartarchive.org/release/{id}/{coverid}.jpg"``).  Stored in the transaction
+    journal as the ``source`` of ``action="downloaded"`` sidecar entries so that any sidecar
+    can be re-downloaded from the journal alone.
+
+    Important attributes: ``data``, ``mime``, ``filename``, ``url``.
     """
 
     data: bytes = b""
     mime: str = ""
+    filename: str = ""  # suggested sidecar filename; empty for 500px embedded images
+    url: str = ""  # canonical CAA URL for journal provenance
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -803,17 +823,29 @@ class CoverImage(BaseModel):
 class CoverArt(BaseModel):
     """All cover art images fetched from the Cover Art Archive for a release.
 
-    Each CAA image type maps to a field holding a list of :class:`CoverImage` instances (because some types, notably
-    booklet pages, may have multiple images).  The ``front`` list is used for the primary front cover; ``back`` for the
-    rear packaging; ``booklet`` for all booklet / liner-notes pages; ``medium`` for disc-label images.
+    Cover art is split by purpose:
 
-    The legacy ``data`` / ``mime`` shortcut properties expose the first front-cover image for backward compatibility with
-    code that previously used ``CoverArt.data`` directly.
+    - ``front`` — 500px JPEG front cover image(s), embedded in every audio track's PICTURE block.
+    - ``front_full`` — original-resolution front cover image(s), written as ``cover.jpg`` sidecar.
+    - ``back`` — back/spine image(s), written as ``back.jpg`` / ``back.pdf`` sidecar only.
+    - ``booklet`` — booklet / liner-notes page(s), written as ``booklet-N.jpg`` / ``booklet-N.pdf`` sidecars.
+      JPEG/PNG pages that fit within the 16 MB FLAC block limit could be embedded, but the current scheme
+      writes all booklet/back/medium images exclusively as sidecar files for simplicity.
+    - ``medium`` — disc-label image(s), written as ``medium-N.jpg`` sidecar only.
 
-    Important attributes: ``front``, ``back``, ``booklet``, ``medium`` (each a ``list[CoverImage]``).
+    Only ``front`` is embedded in audio files.  All other images are sidecar files written once into the
+    work top directory.  Their filenames and CAA source URLs are stored on the :class:`CoverImage` instances
+    so that :func:`~music_annotator._pipeline.run` can write them and add ``action="downloaded"`` journal
+    entries with the correct provenance.
+
+    The legacy ``data`` / ``mime`` shortcut properties expose the first front-cover image for backward
+    compatibility with code that previously used ``CoverArt.data`` directly.
+
+    Important attributes: ``front``, ``front_full``, ``back``, ``booklet``, ``medium``.
     """
 
-    front: list[CoverImage] = []
+    front: list[CoverImage] = []  # 500px for embedding
+    front_full: list[CoverImage] = []  # original resolution for sidecar
     back: list[CoverImage] = []
     booklet: list[CoverImage] = []
     medium: list[CoverImage] = []
@@ -822,9 +854,9 @@ class CoverArt(BaseModel):
     def available(self) -> bool:
         """Return ``True`` if at least one image of any type is present.
 
-        :returns: ``True`` when any of ``front``, ``back``, ``booklet``, or ``medium`` is non-empty.
+        :returns: ``True`` when any of ``front``, ``front_full``, ``back``, ``booklet``, or ``medium`` is non-empty.
         """
-        return bool(self.front or self.back or self.booklet or self.medium)
+        return bool(self.front or self.front_full or self.back or self.booklet or self.medium)
 
     @property
     def data(self) -> bytes:

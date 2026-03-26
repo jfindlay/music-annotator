@@ -703,10 +703,16 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
         performers = file_dict.get("CEA_ENSEMBLE_NAMES") or file_dict.get("ARTIST", "Unknown Performers")
 
     # Work directory component — title + [rec YYYY] or [rel YYYY] year suffix.
-    # Priority: recording.first-release-date (year the audio was first commercially released,
-    # labelled [rec]) → release_group.first_release_date / release.date (album publication year,
-    # labelled [rel]).  Both are publication-era years; [rec] is more granular and tracks the
-    # specific audio rather than the album packaging.
+    #
+    # All three MB date fields are publication-era years, not recording session dates:
+    #   RECORDING_FIRST_RELEASE_DATE  — year this specific audio first appeared on any release
+    #   ORIGINALDATE                  — year the album (release group) was first published
+    #   DATE                          — year of this specific pressing
+    #
+    # The [rec YYYY] label is reserved for a future data source (Discogs / Wikipedia / IMSLP)
+    # that provides actual studio/concert session dates.  Until then rec_year stays empty and
+    # all three MB fields are labelled [rel].  The priority order is most-granular-first:
+    # RECORDING_FIRST_RELEASE_DATE > ORIGINALDATE > DATE.
     work_title = file_dict.get("CWP_WORK_TOP") or file_dict.get("WORK", "")
     work_dir = safe_name(work_title)
 
@@ -718,10 +724,16 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
         """
         return raw[:4] if len(raw) >= 4 and raw[:4].isdigit() else ""
 
-    rec_year = _extract_year(file_dict.get("RECORDING_FIRST_RELEASE_DATE", ""))
-    rel_year = _extract_year(file_dict.get("ORIGINALDATE") or file_dict.get("DATE", ""))
+    # rec_year: reserved — populate from Discogs/Wikipedia/IMSLP when session date lookup
+    # is implemented (see PLAN.md).  Activating it will automatically enable [rec YYYY] output.
+    rec_year = ""
+    rel_year = (
+        _extract_year(file_dict.get("RECORDING_FIRST_RELEASE_DATE", ""))
+        or _extract_year(file_dict.get("ORIGINALDATE", ""))
+        or _extract_year(file_dict.get("DATE", ""))
+    )
 
-    if rec_year:
+    if rec_year:  # pragma: no cover  (reserved for future session-date data source)
         work_dir = f"{work_dir} [rec {rec_year}]"
     elif rel_year:
         work_dir = f"{work_dir} [rel {rel_year}]"

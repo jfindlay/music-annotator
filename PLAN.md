@@ -18,6 +18,9 @@ _(nothing immediately queued)_
 
 ## Deferred
 
+- **`[rec YYYY]` session-date label:** The `rec_year` hook in `build_dest_path` is reserved for a
+  future data source (Discogs / Wikipedia / IMSLP) that provides actual studio or concert session
+  dates.  All three MB date fields are publication-era years and produce `[rel YYYY]`.
 - **Native language / native script (hybrid approach):** Use split-last-word of the canonical
   `name` field for Latin-script composers (no extra API call); for non-Latin-script composers
   (detected via Unicode block, e.g. Cyrillic, CJK), fetch the locale-tagged primary

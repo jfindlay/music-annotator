@@ -205,53 +205,92 @@ def fetch_recording_detail(recording_id: str) -> MBRecording:
     return MBRecording.model_validate(result.get("recording", {}))
 
 
+def _infer_mime(data: bytes) -> str:
+    """Infer the MIME type of ``data`` from its leading magic bytes.
+
+    :param data: Raw image or document bytes.
+    :returns: A MIME type string such as ``"image/jpeg"``, ``"image/png"``, ``"application/pdf"``,
+        or ``"image/tiff"``.  Returns ``"image/jpeg"`` for unrecognised formats.
+    """
+    if data[:2] == b"\xff\xd8":
+        return "image/jpeg"
+    if data[:4] == b"\x89PNG":
+        return "image/png"
+    if data[:4] == b"%PDF":
+        return "application/pdf"
+    if data[:4] in (b"II\x2a\x00", b"MM\x00\x2a"):
+        return "image/tiff"
+    return "image/jpeg"
+
+
+def _sidecar_filename(image_type: str, count: int, index: int, mime: str) -> str:
+    """Return the suggested sidecar filename for a CAA image.
+
+    Single items of a given type (``count == 1``) use no index suffix (e.g. ``"back.jpg"``).
+    Multiple items use a 1-based index suffix (e.g. ``"booklet-1.pdf"``, ``"booklet-2.jpg"``).
+    The extension is derived from the MIME type.
+
+    :param image_type: One of ``"front"``, ``"back"``, ``"booklet"``, or ``"medium"``.
+    :param count: Total number of images of this type (used to decide whether to add an index).
+    :param index: 1-based position of this image within its type group.
+    :param mime: MIME type string (e.g. ``"image/jpeg"``).
+    :returns: A filename string such as ``"cover.jpg"``, ``"booklet-1.pdf"``, ``"medium-1.jpg"``.
+    """
+    _ext_map: dict[str, str] = {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "application/pdf": ".pdf",
+        "image/tiff": ".tiff",
+    }
+    ext = _ext_map.get(mime, ".bin")
+    _base_map = {"front": "cover", "back": "back", "booklet": "booklet", "medium": "medium"}
+    base = _base_map.get(image_type, image_type)
+    if count > 1:
+        return f"{base}-{index}{ext}"
+    return f"{base}{ext}"
+
+
 def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     """Download all available cover art for a release from the Cover Art Archive.
 
     Strategy:
 
-    1. Call ``mb.get_image_list(release_id)`` to obtain the full CAA image listing for the release.
-    2. For each image entry in the listing, classify it by its ``types`` list into one of: ``front``
-       (``"Front"``), ``back`` (``"Back"``), ``booklet`` (``"Booklet"``), or ``medium`` (``"Medium"``).
-       Images whose types do not include any of these four strings are skipped.
-    3. Fetch the binary data for each classified image via ``mb.get_image(release_id, coverid)`` at
-       original resolution (no ``size`` argument), sleeping 1 second after each network call to respect
-       the 1 req/s rate limit.
-    4. If the release has no CAA listing (HTTP 404) and ``release_group_id`` is provided, fall back to
-       fetching the release-group front image via ``mb.get_release_group_image_front()`` at original
-       resolution and place it in ``front`` only.
+    1. Call ``mb.get_image_list(release_id)`` to obtain the full CAA image listing.
+    2. Classify each image entry by its ``types`` list into one of: ``front``, ``back``, ``booklet``,
+       or ``medium``.  Images with unrecognised types are skipped.
+    3. For **front** images: fetch twice — 500 px (for ``CoverArt.front``, embedded in audio files)
+       and original resolution (for ``CoverArt.front_full``, written as ``cover.jpg`` sidecar).
+    4. For **back/booklet/medium** images: fetch original resolution only; set ``filename`` and ``url``
+       on each :class:`~music_annotator.models.CoverImage` for sidecar writing and journal provenance.
+    5. If the release has no CAA listing (HTTP 404) and ``release_group_id`` is provided, fall back to
+       the release-group front image using the same two-fetch strategy.
 
-    The MIME type for each image is inferred from magic bytes: ``\\xff\\xd8`` → ``image/jpeg``;
-    ``\\x89PNG`` → ``image/png``; anything else defaults to ``image/jpeg``.
+    The ``url`` field on each image is the canonical CAA URL from the image listing's ``"image"`` key,
+    which is stable and publicly accessible regardless of the Internet Archive redirect target.
 
     :param release_id: The MusicBrainz release MBID.
-    :param release_group_id: The MusicBrainz release-group MBID used as a fallback when the release has no
-        CAA listing.  Pass an empty string to skip the fallback.
-    :returns: A :class:`~music_annotator.models.CoverArt` instance populated with all retrieved images, or
-        an empty :class:`~music_annotator.models.CoverArt` when nothing could be fetched.
+    :param release_group_id: The MusicBrainz release-group MBID used as a fallback when the release has
+        no CAA listing.  Pass an empty string to skip the fallback.
+    :returns: A :class:`~music_annotator.models.CoverArt` instance, or an empty one on failure.
     """
 
-    def _infer_mime(data: bytes) -> str:
-        if data[:2] == b"\xff\xd8":
-            return "image/jpeg"
-        if data[:4] == b"\x89PNG":
-            return "image/png"
-        return "image/jpeg"
-
-    def _fetch_image(rel_id: str, coverid: str | int) -> CoverImage | None:
-        """Fetch a single image by cover ID; return a CoverImage or None on error."""
+    def _fetch_raw(rel_id: str, coverid: str | int, size: str = "") -> CoverImage | None:
+        """Fetch a single image; return a :class:`~music_annotator.models.CoverImage` or ``None``."""
         try:
-            raw = _mb_call(lambda: mb.get_image(rel_id, coverid))
+            if size:
+                raw = _mb_call(lambda: mb.get_image(rel_id, coverid, size=size))
+            else:
+                raw = _mb_call(lambda: mb.get_image(rel_id, coverid))
             if raw:
                 data = bytes(raw)
                 return CoverImage(data=data, mime=_infer_mime(data))
         except mb.ResponseError as exc:
-            log.warning("cover_art_image_error", coverid=str(coverid), code=str(exc)[:40])
+            log.warning("cover_art_image_error", coverid=str(coverid), size=size or "original", code=str(exc)[:40])
         return None
 
     log.info("fetch_cover_art", release_id=release_id)
 
-    # Attempt to get the full image listing for this release.
+    # Step 1: obtain the image listing.
     listing: list[dict[str, JSON]] = []
     has_release_listing = False
     try:
@@ -268,58 +307,100 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
             case _:
                 log.warning("cover_art_listing_error", code=code[:40])
 
-    front: list[CoverImage] = []
-    back: list[CoverImage] = []
-    booklet: list[CoverImage] = []
-    medium: list[CoverImage] = []
-
+    # Step 2: classify images by type (first pass — no fetching yet).
+    _classified: dict[str, list[tuple[str, str]]] = {"front": [], "back": [], "booklet": [], "medium": []}
     if has_release_listing:
-        for img in listing:
-            types_raw = img.get("types", [])
+        for entry in listing:
+            types_raw = entry.get("types", [])
             if not isinstance(types_raw, list):
                 continue
             types = [t for t in types_raw if isinstance(t, str)]
-            coverid = img.get("id", "")
+            coverid = str(entry.get("id", ""))
             if not coverid:
                 continue
+            # The "image" key in the listing is the canonical CAA URL for this image.
+            caa_url = str(entry.get("image", ""))
             match types:
                 case t if "Front" in t:
-                    image = _fetch_image(release_id, str(coverid))
-                    if image:
-                        front.append(image)
+                    _classified["front"].append((coverid, caa_url))
                 case t if "Back" in t:
-                    image = _fetch_image(release_id, str(coverid))
-                    if image:
-                        back.append(image)
+                    _classified["back"].append((coverid, caa_url))
                 case t if "Booklet" in t:
-                    image = _fetch_image(release_id, str(coverid))
-                    if image:
-                        booklet.append(image)
+                    _classified["booklet"].append((coverid, caa_url))
                 case t if "Medium" in t:
-                    image = _fetch_image(release_id, str(coverid))
-                    if image:
-                        medium.append(image)
+                    _classified["medium"].append((coverid, caa_url))
                 case _:
-                    log.warning("cover_art_skipped_type", types=types, coverid=str(coverid))
+                    log.warning("cover_art_skipped_type", types=types, coverid=coverid)
 
-    # If no release listing was available, fall back to the release-group front image.
+    # Step 3 & 4: fetch images with correct sizing and assign filenames/URLs.
+    imgs_front: list[CoverImage] = []
+    imgs_front_full: list[CoverImage] = []
+    imgs_back: list[CoverImage] = []
+    imgs_booklet: list[CoverImage] = []
+    imgs_medium: list[CoverImage] = []
+
+    # Front: fetch 500px for embedding, original for sidecar.
+    front_count = len(_classified["front"])
+    for idx, (coverid, caa_url) in enumerate(_classified["front"], start=1):
+        img_500 = _fetch_raw(release_id, coverid, size="500")
+        if img_500:
+            img_500.url = caa_url
+            imgs_front.append(img_500)
+        img_orig = _fetch_raw(release_id, coverid)
+        if img_orig:
+            img_orig.filename = _sidecar_filename("front", front_count, idx, img_orig.mime)
+            img_orig.url = caa_url
+            imgs_front_full.append(img_orig)
+
+    # Back/booklet/medium: fetch original only, assign sidecar filenames.
+    _nonfront: list[tuple[str, list[CoverImage]]] = [
+        ("back", imgs_back),
+        ("booklet", imgs_booklet),
+        ("medium", imgs_medium),
+    ]
+    for type_key, store in _nonfront:
+        entries = _classified[type_key]
+        count = len(entries)
+        for idx, (coverid, caa_url) in enumerate(entries, start=1):
+            img = _fetch_raw(release_id, coverid)
+            if img:
+                img.filename = _sidecar_filename(type_key, count, idx, img.mime)
+                img.url = caa_url
+                store.append(img)
+
+    # Step 5: release-group fallback (no listing available).
     if not has_release_listing and release_group_id:
+        rg_url = f"https://coverartarchive.org/release-group/{release_group_id}/front"
         try:
-            raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id))
-            if raw:
-                data = bytes(raw)
-                front.append(CoverImage(data=data, mime=_infer_mime(data)))
+            raw_500 = _mb_call(lambda: mb.get_release_group_image_front(release_group_id, size="500"))
+            if raw_500:
+                d = bytes(raw_500)
+                imgs_front.append(CoverImage(data=d, mime=_infer_mime(d), url=rg_url))
         except mb.ResponseError as exc:
-            log.warning("cover_art_release_group_error", code=str(exc)[:40])
+            log.warning("cover_art_release_group_error", size="500", code=str(exc)[:40])
+        try:
+            raw_orig = _mb_call(lambda: mb.get_release_group_image_front(release_group_id))
+            if raw_orig:
+                d = bytes(raw_orig)
+                imgs_front_full.append(CoverImage(data=d, mime=_infer_mime(d), filename="cover.jpg", url=rg_url))
+        except mb.ResponseError as exc:
+            log.warning("cover_art_release_group_error", size="original", code=str(exc)[:40])
 
-    result_art = CoverArt(front=front, back=back, booklet=booklet, medium=medium)
+    result_art = CoverArt(
+        front=imgs_front,
+        front_full=imgs_front_full,
+        back=imgs_back,
+        booklet=imgs_booklet,
+        medium=imgs_medium,
+    )
     if result_art.available:
         log.info(
             "cover_art_fetched",
-            front=len(front),
-            back=len(back),
-            booklet=len(booklet),
-            medium=len(medium),
+            front=len(imgs_front),
+            front_full=len(imgs_front_full),
+            back=len(imgs_back),
+            booklet=len(imgs_booklet),
+            medium=len(imgs_medium),
         )
     else:
         log.warning("cover_art_unavailable", release_id=release_id)

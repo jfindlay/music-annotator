@@ -15,7 +15,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 
 from music_annotator._tagger import _MP3_STD_KEYS, _MP3_TXXX_MAP
-from music_annotator.models import JSON, CoverArt, CoverImage, TrackTags, TransactionEntry, TransactionLog
+from music_annotator.models import JSON, CoverArt, TrackTags, TransactionEntry, TransactionLog
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -255,18 +255,11 @@ def _verify_copy(
             f"missing={list(missing)}, extra={list(extra)}, wrong={list(wrong)}"
         )
 
-    # 2. Cover art — build expected (pic_type, data) pairs from all CoverArt fields then compare to file.
-    if cover and cover.available:
-        expected_pics: list[tuple[int, bytes]] = []
-        _cov_groups: list[tuple[int, list[CoverImage]]] = [
-            (3, cover.front),
-            (4, cover.back),
-            (5, cover.booklet),
-            (6, cover.medium),
-        ]
-        for pic_type, images in _cov_groups:
-            for img in images:
-                expected_pics.append((pic_type, img.data))
+    # 2. Cover art — verify only the 500 px front images that were actually embedded.
+    # Back, booklet, medium, and original-resolution front images are written as sidecar files
+    # and are not embedded in the audio file; they are not checked here.
+    if cover and cover.front:
+        expected_pics: list[tuple[int, bytes]] = [(3, img.data) for img in cover.front]
 
         match ext:
             case ".flac":

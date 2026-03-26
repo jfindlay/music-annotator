@@ -21,7 +21,7 @@ from music_annotator import (
     fetch_work_detail,
     write_transaction_log,
 )
-from music_annotator._mb_api import _mb_call, _mb_retry, _patched_parse_recording
+from music_annotator._mb_api import _infer_mime, _mb_call, _mb_retry, _patched_parse_recording, _sidecar_filename
 from music_annotator._pipeline_io import _check_collisions
 from music_annotator.models import MBRecording, TransactionEntry
 
@@ -795,3 +795,142 @@ class TestMBRecordingFirstReleaseDate:
         """MBRecording.first_release_date defaults to empty string when absent."""
         rec = MBRecording.model_validate({"id": "r1", "title": "T"})
         assert rec.first_release_date == ""
+
+
+# ---------------------------------------------------------------------------
+# _infer_mime
+# ---------------------------------------------------------------------------
+
+
+class TestInferMime:
+    """Tests for _infer_mime magic-byte detection."""
+
+    def test_jpeg_magic(self) -> None:
+        """JPEG magic bytes produce image/jpeg."""
+        assert _infer_mime(b"\xff\xd8\xff\xe0...") == "image/jpeg"
+
+    def test_png_magic(self) -> None:
+        """PNG magic bytes produce image/png."""
+        assert _infer_mime(b"\x89PNG\r\n\x1a\n") == "image/png"
+
+    def test_pdf_magic(self) -> None:
+        """PDF magic bytes produce application/pdf."""
+        assert _infer_mime(b"%PDF-1.4 content") == "application/pdf"
+
+    def test_tiff_le_magic(self) -> None:
+        """TIFF little-endian magic bytes produce image/tiff."""
+        assert _infer_mime(b"II\x2a\x00extra") == "image/tiff"
+
+    def test_tiff_be_magic(self) -> None:
+        """TIFF big-endian magic bytes produce image/tiff."""
+        assert _infer_mime(b"MM\x00\x2aextra") == "image/tiff"
+
+    def test_unknown_defaults_to_jpeg(self) -> None:
+        """Unrecognised magic bytes default to image/jpeg."""
+        assert _infer_mime(b"\x00\x00\x00\x00") == "image/jpeg"
+
+
+# ---------------------------------------------------------------------------
+# _sidecar_filename
+# ---------------------------------------------------------------------------
+
+
+class TestSidecarFilename:
+    """Tests for _sidecar_filename."""
+
+    def test_single_front(self) -> None:
+        """Single front image → cover.jpg."""
+        assert _sidecar_filename("front", 1, 1, "image/jpeg") == "cover.jpg"
+
+    def test_single_back_jpeg(self) -> None:
+        """Single back JPEG → back.jpg (no index)."""
+        assert _sidecar_filename("back", 1, 1, "image/jpeg") == "back.jpg"
+
+    def test_single_back_pdf(self) -> None:
+        """Single back PDF → back.pdf (no index)."""
+        assert _sidecar_filename("back", 1, 1, "application/pdf") == "back.pdf"
+
+    def test_multiple_booklet_pdf(self) -> None:
+        """Multiple booklet PDFs get 1-based index suffix."""
+        assert _sidecar_filename("booklet", 2, 1, "application/pdf") == "booklet-1.pdf"
+        assert _sidecar_filename("booklet", 2, 2, "application/pdf") == "booklet-2.pdf"
+
+    def test_multiple_booklet_jpeg(self) -> None:
+        """Multiple booklet JPEGs get 1-based index suffix."""
+        assert _sidecar_filename("booklet", 3, 2, "image/jpeg") == "booklet-2.jpg"
+
+    def test_medium_single(self) -> None:
+        """Single medium image → medium.jpg."""
+        assert _sidecar_filename("medium", 1, 1, "image/jpeg") == "medium.jpg"
+
+    def test_png_extension(self) -> None:
+        """PNG MIME type produces .png extension."""
+        assert _sidecar_filename("back", 1, 1, "image/png") == "back.png"
+
+    def test_tiff_extension(self) -> None:
+        """TIFF MIME type produces .tiff extension."""
+        assert _sidecar_filename("booklet", 1, 1, "image/tiff") == "booklet.tiff"
+
+    def test_unknown_mime_extension(self) -> None:
+        """Unknown MIME type produces .bin extension."""
+        assert _sidecar_filename("medium", 1, 1, "application/octet-stream") == "medium.bin"
+
+
+# ---------------------------------------------------------------------------
+# fetch_cover_art — release-group fallback two-fetch
+# ---------------------------------------------------------------------------
+
+
+class TestFetchCoverArtReleaseGroupFallback:
+    """Tests for the release-group fallback dual-fetch in fetch_cover_art."""
+
+    def _make_jpeg_ctx(self, mocker: MockerFixture, data: bytes) -> Any:
+        """Build a mock context manager that returns ``data`` from ``.read()``.
+
+        :param mocker: pytest-mock fixture.
+        :param data: Bytes to return from the context manager.
+        :returns: A mock usable as a context manager.
+        """
+        ctx = mocker.MagicMock()
+        ctx.__enter__ = mocker.MagicMock(return_value=ctx)
+        ctx.__exit__ = mocker.MagicMock(return_value=False)
+        ctx.read = mocker.MagicMock(return_value=data)
+        return ctx
+
+    def test_release_group_fallback_fetches_500px_and_original(self, mocker: MockerFixture) -> None:
+        """When the release has no listing, both 500px and original are fetched for front.
+
+        :param mocker: pytest-mock fixture.
+        """
+        jpeg_500 = b"\xff\xd8" + b"\x00" * 100
+        jpeg_orig = b"\xff\xd8" + b"\x00" * 2000
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=mb.ResponseError("404 Not Found"))
+        mock_rg = mocker.patch(
+            "music_annotator._mb_api.mb.get_release_group_image_front",
+            side_effect=[jpeg_500, jpeg_orig],
+        )
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        result = fetch_cover_art("rel-1", release_group_id="rg-1")
+        assert len(result.front) == 1
+        assert result.front[0].data == jpeg_500
+        assert len(result.front_full) == 1
+        assert result.front_full[0].data == jpeg_orig
+        assert result.front_full[0].filename == "cover.jpg"
+        assert mock_rg.call_count == 2
+
+    def test_release_group_fallback_500_error_still_fetches_original(self, mocker: MockerFixture) -> None:
+        """If 500px fetch fails, original fetch still proceeds.
+
+        :param mocker: pytest-mock fixture.
+        """
+        jpeg_orig = b"\xff\xd8" + b"\x00" * 2000
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=mb.ResponseError("404 Not Found"))
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_release_group_image_front",
+            side_effect=[mb.ResponseError("503"), jpeg_orig],
+        )
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        result = fetch_cover_art("rel-1", release_group_id="rg-1")
+        assert result.front == []
+        assert len(result.front_full) == 1
+        assert result.front_full[0].filename == "cover.jpg"

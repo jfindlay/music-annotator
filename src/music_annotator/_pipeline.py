@@ -39,7 +39,7 @@ from music_annotator._pipeline_io import (
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path, build_track_tags
 from music_annotator._works import build_work_hierarchy, select_primary_performance_work
-from music_annotator.models import CoverArt, MBMedium, MBTrack, MBWork, TrackTags, TransactionEntry
+from music_annotator.models import CoverArt, CoverImage, MBMedium, MBTrack, MBWork, TrackTags, TransactionEntry
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -143,6 +143,56 @@ def _prompt_collision_policy(collisions: list[Path]) -> CollisionPolicy:
                 return CollisionPolicy.ABORT
             case _:
                 _console.print("[yellow]Please enter 'a', 's', or 'o'.[/]")
+
+
+def _write_sidecars(
+    cover: CoverArt,
+    work_top_dir: Path,
+    sidecars_written: set[Path],
+    journal_entries: list[TransactionEntry],
+    now: str,
+    release_id: str,
+) -> None:
+    """Write sidecar cover art files for ``work_top_dir`` and append journal entries.
+
+    Called after every successful :func:`_verify_copy` for a track.  A :class:`~pathlib.Path`
+    set ``sidecars_written`` ensures each work top directory receives its sidecar files exactly
+    once per run, even when the directory contains multiple tracks.
+
+    Writes every :class:`~music_annotator.models.CoverImage` from ``cover.front_full``,
+    ``cover.back``, ``cover.booklet``, and ``cover.medium`` that has a non-empty ``filename``
+    field.  For each written sidecar a ``action="downloaded"`` :class:`~music_annotator.models.TransactionEntry`
+    is appended to ``journal_entries`` with ``source`` set to the canonical CAA URL stored on the image
+    (so the file can be re-downloaded from the journal alone).
+
+    :param cover: The :class:`~music_annotator.models.CoverArt` instance for this release.
+    :param work_top_dir: The work top directory (``<dest_root>/<composer-dir>/<work-dir>``).
+    :param sidecars_written: Mutable set of directories that have already received sidecar files.
+    :param journal_entries: Mutable list to which new entries are appended.
+    :param now: ISO-format timestamp string for journal entries.
+    :param release_id: MusicBrainz release MBID for journal entries.
+    """
+    if work_top_dir in sidecars_written:
+        return
+    sidecars_written.add(work_top_dir)
+
+    sidecar_images: list[CoverImage] = list(cover.front_full) + list(cover.back) + list(cover.booklet) + list(cover.medium)
+    for img in sidecar_images:
+        if not img.filename:
+            continue
+        sidecar_path = work_top_dir / img.filename
+        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        sidecar_path.write_bytes(img.data)
+        log.debug("sidecar_written", path=str(sidecar_path))
+        journal_entries.append(
+            TransactionEntry(
+                timestamp=now,
+                release_id=release_id,
+                source=img.url,
+                destination=str(sidecar_path),
+                action="downloaded",
+            )
+        )
 
 
 def run(
@@ -332,6 +382,7 @@ def run(
 
     # --- Copy, tag, and journal ---
     journal_entries: list[TransactionEntry] = []
+    sidecars_written: set[Path] = set()
     now = datetime.datetime.now(datetime.UTC).isoformat()
 
     for idx, src_file, dest_file in plan:
@@ -387,6 +438,12 @@ def run(
                 f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_copy_hash[:12]}…"
             )
 
+        # Set cover art sidecar reference tags so they are embedded in the audio file.
+        final_tags.coverart_front_file = cover.front_full[0].filename if cover.front_full else ""
+        final_tags.coverart_back_file = "; ".join(img.filename for img in cover.back if img.filename)
+        final_tags.coverart_booklet_files = "; ".join(img.filename for img in cover.booklet if img.filename)
+        final_tags.coverart_medium_files = "; ".join(img.filename for img in cover.medium if img.filename)
+
         ext = src_file.suffix.lower()
         try:
             match ext:
@@ -397,11 +454,17 @@ def run(
                 case _:
                     log.warning("unsupported_format", ext=ext, file=dest_file.name)
         except MutagenError as exc:
-            log.error("tag_error", file=dest_file.name, error=str(exc))
+            raise RuntimeError(f"tag write failure for '{dest_file.name}': {exc}") from exc
 
         os.utime(dest_file, src_times)
 
         _verify_copy(src_file, dest_file, final_tags, cover, src_stat.st_mtime)
+
+        # Derive the work top directory (dest_root / composer-dir / work-dir) and write
+        # sidecar cover art files exactly once per work directory across all tracks.
+        rel_parts = dest_file.relative_to(dest_root).parts
+        work_top_dir = dest_root / rel_parts[0] / rel_parts[1]
+        _write_sidecars(cover, work_top_dir, sidecars_written, journal_entries, now, release_id)
 
         journal_entries.append(
             TransactionEntry(
