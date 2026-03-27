@@ -48,7 +48,7 @@ All quality checks are driven by tox via the project-local venv:
 | Env | Command | Requirement |
 |---|---|---|
 | `build` | setuptools wheel | must succeed |
-| `test` | pytest | 744 tests pass; **100% branch coverage** |
+| `test` | pytest | 758 tests pass; **100% branch coverage** |
 | `check_type` | mypy (strict) | **zero errors** |
 | `check_format` | ruff check + ruff format --check | **zero warnings** |
 | `check_lint` | pylint | **10.00/10** |
@@ -79,6 +79,19 @@ Never skip the full `tox -m analyze` run before declaring a task done.
 - **No `cast()`** in source — if a cast would be needed, the model is under-typed; fix the model instead.
 - Mypy runs in strict mode (`disallow_untyped_defs`, `warn_return_any`, etc.).  Every file must be clean under `mypy src/
   tests/`.
+
+### MusicBrainz API reference
+
+When adding or modifying MB API includes or Pydantic model fields:
+
+1. **Schema**: consult the MMD 2.0 RelaxNG schema at
+   https://github.com/metabrainz/mmd-schema/blob/master/schema/musicbrainz_mmd-2.0.rng for the authoritative field names and
+   structure.
+2. **musicbrainzngs implementation**: the library parses MB XML and may use different key names from the REST JSON API (e.g.
+   `"disc-list"` and `"offset-list"` from musicbrainzngs vs `"discs"` and `"offsets"` in the REST JSON). When a model field
+   doesn't populate as expected, inspect the musicbrainzngs source (particularly `mbxml.py`) — it has known bugs and gaps (e.g.
+   `first-release-date` on recordings is silently dropped). Always verify actual key names by printing the raw dict returned by
+   `mb.get_*` rather than relying on the REST API JSON alone.
 
 ### Models (`models.py`)
 - All MusicBrainz API response types are Pydantic `BaseModel` subclasses.

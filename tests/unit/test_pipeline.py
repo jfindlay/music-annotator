@@ -187,9 +187,9 @@ def _make_multi_disc_release(
         medium: dict[str, JSON] = {"position": disc_idx, "format": "CD", "track-list": tracks}
         if disc_offsets is not None:
             discs: list[dict[str, object]] = [
-                {"offsets": offsets, "sectors": offsets[-1] + 1000} for offsets in disc_offsets[disc_idx - 1]
+                {"offset-list": offsets, "sectors": str(offsets[-1] + 1000)} for offsets in disc_offsets[disc_idx - 1]
             ]
-            medium["discs"] = discs  # type: ignore[assignment]
+            medium["disc-list"] = discs  # type: ignore[assignment]
         mediums.append(medium)
     return MBRelease.model_validate(
         {
@@ -3398,7 +3398,7 @@ def _medium_with_toc(position: int, offsets: list[int]) -> MBMedium:
             "position": position,
             "format": "CD",
             "track-list": [],
-            "discs": [{"offsets": offsets, "sectors": offsets[-1] + 1000}],
+            "disc-list": [{"offset-list": offsets, "sectors": str(offsets[-1] + 1000)}],
         }
     )
 
@@ -3448,9 +3448,9 @@ class TestMatchMediumByToc:
                 "position": 1,
                 "format": "CD",
                 "track-list": [],
-                "discs": [
-                    {"offsets": pressing_a, "sectors": pressing_a[-1] + 1000},
-                    {"offsets": _DISC1_OFFSETS, "sectors": _DISC1_OFFSETS[-1] + 1000},
+                "disc-list": [
+                    {"offset-list": pressing_a, "sectors": str(pressing_a[-1] + 1000)},
+                    {"offset-list": _DISC1_OFFSETS, "sectors": str(_DISC1_OFFSETS[-1] + 1000)},
                 ],
             }
         )

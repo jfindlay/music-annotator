@@ -639,12 +639,31 @@ class MBDisc(BaseModel):
     Each entry records the physical CD's table-of-contents.  A medium may have more than one disc entry when
     multiple pressings of the same disc have slightly different TOC data (e.g. different lead-in offsets).
 
-    Important attributes: ``offsets`` (per-track CD frame start positions, matching the ``disc_id`` list in
+    ``musicbrainzngs`` returns per-track frame start positions under the key ``"offset-list"`` and the lead-out
+    sector address as a string under ``"sectors"``.
+
+    Important attributes: ``offsets`` (per-track CD frame start positions, matching the ``disc_id`` offsets in
     ``00 - disc info.yaml``), ``sectors`` (lead-out frame address).
     """
 
-    offsets: list[int] = Field(default_factory=list)
+    offsets: list[int] = Field(default_factory=list, alias="offset-list")
     sectors: int = 0
+
+    model_config = {"populate_by_name": True}
+
+    @field_validator("sectors", mode="before")
+    @classmethod
+    def coerce_sectors(cls, v: str | int | None) -> int:
+        """Coerce ``sectors`` from string/None to int.
+
+        ``musicbrainzngs`` returns this field as a string from the XML response.
+
+        :param v: Raw value from the API response.
+        :returns: Integer sector count, defaulting to 0.
+        """
+        if v is None:
+            return 0
+        return int(v)
 
 
 class MBMedium(BaseModel):
@@ -654,13 +673,15 @@ class MBMedium(BaseModel):
     ``"Digital Media"``), ``title`` (disc-specific subtitle, e.g. ``"Act I"`` or ``"Disc 1: Symphonies 1 & 2"``
     — maps to ``DISCSUBTITLE``), ``track_list``, ``disc_list`` (TOC entries populated when the release is fetched
     with ``includes=["discids"]``).
+
+    ``musicbrainzngs`` returns disc entries under the key ``"disc-list"``.
     """
 
     position: int = 1
     format: str = ""
     title: str = ""
     track_list: list[MBTrack] = Field(default_factory=list, alias="track-list")
-    disc_list: list[MBDisc] = Field(default_factory=list, alias="discs")
+    disc_list: list[MBDisc] = Field(default_factory=list, alias="disc-list")
 
     model_config = {"populate_by_name": True}
 

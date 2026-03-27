@@ -1183,9 +1183,19 @@ class TestMBDisc:
 
     def test_offsets_and_sectors_populated(self) -> None:
         """MBDisc correctly stores offsets and sectors from API data."""
-        disc = MBDisc.model_validate({"offsets": [182, 67232, 113807], "sectors": 355382})
+        disc = MBDisc.model_validate({"offset-list": [182, 67232, 113807], "sectors": "355382"})
         assert disc.offsets == [182, 67232, 113807]
         assert disc.sectors == 355382
+
+    def test_sectors_coerced_from_int(self) -> None:
+        """MBDisc.coerce_sectors accepts a plain int."""
+        disc = MBDisc.model_validate({"sectors": 12345})
+        assert disc.sectors == 12345
+
+    def test_sectors_none_defaults_to_zero(self) -> None:
+        """MBDisc.coerce_sectors treats None as 0."""
+        disc = MBDisc.model_validate({"sectors": None})
+        assert disc.sectors == 0
 
 
 class TestMBMediumDiscList:
@@ -1203,9 +1213,9 @@ class TestMBMediumDiscList:
                 "position": 2,
                 "format": "CD",
                 "track-list": [],
-                "discs": [
-                    {"offsets": [182, 67232, 113807, 136232, 175832, 233432, 283307, 310607], "sectors": 355382},
-                    {"offsets": [183, 67233, 113808, 136233, 175833, 233433, 283308, 310608], "sectors": 355383},
+                "disc-list": [
+                    {"offset-list": [182, 67232, 113807, 136232, 175832, 233432, 283307, 310607], "sectors": "355382"},
+                    {"offset-list": [183, 67233, 113808, 136233, 175833, 233433, 283308, 310608], "sectors": "355383"},
                 ],
             }
         )
