@@ -33,7 +33,7 @@ from music_annotator import (
     fetch_acoustid_id,
     find_source_files,
 )
-from music_annotator._pipeline import _match_medium_by_toc, _write_sidecars
+from music_annotator._pipeline import _match_medium_by_toc, _prompt_collision_policy, _write_sidecars
 from music_annotator._pipeline_io import _DISC_INFO_FILENAME, _DISC_TOC_FILENAME
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
@@ -2401,6 +2401,60 @@ def _setup_single_track_run(mocker: MockerFixture, fs: FakeFilesystem, src: Path
     mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
 
+class TestPromptCollisionPolicy:
+    """Tests for _prompt_collision_policy."""
+
+    def test_displays_work_top_dirs_not_file_paths(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Collision warning shows the work-top-dir (parts[0]/parts[1]) with date suffix, not individual files.
+
+        Two files in the same work directory should produce one grouped directory in the output.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/dest")
+        work_dir = dest / "Brahms - Karajan" / "Sinfonie Nr. 2 D-Dur, op. 73 [rec 1977-1978]"
+        fs.create_dir(str(work_dir))
+        collisions = [
+            work_dir / "01 - Symphony no. 2 in D major, op. 73_ I.flac",
+            work_dir / "02 - Symphony no. 2 in D major, op. 73_ II.flac",
+        ]
+        printed: list[str] = []
+        mocker.patch("music_annotator._pipeline._console.print", side_effect=lambda s, **_: printed.append(s))
+        mocker.patch("builtins.input", return_value="s")
+
+        _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
+
+        # The work-top-dir with the date suffix must appear exactly once in printed output.
+        assert any("Sinfonie Nr. 2 D-Dur, op. 73 [rec 1977-1978]" in line for line in printed)
+        # Individual file names must not appear.
+        assert not any("Symphony no. 2 in D major" in line for line in printed)
+
+    def test_multiple_work_dirs_shown_grouped(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When collisions span two work directories both are shown, each once.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/dest")
+        w1 = dest / "Brahms - Karajan" / "Sinfonie Nr. 1 c-Moll, op. 68 [rec 1977-1978]"
+        w2 = dest / "Brahms - Karajan" / "Sinfonie Nr. 3 F-Dur, op. 90 [rec 1977-1978]"
+        for d in (w1, w2):
+            fs.create_dir(str(d))
+        collisions = [w1 / "01.flac", w1 / "02.flac", w2 / "01.flac"]
+        printed: list[str] = []
+        mocker.patch("music_annotator._pipeline._console.print", side_effect=lambda s, **_: printed.append(s))
+        mocker.patch("builtins.input", return_value="s")
+
+        _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
+
+        assert any("Sinfonie Nr. 1 c-Moll, op. 68 [rec 1977-1978]" in line for line in printed)
+        assert any("Sinfonie Nr. 3 F-Dur, op. 90 [rec 1977-1978]" in line for line in printed)
+        # Should show 2 work dirs, not 3 file paths — count lines containing the work dir pattern
+        work_lines = [line for line in printed if "Sinfonie" in line]
+        assert len(work_lines) == 2
+
+
 class TestRunCollisionAndJournal:
     """Tests for run() collision detection, user prompt, and transaction journal."""
 
@@ -2483,7 +2537,9 @@ class TestRunCollisionAndJournal:
         # Pre-populate the destination with any file to create a guaranteed collision.
         # We patch _check_collisions to return a fixed path so we don't depend on the
         # exact dest path that build_dest_path would compute.
-        collision_path = dest / "existing.flac"
+        # Path must be at least 2 levels deep relative to dest_root so _prompt_collision_policy
+        # can extract parts[0]/parts[1] for the work-dir display.
+        collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
         mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
         mocker.patch("builtins.input", return_value="o")
@@ -2510,7 +2566,7 @@ class TestRunCollisionAndJournal:
         dest = Path("/dest")
         _setup_single_track_run(mocker, fs, src, dest)
 
-        collision_path = dest / "existing.flac"
+        collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
         mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
         mocker.patch("builtins.input", return_value="overwrite")
@@ -2595,7 +2651,7 @@ class TestRunCollisionAndJournal:
         dest = Path("/dest")
         _setup_single_track_run(mocker, fs, src, dest)
 
-        collision_path = dest / "existing.flac"
+        collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
         mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
         mocker.patch("builtins.input", return_value="a")
@@ -2623,7 +2679,7 @@ class TestRunCollisionAndJournal:
         dest = Path("/dest")
         _setup_single_track_run(mocker, fs, src, dest)
 
-        collision_path = dest / "existing.flac"
+        collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
         mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
         mocker.patch("builtins.input", return_value="abort")
@@ -2649,7 +2705,7 @@ class TestRunCollisionAndJournal:
         dest = Path("/dest")
         _setup_single_track_run(mocker, fs, src, dest)
 
-        collision_path = dest / "existing.flac"
+        collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
         mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
         # First two inputs are invalid; third is valid "skip"
@@ -2719,7 +2775,7 @@ class TestRunCollisionAndJournal:
         dest = Path("/dest")
         _setup_single_track_run(mocker, fs, src, dest)
 
-        collision_path = dest / "existing.flac"
+        collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
         mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
         mock_prompt = mocker.patch("music_annotator._pipeline._prompt_collision_policy")
@@ -2735,6 +2791,51 @@ class TestRunCollisionAndJournal:
         )
         # Prompt must NOT be called when policy is already set
         mock_prompt.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Confirmation message
+# ---------------------------------------------------------------------------
+
+
+class TestRunConfirmationMessage:
+    """Tests for the post-copy 'Verified OK' confirmation message in run()."""
+
+    def test_confirmation_shows_work_top_dir_with_date_suffix(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """The 'Verified OK' message shows the work-top-dir (parts[0]/parts[1]) with [rec/rel] suffix.
+
+        For a 3-level hierarchy the immediate parent of a file is a division subdirectory, not the
+        work directory.  This test verifies that the confirmation message always shows the
+        work-top-dir (dest_root / composer_dir / work_dir) regardless of hierarchy depth.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+        printed: list[str] = []
+        mocker.patch("music_annotator._pipeline._console.print", side_effect=lambda s, **_: printed.append(s))
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        # A 'Verified OK' line must appear.
+        assert any("Verified OK" in line for line in printed)
+        # The destination shown must be at exactly parts[0]/parts[1] depth relative to dest:
+        # it must be a direct child of a direct child of dest — not the file's immediate parent.
+        dest_lines = [line for line in printed if str(dest) in line and "Verified" not in line and "safe" not in line]
+        for line in dest_lines:
+            # Extract the path from the rich markup.
+            raw = line.replace("[green]", "").replace("[/]", "").strip().lstrip()
+            p = Path(raw)
+            assert len(p.relative_to(dest).parts) == 2  # noqa: PLR2004 — exactly composer/work depth
 
 
 # ---------------------------------------------------------------------------

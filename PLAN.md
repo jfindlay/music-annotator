@@ -12,6 +12,9 @@ _(nothing immediately queued)_
 
 ## Backlog
 
+- **Codebase audit:** As the project grows, do a thorough review of principles, structure, and goals.  Evaluate whether the
+  module boundaries remain natural, whether the public API surface in `__init__.py` is still coherent, and whether any
+  accumulated conventions need revisiting.
 - `musicbrainzngs` → `musicbrainzngs2` migration (fork is new; may contribute upstream)
 
 ---

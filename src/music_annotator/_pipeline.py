@@ -146,18 +146,22 @@ def _select_medium(mediums: list[MBMedium], n_src: int, src_dir_name: str, track
     )
 
 
-def _prompt_collision_policy(collisions: list[Path]) -> CollisionPolicy:
+def _prompt_collision_policy(collisions: list[Path], dest_root: Path) -> CollisionPolicy:
     """Print a collision warning and prompt the user for a resolution policy.
 
-    Prints a list of the conflicting destination files and then asks the user to choose one of
-    abort / skip / overwrite.  Re-prompts until a valid choice is entered.
+    Groups the conflicting files by their work-top directory (``dest_root / parts[0] / parts[1]``)
+    so the user sees the ``[rec YYYY]`` / ``[rel YYYY]`` date suffix on each destination rather than
+    a flat list of individual file paths.  Re-prompts until a valid choice is entered.
 
     :param collisions: Destination files that already exist on disk.
+    :param dest_root: Root directory of the destination library, used to derive the work-top-dir
+        for display grouping.
     :returns: The :class:`CollisionPolicy` chosen by the user.
     """
-    _console.print(f"\n[bold red]WARNING:[/] [red]{len(collisions)} destination file(s) already exist:[/]")
-    for p in collisions:
-        _console.print(f"  [red]{p}[/]")
+    work_dirs = sorted({dest_root / p.relative_to(dest_root).parts[0] / p.relative_to(dest_root).parts[1] for p in collisions})
+    _console.print(f"\n[bold red]WARNING:[/] [red]{len(collisions)} destination file(s) already exist in:[/]")
+    for d in work_dirs:
+        _console.print(f"  [red]{d}[/]")
     _console.print("\n[bold]Choose an action:[/]")
     _console.print("  [bold red]\\[a] abort[/]     — quit without copying anything")
     _console.print("  [bold yellow]\\[s] skip[/]      — copy only new files, leave existing untouched")
@@ -452,7 +456,7 @@ def run(
         if collisions:
             policy = collision_policy
             if policy == CollisionPolicy.ASK:
-                policy = _prompt_collision_policy(collisions)
+                policy = _prompt_collision_policy(collisions, dest_root)
             match policy:
                 case CollisionPolicy.OVERWRITE:
                     log.info("collision_overwrite", count=len(collisions))
@@ -599,7 +603,14 @@ def run(
         # Count copied (not skipped/dry-run) entries and print a confirmation message so the user
         # knows it is safe to delete the source directory before they do so.
         copied = [e for e in journal_entries if e.action == "copied"]
-        dest_dirs = sorted({Path(e.destination).parent for e in copied})
+        dest_dirs = sorted(
+            {
+                dest_root
+                / Path(e.destination).relative_to(dest_root).parts[0]
+                / Path(e.destination).relative_to(dest_root).parts[1]
+                for e in copied
+            }
+        )
         if copied:
             _console.print(f"\n[bold green]Verified OK:[/] [green]{len(copied)} file(s) written and confirmed to:[/]")
             for d in dest_dirs:
