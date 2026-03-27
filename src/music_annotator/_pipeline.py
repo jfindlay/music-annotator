@@ -14,6 +14,7 @@ import re
 import shutil
 from collections import defaultdict
 from pathlib import Path
+from typing import Protocol
 
 import structlog
 from mutagen._util import MutagenError
@@ -34,6 +35,7 @@ from music_annotator._pipeline_io import (
     _sha256_file,
     _verify_copy,
     find_source_files,
+    parse_disc_title,
     parse_disc_toc,
     write_transaction_log,
 )
@@ -51,20 +53,46 @@ _DISC_SUFFIX_RE: re.Pattern[str] = re.compile(r"\s*[\(\[]?[Dd]isc\s*\d+[\)\]]?\s
 class CollisionPolicy(enum.Enum):
     """Policy to apply when destination files already exist.
 
-    Used as a parameter to :func:`run` to control behaviour when one or more planned destination
+    Consulted by :func:`run` after :func:`_check_collisions` reports that one or more destination
     files already exist on disk before copying begins.
 
-    Attributes:
-        ASK: Prompt the user interactively via stdin.
-        SKIP: Copy only files that do not already exist; leave existing files untouched.
-        OVERWRITE: Replace all existing files unconditionally.
-        ABORT: Raise :exc:`SystemExit` without copying anything.
+    - ``ASK`` (default): prompt the user interactively via :func:`_prompt_collision_policy`.
+    - ``OVERWRITE``: silently replace all existing files.
+    - ``SKIP``: Copy only files that do not already exist; leave existing files untouched.
+    - ``ABORT``: raise :exc:`SystemExit` with code 1 without copying anything.
     """
 
     ASK = "ask"
-    SKIP = "skip"
     OVERWRITE = "overwrite"
+    SKIP = "skip"
     ABORT = "abort"
+
+
+class DiscUI(Protocol):
+    """Minimal UI protocol for disc-selection confirmation in :func:`run`.
+
+    A structural subset of :class:`~music_annotator._discover.DiscoverUI` — any object that
+    implements :meth:`confirm_disc` satisfies this protocol.  Defined here (rather than importing
+    from ``_discover``) to avoid a circular import: ``_discover`` imports :func:`run` from this
+    module.
+    """
+
+    def confirm_disc(
+        self,
+        mediums: list[MBMedium],
+        proposed: MBMedium,
+        dtitle: str,
+        release_url: str,
+    ) -> MBMedium | None:
+        """Confirm or override the proposed disc selection.
+
+        :param mediums: All mediums for the release.
+        :param proposed: The medium selected by the heuristic.
+        :param dtitle: FreeDB disc title used for the match.
+        :param release_url: MusicBrainz release URL.
+        :returns: The confirmed or user-chosen :class:`~music_annotator.models.MBMedium`, or ``None``
+            to abort.
+        """  # pragma: no cover
 
 
 def _match_medium_by_toc(mediums: list[MBMedium], track_frames: list[int]) -> MBMedium | None:
@@ -108,45 +136,138 @@ def _match_medium_by_toc(mediums: list[MBMedium], track_frames: list[int]) -> MB
     return None
 
 
-def _select_medium(mediums: list[MBMedium], n_src: int, src_dir_name: str, track_frames: list[int] | None = None) -> MBMedium:
-    """Select the correct medium from a multi-medium release for the given source directory.
+class SelectionMethod(enum.Enum):
+    """How :func:`_select_medium_with_reason` chose the medium within a multi-medium release.
+
+    Used by :func:`run` to decide whether an interactive disc-confirmation prompt is required.
+
+    - ``TOC`` — exact or ±1 frame TOC offset match against MB disc IDs; highly reliable.
+    - ``TRACK_COUNT`` — unique track-count match; reliable when only one medium has ``n_src`` tracks.
+    - ``TITLE`` — FreeDB DTITLE token overlap with MB medium/track titles; heuristic, requires
+      user confirmation.
+    - ``FALLBACK`` — track-count tie with no better signal; disc-number hint or first-match; requires
+      user confirmation when the title match was also ambiguous.
+    """
+
+    TOC = "toc"
+    TRACK_COUNT = "track_count"
+    TITLE = "title"
+    FALLBACK = "fallback"
+
+
+def _score_medium_title(medium: MBMedium, dtitle_tokens: set[str]) -> int:
+    """Return the number of ``dtitle_tokens`` that appear in ``medium``'s combined title text.
+
+    The combined text is the medium's own subtitle (if any) concatenated with the title of its
+    first track's recording.  Both are lower-cased and split on non-alphanumeric characters before
+    comparison, so that punctuation differences between FreeDB and MB don't prevent matches.
+
+    :param medium: The :class:`~music_annotator.models.MBMedium` to score.
+    :param dtitle_tokens: Lower-cased alphanumeric tokens from the FreeDB DTITLE title portion.
+    :returns: Count of tokens shared between ``dtitle_tokens`` and the medium's text tokens.
+    """
+
+    def _tokenise(text: str) -> set[str]:
+        return {w for w in re.split(r"[^a-z0-9]+", text.lower()) if w}
+
+    combined = medium.title
+    if medium.track_list:
+        combined = f"{combined} {medium.track_list[0].recording.title}"
+    return len(dtitle_tokens & _tokenise(combined))
+
+
+def _match_medium_by_title(mediums: list[MBMedium], n_src: int, dtitle: str) -> MBMedium | None:
+    """Return the medium that best matches the FreeDB disc title ``dtitle``, or ``None``.
+
+    Restricts candidates to mediums whose track count equals ``n_src``, then scores each by counting
+    shared alphanumeric tokens between ``dtitle`` and the medium's combined title text (medium subtitle
+    + first track title).  Returns the best-scoring medium only when it scores strictly higher than
+    all others and has a non-zero score; ties and zero scores return ``None``.
+
+    Always logs a ``warning`` so the operator knows a heuristic match was used.
+
+    :param mediums: All mediums for the release.
+    :param n_src: Number of source audio files; only mediums with this track count are considered.
+    :param dtitle: FreeDB disc title (title portion of ``DTITLE``, after the `` / `` separator).
+    :returns: The best-matching :class:`~music_annotator.models.MBMedium`, or ``None`` if the match
+        is ambiguous or no medium scores above zero.
+    """
+    candidates = [m for m in mediums if len(m.track_list) == n_src]
+    if not candidates or not dtitle:
+        return None
+
+    dtitle_tokens: set[str] = {w for w in re.split(r"[^a-z0-9]+", dtitle.lower()) if w}
+    if not dtitle_tokens:
+        return None
+
+    scores = [(m, _score_medium_title(m, dtitle_tokens)) for m in candidates]
+    scores.sort(key=lambda x: x[1], reverse=True)
+    best_medium, best_score = scores[0]
+    runner_up_score = scores[1][1] if len(scores) > 1 else 0
+
+    log.warning(
+        "title_match_heuristic",
+        dtitle=dtitle,
+        best_position=best_medium.position,
+        best_score=best_score,
+        runner_up_score=runner_up_score,
+    )
+
+    if best_score > 0 and best_score > runner_up_score:
+        return best_medium
+    return None
+
+
+def _select_medium_with_reason(
+    mediums: list[MBMedium],
+    n_src: int,
+    src_dir_name: str,
+    track_frames: list[int] | None = None,
+    dtitle: str = "",
+) -> tuple[MBMedium, SelectionMethod]:
+    """Select the correct medium from a multi-medium release and return why it was chosen.
 
     Selection strategy (in order):
 
     1. **TOC match**: if ``track_frames`` is provided, compare against each medium's disc TOC entries
-       via :func:`_match_medium_by_toc`.  Matches within ±1 frame per offset to tolerate ripping
-       software conventions; a fuzzy match is logged at warning level.
-    2. **Track-count match**: if exactly one medium has ``len(track_list) == n_src``, return it.
-    3. **Disc-number hint**: if multiple mediums share the same track count, check ``src_dir_name``
-       for a disc-number suffix (e.g. ``"(Disc 2)"``); prefer the medium at that position.
-    4. If none of the above resolves to a single medium, raise :exc:`ValueError`.
-
-    This function should only be called when ``len(mediums) > 1``.
+       via :func:`_match_medium_by_toc`.  Matches within ±1 frame per offset; fuzzy match logged.
+    2. **Track-count unique**: if exactly one medium has ``len(track_list) == n_src``, return it.
+    3. **Title match**: if ``dtitle`` is provided and multiple mediums share the track count, score
+       each medium by FreeDB token overlap via :func:`_match_medium_by_title`.  Returns
+       :attr:`SelectionMethod.TITLE` so the caller can prompt the user for confirmation.
+    4. **Disc-number hint**: check ``src_dir_name`` for a disc-number suffix (e.g. ``"(Disc 2)"``).
+    5. **Fallback**: return the first track-count-matching medium.
 
     :param mediums: The list of :class:`~music_annotator.models.MBMedium` objects from the release.
     :param n_src: Number of source audio files in the directory.
     :param src_dir_name: The directory basename used to extract a disc-number hint.
-    :param track_frames: Optional per-track CD frame offsets from ``00 - disc info.yaml``.  When
-        provided, TOC matching is attempted first before falling back to track-count heuristics.
-    :returns: The selected :class:`~music_annotator.models.MBMedium`.
-    :raises ValueError: When no medium in ``mediums`` has ``len(track_list) == n_src`` and TOC
-        matching also fails.
+    :param track_frames: Optional per-track CD frame offsets from ``00 - disc info.yaml``.
+    :param dtitle: Optional FreeDB disc title from ``00 - disc info.yaml`` for title-based matching.
+    :returns: A ``(medium, method)`` pair.
+    :raises ValueError: When no medium matches the source file count.
     """
     # --- Priority 1: TOC match ---
     if track_frames:
         toc_match = _match_medium_by_toc(mediums, track_frames)
         if toc_match is not None:
             log.info("multi_disc_medium_selected_by_toc", position=toc_match.position, tracks=n_src)
-            return toc_match
+            return toc_match, SelectionMethod.TOC
 
-    # --- Priority 2: track-count match ---
+    # --- Priority 2: track-count unique ---
     matching = [m for m in mediums if len(m.track_list) == n_src]
     if len(matching) == 1:
         selected = matching[0]
         log.info("multi_disc_medium_selected", position=selected.position, tracks=n_src)
-        return selected
+        return selected, SelectionMethod.TRACK_COUNT
+
     if len(matching) > 1:
-        # Multiple mediums with the same track count: try to resolve via disc-number hint in dir name.
+        # --- Priority 3: title match ---
+        if dtitle:
+            title_match = _match_medium_by_title(mediums, n_src, dtitle)
+            if title_match is not None:
+                return title_match, SelectionMethod.TITLE
+
+        # --- Priority 4: disc-number hint ---
         disc_hint_match = _DISC_SUFFIX_RE.search(src_dir_name)
         if disc_hint_match:
             hint_digits = re.search(r"\d+", disc_hint_match.group())
@@ -156,7 +277,7 @@ def _select_medium(mediums: list[MBMedium], n_src: int, src_dir_name: str, track
         else:
             selected = matching[0]
         log.info("multi_disc_medium_selected", position=selected.position, tracks=n_src)
-        return selected
+        return selected, SelectionMethod.FALLBACK
 
     # No exact track-count match — list available mediums and abort.
     medium_info = [(m.position, len(m.track_list)) for m in mediums]
@@ -285,6 +406,7 @@ def run(
     dry_run: bool = False,
     fetch_rels: bool = True,
     collision_policy: CollisionPolicy = CollisionPolicy.ASK,
+    ui: DiscUI | None = None,
 ) -> None:
     """Copy and tag an album directory using MusicBrainz metadata.
 
@@ -315,23 +437,28 @@ def run(
     :param release_id: The MusicBrainz release MBID.
     :param src_dir: Directory containing the source audio files.  Files are matched to release tracks by sorted filename
         order.  For multi-medium releases the correct disc is identified first by matching the CD frame offsets from
-        ``00 - disc info.yaml`` (if present) against each medium's disc TOC data, then by track count, then by a
-        disc-number suffix in the directory name.  A :exc:`ValueError` is raised when no medium can be matched.
+        ``00 - disc info.yaml`` (if present) against each medium's disc TOC data, then by track count, then by FreeDB
+        title token matching, then by a disc-number suffix in the directory name.  When the title-match heuristic is
+        used, ``ui.confirm_disc`` is called to prompt the user unless ``dry_run`` is ``True``.  A :exc:`ValueError` is
+        raised when no medium can be matched.
     :param dest_root: Root directory of the destination music library.
     :param user_agent: User-agent string passed to :func:`init_mb`.
     :param dry_run: When ``True``, log planned operations without copying or writing any files.  MB API calls for the
-        release and recording relations still happen so the planned tag data is logged accurately.  The collision prompt
-        and the journal write are also skipped.
+        release and recording relations still happen so the planned tag data is logged accurately.  The collision prompt,
+        disc-selection prompt, and the journal write are also skipped.
     :param fetch_rels: When ``False``, skip per-recording lookups and produce minimal tags (faster but incomplete).
         Composer, conductor, work hierarchy, and Classical Extras tags will be absent.
     :param collision_policy: How to handle pre-existing destination files.  Defaults to
         :attr:`CollisionPolicy.ASK` which prompts interactively.
+    :param ui: Optional :class:`DiscUI` instance for interactive disc-selection confirmation.  When ``None`` and a
+        title-match heuristic is used, the selection proceeds without confirmation (useful for automated runs and tests).
     :raises mb.ResponseError: On a non-retryable MusicBrainz API error.
     :raises RuntimeError: If all retry attempts are exhausted for any API call, or if post-copy verification fails (copy
         integrity, tag round-trip, cover art, or mtime mismatch).
     :raises ValueError: If no medium in the release matches the source file count for a multi-medium release.
     :raises OSError: If source files cannot be read or destination files cannot be written.
-    :raises SystemExit: With code 1 if the collision policy is ABORT (or the user chooses abort interactively).
+    :raises SystemExit: With code 1 if the collision policy is ABORT (or the user chooses abort interactively), or if
+        the user aborts the disc-selection confirmation prompt.
     """
     init_mb(user_agent)
 
@@ -344,12 +471,24 @@ def run(
 
     toc = parse_disc_toc(src_dir)
     track_frames = toc[2] if toc is not None else None
+    dtitle = parse_disc_title(src_dir)
 
     mediums = release.medium_list
     selected_medium = mediums[0] if mediums else None
 
     if len(mediums) > 1:
-        selected_medium = _select_medium(mediums, len(src_files), src_dir.name, track_frames=track_frames)
+        selected_medium, selection_method = _select_medium_with_reason(
+            mediums, len(src_files), src_dir.name, track_frames=track_frames, dtitle=dtitle
+        )
+        # When a heuristic (title or fallback) selected the medium, prompt for confirmation
+        # unless we're in dry-run mode or no UI was provided.
+        if selection_method in {SelectionMethod.TITLE, SelectionMethod.FALLBACK} and ui is not None and not dry_run:
+            release_url = f"https://musicbrainz.org/release/{release_id}"
+            confirmed = ui.confirm_disc(mediums, selected_medium, dtitle, release_url)
+            if confirmed is None:
+                log.warning("disc_selection_aborted", release_id=release_id)
+                raise SystemExit(1)
+            selected_medium = confirmed
 
     if selected_medium is None:
         raise ValueError(f"release '{release.title}' has no mediums")

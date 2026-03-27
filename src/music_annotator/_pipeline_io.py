@@ -76,6 +76,56 @@ def _load_disc_info_yaml(src_dir: Path) -> dict[str, object] | None:
     return data
 
 
+def _preferred_disc_record(records: list[object]) -> dict[str, object] | None:
+    """Return the preferred FreeDB record dict from ``records``, or ``None``.
+
+    Shared by :func:`parse_disc_title` and :func:`~music_annotator._discover.parse_disc_info_yaml`
+    to avoid duplicating the preferred-record selection loop.
+
+    :param records: The ``record`` list from a ``00 - disc info.yaml`` document.
+    :returns: The preferred record dict, or the first dict-typed record, or ``None``.
+    """
+    for rec in records:
+        if isinstance(rec, dict) and rec.get("preferred"):
+            return rec
+    first = records[0] if records else None
+    return first if isinstance(first, dict) else None
+
+
+def parse_disc_title(src_dir: Path) -> str:
+    """Extract the FreeDB disc title string from ``00 - disc info.yaml``.
+
+    The ``DTITLE`` field in the preferred FreeDB record uses the format ``"artist / title"``.  This
+    function returns only the **title portion** (everything after the first `` / ``), or the whole
+    string when no `` / `` separator is present.  An empty string is returned when the file is absent,
+    unreadable, or has no usable ``DTITLE``.
+
+    Used by :func:`~music_annotator._pipeline.run` to supply a FreeDB title hint to
+    :func:`~music_annotator._pipeline._select_medium_with_reason` for title-based medium selection when
+    MusicBrainz has no disc IDs registered for the release.
+
+    :param src_dir: Directory that may contain a ``00 - disc info.yaml`` file.
+    :returns: The FreeDB disc title string, or ``""`` if unavailable.
+    """
+    data = _load_disc_info_yaml(src_dir)
+    if data is None:
+        return ""
+    records: object = data.get("record")
+    if not isinstance(records, list) or not records:
+        return ""
+    preferred = _preferred_disc_record(records)
+    if preferred is None:
+        return ""
+    track_info: object = preferred.get("track_info")
+    if not isinstance(track_info, dict):
+        return ""
+    dtitle = str(track_info.get("DTITLE", "")).strip()
+    if not dtitle:
+        return ""
+    _, _, suffix = dtitle.partition(" / ")
+    return suffix.strip() if suffix else dtitle
+
+
 def _parse_disc_id_list(disc_id: list[object]) -> tuple[int, int, list[int]] | None:
     """Validate and decode a FreeDB ``disc_id`` list into ``(num_tracks, leadout_frame, track_frames)``.
 

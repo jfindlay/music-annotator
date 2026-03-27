@@ -15,6 +15,11 @@ _(nothing immediately queued)_
 - **Codebase audit:** As the project grows, do a thorough review of principles, structure, and goals.  Evaluate whether the
   module boundaries remain natural, whether the public API surface in `__init__.py` is still coherent, and whether any
   accumulated conventions need revisiting.
+- **Submit disc IDs to MusicBrainz:** When `parse_disc_toc` succeeds (a valid `00 - disc info.yaml` is present) but
+  `_match_medium_by_toc` finds no registered disc IDs on the release, music-annotator has the FreeDB CRC and sector
+  offsets needed to compute a proper MusicBrainz disc ID.  A future phase could offer to submit the disc ID to MB via the
+  ``/ws/2/discid`` endpoint, permanently enriching the database and enabling TOC-based selection for all users.  This
+  requires an authenticated MB session; defer until a login/credential flow is designed.
 - `musicbrainzngs` → `musicbrainzngs2` migration (fork is new; may contribute upstream)
 
 ---

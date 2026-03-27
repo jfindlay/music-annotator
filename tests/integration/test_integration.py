@@ -21,7 +21,7 @@ from pytest_mock import MockerFixture
 import music_annotator
 from music_annotator import JOURNAL_FILENAME, CollisionPolicy
 from music_annotator._discover import DiscoverUI
-from music_annotator.models import CoverArt, CoverImage, MBRecording, MBRelease, MBReleaseCandidate, MBWork
+from music_annotator.models import CoverArt, CoverImage, MBMedium, MBRecording, MBRelease, MBReleaseCandidate, MBWork
 
 # ---------------------------------------------------------------------------
 # Minimal audio file byte sequences
@@ -753,6 +753,10 @@ class TestDiscoverEndToEnd:
                 """Return the first candidate's release_id unconditionally."""
                 return candidates[0].release_id if candidates else None
 
+            def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
+                """Always accept the proposed disc."""
+                return proposed
+
             def confirm_delete(self, _src_dir: object) -> bool:
                 """Decline deletion."""
                 return False
@@ -797,6 +801,10 @@ class TestDiscoverEndToEnd:
                 """Return the first candidate's release_id unconditionally."""
                 return candidates[0].release_id if candidates else None
 
+            def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
+                """Always accept the proposed disc."""
+                return proposed
+
             def confirm_delete(self, _src_dir: object) -> bool:
                 """Confirm deletion."""
                 return True
@@ -840,6 +848,12 @@ class TestDiscoverEndToEnd:
                 """Return None to skip."""
                 return None
 
+            def confirm_disc(
+                self, _m: object, proposed: MBMedium, _d: object, _u: object
+            ) -> MBMedium | None:  # pragma: no cover
+                """Should never be called when skipping."""
+                return proposed
+
             def confirm_delete(self, _src_dir: object) -> bool:
                 """Should never be called when skipping."""
                 return False  # pragma: no cover
@@ -875,6 +889,10 @@ class TestDiscoverEndToEnd:
             def choose_release(self, _src_dir: object, candidates: list[MBReleaseCandidate]) -> str | None:
                 """Return the first candidate's release_id."""
                 return candidates[0].release_id if candidates else None
+
+            def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
+                """Always accept the proposed disc."""
+                return proposed
 
             def confirm_delete(self, _src_dir: object) -> bool:
                 """Decline deletion."""
@@ -1397,6 +1415,10 @@ class TestDiscoverDryRun:
                 """Return first candidate's release_id."""
                 return candidates[0].release_id if candidates else None
 
+            def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
+                """Always accept the proposed disc."""
+                return proposed
+
             def confirm_delete(self, _src_dir: object) -> bool:
                 """Must not be reached in dry-run mode."""
                 raise AssertionError("confirm_delete called during dry_run")  # pragma: no cover
@@ -1458,6 +1480,10 @@ class TestDiscoverSearchError:
             def choose_release(self, _src_dir: object, candidates: list[MBReleaseCandidate]) -> str | None:
                 """Return first candidate's release_id."""
                 return candidates[0].release_id if candidates else None
+
+            def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
+                """Always accept the proposed disc."""
+                return proposed
 
             def confirm_delete(self, _src_dir: object) -> bool:
                 """Decline deletion."""
@@ -1528,6 +1554,12 @@ class TestDiscoverRunError:
             def choose_release(self, _src_dir: object, candidates: list[MBReleaseCandidate]) -> str | None:
                 """Return first candidate's release_id."""
                 return candidates[0].release_id if candidates else None
+
+            def confirm_disc(
+                self, _m: object, proposed: MBMedium, _d: object, _u: object
+            ) -> MBMedium | None:  # pragma: no cover
+                """Should not be reached because run is patched."""
+                return proposed
 
             def confirm_delete(self, _src_dir: object) -> bool:  # pragma: no cover
                 """Should not be reached because run is patched to raise."""

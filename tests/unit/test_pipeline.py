@@ -33,7 +33,15 @@ from music_annotator import (
     fetch_acoustid_id,
     find_source_files,
 )
-from music_annotator._pipeline import _match_medium_by_toc, _prompt_collision_policy, _write_sidecars
+from music_annotator._pipeline import (
+    SelectionMethod,
+    _match_medium_by_title,
+    _match_medium_by_toc,
+    _prompt_collision_policy,
+    _score_medium_title,
+    _select_medium_with_reason,
+    _write_sidecars,
+)
 from music_annotator._pipeline_io import _DISC_INFO_FILENAME, _DISC_TOC_FILENAME
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
@@ -3616,6 +3624,386 @@ class TestMatchMediumByToc:
         medium = _medium_with_toc(2, mb_offsets)
         result = _match_medium_by_toc([medium], yaml_offsets)
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _score_medium_title / _match_medium_by_title / _select_medium_with_reason
+# ---------------------------------------------------------------------------
+
+
+def _medium_with_title(position: int, medium_title: str, first_track_title: str, n_tracks: int = 4) -> MBMedium:
+    """Build a minimal MBMedium with a subtitle and a first track title for title-match tests.
+
+    :param position: 1-based disc position.
+    :param medium_title: Medium subtitle (e.g. ``"Symphonies 101 & 102"``).
+    :param first_track_title: Title of the first track recording.
+    :param n_tracks: Total number of tracks on the medium (only first track title is set; others are blank).
+    :returns: An :class:`~music_annotator.models.MBMedium` instance.
+    """
+    tracks = [
+        {
+            "id": f"t{position}-{i}",
+            "position": i,
+            "recording": {
+                "id": f"r{position}-{i}",
+                "title": first_track_title if i == 1 else f"Track {i}",
+                "artist-credit": [],
+            },
+        }
+        for i in range(1, n_tracks + 1)
+    ]
+    return MBMedium.model_validate({"position": position, "format": "CD", "title": medium_title, "track-list": tracks})
+
+
+class TestScoreMediumTitle:
+    """Tests for _score_medium_title."""
+
+    def test_matches_numeric_tokens(self) -> None:
+        """Symphony numbers shared between dtitle and first track title score positively."""
+        medium = _medium_with_title(4, "", "Symphonie D-Dur Hob.I: 101 Die Uhr: 1. Adagio")
+        score = _score_medium_title(medium, {"101", "102", "haydn"})
+        assert score >= 1
+
+    def test_medium_title_also_scored(self) -> None:
+        """Tokens in the medium subtitle contribute to the score."""
+        medium = _medium_with_title(4, "Symphonies 101 and 102", "Unrelated track title")
+        score = _score_medium_title(medium, {"101", "102"})
+        assert score == 2
+
+    def test_no_overlap_scores_zero(self) -> None:
+        """A medium with no shared tokens scores zero."""
+        medium = _medium_with_title(3, "", "Symphonie B-Dur Hob.I: 98: 1. Adagio")
+        score = _score_medium_title(medium, {"101", "102"})
+        assert score == 0
+
+    def test_empty_track_list_scores_zero(self) -> None:
+        """A medium with no tracks scores zero regardless of dtitle tokens."""
+        empty = MBMedium.model_validate({"position": 1, "format": "CD", "track-list": []})
+        score = _score_medium_title(empty, {"101", "102"})
+        assert score == 0
+
+
+class TestMatchMediumByTitle:
+    """Tests for _match_medium_by_title."""
+
+    def _make_haydn_mediums(self) -> list[MBMedium]:
+        """Return three mediums mimicking the Haydn 12 Londoner Symphonien release."""
+        return [
+            _medium_with_title(3, "", "Symphonie B-Dur Hob.I: 98: 1. Adagio Allegro"),
+            _medium_with_title(4, "", "Symphonie D-Dur Hob.I: 101 Die Uhr: 1. Adagio Presto"),
+            _medium_with_title(5, "", "Symphonie Es-Dur Hob.I: 103 Paukenwirbel: 1. Adagio"),
+        ]
+
+    def test_identifies_disc_4_by_symphony_numbers(self) -> None:
+        """'Haydn Symphonien 101 & 102' token-matches disc 4 (Sym. 101) over disc 3 (Sym. 98)."""
+        mediums = self._make_haydn_mediums()
+        result = _match_medium_by_title(mediums, 4, "Haydn Symphonien 101 & 102")
+        assert result is not None
+        assert result.position == 4
+
+    def test_returns_none_on_tie(self) -> None:
+        """Returns None when two mediums score equally."""
+        m1 = _medium_with_title(1, "Sym 101 102", "First track")
+        m2 = _medium_with_title(2, "Sym 101 102", "Other track")
+        result = _match_medium_by_title([m1, m2], 4, "101 102")
+        assert result is None
+
+    def test_returns_none_when_all_score_zero(self) -> None:
+        """Returns None when no medium has any matching tokens."""
+        mediums = self._make_haydn_mediums()
+        result = _match_medium_by_title(mediums, 4, "Beethoven Fidelio")
+        assert result is None
+
+    def test_returns_none_when_dtitle_empty(self) -> None:
+        """Returns None when dtitle is empty."""
+        mediums = self._make_haydn_mediums()
+        result = _match_medium_by_title(mediums, 4, "")
+        assert result is None
+
+    def test_ignores_mediums_with_wrong_track_count(self) -> None:
+        """Only considers mediums whose track count equals n_src."""
+        m_wrong = _medium_with_title(1, "Sym 101 102", "Sym 101 first movement", n_tracks=6)
+        m_right = _medium_with_title(2, "", "Symphonie 101: first movement", n_tracks=4)
+        result = _match_medium_by_title([m_wrong, m_right], 4, "101")
+        # Only m_right has 4 tracks; it scores 1 while m_wrong is excluded.
+        assert result is m_right
+
+    def test_logs_warning(self, mocker: MockerFixture) -> None:
+        """Always logs a title_match_heuristic warning when called with a non-empty dtitle.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mediums = self._make_haydn_mediums()
+        mock_warn = mocker.patch("music_annotator._pipeline.log.warning")
+        _match_medium_by_title(mediums, 4, "Haydn Symphonien 101 & 102")
+        mock_warn.assert_called_once()
+        assert mock_warn.call_args.args[0] == "title_match_heuristic"
+
+    def test_returns_none_when_dtitle_only_punctuation(self) -> None:
+        """Returns None when dtitle tokenises to an empty set (e.g. all punctuation).
+
+        Covers the ``if not dtitle_tokens: return None`` branch.
+        """
+        mediums = self._make_haydn_mediums()
+        result = _match_medium_by_title(mediums, 4, "--- !!!")
+        assert result is None
+
+
+class TestSelectMediumWithReason:
+    """Tests for _select_medium_with_reason — selection method tagging."""
+
+    def test_toc_match_returns_toc_method(self) -> None:
+        """TOC match returns SelectionMethod.TOC."""
+        m1 = _medium_with_toc(1, _DISC1_OFFSETS)
+        m2 = _medium_with_toc(2, _DISC2_OFFSETS)
+        result, method = _select_medium_with_reason([m1, m2], 4, "dir", track_frames=_DISC2_OFFSETS)
+        assert result is m2
+        assert method is SelectionMethod.TOC
+
+    def test_unique_track_count_returns_track_count_method(self) -> None:
+        """Unique track count returns SelectionMethod.TRACK_COUNT."""
+        m1 = _medium_with_title(1, "", "Track", n_tracks=3)
+        m2 = _medium_with_title(2, "", "Track", n_tracks=4)
+        result, method = _select_medium_with_reason([m1, m2], 4, "dir")
+        assert result is m2
+        assert method is SelectionMethod.TRACK_COUNT
+
+    def test_title_match_returns_title_method(self) -> None:
+        """Title match returns SelectionMethod.TITLE."""
+        m3 = _medium_with_title(3, "", "Symphonie B-Dur Hob.I: 98: 1. Adagio", n_tracks=4)
+        m4 = _medium_with_title(4, "", "Symphonie D-Dur Hob.I: 101 Die Uhr: 1. Adagio", n_tracks=4)
+        result, method = _select_medium_with_reason([m3, m4], 4, "dir", dtitle="Haydn 101 102")
+        assert result is m4
+        assert method is SelectionMethod.TITLE
+
+    def test_fallback_returns_fallback_method(self) -> None:
+        """No TOC, no unique track count, no title match → SelectionMethod.FALLBACK."""
+        m1 = _medium_with_title(1, "", "Generic track", n_tracks=4)
+        m2 = _medium_with_title(2, "", "Generic track", n_tracks=4)
+        result, method = _select_medium_with_reason([m1, m2], 4, "dir")
+        assert result is m1  # first-match fallback
+        assert method is SelectionMethod.FALLBACK
+
+    def test_disc_hint_in_fallback(self) -> None:
+        """Disc-number hint in dir name selects correct medium in fallback path."""
+        m1 = _medium_with_title(1, "", "Track", n_tracks=4)
+        m2 = _medium_with_title(2, "", "Track", n_tracks=4)
+        result, method = _select_medium_with_reason([m1, m2], 4, "Album (Disc 2)")
+        assert result is m2
+        assert method is SelectionMethod.FALLBACK
+
+    def test_dtitle_no_match_falls_through_to_fallback(self) -> None:
+        """When dtitle produces no title match the disc-number/first-match fallback is used.
+
+        Covers the ``if title_match is not None`` False branch (title match attempted but ambiguous).
+        """
+        m1 = _medium_with_title(1, "", "Generic track", n_tracks=4)
+        m2 = _medium_with_title(2, "", "Generic track", n_tracks=4)
+        # dtitle non-empty but scores tie → _match_medium_by_title returns None → fallback
+        result, method = _select_medium_with_reason([m1, m2], 4, "dir", dtitle="Generic")
+        assert result is m1  # first-match fallback
+        assert method is SelectionMethod.FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# run() — title-based medium selection and confirm_disc prompt
+# ---------------------------------------------------------------------------
+
+
+#: Minimal disc info YAML that results in dtitle = "Haydn Symphonien 101 & 102".
+_TITLE_YAML: str = (
+    "disc_id: [1544401672, 4, 182, 38057, 79532, 119782, 3509]\n"
+    "record:\n"
+    "- disc_info: {category: classical}\n"
+    "  preferred: true\n"
+    "  track_info: {DTITLE: 'Karajan BPO / Haydn Symphonien 101 & 102'}\n"
+)
+
+
+class TestRunTitleMediumSelection:
+    """Tests for run() title-match medium selection and confirm_disc UI prompt."""
+
+    def _patch_mb_two_disc(self, mocker: MockerFixture) -> None:
+        """Patch MB API for a 2-medium release where both mediums have 4 tracks and no disc IDs.
+
+        Medium 1 has symphony 98 tracks; medium 2 has symphony 101 tracks.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+
+        def _make_rel() -> MBRelease:
+            mediums_data: list[JSON] = [
+                {
+                    "position": 1,
+                    "format": "CD",
+                    "track-list": [
+                        {
+                            "id": f"t1-{i}",
+                            "position": i,
+                            "recording": {"id": f"r1-{i}", "title": f"Sym 98: mvt {i}", "artist-credit": []},
+                        }
+                        for i in range(1, 5)
+                    ],
+                },
+                {
+                    "position": 2,
+                    "format": "CD",
+                    "track-list": [
+                        {
+                            "id": f"t2-{i}",
+                            "position": i,
+                            "recording": {"id": f"r2-{i}", "title": f"Sym 101: mvt {i}", "artist-credit": []},
+                        }
+                        for i in range(1, 5)
+                    ],
+                },
+            ]
+            return MBRelease.model_validate(
+                {
+                    "id": "rel-title",
+                    "title": "12 Londoner Symphonien",
+                    "date": "1990",
+                    "status": "Official",
+                    "barcode": "",
+                    "artist-credit": [],
+                    "release-group": {"id": "rg-1", "primary-type": "Album", "first-release-date": "1990"},
+                    "label-info-list": [],
+                    "text-representation": {"script": "Latn", "language": "ger"},
+                    "medium-list": mediums_data,
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_rel())
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+    def test_title_match_selects_disc_2_and_prompts(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Title match selects disc 2 (Sym 101) and calls ui.confirm_disc for confirmation.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 5):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / _DISC_INFO_FILENAME), contents=_TITLE_YAML)
+        self._patch_mb_two_disc(mocker)
+
+        mock_ui = MagicMock()
+        mock_ui.confirm_disc.side_effect = lambda mediums, proposed, dtitle, url: proposed
+
+        music_annotator.run(
+            release_id="rel-title",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            ui=mock_ui,
+        )
+
+        mock_ui.confirm_disc.assert_called_once()
+        proposed = mock_ui.confirm_disc.call_args[0][1]
+        assert proposed.position == 2
+
+    def test_confirm_disc_abort_raises_system_exit(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When ui.confirm_disc returns None the run is aborted with SystemExit(1).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 5):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / _DISC_INFO_FILENAME), contents=_TITLE_YAML)
+        self._patch_mb_two_disc(mocker)
+
+        mock_ui = MagicMock()
+        mock_ui.confirm_disc.return_value = None
+
+        with pytest.raises(SystemExit) as exc_info:
+            music_annotator.run(
+                release_id="rel-title",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=True,
+                ui=mock_ui,
+            )
+        assert exc_info.value.code == 1
+
+    def test_no_ui_title_match_proceeds_without_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When ui=None a title-match proceeds without prompting (silent heuristic).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 5):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / _DISC_INFO_FILENAME), contents=_TITLE_YAML)
+        self._patch_mb_two_disc(mocker)
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-title",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            ui=None,
+        )
+        assert mock_tag.call_count == 4
+
+    def test_dry_run_skips_confirm_disc_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """In dry-run mode the confirm_disc prompt is skipped even when ui is provided.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 5):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / _DISC_INFO_FILENAME), contents=_TITLE_YAML)
+        self._patch_mb_two_disc(mocker)
+
+        mock_ui = MagicMock()
+
+        music_annotator.run(
+            release_id="rel-title",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=True,
+            fetch_rels=True,
+            ui=mock_ui,
+        )
+        mock_ui.confirm_disc.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

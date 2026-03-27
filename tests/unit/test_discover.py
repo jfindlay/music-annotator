@@ -1,8 +1,9 @@
 """Unit tests for music_annotator discovery functions.
 
 Covers :func:`~music_annotator.parse_disc_info_yaml`, :func:`~music_annotator.parse_disc_toc`,
-:func:`~music_annotator.parse_dir_hint`, :func:`~music_annotator.search_releases_by_dir`,
-:func:`~music_annotator._format_candidate`, and :func:`~music_annotator.discover`.
+:func:`~music_annotator.parse_disc_title`, :func:`~music_annotator.parse_dir_hint`,
+:func:`~music_annotator.search_releases_by_dir`, :func:`~music_annotator._format_candidate`,
+and :func:`~music_annotator.discover`.
 """
 
 from __future__ import annotations
@@ -19,8 +20,14 @@ from pytest_mock import MockerFixture
 
 import music_annotator
 import music_annotator._discover
-from music_annotator._discover import DiscoverUI, _format_candidate, _score_toc_release, _toc_lookup_mb_releases
-from music_annotator.models import MBReleaseCandidate
+from music_annotator._discover import (
+    DiscoverUI,
+    TerminalDiscoverUI,
+    _format_candidate,
+    _score_toc_release,
+    _toc_lookup_mb_releases,
+)
+from music_annotator.models import MBMedium, MBReleaseCandidate
 
 # ---------------------------------------------------------------------------
 # Minimal FLAC factory (same technique as test_example.py)
@@ -1266,6 +1273,16 @@ class TestDiscover:
                 """Return first candidate MBID unconditionally."""
                 return candidates[0].release_id if candidates else None
 
+            def confirm_disc(
+                self,
+                _mediums: object,
+                proposed: MBMedium,
+                _dtitle: object,
+                _release_url: object,
+            ) -> MBMedium | None:
+                """Always accept the proposed disc."""
+                return proposed
+
             def confirm_delete(self, _src_dir: object) -> bool:
                 """Always decline deletion."""
                 return False
@@ -1476,6 +1493,128 @@ class TestParseDiscToc:
         yaml_content = 'disc_id: [123, 1, 150, "oops"]\nrecord: []\n'
         fs.create_file(str(src / "00 - disc info.yaml"), contents=yaml_content)
         assert music_annotator.parse_disc_toc(src) is None
+
+
+# ---------------------------------------------------------------------------
+# parse_disc_title
+# ---------------------------------------------------------------------------
+
+
+class TestParseDiscTitle:
+    """Tests for parse_disc_title."""
+
+    def test_returns_empty_when_no_yaml(self, fs: FakeFilesystem) -> None:
+        """Returns '' when no disc info YAML is present.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        assert music_annotator.parse_disc_title(src) == ""
+
+    def test_extracts_title_after_separator(self, fs: FakeFilesystem) -> None:
+        """Returns the title portion after ' / ' in DTITLE.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        yaml_content = (
+            "disc_id: [123456789, 2, 182, 50000, 3600]\n"
+            "record:\n"
+            "- disc_info: {}\n"
+            "  preferred: true\n"
+            "  track_info: {DTITLE: 'Karajan, BPO / Haydn Symphonien 101 & 102'}\n"
+        )
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=yaml_content)
+        assert music_annotator.parse_disc_title(src) == "Haydn Symphonien 101 & 102"
+
+    def test_returns_whole_string_when_no_separator(self, fs: FakeFilesystem) -> None:
+        """Returns the full DTITLE when there is no ' / ' separator.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        yaml_content = (
+            "disc_id: [123456789, 2, 182, 50000, 3600]\n"
+            "record:\n"
+            "- disc_info: {}\n"
+            "  preferred: true\n"
+            "  track_info: {DTITLE: 'Haydn Symphonien 101 & 102'}\n"
+        )
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=yaml_content)
+        assert music_annotator.parse_disc_title(src) == "Haydn Symphonien 101 & 102"
+
+    def test_returns_empty_when_no_record_list(self, fs: FakeFilesystem) -> None:
+        """Returns '' when the YAML has no 'record' key.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "00 - disc info.yaml"), contents="disc_id: [1, 2, 3, 4, 5]\n")
+        assert music_annotator.parse_disc_title(src) == ""
+
+    def test_returns_empty_when_record_not_dict(self, fs: FakeFilesystem) -> None:
+        """Returns '' when the preferred record entry is not a dict.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "00 - disc info.yaml"), contents="disc_id: [1]\nrecord:\n- just_a_string\n")
+        assert music_annotator.parse_disc_title(src) == ""
+
+    def test_returns_empty_when_no_track_info(self, fs: FakeFilesystem) -> None:
+        """Returns '' when the preferred record has no track_info key.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        yaml_content = "disc_id: [1]\nrecord:\n- preferred: true\n  disc_info: {}\n"
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=yaml_content)
+        assert music_annotator.parse_disc_title(src) == ""
+
+    def test_returns_empty_when_dtitle_blank(self, fs: FakeFilesystem) -> None:
+        """Returns '' when DTITLE is an empty string.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        yaml_content = "disc_id: [1]\nrecord:\n- preferred: true\n  disc_info: {}\n  track_info: {DTITLE: ''}\n"
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=yaml_content)
+        assert music_annotator.parse_disc_title(src) == ""
+
+    def test_uses_first_record_when_none_preferred(self, fs: FakeFilesystem) -> None:
+        """Falls back to the first record when no record has preferred=true.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        yaml_content = (
+            "disc_id: [1]\n"
+            "record:\n"
+            "- disc_info: {}\n"
+            "  track_info: {DTITLE: 'Artist / First Title'}\n"
+            "- disc_info: {}\n"
+            "  track_info: {DTITLE: 'Artist / Second Title'}\n"
+        )
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=yaml_content)
+        assert music_annotator.parse_disc_title(src) == "First Title"
+
+    def test_returns_empty_when_yaml_not_dict(self, fs: FakeFilesystem) -> None:
+        """Returns '' when YAML content is not a dict (e.g. a plain list).
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "00 - disc info.yaml"), contents="- item1\n- item2\n")
+        assert music_annotator.parse_disc_title(src) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -1910,3 +2049,145 @@ class TestSearchReleasesByDirToc:
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates[0].label == "DG"
         assert candidates[0].catalog_number == "449 724-2"
+
+
+# ---------------------------------------------------------------------------
+# TerminalDiscoverUI.confirm_disc
+# ---------------------------------------------------------------------------
+
+
+def _make_medium(position: int, first_title: str = "Track") -> MBMedium:
+    """Build a minimal MBMedium with one track for confirm_disc tests.
+
+    :param position: 1-based disc position.
+    :param first_title: Title of the first (and only) track recording.
+    :returns: An :class:`~music_annotator.models.MBMedium` instance.
+    """
+    return MBMedium.model_validate(
+        {
+            "position": position,
+            "format": "CD",
+            "track-list": [
+                {
+                    "id": f"t{position}",
+                    "position": 1,
+                    "recording": {"id": f"r{position}", "title": first_title, "artist-credit": []},
+                }
+            ],
+        }
+    )
+
+
+class TestTerminalDiscoverUIConfirmDisc:
+    """Tests for TerminalDiscoverUI.confirm_disc."""
+
+    def _ui(self) -> TerminalDiscoverUI:
+        return TerminalDiscoverUI()
+
+    def _mediums(self) -> list[MBMedium]:
+        return [
+            _make_medium(3, "Symphonie B-Dur Hob.I: 98: 1. Adagio"),
+            _make_medium(4, "Symphonie D-Dur Hob.I: 101 Die Uhr: 1. Adagio"),
+            _make_medium(5, "Symphonie Es-Dur Hob.I: 103: 1. Adagio"),
+        ]
+
+    def test_y_confirms_proposed(self, mocker: MockerFixture) -> None:
+        """Entering 'y' returns the proposed medium unchanged.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mediums = self._mediums()
+        mocker.patch("builtins.input", return_value="y")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_disc(mediums, mediums[1], "Haydn Symphonien 101 & 102", "https://mb/r")
+        assert result is mediums[1]
+
+    def test_yes_confirms_proposed(self, mocker: MockerFixture) -> None:
+        """Entering 'yes' also confirms the proposed medium.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mediums = self._mediums()
+        mocker.patch("builtins.input", return_value="yes")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_disc(mediums, mediums[1], "Haydn Symphonien 101 & 102", "https://mb/r")
+        assert result is mediums[1]
+
+    def test_n_returns_none(self, mocker: MockerFixture) -> None:
+        """Entering 'n' returns None (abort).
+
+        :param mocker: pytest-mock fixture.
+        """
+        mediums = self._mediums()
+        mocker.patch("builtins.input", return_value="n")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_disc(mediums, mediums[1], "dtitle", "url")
+        assert result is None
+
+    def test_abort_returns_none(self, mocker: MockerFixture) -> None:
+        """Entering 'abort' returns None.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mediums = self._mediums()
+        mocker.patch("builtins.input", return_value="abort")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_disc(mediums, mediums[1], "dtitle", "url")
+        assert result is None
+
+    def test_a_returns_none(self, mocker: MockerFixture) -> None:
+        """Entering 'a' returns None.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mediums = self._mediums()
+        mocker.patch("builtins.input", return_value="a")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_disc(mediums, mediums[1], "dtitle", "url")
+        assert result is None
+
+    def test_disc_number_overrides_proposed(self, mocker: MockerFixture) -> None:
+        """Entering a valid disc position number returns that medium.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mediums = self._mediums()
+        mocker.patch("builtins.input", return_value="3")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_disc(mediums, mediums[1], "dtitle", "url")
+        assert result is mediums[0]  # position 3
+
+    def test_invalid_disc_number_reprompts(self, mocker: MockerFixture) -> None:
+        """An invalid disc number triggers re-prompt; subsequent valid input is used.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mediums = self._mediums()
+        mocker.patch("builtins.input", side_effect=["9", "y"])
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_disc(mediums, mediums[1], "dtitle", "url")
+        assert result is mediums[1]
+
+    def test_invalid_text_reprompts(self, mocker: MockerFixture) -> None:
+        """Unrecognised text triggers re-prompt; subsequent 'y' is accepted.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mediums = self._mediums()
+        mocker.patch("builtins.input", side_effect=["what", "y"])
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_disc(mediums, mediums[1], "dtitle", "url")
+        assert result is mediums[1]
+
+    def test_medium_with_no_tracks_shows_placeholder(self, mocker: MockerFixture) -> None:
+        """Medium with no track list shows '(no tracks)' without raising.
+
+        :param mocker: pytest-mock fixture.
+        """
+        empty_medium = MBMedium.model_validate({"position": 1, "format": "CD", "track-list": []})
+        mocker.patch("builtins.input", return_value="y")
+        printed: list[str] = []
+        mocker.patch("music_annotator._discover._console.print", side_effect=lambda s, **_: printed.append(s))
+        result = self._ui().confirm_disc([empty_medium], empty_medium, "dtitle", "url")
+        assert result is empty_medium
+        assert any("no tracks" in line for line in printed)

@@ -23,11 +23,12 @@ from music_annotator._pipeline import CollisionPolicy, run
 from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
     _load_disc_info_yaml,
+    _preferred_disc_record,
     find_source_files,
     parse_disc_toc,
     read_journal,
 )
-from music_annotator.models import JSON, DirHint, MBReleaseCandidate
+from music_annotator.models import JSON, DirHint, MBMedium, MBReleaseCandidate
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -60,6 +61,27 @@ class DiscoverUI(Protocol):
         :param src_dir: The source directory being processed.
         :param candidates: Ordered list of :class:`~music_annotator.models.MBReleaseCandidate` to present.
         :returns: A release MBID string, or ``None`` when the user chooses to skip.
+        """
+
+    def confirm_disc(
+        self,
+        mediums: list[MBMedium],
+        proposed: MBMedium,
+        dtitle: str,
+        release_url: str,
+    ) -> MBMedium | None:
+        """Confirm or override a disc selected by the FreeDB title heuristic.
+
+        Shown when MusicBrainz has no disc IDs for a release and medium selection fell back to
+        token-overlap scoring.  The user may accept the proposed disc, choose a different one by
+        number, or abort the run.
+
+        :param mediums: All mediums for the release (to show as alternatives).
+        :param proposed: The medium selected by the title-match heuristic.
+        :param dtitle: FreeDB disc title used for the match, displayed for context.
+        :param release_url: MusicBrainz release URL, displayed so the user can inspect the release.
+        :returns: The confirmed or user-chosen :class:`~music_annotator.models.MBMedium`, or ``None``
+            to abort the run for this directory.
         """
 
     def confirm_delete(self, src_dir: Path) -> bool:
@@ -106,6 +128,56 @@ class TerminalDiscoverUI:
         # Treat as raw MBID
         return choice
 
+    def confirm_disc(
+        self,
+        mediums: list[MBMedium],
+        proposed: MBMedium,
+        dtitle: str,
+        release_url: str,
+    ) -> MBMedium | None:
+        """Display the title-match result and prompt the user to confirm, override, or abort.
+
+        Prints the FreeDB title, the proposed disc with its first track title, and a numbered list
+        of all available mediums as alternatives.  Accepts ``y`` / ``yes`` to confirm, ``n`` / ``no``
+        / ``a`` / ``abort`` to abort, or a disc number ``1``–``N`` to choose a different medium.
+
+        :param mediums: All mediums for the release.
+        :param proposed: The medium selected by the title-match heuristic.
+        :param dtitle: FreeDB disc title used for the match.
+        :param release_url: MusicBrainz release URL.
+        :returns: The confirmed or user-chosen :class:`~music_annotator.models.MBMedium`, or ``None``
+            to abort.
+        """
+        first_track = proposed.track_list[0].recording.title if proposed.track_list else "(no tracks)"
+        _console.print(
+            "\n[bold yellow]WARNING:[/] [yellow]No disc IDs in MusicBrainz — disc selected by FreeDB title match.[/]"
+        )
+        _console.print(f"  [dim]FreeDB title :[/] {dtitle}")
+        _console.print(f"  [dim]Proposed disc:[/] [bold]{proposed.position}[/] — {first_track[:80]}")
+        _console.print(f"  [dim]Release URL  :[/] {release_url}")
+        _console.print("\n  [dim]Available discs:[/]")
+        for m in mediums:
+            ft = m.track_list[0].recording.title[:60] if m.track_list else "(no tracks)"
+            marker = " [bold cyan]←[/]" if m is proposed else ""
+            _console.print(f"    [{m.position}] disc {m.position}: {ft}{marker}")
+        _console.print(f"\n  [dim]Enter [bold]y[/] to accept, [bold]n[/] to abort, or a disc number (1–{len(mediums)}):[/]")
+        while True:
+            _console.print("\n[bold cyan]>[/] ", end="")
+            choice = input("").strip().lower()
+            match choice:
+                case "y" | "yes":
+                    return proposed
+                case "n" | "no" | "a" | "abort":
+                    return None
+                case s if s.isdigit():
+                    pos = int(s)
+                    hits = [m for m in mediums if m.position == pos]
+                    if hits:
+                        return hits[0]
+                    _console.print(f"  [bold yellow]No disc at position {pos}.[/]")
+                case _:
+                    _console.print("  [bold yellow]Please enter y, n, or a disc number.[/]")
+
     def confirm_delete(self, src_dir: Path) -> bool:
         """Ask whether to delete ``src_dir`` and return ``True`` if confirmed.
 
@@ -137,14 +209,7 @@ def parse_disc_info_yaml(src_dir: Path) -> DirHint | None:  # pylint: disable=to
     if not isinstance(records, list) or not records:
         return None
 
-    # Prefer the record explicitly marked preferred; fall back to the first.
-    preferred: dict[str, object] | None = None
-    for rec in records:
-        if isinstance(rec, dict) and rec.get("preferred"):
-            preferred = rec
-            break
-    if preferred is None:
-        preferred = records[0] if isinstance(records[0], dict) else None
+    preferred = _preferred_disc_record(records)
     if preferred is None:
         return None
 
@@ -626,6 +691,7 @@ def discover(
                 dry_run=dry_run,
                 fetch_rels=fetch_rels,
                 collision_policy=collision_policy,
+                ui=ui,
             )
         except (ValueError, mb.WebServiceError, RuntimeError, OSError) as exc:
             log.error("discover_run_error", release_id=release_id, error=str(exc), exc_info=True)
