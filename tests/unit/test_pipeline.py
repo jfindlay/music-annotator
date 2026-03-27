@@ -40,6 +40,7 @@ from music_annotator._pipeline import (
     _prompt_collision_policy,
     _score_medium_title,
     _select_medium_with_reason,
+    _write_freedb_yaml,
     _write_sidecars,
 )
 from music_annotator._pipeline_io import _DISC_INFO_FILENAME, _DISC_TOC_FILENAME
@@ -1023,6 +1024,207 @@ class TestWriteSidecars:
         journal: list[TransactionEntry] = []
         _write_sidecars(cover, work_top, sidecars_written, journal, "now", "rel-1")  # pylint: disable=protected-access
         assert journal == []
+
+
+# ---------------------------------------------------------------------------
+# _write_sidecars — hash verification
+# ---------------------------------------------------------------------------
+
+
+class TestWriteSidecarsHashCheck:
+    """Tests for the SHA-256 readback integrity check added to _write_sidecars."""
+
+    def test_hash_mismatch_raises_runtime_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """RuntimeError is raised when the written sidecar bytes do not match the in-memory hash.
+
+        Simulates filesystem corruption by making hashlib.sha256 return different digests for the
+        in-memory hash vs the readback hash.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        work_top = Path("/dest/Artist/Work")
+        fs.create_dir(str(work_top))
+        jpeg = b"\xff\xd8" + b"\x00" * 50
+        cover = CoverArt(front_full=[CoverImage(data=jpeg, mime="image/jpeg", filename="cover.jpg", url="https://caa/1")])
+
+        # First sha256 call (in-memory) returns "aaa…", second (readback) returns "bbb…" → mismatch.
+        call_count = 0
+
+        def _fake_sha256(data: bytes) -> MagicMock:  # pylint: disable=unused-argument
+            nonlocal call_count
+            call_count += 1
+            mock_hash: MagicMock = MagicMock()
+            mock_hash.hexdigest.return_value = "a" * 64 if call_count == 1 else "b" * 64
+            return mock_hash
+
+        mocker.patch("music_annotator._pipeline.hashlib.sha256", side_effect=_fake_sha256)
+        journal: list[TransactionEntry] = []
+        with pytest.raises(RuntimeError, match="sidecar write integrity failure"):
+            _write_sidecars(cover, work_top, set(), journal, "now", "rel-1")  # pylint: disable=protected-access
+
+
+# ---------------------------------------------------------------------------
+# _write_freedb_yaml
+# ---------------------------------------------------------------------------
+
+
+class TestWriteFreedBYaml:
+    """Tests for _write_freedb_yaml."""
+
+    _YAML_CONTENT: bytes = b"disc_id: [123, 2, 182, 50000, 3600]\nrecord: []\n"
+
+    def test_no_yaml_file_is_noop(self, fs: FakeFilesystem) -> None:
+        """When no 00 - disc info.yaml exists the function returns without writing anything.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        work_top = Path("/dest/Artist/Work")
+        fs.create_dir(str(src))
+        fs.create_dir(str(work_top))
+        journal: list[TransactionEntry] = []
+        written: set[Path] = set()
+        _write_freedb_yaml(src, work_top, 1, written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        assert journal == []
+        assert not (work_top / "freedb_disc_1.yaml").exists()
+
+    def test_yaml_written_with_correct_name_and_journal_entry(self, fs: FakeFilesystem) -> None:
+        """The YAML is written to freedb_disc_{pos}.yaml and a sidecar journal entry is appended.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        work_top = Path("/dest/Artist/Work")
+        fs.create_dir(str(src))
+        fs.create_dir(str(work_top))
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=self._YAML_CONTENT)
+        journal: list[TransactionEntry] = []
+        written: set[Path] = set()
+        _write_freedb_yaml(src, work_top, 2, written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        dest = work_top / "freedb_disc_2.yaml"
+        assert dest.exists()
+        assert dest.read_bytes() == self._YAML_CONTENT
+        assert len(journal) == 1
+        assert journal[0].action == "sidecar"
+        assert journal[0].destination == str(dest)
+        assert journal[0].source == str(src / "00 - disc info.yaml")
+
+    def test_second_call_for_same_dest_is_noop(self, fs: FakeFilesystem) -> None:
+        """The freedb_written guard prevents writing the file more than once per dest path.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        work_top = Path("/dest/Artist/Work")
+        fs.create_dir(str(src))
+        fs.create_dir(str(work_top))
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=self._YAML_CONTENT)
+        journal: list[TransactionEntry] = []
+        written: set[Path] = set()
+        _write_freedb_yaml(src, work_top, 1, written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        _write_freedb_yaml(src, work_top, 1, written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        assert len(journal) == 1  # only one entry
+
+    def test_different_disc_positions_write_separate_files(self, fs: FakeFilesystem) -> None:
+        """Disc positions 1 and 2 produce freedb_disc_1.yaml and freedb_disc_2.yaml separately.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        work_top = Path("/dest/Artist/Work")
+        fs.create_dir(str(src))
+        fs.create_dir(str(work_top))
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=self._YAML_CONTENT)
+        journal: list[TransactionEntry] = []
+        written: set[Path] = set()
+        _write_freedb_yaml(src, work_top, 1, written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        _write_freedb_yaml(src, work_top, 2, written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        assert (work_top / "freedb_disc_1.yaml").exists()
+        assert (work_top / "freedb_disc_2.yaml").exists()
+        assert len(journal) == 2
+
+    def test_hash_mismatch_raises_runtime_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """RuntimeError is raised when dest SHA-256 does not match source SHA-256 after copy.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        work_top = Path("/dest/Artist/Work")
+        fs.create_dir(str(src))
+        fs.create_dir(str(work_top))
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=self._YAML_CONTENT)
+
+        # Patch shutil.copy2 to write corrupted content.
+        def _corrupt_copy(_s: object, d: object) -> None:
+            Path(str(d)).write_bytes(b"\x00" * len(self._YAML_CONTENT))
+
+        mocker.patch("music_annotator._pipeline.shutil.copy2", side_effect=_corrupt_copy)
+        journal: list[TransactionEntry] = []
+        with pytest.raises(RuntimeError, match="freedb yaml copy integrity failure"):
+            _write_freedb_yaml(src, work_top, 1, set(), journal, "now", "rel-1")  # pylint: disable=protected-access
+
+
+# ---------------------------------------------------------------------------
+# run() — freedb yaml written end-to-end
+# ---------------------------------------------------------------------------
+
+
+class TestRunWritesFreedBYaml:
+    """Tests that run() writes freedb_disc_N.yaml to the work-top-dir."""
+
+    def test_freedb_yaml_written_and_sidecar_journalled(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """After a successful run, freedb_disc_N.yaml exists and the journal has a sidecar entry.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 3):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        yaml_content = b"disc_id: [123, 2, 182, 50000, 3600]\nrecord: []\n"
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=yaml_content)
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=2))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        # freedb_disc_1.yaml must exist in the work top directory.
+        flac_files = list(dest.rglob("*.flac"))
+        assert flac_files
+        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        assert (work_top / "freedb_disc_1.yaml").exists()
+        assert (work_top / "freedb_disc_1.yaml").read_bytes() == yaml_content
+
+        # Journal must include a sidecar entry for the yaml.
+        journal_data = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
+        sidecar_entries = [e for e in journal_data if e["action"] == "sidecar"]
+        assert len(sidecar_entries) == 1
+        assert sidecar_entries[0]["destination"].endswith("freedb_disc_1.yaml")
 
 
 # ---------------------------------------------------------------------------
@@ -2488,7 +2690,7 @@ class TestRunCollisionAndJournal:
         assert journal_path.exists()
         data = json.loads(journal_path.read_text(encoding="utf-8"))
         assert len(data) == 1
-        assert data[0]["action"] == "copied"
+        assert data[0]["action"] == "tagged"
         assert data[0]["release_id"] == "rel-1"
 
     def test_journal_not_written_in_dry_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -2564,8 +2766,8 @@ class TestRunCollisionAndJournal:
         flac_files = [p for p in dest.rglob("*.flac") if p != collision_path]
         assert len(flac_files) >= 1
 
-    def test_collision_overwrite_journal_action_copied(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Journal records action='copied' for files written on overwrite choice.
+    def test_collision_overwrite_journal_action_tagged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Journal records action="tagged" for files written on overwrite choice.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -2588,7 +2790,7 @@ class TestRunCollisionAndJournal:
             fetch_rels=False,
         )
         data = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
-        assert any(e["action"] == "copied" for e in data)
+        assert any(e["action"] == "tagged" for e in data)
 
     def test_collision_skip_skips_existing_and_copies_new(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Choosing 'skip' when collisions exist: conflicting files are skipped, new files are copied.
@@ -2647,7 +2849,7 @@ class TestRunCollisionAndJournal:
         data = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
         actions = {e["action"] for e in data}
         assert "skipped" in actions
-        assert "copied" in actions
+        assert "tagged" in actions
 
     def test_collision_abort_raises_system_exit(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Choosing 'abort' when collisions exist raises SystemExit(1) without copying anything.

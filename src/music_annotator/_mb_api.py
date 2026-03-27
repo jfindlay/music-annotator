@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import functools
 import json
+import os
 import time
 import urllib.request
 import xml.etree.ElementTree as _ET
 from collections.abc import Callable
+from pathlib import Path
 from typing import ParamSpec, TypeVar
 
 import musicbrainzngs as mb
@@ -324,7 +326,84 @@ def _sidecar_filename(image_type: str, count: int, index: int, mime: str) -> str
     return f"{base}{ext}"
 
 
-def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
+def _fetch_rg_image(
+    release_group_id: str,
+    size: str,
+    imgs: list[CoverImage],
+    filename: str,
+    url: str,
+    cache_dir: Path | None,
+) -> None:
+    """Fetch one release-group front image (either 500 px or original) and append to ``imgs``.
+
+    Checks the cache directory for a pre-downloaded copy before hitting the network.  Writes the
+    fetched bytes back to the cache on a miss.  Silently skips when the network call fails.
+
+    :param release_group_id: MusicBrainz release-group MBID.
+    :param size: Size string for ``mb.get_release_group_image_front`` (e.g. ``"500"``); ``""`` for original.
+    :param imgs: List to append the resulting :class:`~music_annotator.models.CoverImage` to.
+    :param filename: ``filename`` attribute to set on the image (empty string leaves it unset).
+    :param url: Canonical CAA URL to record on the image.
+    :param cache_dir: Cache directory, or ``None`` when caching is disabled.
+    """
+    key = _cover_art_cache_key(f"rg_{release_group_id}", size)
+    data: bytes | None = None
+    if cache_dir is not None:
+        cached = cache_dir / f"{key}.bin"
+        if cached.is_file():
+            data = cached.read_bytes()
+            log.debug("cover_art_cache_hit", key=key, bytes=len(data))
+    if data is None:
+        try:
+            if size:
+                raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id, size=size))
+            else:
+                raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id))
+            if raw:
+                data = bytes(raw)
+                if cache_dir is not None:
+                    cache_path = cache_dir / f"{key}.bin"
+                    cache_path.write_bytes(data)
+                    log.debug("cover_art_cache_written", key=key, bytes=len(data))
+        except mb.ResponseError as exc:
+            log.warning("cover_art_release_group_error", size=size or "original", code=str(exc)[:40])
+    if data is not None:
+        img = CoverImage(data=data, mime=_infer_mime(data), url=url)
+        if filename:
+            img.filename = filename
+        imgs.append(img)
+
+
+def _cover_art_cache_dir() -> Path:
+    """Return the cover art cache directory, creating it if necessary.
+
+    Resolves ``$XDG_CACHE_HOME/music-annotator/cover-art/`` (falling back to
+    ``~/.cache/music-annotator/cover-art/`` when ``XDG_CACHE_HOME`` is unset or empty).
+    The directory is created with ``parents=True, exist_ok=True`` on every call.
+
+    :returns: A :class:`~pathlib.Path` for the cache directory.
+    """
+    xdg = os.environ.get("XDG_CACHE_HOME", "")
+    base = Path(xdg) if xdg else Path.home() / ".cache"
+    cache = base / "music-annotator" / "cover-art"
+    cache.mkdir(parents=True, exist_ok=True)
+    return cache
+
+
+def _cover_art_cache_key(coverid: str, size: str) -> str:
+    """Return the cache filename stem for a cover art image.
+
+    The key encodes both the CAA image identifier and the requested size so that the 500 px
+    thumbnail and the original resolution image are stored as separate cache entries.
+
+    :param coverid: The CAA numeric image identifier (or a release-group key string).
+    :param size: The size string passed to ``mb.get_image`` (e.g. ``"500"``), or ``""`` for original.
+    :returns: A filename-safe string such as ``"12345678_500"`` or ``"12345678_original"``.
+    """
+    return f"{coverid}_{size or 'original'}"
+
+
+def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool = False) -> CoverArt:
     """Download all available cover art for a release from the Cover Art Archive.
 
     Strategy:
@@ -345,17 +424,32 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     :param release_id: The MusicBrainz release MBID.
     :param release_group_id: The MusicBrainz release-group MBID used as a fallback when the release has
         no CAA listing.  Pass an empty string to skip the fallback.
+    :param no_cache: When ``True``, bypass the on-disk image cache entirely — always fetch from the
+        network and do not write new cache entries.  Defaults to ``False``.
     :returns: A :class:`~music_annotator.models.CoverArt` instance, or an empty one on failure.
     """
+    cache_dir: Path | None = None if no_cache else _cover_art_cache_dir()
 
     def _fetch_raw(rel_id: str, coverid: str | int, bucket: str, size: str = "") -> CoverImage | None:
-        """Fetch a single image; return a :class:`~music_annotator.models.CoverImage` or ``None``.
+        """Fetch a single image from the cache or network; return a :class:`~music_annotator.models.CoverImage` or ``None``.
+
+        Checks ``$XDG_CACHE_HOME/music-annotator/cover-art/`` for a previously downloaded copy before
+        making a network request.  On a cache miss the image is fetched and written to the cache
+        directory.  When ``no_cache`` is ``True`` the cache directory is ``None`` and both read and
+        write are skipped.
 
         :param rel_id: MusicBrainz release MBID.
         :param coverid: CAA image identifier.
         :param bucket: The destination bucket name (e.g. ``"front"``, ``"back"``), logged with the fetch.
         :param size: Optional size string passed to ``mb.get_image`` (e.g. ``"500"``); omit for original.
         """
+        key = _cover_art_cache_key(str(coverid), size)
+        if cache_dir is not None:
+            cached = cache_dir / f"{key}.bin"
+            if cached.is_file():
+                data = cached.read_bytes()
+                log.debug("cover_art_cache_hit", key=key, bytes=len(data))
+                return CoverImage(data=data, mime=_infer_mime(data))
         try:
             if size:
                 raw = _mb_call(lambda: mb.get_image(rel_id, coverid, size=size))
@@ -363,6 +457,10 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
                 raw = _mb_call(lambda: mb.get_image(rel_id, coverid))
             if raw:
                 data = bytes(raw)
+                if cache_dir is not None:
+                    cache_path = cache_dir / f"{key}.bin"
+                    cache_path.write_bytes(data)
+                    log.debug("cover_art_cache_written", key=key, bytes=len(data))
                 img = CoverImage(data=data, mime=_infer_mime(data))
                 log.info(
                     "cover_art_image_fetched",
@@ -484,20 +582,8 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     # Step 5: release-group fallback (no listing available).
     if not has_release_listing and release_group_id:
         rg_url = f"https://coverartarchive.org/release-group/{release_group_id}/front"
-        try:
-            raw_500 = _mb_call(lambda: mb.get_release_group_image_front(release_group_id, size="500"))
-            if raw_500:
-                d = bytes(raw_500)
-                imgs_front.append(CoverImage(data=d, mime=_infer_mime(d), url=rg_url))
-        except mb.ResponseError as exc:
-            log.warning("cover_art_release_group_error", size="500", code=str(exc)[:40])
-        try:
-            raw_orig = _mb_call(lambda: mb.get_release_group_image_front(release_group_id))
-            if raw_orig:
-                d = bytes(raw_orig)
-                imgs_front_full.append(CoverImage(data=d, mime=_infer_mime(d), filename="cover.jpg", url=rg_url))
-        except mb.ResponseError as exc:
-            log.warning("cover_art_release_group_error", size="original", code=str(exc)[:40])
+        _fetch_rg_image(release_group_id, "500", imgs_front, "", rg_url, cache_dir)
+        _fetch_rg_image(release_group_id, "", imgs_front_full, "cover.jpg", rg_url, cache_dir)
 
     result_art = CoverArt(
         front=imgs_front,

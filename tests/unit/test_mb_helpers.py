@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch as stdlib_patch
 
 import musicbrainzngs as mb
 import musicbrainzngs.mbxml as _mbxml
@@ -21,7 +23,15 @@ from music_annotator import (
     fetch_work_detail,
     write_transaction_log,
 )
-from music_annotator._mb_api import _infer_mime, _mb_call, _mb_retry, _patched_parse_recording, _sidecar_filename
+from music_annotator._mb_api import (
+    _cover_art_cache_dir,
+    _cover_art_cache_key,
+    _infer_mime,
+    _mb_call,
+    _mb_retry,
+    _patched_parse_recording,
+    _sidecar_filename,
+)
 from music_annotator._pipeline_io import _check_collisions
 from music_annotator.models import MBRecording, TransactionEntry
 
@@ -226,7 +236,7 @@ class TestFetchCoverArt:
         jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 100
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("111", "Front")))
         mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg_bytes)
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert result.available
         assert len(result.front) == 1
         assert result.mime == "image/jpeg"
@@ -240,7 +250,7 @@ class TestFetchCoverArt:
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("222", "Front")))
         mocker.patch("music_annotator._mb_api.mb.get_image", return_value=png_bytes)
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert result.available
         assert result.mime == "image/png"
 
@@ -253,7 +263,7 @@ class TestFetchCoverArt:
         bmp_bytes = b"BM" + b"\x00" * 100
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("333", "Front")))
         mocker.patch("music_annotator._mb_api.mb.get_image", return_value=bmp_bytes)
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert result.available
         assert result.mime == "image/jpeg"
 
@@ -269,7 +279,7 @@ class TestFetchCoverArt:
             return_value=_make_listing(("1", "Front"), ("2", "Back"), ("3", "Booklet"), ("4", "Medium")),
         )
         mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert len(result.front) == 1
         assert len(result.back) == 1
         assert len(result.booklet) == 1
@@ -287,7 +297,7 @@ class TestFetchCoverArt:
             return_value=_make_listing(("10", "Booklet"), ("11", "Booklet"), ("12", "Booklet")),
         )
         mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert len(result.booklet) == 3
         assert not result.front
 
@@ -306,7 +316,7 @@ class TestFetchCoverArt:
             return_value=_make_listing(("99", "CustomUnknown")),
         )
         mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert result.available
         assert len(result.unknown) == 1
         assert result.unknown[0].filename == "unknown.jpg"
@@ -328,7 +338,7 @@ class TestFetchCoverArt:
             "music_annotator._mb_api.log.info",
             side_effect=lambda event, **kw: log_calls.append({"event": event, **kw}),
         )
-        fetch_cover_art("rel-1")
+        fetch_cover_art("rel-1", no_cache=True)
         fetched = [c for c in log_calls if c["event"] == "cover_art_image_fetched"]
         assert fetched
         assert fetched[0]["bucket"] == "back"
@@ -342,7 +352,7 @@ class TestFetchCoverArt:
         mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("99", "Spine")))
         mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert len(result.spine) == 1
         assert result.spine[0].filename == "spine.jpg"
 
@@ -355,7 +365,7 @@ class TestFetchCoverArt:
         mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("100", "Tray")))
         mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert len(result.tray) == 1
         assert result.tray[0].filename == "tray.jpg"
 
@@ -373,7 +383,7 @@ class TestFetchCoverArt:
         }
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
         mock_get = mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         # Fetched only once despite appearing in two buckets
         assert mock_get.call_count == 1
         # Both buckets populated, same filename
@@ -396,7 +406,7 @@ class TestFetchCoverArt:
         }
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
         mocker.patch("music_annotator._mb_api.mb.get_image", side_effect=mb.ResponseError(cause=Exception("503")))
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert result.back == []
         assert result.spine == []
 
@@ -411,7 +421,7 @@ class TestFetchCoverArt:
             "music_annotator._mb_api.mb.get_image",
             side_effect=mb.ResponseError(cause=Exception("503 error")),
         )
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert not result.available
 
     def test_image_fetch_returns_empty_bytes_skipped(self, mocker: MockerFixture) -> None:
@@ -422,7 +432,7 @@ class TestFetchCoverArt:
         mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("66", "Front")))
         mocker.patch("music_annotator._mb_api.mb.get_image", return_value=b"")
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert not result.available
 
     def test_listing_404_falls_back_to_release_group(self, mocker: MockerFixture) -> None:
@@ -437,7 +447,7 @@ class TestFetchCoverArt:
             side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
         )
         mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", return_value=jpeg_bytes)
-        result = fetch_cover_art("rel-1", release_group_id="rg-1")
+        result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
         assert result.available
         assert len(result.front) == 1
 
@@ -451,7 +461,7 @@ class TestFetchCoverArt:
             "music_annotator._mb_api.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
         )
-        result = fetch_cover_art("rel-1", release_group_id="")
+        result = fetch_cover_art("rel-1", release_group_id="", no_cache=True)
         assert not result.available
 
     def test_listing_non_404_error_returns_empty(self, mocker: MockerFixture) -> None:
@@ -464,7 +474,7 @@ class TestFetchCoverArt:
             "music_annotator._mb_api.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("500 Internal Server Error")),
         )
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert not result.available
 
     def test_release_group_fallback_fails_returns_empty(self, mocker: MockerFixture) -> None:
@@ -481,7 +491,7 @@ class TestFetchCoverArt:
             "music_annotator._mb_api.mb.get_release_group_image_front",
             side_effect=mb.ResponseError(cause=Exception("500 error")),
         )
-        result = fetch_cover_art("rel-1", release_group_id="rg-1")
+        result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
         assert not result.available
 
     def test_release_group_fallback_returns_empty_bytes(self, mocker: MockerFixture) -> None:
@@ -495,7 +505,7 @@ class TestFetchCoverArt:
             side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
         )
         mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", return_value=b"")
-        result = fetch_cover_art("rel-1", release_group_id="rg-1")
+        result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
         assert not result.available
 
     def test_listing_missing_id_skipped(self, mocker: MockerFixture) -> None:
@@ -507,7 +517,7 @@ class TestFetchCoverArt:
         listing = {"images": [{"types": ["Front"], "front": True, "back": False}]}
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
         mock_get = mocker.patch("music_annotator._mb_api.mb.get_image")
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         mock_get.assert_not_called()
         assert not result.available
 
@@ -518,7 +528,7 @@ class TestFetchCoverArt:
         """
         mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value={"images": "bad"})
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert not result.available
 
     def test_image_entry_with_non_list_types_skipped(self, mocker: MockerFixture) -> None:
@@ -532,7 +542,7 @@ class TestFetchCoverArt:
         listing = {"images": [{"id": "77", "types": "Front", "front": True}]}
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
         mock_get = mocker.patch("music_annotator._mb_api.mb.get_image")
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         mock_get.assert_not_called()
         assert not result.available
 
@@ -549,7 +559,7 @@ class TestFetchCoverArt:
             return_value=_make_listing(("2", "Back"), ("3", "Booklet"), ("4", "Medium")),
         )
         mocker.patch("music_annotator._mb_api.mb.get_image", return_value=b"")
-        result = fetch_cover_art("rel-1")
+        result = fetch_cover_art("rel-1", no_cache=True)
         assert not result.back
         assert not result.booklet
         assert not result.medium
@@ -673,7 +683,7 @@ class TestCheckCollisions:
 # ---------------------------------------------------------------------------
 
 
-def _entry(action: str = "copied", src: str = "/src/01.flac", dest: str = "/dest/01.flac") -> TransactionEntry:
+def _entry(action: str = "tagged", src: str = "/src/01.flac", dest: str = "/dest/01.flac") -> TransactionEntry:
     """Build a minimal TransactionEntry for testing.
 
     :param action: The action string.
@@ -705,7 +715,7 @@ class TestWriteTransactionLog:
         assert journal.exists()
         data = json.loads(journal.read_text(encoding="utf-8"))
         assert len(data) == 1
-        assert data[0]["action"] == "copied"
+        assert data[0]["action"] == "tagged"
         assert data[0]["source"] == "/src/01.flac"
 
     def test_appends_to_existing_journal(self, fs: FakeFilesystem) -> None:
@@ -715,7 +725,7 @@ class TestWriteTransactionLog:
         """
         fs.create_dir("/dest")
         journal = Path("/dest/music_annotator_journal.json")
-        first = _entry(action="copied", src="/src/01.flac", dest="/dest/01.flac")
+        first = _entry(action="tagged", src="/src/01.flac", dest="/dest/01.flac")
         write_transaction_log(journal, [first])
 
         second = _entry(action="skipped", src="/src/02.flac", dest="/dest/02.flac")
@@ -723,7 +733,7 @@ class TestWriteTransactionLog:
 
         data = json.loads(journal.read_text(encoding="utf-8"))
         assert len(data) == 2
-        assert data[0]["action"] == "copied"
+        assert data[0]["action"] == "tagged"
         assert data[1]["action"] == "skipped"
 
     def test_corrupt_journal_is_reset(self, fs: FakeFilesystem) -> None:
@@ -1004,7 +1014,7 @@ class TestFetchCoverArtReleaseGroupFallback:
             side_effect=[jpeg_500, jpeg_orig],
         )
         mocker.patch("music_annotator._mb_api.time.sleep")
-        result = fetch_cover_art("rel-1", release_group_id="rg-1")
+        result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
         assert len(result.front) == 1
         assert result.front[0].data == jpeg_500
         assert len(result.front_full) == 1
@@ -1024,7 +1034,201 @@ class TestFetchCoverArtReleaseGroupFallback:
             side_effect=[mb.ResponseError("503"), jpeg_orig],
         )
         mocker.patch("music_annotator._mb_api.time.sleep")
-        result = fetch_cover_art("rel-1", release_group_id="rg-1")
+        result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
         assert result.front == []
         assert len(result.front_full) == 1
         assert result.front_full[0].filename == "cover.jpg"
+
+
+# ---------------------------------------------------------------------------
+# Cover art cache
+# ---------------------------------------------------------------------------
+
+_JPEG_BYTES: bytes = b"\xff\xd8" + b"\x00" * 100
+
+
+class TestCoverArtCacheDir:
+    """Tests for _cover_art_cache_dir()."""
+
+    def test_creates_directory_under_xdg_cache_home(self, fs: FakeFilesystem) -> None:
+        """Cache dir is created under $XDG_CACHE_HOME when set.
+
+        :param fs: pyfakefs fixture.
+        """
+
+        fs.create_dir("/custom/cache")
+        with stdlib_patch.dict(os.environ, {"XDG_CACHE_HOME": "/custom/cache"}):
+            result = _cover_art_cache_dir()
+        assert result == Path("/custom/cache/music-annotator/cover-art")
+        assert result.is_dir()
+
+    def test_falls_back_to_home_cache_when_xdg_unset(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:  # pylint: disable=unused-argument
+        """Falls back to ~/.cache when XDG_CACHE_HOME is not set.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+
+        mocker.patch.dict(os.environ, {}, clear=True)
+        mocker.patch("music_annotator._mb_api.Path.home", return_value=Path("/home/user"))
+        result = _cover_art_cache_dir()
+        assert result == Path("/home/user/.cache/music-annotator/cover-art")
+
+    def test_creates_dir_if_absent(self, fs: FakeFilesystem) -> None:
+        """Cache directory is created if it does not yet exist.
+
+        :param fs: pyfakefs fixture.
+        """
+
+        fs.create_dir("/xdg")
+        with stdlib_patch.dict(os.environ, {"XDG_CACHE_HOME": "/xdg"}):
+            result = _cover_art_cache_dir()
+        assert result.is_dir()
+
+
+class TestCoverArtCacheKey:
+    """Tests for _cover_art_cache_key()."""
+
+    def test_500_size(self) -> None:
+        """Size '500' produces a key ending in '_500'."""
+        assert _cover_art_cache_key("12345678", "500") == "12345678_500"
+
+    def test_empty_size_is_original(self) -> None:
+        """Empty size string produces a key ending in '_original'."""
+        assert _cover_art_cache_key("12345678", "") == "12345678_original"
+
+    def test_rg_key(self) -> None:
+        """Release-group key format is correct."""
+        assert _cover_art_cache_key("rg_abc", "500") == "rg_abc_500"
+
+
+class TestFetchCoverArtCacheMissAndHit:
+    """Tests for cache read/write paths in fetch_cover_art."""
+
+    def _make_listing(self, coverid: str, image_type: str = "Front") -> dict[str, object]:
+        """Build a minimal CAA image listing dict.
+
+        :param coverid: CAA image identifier string.
+        :param image_type: CAA type string.
+        :returns: A listing dict consumable by the image classification logic.
+        """
+        return {
+            "images": [{"types": [image_type], "id": coverid, "image": f"https://caa/{coverid}"}],
+            "release": "https://mb/release/rel-1",
+        }
+
+    def test_cache_miss_writes_file_and_fetches_network(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """On a cache miss the image is fetched from the network and written to the cache dir.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=self._make_listing("99"))
+        mock_get_image = mocker.patch("music_annotator._mb_api.mb.get_image", return_value=_JPEG_BYTES)
+
+        result = fetch_cover_art("rel-1")
+
+        # Network was called.
+        assert mock_get_image.call_count >= 1
+        # Result contains image data.
+        assert result.front[0].data == _JPEG_BYTES
+        # Cache file was written.
+        cache_file_500 = Path("/cache/music-annotator/cover-art/99_500.bin")
+        assert cache_file_500.exists()
+        assert cache_file_500.read_bytes() == _JPEG_BYTES
+
+    def test_cache_hit_skips_network(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """On a cache hit the image is returned from disk without calling the network.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+
+        cache_dir = Path("/cache/music-annotator/cover-art")
+        fs.create_dir(str(cache_dir))
+        # Pre-populate cache for both 500 and original sizes.
+        (cache_dir / "99_500.bin").write_bytes(_JPEG_BYTES)
+        (cache_dir / "99_original.bin").write_bytes(_JPEG_BYTES)
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=self._make_listing("99"))
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image")
+
+        result = fetch_cover_art("rel-1")
+
+        # Network was never called.
+        mock_get.assert_not_called()
+        assert result.front[0].data == _JPEG_BYTES
+
+    def test_no_cache_flag_bypasses_cache(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When no_cache=True the cache is bypassed even when cache files exist.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+
+        cache_dir = Path("/cache/music-annotator/cover-art")
+        fs.create_dir(str(cache_dir))
+        (cache_dir / "99_500.bin").write_bytes(_JPEG_BYTES)
+        (cache_dir / "99_original.bin").write_bytes(_JPEG_BYTES)
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=self._make_listing("99"))
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image", return_value=_JPEG_BYTES)
+
+        fetch_cover_art("rel-1", no_cache=True)
+
+        # Network was called despite cache files existing.
+        assert mock_get.call_count >= 1
+
+    def test_release_group_fallback_cache_hit(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Release-group fallback images are returned from cache without network calls.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+
+        cache_dir = Path("/cache/music-annotator/cover-art")
+        fs.create_dir(str(cache_dir))
+        (cache_dir / "rg_rg-1_500.bin").write_bytes(_JPEG_BYTES)
+        (cache_dir / "rg_rg-1_original.bin").write_bytes(_JPEG_BYTES)
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=mb.ResponseError("404"))
+        mock_rg = mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front")
+
+        result = fetch_cover_art("rel-1", release_group_id="rg-1")
+
+        mock_rg.assert_not_called()
+        assert result.front[0].data == _JPEG_BYTES
+        assert result.front_full[0].data == _JPEG_BYTES
+
+    def test_release_group_fallback_cache_miss_writes_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Release-group fallback images are written to cache on a miss.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=mb.ResponseError("404"))
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_release_group_image_front",
+            side_effect=[_JPEG_BYTES, _JPEG_BYTES],
+        )
+
+        result = fetch_cover_art("rel-1", release_group_id="rg-1")
+
+        assert result.front[0].data == _JPEG_BYTES
+        cache_dir = Path("/cache/music-annotator/cover-art")
+        assert (cache_dir / "rg_rg-1_500.bin").exists()
+        assert (cache_dir / "rg_rg-1_original.bin").exists()

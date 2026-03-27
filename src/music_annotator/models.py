@@ -1464,14 +1464,15 @@ class TransactionEntry(BaseModel):
 
     Important attributes: ``timestamp`` (ISO-8601 UTC string), ``release_id`` (MusicBrainz MBID),
     ``source`` (absolute path of the input audio file), ``destination`` (absolute path of the output
-    file including extension), ``action`` (one of ``"copied"``, ``"skipped"``, ``"dry_run"``).
+    file including extension), ``action`` (one of ``"tagged"``, ``"skipped"``, ``"dry_run"``,
+    ``"downloaded"``, ``"sidecar"``).
     """
 
     timestamp: str
     release_id: str
     source: str
     destination: str
-    action: str  # "copied" | "skipped" | "dry_run"
+    action: str  # "tagged" | "skipped" | "dry_run" | "downloaded" | "sidecar"
 
 
 class TransactionLog(BaseModel):

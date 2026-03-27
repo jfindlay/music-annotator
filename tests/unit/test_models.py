@@ -594,7 +594,7 @@ class TestTransactionEntry:
             release_id="rel-abc",
             source="/src/01.flac",
             destination="/dest/01.flac",
-            action="copied",
+            action="tagged",
         )
         data = entry.model_dump()
         restored = TransactionEntry.model_validate(data)
@@ -602,7 +602,7 @@ class TestTransactionEntry:
         assert restored.release_id == "rel-abc"
         assert restored.source == "/src/01.flac"
         assert restored.destination == "/dest/01.flac"
-        assert restored.action == "copied"
+        assert restored.action == "tagged"
 
     def test_action_skipped(self) -> None:
         """action field accepts 'skipped'."""
@@ -638,14 +638,14 @@ class TestTransactionLog:
                         "release_id": "r",
                         "source": "s",
                         "destination": "d",
-                        "action": "copied",
+                        "action": "tagged",
                     }
                 ]
             }
         )
         assert len(log.entries) == 1
         assert isinstance(log.entries[0], TransactionEntry)
-        assert log.entries[0].action == "copied"
+        assert log.entries[0].action == "tagged"
 
 
 # ---------------------------------------------------------------------------

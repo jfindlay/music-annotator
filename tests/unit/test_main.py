@@ -243,6 +243,18 @@ class TestBuildParser:
         ns = parser.parse_args(self._APPLY_BASE)
         assert not ns.delete
 
+    def test_apply_no_cache_flag(self) -> None:
+        """apply --no-cache sets no_cache=True."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._APPLY_BASE, "--no-cache"])
+        assert ns.no_cache
+
+    def test_apply_no_cache_default_false(self) -> None:
+        """apply no_cache defaults to False when flag is absent."""
+        parser = _build_parser()
+        ns = parser.parse_args(self._APPLY_BASE)
+        assert not ns.no_cache
+
     def test_apply_verbose_flag(self) -> None:
         """-v before the subcommand sets verbose=True."""
         parser = _build_parser()
@@ -339,6 +351,18 @@ class TestBuildParser:
         parser = _build_parser()
         ns = parser.parse_args([*self._SEARCH_BASE, "--no-fetch-rels"])
         assert ns.no_fetch_rels
+
+    def test_search_no_cache_flag(self) -> None:
+        """search --no-cache sets no_cache=True."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._SEARCH_BASE, "--no-cache"])
+        assert ns.no_cache
+
+    def test_search_no_cache_default_false(self) -> None:
+        """search no_cache defaults to False when flag is absent."""
+        parser = _build_parser()
+        ns = parser.parse_args(self._SEARCH_BASE)
+        assert not ns.no_cache
 
     def test_search_delete_flag(self) -> None:
         """search --delete sets delete=True."""
@@ -495,6 +519,20 @@ class TestMain:
             main()
         _, kwargs = mock_run.call_args
         assert kwargs["fetch_rels"] is False
+
+    def test_apply_no_cache_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """apply --no-cache is passed as no_cache=True to run().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        fs.create_dir("/src")
+        mock_run = mocker.patch("music_annotator.run")
+        with patch.object(sys, "argv", [*self._APPLY_ARGV, "--no-cache"]):
+            main()
+        _, kwargs = mock_run.call_args
+        assert kwargs["no_cache"] is True
 
     def test_apply_user_agent_assembled_correctly(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """user_agent passed to run() is '{app} {email}'.
@@ -656,6 +694,20 @@ class TestMain:
             main()
         _, kwargs = mock_discover.call_args
         assert kwargs["fetch_rels"] is False
+
+    def test_search_no_cache_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """search --no-cache is passed as no_cache=True to discover().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        fs.create_dir("/src")
+        mock_discover = mocker.patch("music_annotator.discover")
+        with patch.object(sys, "argv", [*self._SEARCH_ARGV, "--no-cache"]):
+            main()
+        _, kwargs = mock_discover.call_args
+        assert kwargs["no_cache"] is True
 
     def test_search_limit_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """search --limit N is forwarded to discover().
@@ -926,14 +978,14 @@ class TestReadJournal:
                         "release_id": "r1",
                         "source": "/src/01.flac",
                         "destination": "/dest/Track/01.flac",
-                        "action": "copied",
+                        "action": "tagged",
                     }
                 ]
             ),
         )
         log = music_annotator.read_journal(journal_path)
         assert len(log.entries) == 1
-        assert log.entries[0].action == "copied"
+        assert log.entries[0].action == "tagged"
         assert log.entries[0].source == "/src/01.flac"
 
     def test_returns_empty_when_file_absent(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
@@ -1106,7 +1158,7 @@ class TestPruneSources:
                     "release_id": "r",
                     "source": "/src/01.flac",
                     "destination": "/dest/W/01.flac",
-                    "action": "copied",
+                    "action": "tagged",
                 }
             ],
         )
@@ -1137,7 +1189,7 @@ class TestPruneSources:
                     "release_id": "r",
                     "source": "/src/01.flac",
                     "destination": "/dest/01.flac",
-                    "action": "copied",
+                    "action": "tagged",
                 }
             ],
         )
@@ -1167,7 +1219,7 @@ class TestPruneSources:
                     "release_id": "r",
                     "source": "/src/01.flac",
                     "destination": "/dest/W/01.flac",
-                    "action": "copied",
+                    "action": "tagged",
                 }
             ],
         )
@@ -1197,7 +1249,7 @@ class TestPruneSources:
                     "release_id": "r",
                     "source": "/src/01.flac",
                     "destination": "/dest/01.flac",
-                    "action": "copied",
+                    "action": "tagged",
                 }
             ],
         )
@@ -1228,7 +1280,7 @@ class TestPruneSources:
                     "release_id": "r",
                     "source": "/src/01.flac",
                     "destination": "/dest/01.flac",
-                    "action": "copied",
+                    "action": "tagged",
                 }
             ],
         )
@@ -1259,7 +1311,7 @@ class TestPruneSources:
                     "release_id": "r",
                     "source": "/src/01.flac",
                     "destination": "/dest/01.flac",
-                    "action": "copied",
+                    "action": "tagged",
                 }
             ],
         )
@@ -1292,7 +1344,7 @@ class TestPruneSources:
                     "release_id": "r",
                     "source": "/src/01.flac",
                     "destination": "/dest/01.flac",
-                    "action": "copied",
+                    "action": "tagged",
                 }
             ],
         )
@@ -1324,7 +1376,7 @@ class TestPruneSources:
                     "release_id": "r",
                     "source": "/src/01.flac",
                     "destination": "/dest/01.flac",
-                    "action": "copied",
+                    "action": "tagged",
                 }
             ],
         )
@@ -1333,6 +1385,133 @@ class TestPruneSources:
         mocker.patch("music_annotator._discover.TerminalDiscoverUI", return_value=mock_ui)
         music_annotator.prune_sources(src, dest, ui=None)
         mock_ui.confirm_delete.assert_called_once_with(src)
+
+    def test_sidecar_dest_existence_checked(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """prune_sources checks destination existence of 'sidecar' entries alongside 'tagged' entries.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=b"x")
+        dest_audio = dest / "01.flac"
+        dest_yaml = dest / "freedb_disc_1.yaml"
+        fs.create_file(str(dest_audio), contents=b"x")
+        fs.create_file(str(dest_yaml), contents=b"yaml")
+        self._write_journal(
+            fs,
+            dest,
+            [
+                {
+                    "timestamp": "t",
+                    "release_id": "r",
+                    "source": "/src/01.flac",
+                    "destination": str(dest_audio),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "t",
+                    "release_id": "r",
+                    "source": "/src/00 - disc info.yaml",
+                    "destination": str(dest_yaml),
+                    "action": "sidecar",
+                },
+            ],
+        )
+        mock_ui = mocker.MagicMock()
+        mock_ui.confirm_delete.return_value = True
+        music_annotator.prune_sources(src, dest, yes=False, ui=mock_ui)
+        # All checks passed → deletion was offered.
+        mock_ui.confirm_delete.assert_called_once()
+
+    def test_sidecar_dest_missing_blocks_deletion(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """prune_sources blocks deletion when a sidecar destination file is missing.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=b"x")
+        dest_audio = dest / "01.flac"
+        fs.create_file(str(dest_audio), contents=b"x")
+        # Note: dest_yaml is NOT created.
+        dest_yaml = dest / "freedb_disc_1.yaml"
+        self._write_journal(
+            fs,
+            dest,
+            [
+                {
+                    "timestamp": "t",
+                    "release_id": "r",
+                    "source": "/src/01.flac",
+                    "destination": str(dest_audio),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "t",
+                    "release_id": "r",
+                    "source": "/src/00 - disc info.yaml",
+                    "destination": str(dest_yaml),
+                    "action": "sidecar",
+                },
+            ],
+        )
+        mock_ui = mocker.MagicMock()
+        music_annotator.prune_sources(src, dest, yes=False, ui=mock_ui)
+        # Missing sidecar dest → deletion prompt must NOT be called.
+        mock_ui.confirm_delete.assert_not_called()
+
+    def test_sidecar_source_not_included_in_src_audio_check(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Sidecar source paths are excluded from the audio source-side presence check.
+
+        find_source_files excludes 00 - disc info.yaml, so the source-side check only validates
+        audio files from 'tagged' entries and a sidecar's source path never causes a mismatch.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=b"x")
+        # 00 - disc info.yaml present in src but NOT counted as an audio file.
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=b"yaml")
+        dest_audio = dest / "01.flac"
+        dest_yaml = dest / "freedb_disc_1.yaml"
+        fs.create_file(str(dest_audio), contents=b"x")
+        fs.create_file(str(dest_yaml), contents=b"yaml")
+        self._write_journal(
+            fs,
+            dest,
+            [
+                {
+                    "timestamp": "t",
+                    "release_id": "r",
+                    "source": "/src/01.flac",
+                    "destination": str(dest_audio),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "t",
+                    "release_id": "r",
+                    "source": str(src / "00 - disc info.yaml"),
+                    "destination": str(dest_yaml),
+                    "action": "sidecar",
+                },
+            ],
+        )
+        mock_ui = mocker.MagicMock()
+        mock_ui.confirm_delete.return_value = True
+        music_annotator.prune_sources(src, dest, yes=False, ui=mock_ui)
+        # Should succeed — sidecar source is not in the audio set comparison.
+        mock_ui.confirm_delete.assert_called_once()
 
     def test_only_copied_entries_considered(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """prune_sources ignores 'skipped' and 'dry_run' journal entries.
@@ -1356,7 +1535,7 @@ class TestPruneSources:
                     "release_id": "r",
                     "source": "/src/01.flac",
                     "destination": "/dest/01.flac",
-                    "action": "copied",
+                    "action": "tagged",
                 },
                 {
                     "timestamp": "t",

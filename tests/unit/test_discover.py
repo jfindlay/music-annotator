@@ -1150,6 +1150,23 @@ class TestDiscover:
         _, kwargs = mock_run.call_args
         assert kwargs["fetch_rels"] is False
 
+    def test_no_cache_forwarded_to_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """no_cache=True is passed through to run().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        mock_run = self._patch_mb_and_run(mocker, [_candidate()])
+        mocker.patch("builtins.input", return_value="1")
+
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0", no_cache=True)
+        _, kwargs = mock_run.call_args
+        assert kwargs["no_cache"] is True
+
     def test_skip_word_choice_does_not_invoke_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Entering 'skip' skips the directory without calling run().
 

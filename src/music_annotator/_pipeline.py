@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import enum
+import hashlib
 import os
 import re
 import shutil
@@ -30,6 +31,7 @@ from music_annotator._mb_api import (
     init_mb,
 )
 from music_annotator._pipeline_io import (
+    _DISC_INFO_FILENAME,
     JOURNAL_FILENAME,
     _check_collisions,
     _sha256_file,
@@ -385,7 +387,14 @@ def _write_sidecars(
             continue
         sidecar_path = work_top_dir / img.filename
         sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+        expected_hash = hashlib.sha256(img.data).hexdigest()
         sidecar_path.write_bytes(img.data)
+        written_hash = hashlib.sha256(sidecar_path.read_bytes()).hexdigest()
+        if written_hash != expected_hash:
+            raise RuntimeError(
+                f"sidecar write integrity failure for '{sidecar_path.name}': "
+                f"expected SHA-256 {expected_hash[:12]}… ≠ written SHA-256 {written_hash[:12]}…"
+            )
         log.debug("sidecar_written", path=str(sidecar_path))
         journal_entries.append(
             TransactionEntry(
@@ -398,6 +407,68 @@ def _write_sidecars(
         )
 
 
+def _write_freedb_yaml(
+    src_dir: Path,
+    work_top_dir: Path,
+    medium_pos: int,
+    freedb_written: set[Path],
+    journal_entries: list[TransactionEntry],
+    now: str,
+    release_id: str,
+) -> None:
+    """Copy ``00 - disc info.yaml`` from ``src_dir`` to ``work_top_dir/freedb_disc_N.yaml``.
+
+    Preserves FreeDB disc data losslessly in the destination library so it can later be used for
+    submitting disc IDs to MusicBrainz, Discogs lookups, or further analysis.
+
+    The destination filename is ``freedb_disc_{medium_pos}.yaml`` so that multi-disc releases where
+    both discs share a ``work_top_dir`` each receive their own numbered file without overwriting.
+
+    A SHA-256 hash of the source file is computed before the copy and verified against the
+    destination after the copy; a mismatch raises :exc:`RuntimeError`.  A ``"sidecar"`` journal entry
+    is appended on success.
+
+    A set ``freedb_written`` keyed on the destination path ensures the copy is performed at most once
+    per ``work_top_dir + medium_pos`` combination across all tracks in the copy loop.
+
+    :param src_dir: Source directory that may contain a ``00 - disc info.yaml`` file.
+    :param work_top_dir: Work top directory (``dest_root / composer-dir / work-dir``) where the YAML
+        is written.
+    :param medium_pos: 1-based disc position, used to form the destination filename.
+    :param freedb_written: Mutable set of destination paths already written this run.
+    :param journal_entries: Mutable list to which a new ``"sidecar"`` entry is appended.
+    :param now: ISO-format timestamp string for the journal entry.
+    :param release_id: MusicBrainz release MBID for the journal entry.
+    :raises RuntimeError: When the SHA-256 of the written file does not match the source.
+    """
+    yaml_src = src_dir / _DISC_INFO_FILENAME
+    if not yaml_src.is_file():
+        return
+    dest_yaml = work_top_dir / f"freedb_disc_{medium_pos}.yaml"
+    if dest_yaml in freedb_written:
+        return
+    freedb_written.add(dest_yaml)
+    src_data = yaml_src.read_bytes()
+    src_hash = hashlib.sha256(src_data).hexdigest()
+    shutil.copy2(yaml_src, dest_yaml)
+    dest_hash = hashlib.sha256(dest_yaml.read_bytes()).hexdigest()
+    if dest_hash != src_hash:
+        raise RuntimeError(
+            f"freedb yaml copy integrity failure for '{dest_yaml.name}': "
+            f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_hash[:12]}…"
+        )
+    log.debug("freedb_yaml_written", dest=str(dest_yaml))
+    journal_entries.append(
+        TransactionEntry(
+            timestamp=now,
+            release_id=release_id,
+            source=str(yaml_src),
+            destination=str(dest_yaml),
+            action="sidecar",
+        )
+    )
+
+
 def run(
     release_id: str,
     src_dir: Path,
@@ -407,6 +478,7 @@ def run(
     fetch_rels: bool = True,
     collision_policy: CollisionPolicy = CollisionPolicy.ASK,
     ui: DiscUI | None = None,
+    no_cache: bool = False,
 ) -> None:
     """Copy and tag an album directory using MusicBrainz metadata.
 
@@ -452,6 +524,8 @@ def run(
         :attr:`CollisionPolicy.ASK` which prompts interactively.
     :param ui: Optional :class:`DiscUI` instance for interactive disc-selection confirmation.  When ``None`` and a
         title-match heuristic is used, the selection proceeds without confirmation (useful for automated runs and tests).
+    :param no_cache: When ``True``, bypass the cover art on-disk cache and always fetch from the network.  Defaults to
+        ``False``.
     :raises mb.ResponseError: On a non-retryable MusicBrainz API error.
     :raises RuntimeError: If all retry attempts are exhausted for any API call, or if post-copy verification fails (copy
         integrity, tag round-trip, cover art, or mtime mismatch).
@@ -507,7 +581,7 @@ def run(
     rg_id = release.release_group.id
     cover = CoverArt()
     if not dry_run:
-        cover = fetch_cover_art(release_id, rg_id)
+        cover = fetch_cover_art(release_id, rg_id, no_cache=no_cache)
         if not cover.available:
             log.warning("cover_art_not_available", release_id=release_id)
 
@@ -633,6 +707,7 @@ def run(
     # --- Copy, tag, and journal ---
     journal_entries: list[TransactionEntry] = []
     sidecars_written: set[Path] = set()
+    freedb_written: set[Path] = set()
     now = datetime.datetime.now(datetime.UTC).isoformat()
 
     for entry in plan:
@@ -747,6 +822,7 @@ def run(
         rel_parts = dest_file.relative_to(dest_root).parts
         work_top_dir = dest_root / rel_parts[0] / rel_parts[1]
         _write_sidecars(cover, work_top_dir, sidecars_written, journal_entries, now, release_id)
+        _write_freedb_yaml(src_dir, work_top_dir, medium_pos, freedb_written, journal_entries, now, release_id)
 
         journal_entries.append(
             TransactionEntry(
@@ -754,7 +830,7 @@ def run(
                 release_id=release_id,
                 source=str(src_file),
                 destination=str(dest_file),
-                action="copied",
+                action="tagged",
             )
         )
 
@@ -763,7 +839,7 @@ def run(
 
         # Count copied (not skipped/dry-run) entries and print a confirmation message so the user
         # knows it is safe to delete the source directory before they do so.
-        copied = [e for e in journal_entries if e.action == "copied"]
+        copied = [e for e in journal_entries if e.action == "tagged"]
         dest_dirs = sorted(
             {
                 dest_root

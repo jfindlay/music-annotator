@@ -410,12 +410,12 @@ class TestRunFullNonDryRunFlac:
             assert tags.get("TITLE"), f"TITLE missing in {flac_path.name}"
             assert tags.get("ALBUMARTIST"), f"ALBUMARTIST missing in {flac_path.name}"
 
-        # Journal file should exist and record two "copied" actions
+        # Journal file should exist and record two "tagged" actions
         journal_path = dest_root / JOURNAL_FILENAME
         assert journal_path.exists()
         entries = json.loads(journal_path.read_text(encoding="utf-8"))
         assert len(entries) == 2
-        assert all(e["action"] == "copied" for e in entries)
+        assert all(e["action"] == "tagged" for e in entries)
 
 
 # ---------------------------------------------------------------------------
@@ -469,7 +469,7 @@ class TestRunFullNonDryRunMp3:
         assert journal_path.exists()
         entries = json.loads(journal_path.read_text(encoding="utf-8"))
         assert len(entries) == 2
-        assert all(e["action"] == "copied" for e in entries)
+        assert all(e["action"] == "tagged" for e in entries)
 
 
 # ---------------------------------------------------------------------------
@@ -969,12 +969,12 @@ class TestRunCollisionPolicySkip:
         # Files must be unchanged (mtime preserved by SKIP).
         assert flac_files_first[0].stat().st_mtime == first_mtime
 
-        # Journal must now contain four entries: 2 "copied" + 2 "skipped".
+        # Journal must now contain four entries: 2 "tagged" + 2 "skipped".
         journal_path = dest_root / JOURNAL_FILENAME
         entries = json.loads(journal_path.read_text(encoding="utf-8"))
         assert len(entries) == 4
         actions = [e["action"] for e in entries]
-        assert actions.count("copied") == 2
+        assert actions.count("tagged") == 2
         assert actions.count("skipped") == 2
 
 
@@ -987,7 +987,7 @@ class TestRunCollisionPolicyOverwrite:
     """End-to-end smoke test for CollisionPolicy.OVERWRITE.
 
     The first run copies two FLAC files.  The second run uses OVERWRITE, which must replace the
-    existing files (producing updated mtimes) and journal both as ``"copied"``.
+    existing files (producing updated mtimes) and journal both as ``"tagged"``.
     """
 
     def test_overwrite_policy_replaces_existing_files(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -1031,11 +1031,11 @@ class TestRunCollisionPolicyOverwrite:
             collision_policy=CollisionPolicy.OVERWRITE,
         )
 
-        # Journal: 4 entries total, all "copied".
+        # Journal: 4 entries total, all "tagged".
         journal_path = dest_root / JOURNAL_FILENAME
         entries = json.loads(journal_path.read_text(encoding="utf-8"))
         assert len(entries) == 4
-        assert all(e["action"] == "copied" for e in entries)
+        assert all(e["action"] == "tagged" for e in entries)
 
 
 # ---------------------------------------------------------------------------
@@ -1180,11 +1180,11 @@ class TestRunMultiDisc:
         flac_files = sorted(dest_root.rglob("*.flac"))
         assert len(flac_files) == 3
 
-        # Journal should record 3 "copied" entries.
+        # Journal should record 3 "tagged" entries.
         journal_path = dest_root / JOURNAL_FILENAME
         entries = json.loads(journal_path.read_text(encoding="utf-8"))
         assert len(entries) == 3
-        assert all(e["action"] == "copied" for e in entries)
+        assert all(e["action"] == "tagged" for e in entries)
 
 
 # ---------------------------------------------------------------------------
@@ -1332,8 +1332,8 @@ class TestRunCoverArtMp3:
 class TestJournalMerge:
     """End-to-end smoke test: a second run appends to an existing journal file.
 
-    The first run writes 2 ``"copied"`` entries.  The second run (with OVERWRITE so it can
-    proceed) also writes 2 ``"copied"`` entries.  The resulting journal must contain all 4.
+    The first run writes 2 ``"tagged"`` entries.  The second run (with OVERWRITE so it can
+    proceed) also writes 2 ``"tagged"`` entries.  The resulting journal must contain all 4.
     """
 
     def test_second_run_appends_to_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -1374,7 +1374,7 @@ class TestJournalMerge:
         journal_path = dest_root / JOURNAL_FILENAME
         entries = json.loads(journal_path.read_text(encoding="utf-8"))
         assert len(entries) == 4
-        assert all(e["action"] == "copied" for e in entries)
+        assert all(e["action"] == "tagged" for e in entries)
 
 
 # ---------------------------------------------------------------------------

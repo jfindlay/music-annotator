@@ -15,13 +15,13 @@ Usage::
         --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
         --user-agent-email contact@example.com \\
         [--user-agent-app "MyApp/1.0"] \\
-        [--dry-run] [--no-fetch-rels] [--delete]
+        [--dry-run] [--no-fetch-rels] [--delete] [--no-cache]
 
     music-annotator search \\
         <src_dir> <dest_dir> \\
         --user-agent-email contact@example.com \\
         [--user-agent-app "MyApp/1.0"] \\
-        [--limit 10] [--dry-run] [--no-fetch-rels] [--delete]
+        [--limit 10] [--dry-run] [--no-fetch-rels] [--delete] [--no-cache]
 
     music-annotator prune \\
         <src_dir> <dest_dir> \\
@@ -147,6 +147,11 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         "--delete",
         action="store_true",
         help="After a successful copy, prompt to delete the source directory.",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass the cover art download cache; always fetch images from the network.",
     )
 
 
@@ -348,6 +353,7 @@ def main() -> None:
                     user_agent=user_agent,
                     dry_run=args.dry_run,
                     fetch_rels=not args.no_fetch_rels,
+                    no_cache=args.no_cache,
                 )
             except KeyboardInterrupt:
                 log.warning("interrupted")
@@ -373,6 +379,7 @@ def main() -> None:
                     fetch_rels=not args.no_fetch_rels,
                     limit=args.limit,
                     delete=args.delete,
+                    no_cache=args.no_cache,
                 )
             except KeyboardInterrupt:
                 log.warning("interrupted")
