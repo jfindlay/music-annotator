@@ -865,7 +865,11 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
             path = path / d
         return path / f"{leaf_nn} - {track_title}"
 
-    # 1- or 2-level hierarchy: single work directory + leaf file
-    movt_num = int(file_dict.get("MOVEMENTNUMBER") or str(track.position))
-    track_num = str(movt_num).zfill(width)
+    # 1- or 2-level hierarchy: single work directory + leaf file.
+    # Use CWP_ORDERING_KEY_0 (MB ordering-key, gives correct global position across all discs
+    # of a multi-disc work) before falling back to MOVEMENTNUMBER or track.position.  This is
+    # the same priority chain used in the part_levels >= 2 branch above.
+    leaf_ok = file_dict.get("CWP_ORDERING_KEY_0", "0")
+    leaf_fallback = int(file_dict.get("MOVEMENTNUMBER") or str(track.position))
+    track_num = _nn(leaf_ok, leaf_fallback, width)
     return dest_root / top_dir / work_dir / f"{track_num} - {track_title}"

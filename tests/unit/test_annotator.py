@@ -1844,6 +1844,53 @@ class TestBuildDestPathYear:
         """
         assert "[" not in self._dest(self._make_tags(), fs)
 
+    def test_ordering_key_used_in_2level_hierarchy(self, fs: FakeFilesystem) -> None:
+        """CWP_ORDERING_KEY_0 sets the track prefix for 2-level hierarchies (no intermediate dirs).
+
+        Disc 2 of a multi-disc work has ordering-key=13; the file should be prefixed '13 -',
+        not '01 -' from the disc-local MOVEMENTNUMBER.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = TrackTags(
+            title="Credo in unum Deum",
+            movementnumber="1",
+            movementtotal="15",
+            cwp_work_top="h-Moll-Messe, BWV 232",
+            cwp_composer_lastnames="Bach",
+            cwp_part_levels="1",
+            originaldate="1974",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        tags.model_extra["cwp_ordering_key_0"] = "13"  # type: ignore[index]
+        result = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+            tags,
+        )
+        assert result.name.startswith("13 -")
+
+    def test_2level_falls_back_to_movementnumber_when_ordering_key_zero(self, fs: FakeFilesystem) -> None:
+        """Without ordering-key, MOVEMENTNUMBER is used for the 2-level file prefix.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_tags(originaldate="1974")
+        tags.movementnumber = "3"
+        result = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+            tags,
+        )
+        assert result.name.startswith("03 -")
+
     def test_mbid_no_longer_in_path(self, fs: FakeFilesystem) -> None:
         """Full MBID UUID is not present in the path (replaced by [rec/rel YYYY]).
 
