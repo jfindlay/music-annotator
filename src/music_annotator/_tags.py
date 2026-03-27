@@ -797,7 +797,11 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     #   - Single year:    [rec 1984]
     #   - Multi-year:     [rec 1983-1984]
     # rel_year falls back to publication-era MB fields when no session date is known.
-    rec_date = file_dict.get("RECORDING_DATE", "")
+    # Prefer the work-level union date (computed by run() across all movements of the work)
+    # so that all movements of a work land in the same destination directory even when
+    # individual recordings have different session date ranges.
+    # RECORDING_DATE_WORK is excluded from to_file_dict() — it is a path-construction helper only.
+    rec_date = file_dict.get("RECORDING_DATE_WORK") or file_dict.get("RECORDING_DATE", "")
     rec_label = ""
     if rec_date:
         if "/" in rec_date:

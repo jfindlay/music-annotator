@@ -1001,6 +1001,8 @@ class TrackTags(BaseModel):
 
     # Recording session date
     recording_date: str = ""  # RECORDING_DATE — session date from artist relation begin dates
+    recording_date_work: str = ""  # internal path-construction helper: union of all movements'
+    # session dates for the top work; not written to audio files
 
     # Performer credited-as companion
     cea_performers_credited: str = ""  # credited names for performers where they differ from canonical
@@ -1183,14 +1185,15 @@ class TrackTags(BaseModel):
     def to_file_dict(self) -> dict[str, str]:
         """Return a ``{tag_name: value}`` mapping suitable for writing to an audio file.
 
-        Internal fields (``cea_conductors_list``, ``cea_ensembles_list``) are excluded.  Empty values are excluded.  All
+        Internal fields (``cea_conductors_list``, ``cea_ensembles_list``, ``recording_date_work``) are excluded.
+        Empty values are excluded.  All
         keys are uppercased to match Vorbis Comment / ID3 conventions.  Dynamically-added per-level
         ``cwp_work_N`` / ``cwp_workid_N`` / ``cwp_part_N`` extra fields are included.
 
         :returns: A flat ``dict[str, str]`` of non-empty tag key/value pairs with uppercase keys, excluding internal list
             fields.
         """
-        excluded = {"cea_conductors_list", "cea_ensembles_list"}
+        excluded = {"cea_conductors_list", "cea_ensembles_list", "recording_date_work"}
         out: dict[str, str] = {}
         for field_name, value in self.model_dump(exclude=excluded).items():
             if isinstance(value, str) and value:

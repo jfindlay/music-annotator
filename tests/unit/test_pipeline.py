@@ -1212,6 +1212,166 @@ class TestRunFullPipeline:
         )
         assert mock_tag.call_count == 2
 
+    def test_recording_date_work_unified_across_movements(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Tracks with different RECORDING_DATE values get a unified RECORDING_DATE_WORK.
+
+        When two movements of the same work have different session date ranges, run()
+        computes the union range and writes it to recording_date_work on both tracks.
+        This ensures both movements produce the same destination directory label.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        self._patch_mb(mocker, release)
+
+        # Patch fetch_recording_detail to return recordings with different session dates:
+        # movement 1: single date 1984-01-27
+        # movement 2: date range 1981-01-27/1984-01-27
+        call_count = [0]
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            call_count[0] += 1
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "T",
+                    "artist-credit": [],
+                    "artist-relation-list": [
+                        {
+                            "type": "conductor",
+                            "direction": "backward",
+                            "begin": "1984-01-27" if call_count[0] == 1 else "1981-01-27",
+                            "end": "" if call_count[0] == 1 else "1984-01-27",
+                            "artist": {"id": "a1", "name": "K", "sort-name": "K"},
+                        }
+                    ],
+                    "work-relation-list": [],
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        # Both tracks should have the same unified recording_date_work
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+        assert tags1.recording_date_work == tags2.recording_date_work == "1981-01-27/1984-01-27"
+        # Individual RECORDING_DATE tags are unchanged
+        assert tags1.recording_date == "1984-01-27"
+        assert tags2.recording_date == "1981-01-27/1984-01-27"
+
+    def test_recording_date_work_same_year_no_range(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When all movements share the same session year, RECORDING_DATE_WORK has no range suffix.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        self._patch_mb(mocker, release)
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "T",
+                    "artist-credit": [],
+                    "artist-relation-list": [
+                        {
+                            "type": "balance",
+                            "direction": "backward",
+                            "begin": "1984-01-27",
+                            "end": "1984-02-21",
+                            "artist": {"id": "engineer-1", "name": "Engineer", "sort-name": "Engineer"},
+                        }
+                    ],
+                    "work-relation-list": [],
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+        # Same year begin and end → both tracks get the same unified value
+        assert tags1.recording_date_work == "1984-01-27/1984-02-21"
+        assert tags1.recording_date_work == tags2.recording_date_work
+
+    def test_recording_date_work_slash_with_empty_end(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """recording_date with a slash but empty end component is handled gracefully.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            r = _rec({"id": rec_id, "title": "T", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []})
+            return r
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        # No session date relations → recording_date_work stays empty
+        assert tags1.recording_date_work == ""
+
     def test_tag_error_raises_runtime_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """A MutagenError during tagging is re-raised as RuntimeError (provenance invariant).
 

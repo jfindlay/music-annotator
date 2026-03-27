@@ -352,6 +352,32 @@ def run(
                 tags_obj.cwp_movt_tot = str(total)
                 tags_obj.cwp_single_work_album = "1" if single else "0"
 
+            # Compute recording_date_work: the minimum year range spanning all movements of
+            # this work.  All tracks in the group use this unified value for the destination
+            # directory label so movements recorded in different sessions land in the same dir.
+            # The per-track RECORDING_DATE tag is NOT modified — only this path-construction
+            # helper is set.
+            _begins: list[str] = []
+            _ends: list[str] = []
+            for grp_idx in group_idxs:
+                rd = tags_map[grp_idx].recording_date
+                if not rd:
+                    continue
+                if "/" in rd:
+                    b, _, e = rd.partition("/")
+                    if b:  # pragma: no branch — begin is always non-empty for valid ISO intervals
+                        _begins.append(b)
+                    if e:  # pragma: no branch — end is always non-empty for valid ISO intervals
+                        _ends.append(e)
+                else:
+                    _begins.append(rd)
+            if _begins:
+                _min_begin = min(_begins)
+                _max_end = max(_ends) if _ends else ""
+                _unified = f"{_min_begin}/{_max_end}" if _max_end and _max_end != _min_begin else _min_begin
+                for grp_idx in group_idxs:
+                    tags_map[grp_idx].recording_date_work = _unified
+
     else:
         label_info = release.label_info_list[0] if release.label_info_list else None
         for idx, (_src_file, (track, _medium_pos)) in enumerate(file_track_pairs):
