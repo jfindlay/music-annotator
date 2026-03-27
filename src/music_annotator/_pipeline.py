@@ -68,13 +68,23 @@ class CollisionPolicy(enum.Enum):
 
 
 def _match_medium_by_toc(mediums: list[MBMedium], track_frames: list[int]) -> MBMedium | None:
-    """Return the medium whose disc TOC exactly matches ``track_frames``, or ``None``.
+    """Return the medium whose disc TOC matches ``track_frames`` within a ±1 frame tolerance, or ``None``.
 
     Compares ``track_frames`` (per-track CD frame offsets from the source directory's
     ``00 - disc info.yaml``) against the ``offsets`` list on every :class:`~music_annotator.models.MBDisc`
     entry attached to each medium.  A medium may carry more than one disc entry (different pressings),
-    so all are checked.  Returns ``None`` when no medium has a matching disc, or when the release was
-    fetched without ``discids`` includes (i.e. all ``disc_list`` fields are empty).
+    so all are checked.
+
+    A tolerance of ±1 CD frame (~13 ms) per offset is applied because ripping software (e.g. dBpowerAMP,
+    EAC, Whipper) and MusicBrainz can differ by a single frame in how they count the track start position,
+    due to rounding or read-offset conventions.  This tolerance is tight enough to be unambiguous in
+    practice — adjacent movements on a disc are thousands of frames apart.
+
+    An exact match is logged at ``info`` level; a fuzzy match (any offset differs by exactly 1) is logged
+    at ``warning`` level so the operator can verify the selection manually if needed.
+
+    Returns ``None`` when no medium has a matching disc, or when the release was fetched without
+    ``discids`` includes (i.e. all ``disc_list`` fields are empty).
 
     :param mediums: The list of :class:`~music_annotator.models.MBMedium` objects from the release.
     :param track_frames: Per-track CD frame start offsets extracted from ``00 - disc info.yaml``.
@@ -82,7 +92,18 @@ def _match_medium_by_toc(mediums: list[MBMedium], track_frames: list[int]) -> MB
     """
     for medium in mediums:
         for disc in medium.disc_list:
+            if len(disc.offsets) != len(track_frames):
+                continue
             if disc.offsets == track_frames:
+                log.info("toc_match_exact", position=medium.position, offsets=track_frames)
+                return medium
+            if all(abs(a - b) <= 1 for a, b in zip(disc.offsets, track_frames)):
+                log.warning(
+                    "toc_match_fuzzy",
+                    position=medium.position,
+                    mb_offsets=disc.offsets,
+                    yaml_offsets=track_frames,
+                )
                 return medium
     return None
 
@@ -93,7 +114,8 @@ def _select_medium(mediums: list[MBMedium], n_src: int, src_dir_name: str, track
     Selection strategy (in order):
 
     1. **TOC match**: if ``track_frames`` is provided, compare against each medium's disc TOC entries
-       via :func:`_match_medium_by_toc`.  An exact offset match unambiguously identifies the disc.
+       via :func:`_match_medium_by_toc`.  Matches within ±1 frame per offset to tolerate ripping
+       software conventions; a fuzzy match is logged at warning level.
     2. **Track-count match**: if exactly one medium has ``len(track_list) == n_src``, return it.
     3. **Disc-number hint**: if multiple mediums share the same track count, check ``src_dir_name``
        for a disc-number suffix (e.g. ``"(Disc 2)"``); prefer the medium at that position.

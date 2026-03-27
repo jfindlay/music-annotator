@@ -3541,9 +3541,9 @@ class TestMatchMediumByToc:
     def test_multiple_discs_per_medium_second_entry_matches(self) -> None:
         """Matches when the second MBDisc entry on a medium carries the correct offsets.
 
-        Pressing A has slightly different offsets from pressing B; pressing B offsets supplied.
+        Pressing A has offsets well outside tolerance; pressing B offsets (exact) are supplied.
         """
-        pressing_a = [182, 50001, 100001, 150001]
+        pressing_a = [182, 50500, 100500, 150500]  # >1 frame difference — outside tolerance
         medium = MBMedium.model_validate(
             {
                 "position": 1,
@@ -3557,6 +3557,65 @@ class TestMatchMediumByToc:
         )
         result = _match_medium_by_toc([medium], _DISC1_OFFSETS)
         assert result is medium
+
+    def test_fuzzy_match_plus_one_per_track(self) -> None:
+        """Matches when every YAML offset is exactly 1 frame less than the MB offset.
+
+        This is the real-world case seen with dBpowerAMP vs MusicBrainz counting conventions.
+        """
+        mb_offsets = [183, 114258]
+        yaml_offsets = [182, 114257]  # each off by -1
+        medium = _medium_with_toc(2, mb_offsets)
+        result = _match_medium_by_toc([medium], yaml_offsets)
+        assert result is medium
+
+    def test_fuzzy_match_minus_one_per_track(self) -> None:
+        """Matches when every YAML offset is exactly 1 frame more than the MB offset."""
+        mb_offsets = [182, 114257]
+        yaml_offsets = [183, 114258]  # each off by +1
+        medium = _medium_with_toc(2, mb_offsets)
+        result = _match_medium_by_toc([medium], yaml_offsets)
+        assert result is medium
+
+    def test_fuzzy_match_logs_warning(self, mocker: MockerFixture) -> None:
+        """A fuzzy TOC match (±1 frame) emits a toc_match_fuzzy warning log.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mb_offsets = [183, 114258]
+        yaml_offsets = [182, 114257]
+        medium = _medium_with_toc(2, mb_offsets)
+        mock_warn = mocker.patch("music_annotator._pipeline.log.warning")
+        _match_medium_by_toc([medium], yaml_offsets)
+        mock_warn.assert_called_once()
+        call_args = mock_warn.call_args
+        assert call_args.args[0] == "toc_match_fuzzy"
+
+    def test_exact_match_does_not_log_warning(self, mocker: MockerFixture) -> None:
+        """An exact TOC match does not emit a warning log.
+
+        :param mocker: pytest-mock fixture.
+        """
+        medium = _medium_with_toc(1, _DISC1_OFFSETS)
+        mock_warn = mocker.patch("music_annotator._pipeline.log.warning")
+        _match_medium_by_toc([medium], _DISC1_OFFSETS)
+        mock_warn.assert_not_called()
+
+    def test_offset_diff_of_two_does_not_match(self) -> None:
+        """Offsets differing by 2 frames are outside tolerance and do not match."""
+        mb_offsets = [183, 114258]
+        yaml_offsets = [181, 114256]  # each off by -2
+        medium = _medium_with_toc(2, mb_offsets)
+        result = _match_medium_by_toc([medium], yaml_offsets)
+        assert result is None
+
+    def test_different_length_offsets_do_not_match(self) -> None:
+        """Lists of different lengths never match, even if individual values are close."""
+        mb_offsets = [183, 114258, 200000]
+        yaml_offsets = [183, 114258]
+        medium = _medium_with_toc(2, mb_offsets)
+        result = _match_medium_by_toc([medium], yaml_offsets)
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
