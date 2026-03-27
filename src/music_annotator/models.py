@@ -511,6 +511,24 @@ class MBWork(BaseModel):
 
     model_config = {"populate_by_name": True}
 
+    @field_validator("annotation", mode="before")
+    @classmethod
+    def coerce_annotation(cls, v: str | dict[str, str] | None) -> str:
+        """Extract annotation text from the musicbrainzngs dict representation.
+
+        Per the MMD 2.0 schema, the MB API returns ``<annotation><text>…</text></annotation>``
+        which musicbrainzngs parses as ``{"text": "…"}`` (plus optional ``"entity"`` and ``"name"``
+        keys).  This validator extracts the ``"text"`` value so callers always receive a plain string.
+
+        :param v: Raw annotation value — either a dict from musicbrainzngs, a plain string, or ``None``.
+        :returns: The annotation text string, or ``""`` when absent.
+        """
+        if v is None:
+            return ""
+        if isinstance(v, dict):
+            return str(v.get("text", ""))
+        return str(v)
+
     @field_validator("attribute_list", mode="before")
     @classmethod
     def coerce_attributes(cls, v: JSON) -> list[JSON]:

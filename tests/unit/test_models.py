@@ -886,10 +886,24 @@ class TestMBWorkNewFields:
         w = MBWork.model_validate({"id": "w1", "title": "T", "disambiguation": "1841 arrangement by Mendelssohn"})
         assert w.disambiguation == "1841 arrangement by Mendelssohn"
 
-    def test_annotation_populated(self) -> None:
-        """annotation is populated."""
+    def test_annotation_plain_string_passthrough(self) -> None:
+        """annotation accepts a plain string directly."""
         w = MBWork.model_validate({"id": "w1", "title": "T", "annotation": "Scholarly note."})
         assert w.annotation == "Scholarly note."
+
+    def test_annotation_from_musicbrainzngs_dict(self) -> None:
+        """annotation is extracted from the musicbrainzngs {'text': '...'} dict format.
+
+        Per MMD 2.0 schema, annotation is <annotation><text>…</text></annotation>;
+        musicbrainzngs parses this as {'text': '...'} rather than a plain string.
+        """
+        w = MBWork.model_validate({"id": "w1", "title": "T", "annotation": {"text": "Composed 1822–1824."}})
+        assert w.annotation == "Composed 1822–1824."
+
+    def test_annotation_none_defaults_to_empty(self) -> None:
+        """annotation defaults to empty string when None is passed."""
+        w = MBWork.model_validate({"id": "w1", "title": "T", "annotation": None})
+        assert w.annotation == ""
 
     def test_place_relation_list_populated(self) -> None:
         """place-relation-list is populated from the API response."""
