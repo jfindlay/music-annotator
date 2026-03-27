@@ -136,7 +136,8 @@ def _get_release_by_id(release_id: str) -> dict[str, JSON]:
     """Thin typed wrapper around ``mb.get_release_by_id`` decorated with ``@_mb_retry``.
 
     Requests all includes needed for full annotation: artists, recordings, release groups, labels, media, artist credits,
-    work relations, and recording-level relations.
+    work relations, recording-level relations, and disc IDs (so that each medium's ``discs`` list is populated for
+    TOC-based medium selection).
 
     :param release_id: The MusicBrainz release MBID.
     :returns: The raw response dict from ``musicbrainzngs``.
@@ -155,6 +156,7 @@ def _get_release_by_id(release_id: str) -> dict[str, JSON]:
             "url-rels",
             "series-rels",
             "isrcs",
+            "discids",
         ],
     )
     return result

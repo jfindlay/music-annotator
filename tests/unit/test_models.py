@@ -13,9 +13,11 @@ from music_annotator.models import (
     MBArtist,
     MBArtistRelation,
     MBCoverArtArchive,
+    MBDisc,
     MBLabel,
     MBLabelInfo,
     MBLabelRelation,
+    MBMedium,
     MBPlaceRelation,
     MBRecording,
     MBRelease,
@@ -1168,3 +1170,46 @@ class TestCoverageGaps:
         """MBReleaseEvent.extract_country_from_area skips when area is not a dict (436→441)."""
         evt = MBReleaseEvent.model_validate({"date": "1986", "area": "Germany"})
         assert evt.country == ""
+
+
+class TestMBDisc:
+    """Tests for MBDisc model construction and defaults."""
+
+    def test_defaults(self) -> None:
+        """MBDisc with no data has empty offsets and zero sectors."""
+        disc = MBDisc.model_validate({})
+        assert disc.offsets == []
+        assert disc.sectors == 0
+
+    def test_offsets_and_sectors_populated(self) -> None:
+        """MBDisc correctly stores offsets and sectors from API data."""
+        disc = MBDisc.model_validate({"offsets": [182, 67232, 113807], "sectors": 355382})
+        assert disc.offsets == [182, 67232, 113807]
+        assert disc.sectors == 355382
+
+
+class TestMBMediumDiscList:
+    """Tests for MBMedium.disc_list populated from 'discs' key."""
+
+    def test_disc_list_defaults_empty(self) -> None:
+        """MBMedium with no 'discs' key has an empty disc_list."""
+        medium = MBMedium.model_validate({"position": 1, "format": "CD", "track-list": []})
+        assert medium.disc_list == []
+
+    def test_disc_list_populated(self) -> None:
+        """MBMedium.disc_list is populated when 'discs' key is present."""
+        medium = MBMedium.model_validate(
+            {
+                "position": 2,
+                "format": "CD",
+                "track-list": [],
+                "discs": [
+                    {"offsets": [182, 67232, 113807, 136232, 175832, 233432, 283307, 310607], "sectors": 355382},
+                    {"offsets": [183, 67233, 113808, 136233, 175833, 233433, 283308, 310608], "sectors": 355383},
+                ],
+            }
+        )
+        assert len(medium.disc_list) == 2
+        assert medium.disc_list[0].offsets == [182, 67232, 113807, 136232, 175832, 233432, 283307, 310607]
+        assert medium.disc_list[0].sectors == 355382
+        assert medium.disc_list[1].offsets == [183, 67233, 113808, 136233, 175833, 233433, 283308, 310608]

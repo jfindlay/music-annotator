@@ -633,18 +633,34 @@ class MBTrack(BaseModel):
         return int(v)
 
 
+class MBDisc(BaseModel):
+    """A single disc ID entry attached to a medium, as returned by ``musicbrainzngs`` when ``includes=["discids"]``.
+
+    Each entry records the physical CD's table-of-contents.  A medium may have more than one disc entry when
+    multiple pressings of the same disc have slightly different TOC data (e.g. different lead-in offsets).
+
+    Important attributes: ``offsets`` (per-track CD frame start positions, matching the ``disc_id`` list in
+    ``00 - disc info.yaml``), ``sectors`` (lead-out frame address).
+    """
+
+    offsets: list[int] = Field(default_factory=list)
+    sectors: int = 0
+
+
 class MBMedium(BaseModel):
     """One disc (medium) in a release.
 
     Important attributes: ``position`` (1-based disc number), ``format`` (e.g. ``"CD"``, ``"Vinyl"``,
     ``"Digital Media"``), ``title`` (disc-specific subtitle, e.g. ``"Act I"`` or ``"Disc 1: Symphonies 1 & 2"``
-    — maps to ``DISCSUBTITLE``), ``track_list``.
+    — maps to ``DISCSUBTITLE``), ``track_list``, ``disc_list`` (TOC entries populated when the release is fetched
+    with ``includes=["discids"]``).
     """
 
     position: int = 1
     format: str = ""
     title: str = ""
     track_list: list[MBTrack] = Field(default_factory=list, alias="track-list")
+    disc_list: list[MBDisc] = Field(default_factory=list, alias="discs")
 
     model_config = {"populate_by_name": True}
 

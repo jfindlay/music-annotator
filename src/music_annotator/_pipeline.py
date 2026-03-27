@@ -34,6 +34,7 @@ from music_annotator._pipeline_io import (
     _sha256_file,
     _verify_copy,
     find_source_files,
+    parse_disc_toc,
     write_transaction_log,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
@@ -66,24 +67,57 @@ class CollisionPolicy(enum.Enum):
     ABORT = "abort"
 
 
-def _select_medium(mediums: list[MBMedium], n_src: int, src_dir_name: str) -> MBMedium:
+def _match_medium_by_toc(mediums: list[MBMedium], track_frames: list[int]) -> MBMedium | None:
+    """Return the medium whose disc TOC exactly matches ``track_frames``, or ``None``.
+
+    Compares ``track_frames`` (per-track CD frame offsets from the source directory's
+    ``00 - disc info.yaml``) against the ``offsets`` list on every :class:`~music_annotator.models.MBDisc`
+    entry attached to each medium.  A medium may carry more than one disc entry (different pressings),
+    so all are checked.  Returns ``None`` when no medium has a matching disc, or when the release was
+    fetched without ``discids`` includes (i.e. all ``disc_list`` fields are empty).
+
+    :param mediums: The list of :class:`~music_annotator.models.MBMedium` objects from the release.
+    :param track_frames: Per-track CD frame start offsets extracted from ``00 - disc info.yaml``.
+    :returns: The matching :class:`~music_annotator.models.MBMedium`, or ``None`` if no match is found.
+    """
+    for medium in mediums:
+        for disc in medium.disc_list:
+            if disc.offsets == track_frames:
+                return medium
+    return None
+
+
+def _select_medium(mediums: list[MBMedium], n_src: int, src_dir_name: str, track_frames: list[int] | None = None) -> MBMedium:
     """Select the correct medium from a multi-medium release for the given source directory.
 
     Selection strategy (in order):
 
-    1. If exactly one medium matches the source file count, return it.
-    2. If multiple mediums match, prefer the one whose position matches any disc-number hint in
-       ``src_dir_name`` (e.g. ``"(Disc 1)"``); otherwise return the first match.
-    3. If no medium matches, raise :exc:`ValueError` listing the available mediums.
+    1. **TOC match**: if ``track_frames`` is provided, compare against each medium's disc TOC entries
+       via :func:`_match_medium_by_toc`.  An exact offset match unambiguously identifies the disc.
+    2. **Track-count match**: if exactly one medium has ``len(track_list) == n_src``, return it.
+    3. **Disc-number hint**: if multiple mediums share the same track count, check ``src_dir_name``
+       for a disc-number suffix (e.g. ``"(Disc 2)"``); prefer the medium at that position.
+    4. If none of the above resolves to a single medium, raise :exc:`ValueError`.
 
     This function should only be called when ``len(mediums) > 1``.
 
     :param mediums: The list of :class:`~music_annotator.models.MBMedium` objects from the release.
     :param n_src: Number of source audio files in the directory.
     :param src_dir_name: The directory basename used to extract a disc-number hint.
+    :param track_frames: Optional per-track CD frame offsets from ``00 - disc info.yaml``.  When
+        provided, TOC matching is attempted first before falling back to track-count heuristics.
     :returns: The selected :class:`~music_annotator.models.MBMedium`.
-    :raises ValueError: When no medium in ``mediums`` has ``len(track_list) == n_src``.
+    :raises ValueError: When no medium in ``mediums`` has ``len(track_list) == n_src`` and TOC
+        matching also fails.
     """
+    # --- Priority 1: TOC match ---
+    if track_frames:
+        toc_match = _match_medium_by_toc(mediums, track_frames)
+        if toc_match is not None:
+            log.info("multi_disc_medium_selected_by_toc", position=toc_match.position, tracks=n_src)
+            return toc_match
+
+    # --- Priority 2: track-count match ---
     matching = [m for m in mediums if len(m.track_list) == n_src]
     if len(matching) == 1:
         selected = matching[0]
@@ -253,8 +287,9 @@ def run(
 
     :param release_id: The MusicBrainz release MBID.
     :param src_dir: Directory containing the source audio files.  Files are matched to release tracks by sorted filename
-        order.  For multi-medium releases the medium whose track count matches ``len(src_files)`` is selected
-        automatically; when no medium matches a :exc:`ValueError` is raised listing the available options.
+        order.  For multi-medium releases the correct disc is identified first by matching the CD frame offsets from
+        ``00 - disc info.yaml`` (if present) against each medium's disc TOC data, then by track count, then by a
+        disc-number suffix in the directory name.  A :exc:`ValueError` is raised when no medium can be matched.
     :param dest_root: Root directory of the destination music library.
     :param user_agent: User-agent string passed to :func:`init_mb`.
     :param dry_run: When ``True``, log planned operations without copying or writing any files.  MB API calls for the
@@ -280,11 +315,14 @@ def run(
     src_files = find_source_files(src_dir)
     log.info("source_files", count=len(src_files))
 
+    toc = parse_disc_toc(src_dir)
+    track_frames = toc[2] if toc is not None else None
+
     mediums = release.medium_list
     selected_medium = mediums[0] if mediums else None
 
     if len(mediums) > 1:
-        selected_medium = _select_medium(mediums, len(src_files), src_dir.name)
+        selected_medium = _select_medium(mediums, len(src_files), src_dir.name, track_frames=track_frames)
 
     if selected_medium is None:
         raise ValueError(f"release '{release.title}' has no mediums")

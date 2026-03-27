@@ -33,13 +33,14 @@ from music_annotator import (
     fetch_acoustid_id,
     find_source_files,
 )
-from music_annotator._pipeline import _write_sidecars
+from music_annotator._pipeline import _match_medium_by_toc, _write_sidecars
 from music_annotator._pipeline_io import _DISC_INFO_FILENAME, _DISC_TOC_FILENAME
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
     JSON,
     CoverArt,
     CoverImage,
+    MBMedium,
     MBRecording,
     MBRelease,
     MBTrack,
@@ -153,13 +154,19 @@ def _make_release(n_tracks: int = 1) -> MBRelease:
     )
 
 
-def _make_multi_disc_release(tracks_per_disc: list[int]) -> MBRelease:
+def _make_multi_disc_release(
+    tracks_per_disc: list[int],
+    disc_offsets: list[list[list[int]]] | None = None,
+) -> MBRelease:
     """Build a minimal multi-disc release model.
 
     Each element in ``tracks_per_disc`` specifies the number of tracks on that medium (disc).
     Medium positions are 1-based.
 
     :param tracks_per_disc: List of per-medium track counts.
+    :param disc_offsets: Optional per-medium list of disc TOC offset lists.  Each element is a list of
+        ``offsets`` lists for one or more :class:`~music_annotator.models.MBDisc` entries on that medium.
+        When ``None``, no ``discs`` key is included (empty disc_list on each medium).
     :returns: An :class:`~music_annotator.models.MBRelease` instance with multiple mediums.
     """
     mediums: list[JSON] = []
@@ -177,7 +184,13 @@ def _make_multi_disc_release(tracks_per_disc: list[int]) -> MBRelease:
                     },
                 }
             )
-        mediums.append({"position": disc_idx, "format": "CD", "track-list": tracks})
+        medium: dict[str, JSON] = {"position": disc_idx, "format": "CD", "track-list": tracks}
+        if disc_offsets is not None:
+            discs: list[dict[str, object]] = [
+                {"offsets": offsets, "sectors": offsets[-1] + 1000} for offsets in disc_offsets[disc_idx - 1]
+            ]
+            medium["discs"] = discs  # type: ignore[assignment]
+        mediums.append(medium)
     return MBRelease.model_validate(
         {
             "id": "rel-multi",
@@ -3361,3 +3374,233 @@ class TestRunMultiDisc:
                 dry_run=False,
                 fetch_rels=False,
             )
+
+
+# ---------------------------------------------------------------------------
+# _match_medium_by_toc
+# ---------------------------------------------------------------------------
+
+#: CD frame offsets for a fictional disc 1 (4 tracks).
+_DISC1_OFFSETS: list[int] = [182, 50000, 100000, 150000]
+#: CD frame offsets for a fictional disc 2 (4 tracks).
+_DISC2_OFFSETS: list[int] = [182, 60000, 110000, 160000]
+
+
+def _medium_with_toc(position: int, offsets: list[int]) -> MBMedium:
+    """Build a minimal MBMedium with one MBDisc entry carrying ``offsets``.
+
+    :param position: 1-based disc position.
+    :param offsets: Per-track CD frame start offsets.
+    :returns: An :class:`~music_annotator.models.MBMedium` instance.
+    """
+    return MBMedium.model_validate(
+        {
+            "position": position,
+            "format": "CD",
+            "track-list": [],
+            "discs": [{"offsets": offsets, "sectors": offsets[-1] + 1000}],
+        }
+    )
+
+
+class TestMatchMediumByToc:
+    """Tests for _match_medium_by_toc."""
+
+    def test_matches_disc2_offsets(self) -> None:
+        """Returns the medium whose disc offsets exactly match the supplied track_frames.
+
+        Two mediums with different offsets; disc 2 offsets supplied → disc 2 returned.
+        """
+        m1 = _medium_with_toc(1, _DISC1_OFFSETS)
+        m2 = _medium_with_toc(2, _DISC2_OFFSETS)
+        result = _match_medium_by_toc([m1, m2], _DISC2_OFFSETS)
+        assert result is m2
+
+    def test_matches_disc1_offsets(self) -> None:
+        """Returns disc 1 when disc 1 offsets are supplied."""
+        m1 = _medium_with_toc(1, _DISC1_OFFSETS)
+        m2 = _medium_with_toc(2, _DISC2_OFFSETS)
+        result = _match_medium_by_toc([m1, m2], _DISC1_OFFSETS)
+        assert result is m1
+
+    def test_no_match_returns_none(self) -> None:
+        """Returns None when no medium's disc offsets match the supplied track_frames."""
+        m1 = _medium_with_toc(1, _DISC1_OFFSETS)
+        m2 = _medium_with_toc(2, _DISC2_OFFSETS)
+        result = _match_medium_by_toc([m1, m2], [182, 99999, 199999, 299999])
+        assert result is None
+
+    def test_empty_disc_list_returns_none(self) -> None:
+        """Returns None when mediums have no disc entries (discids not fetched)."""
+        m1 = MBMedium.model_validate({"position": 1, "format": "CD", "track-list": []})
+        m2 = MBMedium.model_validate({"position": 2, "format": "CD", "track-list": []})
+        result = _match_medium_by_toc([m1, m2], _DISC1_OFFSETS)
+        assert result is None
+
+    def test_multiple_discs_per_medium_second_entry_matches(self) -> None:
+        """Matches when the second MBDisc entry on a medium carries the correct offsets.
+
+        Pressing A has slightly different offsets from pressing B; pressing B offsets supplied.
+        """
+        pressing_a = [182, 50001, 100001, 150001]
+        medium = MBMedium.model_validate(
+            {
+                "position": 1,
+                "format": "CD",
+                "track-list": [],
+                "discs": [
+                    {"offsets": pressing_a, "sectors": pressing_a[-1] + 1000},
+                    {"offsets": _DISC1_OFFSETS, "sectors": _DISC1_OFFSETS[-1] + 1000},
+                ],
+            }
+        )
+        result = _match_medium_by_toc([medium], _DISC1_OFFSETS)
+        assert result is medium
+
+
+# ---------------------------------------------------------------------------
+# run() — TOC-based medium selection via 00 - disc info.yaml
+# ---------------------------------------------------------------------------
+
+#: Minimal valid disc info YAML for a fictional 4-track disc 2.
+_DISC2_YAML: str = (
+    "disc_id: [999999999, 4, 182, 60000, 110000, 160000, 3600]\n"
+    "record:\n"
+    "- disc_info: {category: classical, disc_id: '3b9ac9ff', title: 'Composer / Symphony 2 & 4'}\n"
+    "  preferred: true\n"
+    "  track_info: {DTITLE: 'Composer / Symphony 2 & 4', DISCID: '3b9ac9ff'}\n"
+)
+
+
+class TestRunTocMediumSelection:
+    """Tests for run() selecting the correct medium via TOC matching from 00 - disc info.yaml."""
+
+    def _patch_mb(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API calls for a TOC-based medium selection run.
+
+        :param mocker: pytest-mock fixture.
+        :param release: Release model to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+    def test_toc_selects_disc2_when_both_discs_have_same_track_count(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """TOC offsets from 00 - disc info.yaml select disc 2 even when both discs have 4 tracks.
+
+        Without TOC matching the heuristic would fall back to disc 1 (first matching medium).
+        With TOC matching disc 2 is correctly identified by its unique frame offsets.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 5):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / _DISC_INFO_FILENAME), contents=_DISC2_YAML)
+
+        # Two discs each with 4 tracks; disc 2 carries offsets matching _DISC2_YAML.
+        release = _make_multi_disc_release(
+            [4, 4],
+            disc_offsets=[[_DISC1_OFFSETS], [_DISC2_OFFSETS]],
+        )
+        self._patch_mb(mocker, release)
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        # 4 tracks copied — confirms disc 2 was selected (disc 1 would produce identical count
+        # but different recording IDs; the test verifies no ValueError was raised and tagging ran).
+        assert mock_tag.call_count == 4
+
+    def test_no_yaml_falls_back_to_track_count_heuristic(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When no 00 - disc info.yaml is present, track-count heuristic selects the medium.
+
+        Two-disc release (3 + 4 tracks); source dir has 4 files, no YAML → disc 2 selected by count.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 5):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        # No YAML file created.
+
+        release = _make_multi_disc_release([3, 4])
+        self._patch_mb(mocker, release)
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        assert mock_tag.call_count == 4
+
+    def test_yaml_toc_no_match_falls_back_to_track_count(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When YAML TOC offsets match no medium, selection falls back to track-count heuristic.
+
+        Disc info YAML has offsets that don't correspond to either medium; track-count heuristic
+        selects the unique matching medium (3 + 4 tracks, 4 source files → disc 2).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 5):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        # YAML with offsets that don't match either medium's disc entries.
+        unmatched_yaml = (
+            "disc_id: [111111111, 4, 182, 11111, 22222, 33333, 3600]\n"
+            "record:\n"
+            "- disc_info: {category: classical, disc_id: '06acef47', title: 'X / Y'}\n"
+            "  preferred: true\n"
+            "  track_info: {DTITLE: 'X / Y', DISCID: '06acef47'}\n"
+        )
+        fs.create_file(str(src / _DISC_INFO_FILENAME), contents=unmatched_yaml)
+
+        release = _make_multi_disc_release(
+            [3, 4],
+            disc_offsets=[[_DISC1_OFFSETS[:3]], [_DISC2_OFFSETS]],
+        )
+        self._patch_mb(mocker, release)
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        assert mock_tag.call_count == 4

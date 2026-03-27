@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 import structlog
+import yaml
 from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 
@@ -53,6 +54,85 @@ def find_source_files(src_dir: Path) -> list[Path]:
         (p for p in src_dir.iterdir() if p.suffix.lower() in AUDIO_EXTENSIONS and p.name not in _EXCLUDED_FILENAMES),
         key=lambda p: p.name,
     )
+
+
+def _load_disc_info_yaml(src_dir: Path) -> dict[str, object] | None:
+    """Load and parse the ``00 - disc info.yaml`` file from ``src_dir``, returning its top-level dict.
+
+    Shared by :func:`parse_disc_toc` and :func:`~music_annotator._discover.parse_disc_info_yaml` to avoid
+    duplicating the file-open and YAML-parse boilerplate.
+
+    :param src_dir: Directory that may contain a ``00 - disc info.yaml`` file.
+    :returns: The parsed top-level mapping, or ``None`` if the file is absent or its content is not a dict.
+    :raises yaml.YAMLError: Propagated if the file exists but cannot be parsed.
+    """
+    yaml_path = src_dir / _DISC_INFO_FILENAME
+    if not yaml_path.is_file():
+        return None
+    with yaml_path.open(encoding="utf-8") as fh:
+        data: object = yaml.full_load(fh)
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _parse_disc_id_list(disc_id: list[object]) -> tuple[int, int, list[int]] | None:
+    """Validate and decode a FreeDB ``disc_id`` list into ``(num_tracks, leadout_frame, track_frames)``.
+
+    The expected structure is ``[freedb_crc, num_tracks, offset_1, …, offset_N, total_seconds]`` where ``total_seconds * 75``
+    gives the MusicBrainz lead-out frame address.
+
+    :param disc_id: The raw ``disc_id`` list from the YAML document.
+    :returns: A ``(num_tracks, leadout_frame, track_frames)`` triple, or ``None`` when the list is malformed (too short, wrong
+        types, or mismatched offset count).
+    """
+    # Minimum viable list: [crc, num_tracks, offset_1, total_seconds] → length 4
+    if len(disc_id) < 4:  # noqa: PLR2004
+        return None
+    num_tracks_raw = disc_id[1]
+    total_seconds_raw = disc_id[-1]
+    if not isinstance(num_tracks_raw, int) or num_tracks_raw < 1:
+        return None
+    if not isinstance(total_seconds_raw, int) or total_seconds_raw < 1:
+        return None
+    offsets_raw: list[object] = disc_id[2:-1]
+    if len(offsets_raw) != num_tracks_raw:
+        return None
+    track_frames: list[int] = []
+    for offset in offsets_raw:
+        if not isinstance(offset, int):
+            return None
+        track_frames.append(offset)
+    return num_tracks_raw, total_seconds_raw * 75, track_frames
+
+
+def parse_disc_toc(src_dir: Path) -> tuple[int, int, list[int]] | None:
+    """Extract the CD table-of-contents from a FreeDB ``00 - disc info.yaml`` file.
+
+    The ``disc_id`` field in the YAML is a list with the structure::
+
+        [freedb_crc, num_tracks, offset_1, offset_2, …, offset_N, total_seconds]
+
+    where:
+
+    * ``freedb_crc`` — the FreeDB CRC checksum (element 0, ignored here).
+    * ``num_tracks`` — number of audio tracks (element 1).
+    * ``offset_1 … offset_N`` — per-track frame offsets in CD frames (elements 2 through N+1).
+    * ``total_seconds`` — the disc's total playing time in seconds; multiplying by 75 gives the lead-out frame address as
+      expected by the MusicBrainz disc-ID and TOC lookup APIs.
+
+    :param src_dir: Directory that may contain a ``00 - disc info.yaml`` file.
+    :returns: A ``(num_tracks, leadout_frame, track_frames)`` triple when a valid TOC is found, or ``None`` if the file is
+        absent, the ``disc_id`` key is missing, or the list is too short to contain at least one track offset.
+    :raises yaml.YAMLError: Propagated if the file exists but cannot be parsed.
+    """
+    data = _load_disc_info_yaml(src_dir)
+    if data is None:
+        return None
+    disc_id: object = data.get("disc_id")
+    if not isinstance(disc_id, list):
+        return None
+    return _parse_disc_id_list(disc_id)
 
 
 def write_transaction_log(journal_path: Path, new_entries: list[TransactionEntry]) -> None:

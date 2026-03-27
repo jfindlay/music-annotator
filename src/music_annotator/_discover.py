@@ -16,12 +16,17 @@ from typing import Protocol
 
 import musicbrainzngs as mb
 import structlog
-import yaml
 
 from music_annotator._console import _console
 from music_annotator._mb_api import _mb_retry, init_mb
 from music_annotator._pipeline import CollisionPolicy, run
-from music_annotator._pipeline_io import _DISC_INFO_FILENAME, JOURNAL_FILENAME, find_source_files, read_journal
+from music_annotator._pipeline_io import (
+    JOURNAL_FILENAME,
+    _load_disc_info_yaml,
+    find_source_files,
+    parse_disc_toc,
+    read_journal,
+)
 from music_annotator.models import JSON, DirHint, MBReleaseCandidate
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
@@ -124,14 +129,8 @@ def parse_disc_info_yaml(src_dir: Path) -> DirHint | None:  # pylint: disable=to
         found, or ``None`` if the file is absent, the record list is empty, or ``DTITLE`` is missing / blank.
     :raises yaml.YAMLError: Propagated if the file exists but cannot be parsed.
     """
-    yaml_path = src_dir / _DISC_INFO_FILENAME
-    if not yaml_path.is_file():
-        return None
-
-    with yaml_path.open(encoding="utf-8") as fh:
-        data: object = yaml.full_load(fh)
-
-    if not isinstance(data, dict):
+    data = _load_disc_info_yaml(src_dir)
+    if data is None:
         return None
 
     records: object = data.get("record")
@@ -162,73 +161,6 @@ def parse_disc_info_yaml(src_dir: Path) -> DirHint | None:  # pylint: disable=to
         artist, title = dtitle.split(" / ", 1)
         return DirHint(query=title.strip(), artist=artist.strip())
     return DirHint(query=dtitle, artist="")
-
-
-def _parse_disc_id_list(disc_id: list[object]) -> tuple[int, int, list[int]] | None:
-    """Validate and decode a FreeDB ``disc_id`` list into ``(num_tracks, leadout_frame, track_frames)``.
-
-    The expected structure is ``[freedb_crc, num_tracks, offset_1, …, offset_N, total_seconds]`` where ``total_seconds * 75``
-    gives the MusicBrainz lead-out frame address.
-
-    :param disc_id: The raw ``disc_id`` list from the YAML document.
-    :returns: A ``(num_tracks, leadout_frame, track_frames)`` triple, or ``None`` when the list is malformed (too short, wrong
-        types, or mismatched offset count).
-    """
-    # Minimum viable list: [crc, num_tracks, offset_1, total_seconds] → length 4
-    if len(disc_id) < 4:  # noqa: PLR2004
-        return None
-    num_tracks_raw = disc_id[1]
-    total_seconds_raw = disc_id[-1]
-    if not isinstance(num_tracks_raw, int) or num_tracks_raw < 1:
-        return None
-    if not isinstance(total_seconds_raw, int) or total_seconds_raw < 1:
-        return None
-    offsets_raw: list[object] = disc_id[2:-1]
-    if len(offsets_raw) != num_tracks_raw:
-        return None
-    track_frames: list[int] = []
-    for offset in offsets_raw:
-        if not isinstance(offset, int):
-            return None
-        track_frames.append(offset)
-    return num_tracks_raw, total_seconds_raw * 75, track_frames
-
-
-def parse_disc_toc(src_dir: Path) -> tuple[int, int, list[int]] | None:
-    """Extract the CD table-of-contents from a FreeDB ``00 - disc info.yaml`` file.
-
-    The ``disc_id`` field in the YAML is a list with the structure::
-
-        [freedb_crc, num_tracks, offset_1, offset_2, …, offset_N, total_seconds]
-
-    where:
-
-    * ``freedb_crc`` — the FreeDB CRC checksum (element 0, ignored here).
-    * ``num_tracks`` — number of audio tracks (element 1).
-    * ``offset_1 … offset_N`` — per-track frame offsets in CD frames (elements 2 through N+1).
-    * ``total_seconds`` — the disc's total playing time in seconds; multiplying by 75 gives the lead-out frame address as
-      expected by the MusicBrainz disc-ID and TOC lookup APIs.
-
-    :param src_dir: Directory that may contain a ``00 - disc info.yaml`` file.
-    :returns: A ``(num_tracks, leadout_frame, track_frames)`` triple when a valid TOC is found, or ``None`` if the file is
-        absent, the ``disc_id`` key is missing, or the list is too short to contain at least one track offset.
-    :raises yaml.YAMLError: Propagated if the file exists but cannot be parsed.
-    """
-    yaml_path = src_dir / _DISC_INFO_FILENAME
-    if not yaml_path.is_file():
-        return None
-
-    with yaml_path.open(encoding="utf-8") as fh:
-        data: object = yaml.full_load(fh)
-
-    if not isinstance(data, dict):
-        return None
-
-    disc_id: object = data.get("disc_id")
-    if not isinstance(disc_id, list):
-        return None
-
-    return _parse_disc_id_list(disc_id)
 
 
 def _toc_lookup_mb_releases(toc_string: str, limit: int) -> list[dict[str, object]]:
