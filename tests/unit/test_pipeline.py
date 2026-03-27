@@ -1197,6 +1197,61 @@ class TestRunFullPipeline:
                 fetch_rels=True,
             )
 
+    def test_track_count_mismatch_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """run() raises RuntimeError when source file count does not match release track count.
+
+        This applies in both real and dry-run modes.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        # 2 source files but release has 1 track
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+
+        with pytest.raises(RuntimeError, match="track count mismatch"):
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=True,
+            )
+
+    def test_track_count_mismatch_raises_in_dry_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """run() raises RuntimeError on count mismatch even in dry-run mode.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+
+        with pytest.raises(RuntimeError, match="track count mismatch"):
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=True,
+                fetch_rels=True,
+            )
+
     def test_unsupported_ext_logged_not_raised(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Unsupported audio extension is logged but does not abort the run.
 

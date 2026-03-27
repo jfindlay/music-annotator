@@ -334,8 +334,8 @@ class TestRunNoFetchRels:
 class TestRunTrackCountMismatch:
     """Smoke tests for run() when source file count != release track count."""
 
-    def test_mismatch_does_not_raise(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Track-count mismatch is logged as a warning, not an exception.
+    def test_mismatch_raises_runtime_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Track-count mismatch raises RuntimeError with a descriptive message.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs filesystem fixture.
@@ -350,15 +350,15 @@ class TestRunTrackCountMismatch:
         release = _make_release()
         _patch_mb(mocker, release)
 
-        # Should not raise despite mismatch
-        music_annotator.run(
-            release_id="rel-1",
-            src_dir=src_dir,
-            dest_root=dest_root,
-            user_agent="Test/1.0",
-            dry_run=True,
-            fetch_rels=False,
-        )
+        with pytest.raises(RuntimeError, match="track count mismatch"):
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src_dir,
+                dest_root=dest_root,
+                user_agent="Test/1.0",
+                dry_run=True,
+                fetch_rels=False,
+            )
 
 
 # ---------------------------------------------------------------------------

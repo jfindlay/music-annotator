@@ -273,10 +273,9 @@ def run(
     log.info("release_tracks", count=len(all_track_pairs), disc=medium_pos)
 
     if len(src_files) != len(all_track_pairs):
-        log.warning(
-            "track_count_mismatch",
-            src_files=len(src_files),
-            release_tracks=len(all_track_pairs),
+        raise RuntimeError(
+            f"track count mismatch for release '{release.title}': "
+            f"{len(src_files)} source file(s) but {len(all_track_pairs)} track(s) on disc {medium_pos}"
         )
 
     # Fetch all cover art once for the whole release
