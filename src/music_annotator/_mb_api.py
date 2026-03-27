@@ -250,6 +250,31 @@ def _infer_mime(data: bytes) -> str:
     return "image/jpeg"
 
 
+#: Mapping from CAA type string to the CoverArt bucket name (field name on CoverArt).
+#: Priority order matters — when an image has multiple types, the first matching bucket
+#: in this dict determines the primary bucket and therefore the sidecar filename.
+_CAA_TYPE_TO_BUCKET: dict[str, str] = {
+    "Front": "front",
+    "Back": "back",
+    "Booklet": "booklet",
+    "Medium": "medium",
+    "Tray": "tray",
+    "Obi": "obi",
+    "Spine": "spine",
+    "Track": "track",
+    "Liner": "liner",
+    "Sticker": "sticker",
+    "Poster": "poster",
+    "Matrix/Runout": "matrix",
+    "Top": "top",
+    "Bottom": "bottom",
+    "Panel": "panel",
+    "Watermark": "watermark",
+    "Raw/Unedited": "raw",
+    "Other": "other",
+}
+
+
 def _sidecar_filename(image_type: str, count: int, index: int, mime: str) -> str:
     """Return the suggested sidecar filename for a CAA image.
 
@@ -257,11 +282,11 @@ def _sidecar_filename(image_type: str, count: int, index: int, mime: str) -> str
     Multiple items use a 1-based index suffix (e.g. ``"booklet-1.pdf"``, ``"booklet-2.jpg"``).
     The extension is derived from the MIME type.
 
-    :param image_type: One of ``"front"``, ``"back"``, ``"booklet"``, or ``"medium"``.
+    :param image_type: A bucket name such as ``"front"``, ``"back"``, ``"booklet"``, ``"matrix"``, etc.
     :param count: Total number of images of this type (used to decide whether to add an index).
     :param index: 1-based position of this image within its type group.
     :param mime: MIME type string (e.g. ``"image/jpeg"``).
-    :returns: A filename string such as ``"cover.jpg"``, ``"booklet-1.pdf"``, ``"medium-1.jpg"``.
+    :returns: A filename string such as ``"cover.jpg"``, ``"booklet-1.pdf"``, ``"matrix-1.jpg"``.
     """
     _ext_map: dict[str, str] = {
         "image/jpeg": ".jpg",
@@ -270,7 +295,26 @@ def _sidecar_filename(image_type: str, count: int, index: int, mime: str) -> str
         "image/tiff": ".tiff",
     }
     ext = _ext_map.get(mime, ".bin")
-    _base_map = {"front": "cover", "back": "back", "booklet": "booklet", "medium": "medium"}
+    _base_map = {
+        "front": "cover",
+        "back": "back",
+        "booklet": "booklet",
+        "medium": "medium",
+        "tray": "tray",
+        "obi": "obi",
+        "spine": "spine",
+        "track": "track",
+        "liner": "liner",
+        "sticker": "sticker",
+        "poster": "poster",
+        "matrix": "matrix",
+        "top": "top",
+        "bottom": "bottom",
+        "panel": "panel",
+        "watermark": "watermark",
+        "raw": "raw",
+        "other": "other",
+    }
     base = _base_map.get(image_type, image_type)
     if count > 1:
         return f"{base}-{index}{ext}"
@@ -310,7 +354,15 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
                 raw = _mb_call(lambda: mb.get_image(rel_id, coverid))
             if raw:
                 data = bytes(raw)
-                return CoverImage(data=data, mime=_infer_mime(data))
+                img = CoverImage(data=data, mime=_infer_mime(data))
+                log.info(
+                    "cover_art_image_fetched",
+                    coverid=str(coverid),
+                    size=size or "original",
+                    mime=img.mime,
+                    bytes=len(data),
+                )
+                return img
         except mb.ResponseError as exc:
             log.warning("cover_art_image_error", coverid=str(coverid), size=size or "original", code=str(exc)[:40])
         return None
@@ -335,7 +387,11 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
                 log.warning("cover_art_listing_error", code=code[:40])
 
     # Step 2: classify images by type (first pass — no fetching yet).
-    _classified: dict[str, list[tuple[str, str]]] = {"front": [], "back": [], "booklet": [], "medium": []}
+    # Each image may carry multiple types (e.g. ["Back", "Spine"]).  We route each image to
+    # ALL matching buckets; the primary bucket (first match in _CAA_TYPE_TO_BUCKET priority
+    # order) determines the sidecar filename — secondary buckets reuse the same filename so the
+    # file is written once and multiple COVERART_*_FILES tags point to it.
+    _classified: dict[str, list[tuple[str, str]]] = {b: [] for b in _CAA_TYPE_TO_BUCKET.values()}
     if has_release_listing:
         for entry in listing:
             types_raw = entry.get("types", [])
@@ -347,24 +403,25 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
                 continue
             # The "image" key in the listing is the canonical CAA URL for this image.
             caa_url = str(entry.get("image", ""))
-            match types:
-                case t if "Front" in t:
-                    _classified["front"].append((coverid, caa_url))
-                case t if "Back" in t:
-                    _classified["back"].append((coverid, caa_url))
-                case t if "Booklet" in t:
-                    _classified["booklet"].append((coverid, caa_url))
-                case t if "Medium" in t:
-                    _classified["medium"].append((coverid, caa_url))
-                case _:
-                    log.warning("cover_art_skipped_type", types=types, coverid=coverid)
+            # Map each CAA type string to its bucket; collect all matched buckets.
+            matched_buckets = [_CAA_TYPE_TO_BUCKET[t] for t in types if t in _CAA_TYPE_TO_BUCKET]
+            if matched_buckets:
+                for bucket in matched_buckets:
+                    _classified[bucket].append((coverid, caa_url))
+            else:
+                log.warning("cover_art_unknown_types", types=types, coverid=coverid)
 
     # Step 3 & 4: fetch images with correct sizing and assign filenames/URLs.
     imgs_front: list[CoverImage] = []
     imgs_front_full: list[CoverImage] = []
-    imgs_back: list[CoverImage] = []
-    imgs_booklet: list[CoverImage] = []
-    imgs_medium: list[CoverImage] = []
+
+    # Accumulators for all non-front sidecar buckets.
+    # Keys match _CAA_TYPE_TO_BUCKET values (minus "front").
+    imgs_sidecar: dict[str, list[CoverImage]] = {b: [] for b in _CAA_TYPE_TO_BUCKET.values() if b != "front"}
+
+    # Track which coverids have already been fetched so multi-type images are fetched only once.
+    # Maps coverid -> the CoverImage already fetched (primary bucket's fetch result).
+    _fetched_originals: dict[str, CoverImage | None] = {}
 
     # Front: fetch 500px for embedding, original for sidecar.
     front_count = len(_classified["front"])
@@ -378,22 +435,38 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
             img_orig.filename = _sidecar_filename("front", front_count, idx, img_orig.mime)
             img_orig.url = caa_url
             imgs_front_full.append(img_orig)
+            _fetched_originals[coverid] = img_orig
 
-    # Back/booklet/medium: fetch original only, assign sidecar filenames.
-    _nonfront: list[tuple[str, list[CoverImage]]] = [
-        ("back", imgs_back),
-        ("booklet", imgs_booklet),
-        ("medium", imgs_medium),
-    ]
-    for type_key, store in _nonfront:
-        entries = _classified[type_key]
+    # All non-front buckets: fetch original once per coverid, assign sidecar filenames.
+    # For each bucket, determine the index *within that bucket* for naming purposes.
+    # Multi-type images: primary bucket fetches and names; secondary buckets reuse the
+    # same CoverImage (same filename) so the file is written once.
+    non_front_buckets = [b for b in _CAA_TYPE_TO_BUCKET.values() if b != "front"]
+
+    # Build per-bucket index maps: coverid -> 1-based index within its bucket
+    # (needed for sidecar_filename when count > 1).
+    for bucket in non_front_buckets:
+        entries = _classified[bucket]
         count = len(entries)
+        # Determine the primary bucket for each coverid (the first bucket in priority order
+        # whose _classified list contains this coverid).
         for idx, (coverid, caa_url) in enumerate(entries, start=1):
+            # Check if we've already fetched this coverid (it appeared in a higher-priority bucket).
+            if coverid in _fetched_originals:
+                existing = _fetched_originals[coverid]
+                if existing is not None:
+                    # Reuse the same CoverImage — same filename, same data, written once.
+                    imgs_sidecar[bucket].append(existing)
+                continue
+            # First time seeing this coverid — fetch it and assign filename from this bucket.
             img = _fetch_raw(release_id, coverid)
             if img:
-                img.filename = _sidecar_filename(type_key, count, idx, img.mime)
+                img.filename = _sidecar_filename(bucket, count, idx, img.mime)
                 img.url = caa_url
-                store.append(img)
+                imgs_sidecar[bucket].append(img)
+                _fetched_originals[coverid] = img
+            else:
+                _fetched_originals[coverid] = None
 
     # Step 5: release-group fallback (no listing available).
     if not has_release_listing and release_group_id:
@@ -416,19 +489,11 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     result_art = CoverArt(
         front=imgs_front,
         front_full=imgs_front_full,
-        back=imgs_back,
-        booklet=imgs_booklet,
-        medium=imgs_medium,
+        **{b: imgs_sidecar[b] for b in imgs_sidecar},
     )
     if result_art.available:
-        log.info(
-            "cover_art_fetched",
-            front=len(imgs_front),
-            front_full=len(imgs_front_full),
-            back=len(imgs_back),
-            booklet=len(imgs_booklet),
-            medium=len(imgs_medium),
-        )
+        counts = {b: len(imgs_sidecar[b]) for b in imgs_sidecar if imgs_sidecar[b]}
+        log.info("cover_art_fetched", front=len(imgs_front), front_full=len(imgs_front_full), **counts)
     else:
         log.warning("cover_art_unavailable", release_id=release_id)
     return result_art

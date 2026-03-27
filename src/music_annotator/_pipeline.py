@@ -159,11 +159,13 @@ def _write_sidecars(
     set ``sidecars_written`` ensures each work top directory receives its sidecar files exactly
     once per run, even when the directory contains multiple tracks.
 
-    Writes every :class:`~music_annotator.models.CoverImage` from ``cover.front_full``,
-    ``cover.back``, ``cover.booklet``, and ``cover.medium`` that has a non-empty ``filename``
-    field.  For each written sidecar a ``action="downloaded"`` :class:`~music_annotator.models.TransactionEntry`
-    is appended to ``journal_entries`` with ``source`` set to the canonical CAA URL stored on the image
-    (so the file can be re-downloaded from the journal alone).
+    Writes every :class:`~music_annotator.models.CoverImage` from all non-front sidecar lists
+    on ``cover`` (``front_full``, ``back``, ``booklet``, ``medium``, ``tray``, ``obi``,
+    ``spine``, ``track``, ``liner``, ``sticker``, ``poster``, ``matrix``, ``top``, ``bottom``,
+    ``panel``, ``watermark``, ``raw``, ``other``) that has a non-empty ``filename`` field.
+    For each written sidecar an ``action="downloaded"`` :class:`~music_annotator.models.TransactionEntry`
+    is appended to ``journal_entries`` with ``source`` set to the canonical CAA URL (so the file
+    can be re-downloaded from the journal alone).
 
     :param cover: The :class:`~music_annotator.models.CoverArt` instance for this release.
     :param work_top_dir: The work top directory (``<dest_root>/<composer-dir>/<work-dir>``).
@@ -176,7 +178,26 @@ def _write_sidecars(
         return
     sidecars_written.add(work_top_dir)
 
-    sidecar_images: list[CoverImage] = list(cover.front_full) + list(cover.back) + list(cover.booklet) + list(cover.medium)
+    sidecar_images: list[CoverImage] = (
+        list(cover.front_full)
+        + list(cover.back)
+        + list(cover.booklet)
+        + list(cover.medium)
+        + list(cover.tray)
+        + list(cover.obi)
+        + list(cover.spine)
+        + list(cover.track)
+        + list(cover.liner)
+        + list(cover.sticker)
+        + list(cover.poster)
+        + list(cover.matrix)
+        + list(cover.top)
+        + list(cover.bottom)
+        + list(cover.panel)
+        + list(cover.watermark)
+        + list(cover.raw)
+        + list(cover.other)
+    )
     for img in sidecar_images:
         if not img.filename:
             continue
@@ -439,10 +460,40 @@ def run(
             )
 
         # Set cover art sidecar reference tags so they are embedded in the audio file.
+        def _filenames(images: list[CoverImage]) -> str:
+            """Return unique semicolon-joined filenames from a list of CoverImages.
+
+            Deduplicates filenames so multi-type images shared between buckets appear only once.
+
+            :param images: List of :class:`~music_annotator.models.CoverImage` instances.
+            :returns: Semicolon-joined unique non-empty filename strings.
+            """
+            seen: set[str] = set()
+            parts: list[str] = []
+            for img in images:
+                if img.filename and img.filename not in seen:
+                    seen.add(img.filename)
+                    parts.append(img.filename)
+            return "; ".join(parts)
+
         final_tags.coverart_front_file = cover.front_full[0].filename if cover.front_full else ""
-        final_tags.coverart_back_file = "; ".join(img.filename for img in cover.back if img.filename)
-        final_tags.coverart_booklet_files = "; ".join(img.filename for img in cover.booklet if img.filename)
-        final_tags.coverart_medium_files = "; ".join(img.filename for img in cover.medium if img.filename)
+        final_tags.coverart_back_file = _filenames(cover.back)
+        final_tags.coverart_booklet_files = _filenames(cover.booklet)
+        final_tags.coverart_medium_files = _filenames(cover.medium)
+        final_tags.coverart_tray_files = _filenames(cover.tray)
+        final_tags.coverart_obi_files = _filenames(cover.obi)
+        final_tags.coverart_spine_files = _filenames(cover.spine)
+        final_tags.coverart_track_files = _filenames(cover.track)
+        final_tags.coverart_liner_files = _filenames(cover.liner)
+        final_tags.coverart_sticker_files = _filenames(cover.sticker)
+        final_tags.coverart_poster_files = _filenames(cover.poster)
+        final_tags.coverart_matrix_files = _filenames(cover.matrix)
+        final_tags.coverart_top_files = _filenames(cover.top)
+        final_tags.coverart_bottom_files = _filenames(cover.bottom)
+        final_tags.coverart_panel_files = _filenames(cover.panel)
+        final_tags.coverart_watermark_files = _filenames(cover.watermark)
+        final_tags.coverart_raw_files = _filenames(cover.raw)
+        final_tags.coverart_other_files = _filenames(cover.other)
 
         ext = src_file.suffix.lower()
         try:

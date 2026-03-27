@@ -291,20 +291,90 @@ class TestFetchCoverArt:
         assert len(result.booklet) == 3
         assert not result.front
 
-    def test_unknown_type_skipped(self, mocker: MockerFixture) -> None:
-        """Images whose types do not include Front/Back/Booklet/Medium are skipped.
+    def test_truly_unknown_type_logged(self, mocker: MockerFixture) -> None:
+        """Images with type strings not in the 18 known CAA types are logged as unknown.
+
+        All 18 standard types are now supported; only non-standard custom strings trigger the
+        warning.  An image with a known type such as 'Spine' or 'Tray' is fetched as normal.
 
         :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
             "music_annotator._mb_api.mb.get_image_list",
-            return_value=_make_listing(("99", "Spine"), ("100", "Tray")),
+            return_value=_make_listing(("99", "CustomUnknown")),
         )
         mock_get = mocker.patch("music_annotator._mb_api.mb.get_image")
         result = fetch_cover_art("rel-1")
         mock_get.assert_not_called()
         assert not result.available
+
+    def test_spine_type_fetched_as_sidecar(self, mocker: MockerFixture) -> None:
+        """Images with type 'Spine' are now fetched and stored in CoverArt.spine.
+
+        :param mocker: pytest-mock fixture.
+        """
+        jpeg = b"\xff\xd8" + b"\x00" * 100
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("99", "Spine")))
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
+        result = fetch_cover_art("rel-1")
+        assert len(result.spine) == 1
+        assert result.spine[0].filename == "spine.jpg"
+
+    def test_tray_type_fetched_as_sidecar(self, mocker: MockerFixture) -> None:
+        """Images with type 'Tray' are now fetched and stored in CoverArt.tray.
+
+        :param mocker: pytest-mock fixture.
+        """
+        jpeg = b"\xff\xd8" + b"\x00" * 100
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("100", "Tray")))
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
+        result = fetch_cover_art("rel-1")
+        assert len(result.tray) == 1
+        assert result.tray[0].filename == "tray.jpg"
+
+    def test_multi_type_image_fetched_once_shared_filename(self, mocker: MockerFixture) -> None:
+        """An image with types ['Back', 'Spine'] is fetched once; both buckets share the filename.
+
+        :param mocker: pytest-mock fixture.
+        """
+        jpeg = b"\xff\xd8" + b"\x00" * 100
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        # Listing has one image with two types
+        listing = {
+            "images": [{"types": ["Back", "Spine"], "id": "77", "image": "https://caa/77"}],
+            "release": "https://mb/release/r1",
+        }
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
+        result = fetch_cover_art("rel-1")
+        # Fetched only once despite appearing in two buckets
+        assert mock_get.call_count == 1
+        # Both buckets populated, same filename
+        assert len(result.back) == 1
+        assert len(result.spine) == 1
+        assert result.back[0].filename == "back.jpg"
+        assert result.spine[0].filename == "back.jpg"  # secondary bucket reuses primary filename
+        # Same CoverImage object
+        assert result.back[0] is result.spine[0]
+
+    def test_multi_type_primary_fetch_failure_skips_secondary(self, mocker: MockerFixture) -> None:
+        """When a multi-type image fails to fetch in its primary bucket, secondary buckets also skip it.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        listing = {
+            "images": [{"types": ["Back", "Spine"], "id": "77", "image": "https://caa/77"}],
+            "release": "https://mb/release/r1",
+        }
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
+        mocker.patch("music_annotator._mb_api.mb.get_image", side_effect=mb.ResponseError(cause=Exception("503")))
+        result = fetch_cover_art("rel-1")
+        assert result.back == []
+        assert result.spine == []
 
     def test_image_fetch_error_skipped(self, mocker: MockerFixture) -> None:
         """A ResponseError on a single image fetch is logged and that image is skipped.

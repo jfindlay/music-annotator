@@ -1024,10 +1024,24 @@ class TrackTags(BaseModel):
     # Cover art sidecar file references (relative filenames in the work top directory).
     # These reference the sidecar files written alongside the tracks; no player currently
     # reads them but they make the sidecar inventory machine-readable for future tooling.
-    coverart_front_file: str = ""  # COVERART_FRONT_FILE  — original-res front sidecar
-    coverart_back_file: str = ""  # COVERART_BACK_FILE   — back/spine sidecar(s)
-    coverart_booklet_files: str = ""  # COVERART_BOOKLET_FILES — booklet page sidecar(s)
-    coverart_medium_files: str = ""  # COVERART_MEDIUM_FILES  — disc label sidecar(s)
+    coverart_front_file: str = ""  # COVERART_FRONT_FILE
+    coverart_back_file: str = ""  # COVERART_BACK_FILE
+    coverart_booklet_files: str = ""  # COVERART_BOOKLET_FILES
+    coverart_medium_files: str = ""  # COVERART_MEDIUM_FILES
+    coverart_tray_files: str = ""  # COVERART_TRAY_FILES
+    coverart_obi_files: str = ""  # COVERART_OBI_FILES
+    coverart_spine_files: str = ""  # COVERART_SPINE_FILES
+    coverart_track_files: str = ""  # COVERART_TRACK_FILES
+    coverart_liner_files: str = ""  # COVERART_LINER_FILES
+    coverart_sticker_files: str = ""  # COVERART_STICKER_FILES
+    coverart_poster_files: str = ""  # COVERART_POSTER_FILES
+    coverart_matrix_files: str = ""  # COVERART_MATRIX_FILES
+    coverart_top_files: str = ""  # COVERART_TOP_FILES
+    coverart_bottom_files: str = ""  # COVERART_BOTTOM_FILES
+    coverart_panel_files: str = ""  # COVERART_PANEL_FILES
+    coverart_watermark_files: str = ""  # COVERART_WATERMARK_FILES
+    coverart_raw_files: str = ""  # COVERART_RAW_FILES
+    coverart_other_files: str = ""  # COVERART_OTHER_FILES
 
     # Work / movement
     work: str = ""
@@ -1263,7 +1277,9 @@ class CoverArt(BaseModel):
     The legacy ``data`` / ``mime`` shortcut properties expose the first front-cover image for backward
     compatibility with code that previously used ``CoverArt.data`` directly.
 
-    Important attributes: ``front``, ``front_full``, ``back``, ``booklet``, ``medium``.
+    Important attributes: ``front``, ``front_full``, ``back``, ``booklet``, ``medium``,
+    ``tray``, ``obi``, ``spine``, ``track``, ``liner``, ``sticker``, ``poster``, ``matrix``,
+    ``top``, ``bottom``, ``panel``, ``watermark``, ``raw``, ``other``.
     """
 
     front: list[CoverImage] = []  # 500px for embedding
@@ -1271,14 +1287,48 @@ class CoverArt(BaseModel):
     back: list[CoverImage] = []
     booklet: list[CoverImage] = []
     medium: list[CoverImage] = []
+    tray: list[CoverImage] = []  # image behind/on the tray
+    obi: list[CoverImage] = []  # obi strip (common in Japanese releases)
+    spine: list[CoverImage] = []  # edge/spine of packaging
+    track: list[CoverImage] = []  # per-track art (digital releases)
+    liner: list[CoverImage] = []  # protective sleeve
+    sticker: list[CoverImage] = []  # adhesive sticker on packaging
+    poster: list[CoverImage] = []  # poster included with release
+    matrix: list[CoverImage] = []  # matrix/runout area
+    top: list[CoverImage] = []  # top face of box packaging
+    bottom: list[CoverImage] = []  # bottom face of box packaging
+    panel: list[CoverImage] = []  # panel of folded packaging
+    watermark: list[CoverImage] = []  # scan with watermark added by scanner
+    raw: list[CoverImage] = []  # raw/unedited scan
+    other: list[CoverImage] = []  # any type not covered above
 
     @property
     def available(self) -> bool:
         """Return ``True`` if at least one image of any type is present.
 
-        :returns: ``True`` when any of ``front``, ``front_full``, ``back``, ``booklet``, or ``medium`` is non-empty.
+        :returns: ``True`` when any of the image lists is non-empty.
         """
-        return bool(self.front or self.front_full or self.back or self.booklet or self.medium)
+        return bool(
+            self.front
+            or self.front_full
+            or self.back
+            or self.booklet
+            or self.medium
+            or self.tray
+            or self.obi
+            or self.spine
+            or self.track
+            or self.liner
+            or self.sticker
+            or self.poster
+            or self.matrix
+            or self.top
+            or self.bottom
+            or self.panel
+            or self.watermark
+            or self.raw
+            or self.other
+        )
 
     @property
     def data(self) -> bytes:

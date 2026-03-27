@@ -1009,6 +1009,49 @@ class TestWriteSidecars:
 # ---------------------------------------------------------------------------
 
 
+class TestCoverArtSidecarTagDedup:
+    """Tests for coverart_* tag deduplication when multi-type images share a filename."""
+
+    def test_shared_filename_appears_once_in_tag(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When back and spine share the same CoverImage, the filename appears only once in each tag.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        shared = CoverImage(data=b"\xff\xd8\x00" * 10, mime="image/jpeg", filename="back.jpg", url="https://caa/99")
+        # Same image object appears twice in back (simulates a multi-type dedup scenario)
+        cover = CoverArt(back=[shared, shared], spine=[shared])  # duplicate in back list
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=cover)
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", return_value=MBRecording())
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        tags_used: TrackTags = mock_tag.call_args[0][1]
+        # back.jpg should appear only once — not duplicated from back + spine
+        assert tags_used.coverart_back_file == "back.jpg"
+        assert tags_used.coverart_spine_files == "back.jpg"
+
+
 class TestApplyTagsMp3:
     """Tests for apply_tags_mp3."""
 

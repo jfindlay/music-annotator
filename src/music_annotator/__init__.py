@@ -112,6 +112,7 @@ from music_annotator._discover import (
     search_releases_by_dir,
 )
 from music_annotator._mb_api import (
+    _CAA_TYPE_TO_BUCKET,
     _P,
     _SESSION_REL_TYPES,
     _T,
