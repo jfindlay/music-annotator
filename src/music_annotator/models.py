@@ -1081,6 +1081,7 @@ class TrackTags(BaseModel):
     coverart_watermark_files: str = ""  # COVERART_WATERMARK_FILES
     coverart_raw_files: str = ""  # COVERART_RAW_FILES
     coverart_other_files: str = ""  # COVERART_OTHER_FILES
+    coverart_unknown_files: str = ""  # COVERART_UNKNOWN_FILES
 
     # Work / movement
     work: str = ""
@@ -1319,7 +1320,7 @@ class CoverArt(BaseModel):
 
     Important attributes: ``front``, ``front_full``, ``back``, ``booklet``, ``medium``,
     ``tray``, ``obi``, ``spine``, ``track``, ``liner``, ``sticker``, ``poster``, ``matrix``,
-    ``top``, ``bottom``, ``panel``, ``watermark``, ``raw``, ``other``.
+    ``top``, ``bottom``, ``panel``, ``watermark``, ``raw``, ``other``, ``unknown``.
     """
 
     front: list[CoverImage] = []  # 500px for embedding
@@ -1341,6 +1342,7 @@ class CoverArt(BaseModel):
     watermark: list[CoverImage] = []  # scan with watermark added by scanner
     raw: list[CoverImage] = []  # raw/unedited scan
     other: list[CoverImage] = []  # any type not covered above
+    unknown: list[CoverImage] = []  # type string not recognised by music-annotator
 
     @property
     def available(self) -> bool:
@@ -1368,6 +1370,7 @@ class CoverArt(BaseModel):
             or self.watermark
             or self.raw
             or self.other
+            or self.unknown
         )
 
     @property

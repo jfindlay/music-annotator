@@ -196,7 +196,7 @@ def _write_sidecars(
     Writes every :class:`~music_annotator.models.CoverImage` from all non-front sidecar lists
     on ``cover`` (``front_full``, ``back``, ``booklet``, ``medium``, ``tray``, ``obi``,
     ``spine``, ``track``, ``liner``, ``sticker``, ``poster``, ``matrix``, ``top``, ``bottom``,
-    ``panel``, ``watermark``, ``raw``, ``other``) that has a non-empty ``filename`` field.
+    ``panel``, ``watermark``, ``raw``, ``other``, ``unknown``) that has a non-empty ``filename`` field.
     For each written sidecar an ``action="downloaded"`` :class:`~music_annotator.models.TransactionEntry`
     is appended to ``journal_entries`` with ``source`` set to the canonical CAA URL (so the file
     can be re-downloaded from the journal alone).
@@ -231,6 +231,7 @@ def _write_sidecars(
         + list(cover.watermark)
         + list(cover.raw)
         + list(cover.other)
+        + list(cover.unknown)
     )
     for img in sidecar_images:
         if not img.filename:
@@ -558,6 +559,7 @@ def run(
         final_tags.coverart_watermark_files = _filenames(cover.watermark)
         final_tags.coverart_raw_files = _filenames(cover.raw)
         final_tags.coverart_other_files = _filenames(cover.other)
+        final_tags.coverart_unknown_files = _filenames(cover.unknown)
 
         ext = src_file.suffix.lower()
         try:

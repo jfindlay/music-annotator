@@ -316,6 +316,7 @@ def _sidecar_filename(image_type: str, count: int, index: int, mime: str) -> str
         "watermark": "watermark",
         "raw": "raw",
         "other": "other",
+        "unknown": "unknown",
     }
     base = _base_map.get(image_type, image_type)
     if count > 1:
@@ -347,8 +348,14 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     :returns: A :class:`~music_annotator.models.CoverArt` instance, or an empty one on failure.
     """
 
-    def _fetch_raw(rel_id: str, coverid: str | int, size: str = "") -> CoverImage | None:
-        """Fetch a single image; return a :class:`~music_annotator.models.CoverImage` or ``None``."""
+    def _fetch_raw(rel_id: str, coverid: str | int, bucket: str, size: str = "") -> CoverImage | None:
+        """Fetch a single image; return a :class:`~music_annotator.models.CoverImage` or ``None``.
+
+        :param rel_id: MusicBrainz release MBID.
+        :param coverid: CAA image identifier.
+        :param bucket: The destination bucket name (e.g. ``"front"``, ``"back"``), logged with the fetch.
+        :param size: Optional size string passed to ``mb.get_image`` (e.g. ``"500"``); omit for original.
+        """
         try:
             if size:
                 raw = _mb_call(lambda: mb.get_image(rel_id, coverid, size=size))
@@ -363,6 +370,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
                     size=size or "original",
                     mime=img.mime,
                     bytes=len(data),
+                    bucket=bucket,
                 )
                 return img
         except mb.ResponseError as exc:
@@ -393,7 +401,9 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     # ALL matching buckets; the primary bucket (first match in _CAA_TYPE_TO_BUCKET priority
     # order) determines the sidecar filename — secondary buckets reuse the same filename so the
     # file is written once and multiple COVERART_*_FILES tags point to it.
-    _classified: dict[str, list[tuple[str, str]]] = {b: [] for b in _CAA_TYPE_TO_BUCKET.values()}
+    # "unknown" is a synthetic bucket (not a CAA type) for images with unrecognised type strings.
+    _all_buckets: list[str] = list(_CAA_TYPE_TO_BUCKET.values()) + ["unknown"]
+    _classified: dict[str, list[tuple[str, str]]] = {b: [] for b in _all_buckets}
     if has_release_listing:
         for entry in listing:
             types_raw = entry.get("types", [])
@@ -408,18 +418,19 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
             # Map each CAA type string to its bucket; collect all matched buckets.
             matched_buckets = [_CAA_TYPE_TO_BUCKET[t] for t in types if t in _CAA_TYPE_TO_BUCKET]
             if matched_buckets:
-                for bucket in matched_buckets:
-                    _classified[bucket].append((coverid, caa_url))
+                for bkt in matched_buckets:
+                    _classified[bkt].append((coverid, caa_url))
             else:
+                # Type string not in _CAA_TYPE_TO_BUCKET — route to unknown bucket and warn.
                 log.warning("cover_art_unknown_types", types=types, coverid=coverid)
+                _classified["unknown"].append((coverid, caa_url))
 
     # Step 3 & 4: fetch images with correct sizing and assign filenames/URLs.
     imgs_front: list[CoverImage] = []
     imgs_front_full: list[CoverImage] = []
 
-    # Accumulators for all non-front sidecar buckets.
-    # Keys match _CAA_TYPE_TO_BUCKET values (minus "front").
-    imgs_sidecar: dict[str, list[CoverImage]] = {b: [] for b in _CAA_TYPE_TO_BUCKET.values() if b != "front"}
+    # Accumulators for all non-front sidecar buckets, including the synthetic "unknown" bucket.
+    imgs_sidecar: dict[str, list[CoverImage]] = {b: [] for b in _all_buckets if b != "front"}
 
     # Track which coverids have already been fetched so multi-type images are fetched only once.
     # Maps coverid -> the CoverImage already fetched (primary bucket's fetch result).
@@ -428,11 +439,11 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     # Front: fetch 500px for embedding, original for sidecar.
     front_count = len(_classified["front"])
     for idx, (coverid, caa_url) in enumerate(_classified["front"], start=1):
-        img_500 = _fetch_raw(release_id, coverid, size="500")
+        img_500 = _fetch_raw(release_id, coverid, bucket="front", size="500")
         if img_500:
             img_500.url = caa_url
             imgs_front.append(img_500)
-        img_orig = _fetch_raw(release_id, coverid)
+        img_orig = _fetch_raw(release_id, coverid, bucket="front")
         if img_orig:
             img_orig.filename = _sidecar_filename("front", front_count, idx, img_orig.mime)
             img_orig.url = caa_url
@@ -443,12 +454,12 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
     # For each bucket, determine the index *within that bucket* for naming purposes.
     # Multi-type images: primary bucket fetches and names; secondary buckets reuse the
     # same CoverImage (same filename) so the file is written once.
-    non_front_buckets = [b for b in _CAA_TYPE_TO_BUCKET.values() if b != "front"]
+    non_front_buckets = [b for b in _all_buckets if b != "front"]
 
     # Build per-bucket index maps: coverid -> 1-based index within its bucket
     # (needed for sidecar_filename when count > 1).
-    for bucket in non_front_buckets:
-        entries = _classified[bucket]
+    for bkt in non_front_buckets:
+        entries = _classified[bkt]
         count = len(entries)
         # Determine the primary bucket for each coverid (the first bucket in priority order
         # whose _classified list contains this coverid).
@@ -458,14 +469,14 @@ def fetch_cover_art(release_id: str, release_group_id: str = "") -> CoverArt:
                 existing = _fetched_originals[coverid]
                 if existing is not None:
                     # Reuse the same CoverImage — same filename, same data, written once.
-                    imgs_sidecar[bucket].append(existing)
+                    imgs_sidecar[bkt].append(existing)
                 continue
             # First time seeing this coverid — fetch it and assign filename from this bucket.
-            img = _fetch_raw(release_id, coverid)
+            img = _fetch_raw(release_id, coverid, bucket=bkt)
             if img:
-                img.filename = _sidecar_filename(bucket, count, idx, img.mime)
+                img.filename = _sidecar_filename(bkt, count, idx, img.mime)
                 img.url = caa_url
-                imgs_sidecar[bucket].append(img)
+                imgs_sidecar[bkt].append(img)
                 _fetched_originals[coverid] = img
             else:
                 _fetched_originals[coverid] = None

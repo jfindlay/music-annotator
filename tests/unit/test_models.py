@@ -332,6 +332,11 @@ class TestCoverArt:
         c = CoverArt(medium=[CoverImage(data=b"\xff\xd8", mime="image/jpeg")])
         assert c.available is True
 
+    def test_available_true_with_unknown_only(self) -> None:
+        """available is True when only unknown images are present."""
+        c = CoverArt(unknown=[CoverImage(data=b"\xff\xd8", mime="image/jpeg")])
+        assert c.available is True
+
     def test_available_false_empty(self) -> None:
         """available is False when all lists are empty (default)."""
         c = CoverArt()

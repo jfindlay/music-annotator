@@ -48,7 +48,7 @@ All quality checks are driven by tox via the project-local venv:
 | Env | Command | Requirement |
 |---|---|---|
 | `build` | setuptools wheel | must succeed |
-| `test` | pytest | 758 tests pass; **100% branch coverage** |
+| `test` | pytest | 760 tests pass; **100% branch coverage** |
 | `check_type` | mypy (strict) | **zero errors** |
 | `check_format` | ruff check + ruff format --check | **zero warnings** |
 | `check_lint` | pylint | **10.00/10** |

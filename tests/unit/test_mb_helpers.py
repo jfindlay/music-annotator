@@ -291,23 +291,47 @@ class TestFetchCoverArt:
         assert len(result.booklet) == 3
         assert not result.front
 
-    def test_truly_unknown_type_logged(self, mocker: MockerFixture) -> None:
-        """Images with type strings not in the 18 known CAA types are logged as unknown.
+    def test_truly_unknown_type_fetched_into_unknown_bucket(self, mocker: MockerFixture) -> None:
+        """Images with type strings not in the 18 known CAA types are fetched into CoverArt.unknown.
 
-        All 18 standard types are now supported; only non-standard custom strings trigger the
-        warning.  An image with a known type such as 'Spine' or 'Tray' is fetched as normal.
+        The warning is still logged so the operator knows an unrecognised type was encountered,
+        but the image is preserved rather than silently discarded.
 
         :param mocker: pytest-mock fixture.
         """
+        jpeg = b"\xff\xd8" + b"\x00" * 100
         mocker.patch("music_annotator._mb_api.time.sleep")
         mocker.patch(
             "music_annotator._mb_api.mb.get_image_list",
             return_value=_make_listing(("99", "CustomUnknown")),
         )
-        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image")
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
         result = fetch_cover_art("rel-1")
-        mock_get.assert_not_called()
-        assert not result.available
+        assert result.available
+        assert len(result.unknown) == 1
+        assert result.unknown[0].filename == "unknown.jpg"
+
+    def test_unknown_type_bucket_field_in_log(self, mocker: MockerFixture) -> None:
+        """The bucket field in the cover_art_image_fetched log matches the destination bucket.
+
+        :param mocker: pytest-mock fixture.
+        """
+        jpeg = b"\xff\xd8" + b"\x00" * 100
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_image_list",
+            return_value=_make_listing(("42", "Back")),
+        )
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
+        log_calls: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._mb_api.log.info",
+            side_effect=lambda event, **kw: log_calls.append({"event": event, **kw}),
+        )
+        fetch_cover_art("rel-1")
+        fetched = [c for c in log_calls if c["event"] == "cover_art_image_fetched"]
+        assert fetched
+        assert fetched[0]["bucket"] == "back"
 
     def test_spine_type_fetched_as_sidecar(self, mocker: MockerFixture) -> None:
         """Images with type 'Spine' are now fetched and stored in CoverArt.spine.
