@@ -2,7 +2,37 @@
 
 ## Next up
 
-_(nothing immediately queued)_
+### Cover art fetch errors — make fatal + fast-fail on redirect loops
+
+Currently `_fetch_raw` and `_fetch_rg_image` swallow `mb.ResponseError` and silently return
+empty / `None`; non-404 `get_image_list` errors are logged as warnings and annotation continues
+without cover art.  The user's stated preference is that all data fetch errors are fatal.
+
+Additionally, `_safe_read` in musicbrainzngs retries any "unknown" HTTP code (including 307
+redirect loops) 8× with growing delays, producing a ~60-second hang before raising
+`NetworkError` rather than failing immediately.
+
+Four changes to `_mb_api.py` (one commit):
+
+1. **`_patched_safe_read` monkey-patch** — same pattern as `_patched_parse_recording`.  Replace
+   the `else: # Other, unknown error — retrying for now` branch in `_safe_read` with
+   `raise ResponseError(cause=exc)`, so any non-retryable HTTP status (including 307) fails
+   immediately rather than spinning through 8 retries with growing delays.  Apply via
+   `musicbrainzngs.musicbrainz._safe_read = _patched_safe_read`.  Document the upstream bug and
+   removal condition pointing to the musicbrainzngs2 PR.
+
+2. **`_fetch_raw` fatal** — remove the `except mb.ResponseError` swallow; replace with
+   `raise RuntimeError(...)` carrying the coverid and size.  `NetworkError` already propagates
+   naturally and needs no change.
+
+3. **`_fetch_rg_image` fatal** — same treatment as `_fetch_raw`.
+
+4. **`get_image_list` non-404 errors fatal** — keep 404 as non-fatal (legitimate: release has
+   no CAA listing; continue to release-group fallback); raise `RuntimeError` for all other
+   `ResponseError` codes.
+
+Update `test_mb_helpers.py`: ~5 tests change assertion from "swallowed / returns empty" to
+`pytest.raises(RuntimeError)`; 2 new tests for the patched `_safe_read` fast-fail path.
 
 ---
 
@@ -10,17 +40,108 @@ _(nothing immediately queued)_
 
 ---
 
+## musicbrainzngs2 contributions
+
+`python-musicbrainzngs` (0.7.1, 2020) is effectively unmaintained — 47 open issues, 16 open PRs,
+no releases since 2020, maintainer's own PRs open since January 2022.  A fork,
+`C0rn3j/python-musicbrainzngs2`, began modernisation in January 2026 (Python 3.10+, ruff,
+pyproject.toml, partial type stubs) but has not yet addressed any of the substantive bugs or
+gaps that music-annotator has encountered.  The package is not yet on PyPI.
+
+music-annotator will migrate its dependency to musicbrainzngs2 once it reaches a stable release
+covering the fixes below.  Until then, local monkey-patches remain in `_mb_api.py` and are
+removed as each upstream fix lands.
+
+The items below are sketched at PR granularity; exact payload size will be decided as each is
+started.
+
+Also, we should proceed carefully and require a slow human review+styling of the changes as we
+don't know how the project maintainers will respond to high volume agent-written changes.
+
+### Bug fixes (directly blocking or affecting music-annotator)
+
+**mbngs2-1 — `_safe_read`: raise immediately on non-retryable HTTP codes**
+
+File: `musicbrainz.py`.  Replace the `else: retrying for now` branch with
+`raise ResponseError(cause=exc)`.  Any HTTP status that is not 503/502/500 (transient server
+errors) or 401 (auth) is a permanent failure that should not be retried.  A 307 redirect loop
+detected by Python's `HTTPRedirectHandler` raises `HTTPError(307)` which currently triggers 8
+retries (~60 s); with this fix it raises `ResponseError` immediately.
+
+Tests to add to `test_requests.py`: `FakeOpener(exception=HTTPError(url, 307, ...))` → asserts
+`ResponseError` is raised on the first attempt (no retries); same for an arbitrary unknown code.
+
+Local workaround to remove once merged: `_patched_safe_read` in `_mb_api.py`.
+
+**mbngs2-2 — `mbxml.parse_recording`: add `first-release-date` to elements list**
+
+File: `mbxml.py`.  Add `"first-release-date"` to the `elements` list in `parse_recording`.
+Field is present in the MB XML response but silently discarded today.  Upstream issue:
+`alastair/python-musicbrainzngs#288`.
+
+Tests: add a recording XML fixture with `first-release-date`; assert field present in result.
+
+Local workaround to remove once merged: `_patched_parse_recording` in `_mb_api.py`.
+
+**mbngs2-3 — `mbxml`: add `type-id` to entity parser `attribs` lists**
+
+File: `mbxml.py`.  Add `"type-id"` to `attribs` in `parse_area`, `parse_artist`, `parse_label`,
+`parse_place`, `parse_event`, `parse_instrument`, `parse_release_group`, `parse_series`,
+`parse_work` (9 functions; `parse_relation` already has it).  Field is present in MB XML
+responses but silently discarded today.  Upstream issue: `alastair/python-musicbrainzngs#276`.
+
+Tests: update affected XML fixtures to include `type-id` attribute; assert field present.
+
+### Modernisation (C0rn3j's stated goals)
+
+**mbngs2-4 — Full codebase typing**
+
+Add type annotations throughout `musicbrainz.py`, `mbxml.py`, `caa.py`, `util.py`,
+`compat.py`.  Use `from __future__ import annotations`.  Add `py.typed` PEP 561 marker.
+Coordinate with C0rn3j's existing issue #6 to avoid duplication.
+
+**mbngs2-5 — Remove `*` imports from `__init__.py`**
+
+Replace `from musicbrainzngs.caa import *` and `from musicbrainzngs.musicbrainz import *` with
+explicit named exports.  Coordinate with C0rn3j's issue #5.
+
+**mbngs2-6 — Comprehensive test coverage**
+
+Current suite is sparse: fixture XML exists for some entities but many code paths are untested
+(all `_safe_read` except-clause branches, CAA redirect and error paths, edge cases in every
+`parse_*` function).  Extend `test_requests.py`, `test_caa.py`, and the `test_mbxml_*.py`
+modules.  Scope to be determined after mbngs2-4 (typing) clarifies the code structure.
+
+**mbngs2-7 — Address upstream open issues and PRs**
+
+Triage `alastair/python-musicbrainzngs` open issues and PRs for applicability to mbngs2.
+Notable candidates: #266 (genre parsing), #282 (missing attributes), #283 (alias-list on
+recordings/releases), #289 (add alias list), #291 (release-group-status parameter).
+Coordinate with C0rn3j's issue #8.
+
+**mbngs2-8 — Replatform on the MB API v2 XML contract**
+
+Cross-reference every `parse_*` function in `mbxml.py` against the authoritative MMD 2.0
+RelaxNG schema at `https://github.com/metabrainz/mmd-schema/blob/master/schema/musicbrainz_mmd-2.0.rng`.
+For each entity: verify all XML attributes, child elements, and list wrappers are parsed;
+identify and add any fields present in the schema but absent from the parser (mbngs2-2 and
+mbngs2-3 fix the two we already know about); remove any fields that are no longer in the schema.
+This is the most open-ended item and should follow mbngs2-1 through mbngs2-3.
+
+---
+
 ## Backlog
 
-- **Codebase audit:** As the project grows, do a thorough review of principles, structure, and goals.  Evaluate whether the
-  module boundaries remain natural, whether the public API surface in `__init__.py` is still coherent, and whether any
-  accumulated conventions need revisiting.
-- **Submit disc IDs to MusicBrainz:** When `parse_disc_toc` succeeds (a valid `00 - disc info.yaml` is present) but
-  `_match_medium_by_toc` finds no registered disc IDs on the release, music-annotator has the FreeDB CRC and sector
-  offsets needed to compute a proper MusicBrainz disc ID.  A future phase could offer to submit the disc ID to MB via the
-  ``/ws/2/discid`` endpoint, permanently enriching the database and enabling TOC-based selection for all users.  This
-  requires an authenticated MB session; defer until a login/credential flow is designed.
-- `musicbrainzngs` → `musicbrainzngs2` migration (fork is new; may contribute upstream)
+- **Codebase audit:** As the project grows, do a thorough review of principles, structure, and
+  goals.  Evaluate whether the module boundaries remain natural, whether the public API surface
+  in `__init__.py` is still coherent, and whether any accumulated conventions need revisiting.
+- **Submit disc IDs to MusicBrainz:** When `parse_disc_toc` succeeds (a valid
+  `00 - disc info.yaml` is present) but `_match_medium_by_toc` finds no registered disc IDs on
+  the release, music-annotator has the FreeDB CRC and sector offsets needed to compute a proper
+  MusicBrainz disc ID.  A future phase could offer to submit the disc ID to MB via the
+  `/ws/2/discid` endpoint, permanently enriching the database and enabling TOC-based selection
+  for all users.  This requires an authenticated MB session; defer until a login/credential flow
+  is designed.
 
 ---
 
@@ -64,16 +185,17 @@ _(nothing immediately queued)_
   work titles, and performer names consistently.  Depends on the Wikipedia / IMSLP phase for
   authoritative urtext work title strings; until then MB canonical title is primary and English +
   unlocaled aliases are stored as companion tags (`CWP_WORK_TOP_EN`, `CWP_WORK_TOP_ALT`).
-- Add support for source directories containing tracks downloaded from PrestoMusic.  These dirs will potentially contain their
-  own coverart and booklet.  These arts should supplant whatever is in MusicBrainz, but in copying them from `src_dir` to
-  `dst_dir`, music-annotator should still try to query MusicBrainz for a tag comparison and enrichment.
+- Add support for source directories containing tracks downloaded from PrestoMusic.  These dirs
+  will potentially contain their own coverart and booklet.  These arts should supplant whatever
+  is in MusicBrainz, but in copying them from `src_dir` to `dst_dir`, music-annotator should
+  still try to query MusicBrainz for a tag comparison and enrichment.
 - Add support for more modes:
   - PrestoMusic dirs/tracks
   - Existing dirs/tracks already annotated by a previous pass of music-annotator
   - Direct whipper and MakeMKV transfers
 - Playlist generation for collection/cycle groupings (Ring cycle, symphony cycles, etc.)
-- Re-annotation / update mode: diff library against updated MB / CAA / Discogs data, replace thumbnail cover art with
-  original-resolution
+- Re-annotation / update mode: diff library against updated MB / CAA / Discogs data, replace
+  thumbnail cover art with original-resolution
 - Whipper integration (rip → annotate pipeline)
 - Discogs integration (fallback search and release creation)
 - Audit CE-derived tags: every field populated or explicitly `""`
