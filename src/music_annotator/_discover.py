@@ -28,6 +28,7 @@ from music_annotator._pipeline_io import (
     parse_disc_toc,
     read_journal,
 )
+from music_annotator._tags import _NAME_MAX
 from music_annotator.models import JSON, DirHint, MBMedium, MBReleaseCandidate
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
@@ -82,6 +83,18 @@ class DiscoverUI(Protocol):
         :param release_url: MusicBrainz release URL, displayed so the user can inspect the release.
         :returns: The confirmed or user-chosen :class:`~music_annotator.models.MBMedium`, or ``None``
             to abort the run for this directory.
+        """
+
+    def confirm_shortened_name(self, original: str, proposed: str) -> str | None:
+        """Confirm or override a path component that exceeds :data:`~music_annotator._tags._NAME_MAX` bytes.
+
+        Called once per unique too-long component before any files are written.  The user may
+        accept the proposed shortened name, type a custom replacement, or abort the run.
+
+        :param original: The full computed path component that exceeds the byte limit.
+        :param proposed: The auto-shortened component produced by
+            :func:`~music_annotator._tags._proposed_short`.
+        :returns: The confirmed replacement string, or ``None`` to abort.
         """
 
     def confirm_delete(self, src_dir: Path) -> bool:
@@ -177,6 +190,47 @@ class TerminalDiscoverUI:
                     _console.print(f"  [bold yellow]No disc at position {pos}.[/]")
                 case _:
                     _console.print("  [bold yellow]Please enter y, n, or a disc number.[/]")
+
+    def confirm_shortened_name(self, original: str, proposed: str) -> str | None:
+        """Display the too-long component, show the proposed shortened name, and prompt for confirmation.
+
+        Accepts ``y`` / ``yes`` to accept ``proposed``, ``q`` / ``quit`` / ``a`` / ``abort`` to abort,
+        or any other non-empty input as a custom replacement (re-prompts if the custom value still
+        exceeds :data:`~music_annotator._tags._NAME_MAX` bytes after :func:`~music_annotator._tags.safe_name`
+        sanitisation).
+
+        :param original: The full computed path component that exceeds the byte limit.
+        :param proposed: The auto-shortened component produced by
+            :func:`~music_annotator._tags._proposed_short`.
+        :returns: The confirmed replacement string, or ``None`` to abort.
+        """
+        from music_annotator._tags import safe_name  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+        orig_bytes = len(original.encode("utf-8"))
+        prop_bytes = len(proposed.encode("utf-8"))
+        _console.print(f"\n[bold red]WARNING:[/] [red]Path component exceeds {_NAME_MAX} bytes ({orig_bytes} bytes):[/]")
+        _console.print(f"  [dim]Original  ({orig_bytes:3d} B):[/] {original}")
+        _console.print(f"  [dim]Proposed  ({prop_bytes:3d} B):[/] [bold]{proposed}[/]")
+        _console.print("\n  [dim]Enter [bold]y[/] to accept the proposed name, [bold]q[/] to abort,")
+        _console.print(f"  [dim]or type a custom replacement (must be ≤ {_NAME_MAX} bytes):[/]")
+        while True:
+            _console.print("\n[bold cyan]>[/] ", end="")
+            choice = input("").strip()
+            match choice.lower():
+                case "y" | "yes":
+                    return proposed
+                case "q" | "quit" | "a" | "abort":
+                    return None
+                case _ if choice:
+                    sanitised = safe_name(choice)
+                    if len(sanitised.encode("utf-8")) <= _NAME_MAX:
+                        return sanitised
+                    _console.print(
+                        f"  [bold yellow]'{sanitised}' is {len(sanitised.encode('utf-8'))} bytes — still too long.  "
+                        f"Please try again.[/]"
+                    )
+                case _:
+                    _console.print("  [bold yellow]Please enter y, q, or a custom name.[/]")
 
     def confirm_delete(self, src_dir: Path) -> bool:
         """Ask whether to delete ``src_dir`` and return ``True`` if confirmed.

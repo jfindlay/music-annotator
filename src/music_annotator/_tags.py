@@ -87,19 +87,125 @@ log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 #: Regex matching filesystem-unsafe characters for :func:`safe_name`.
 _SAFE_RE: re.Pattern[str] = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
+#: Maximum byte length of a single path component on standard filesystems (ext4, btrfs, XFS, NTFS, HFS+, APFS, …).
+#: Unusual filesystems (e.g. eCryptfs at 143) are deliberately excluded — the common case is always 255.
+_NAME_MAX: int = 255
 
-def safe_name(s: str, max_len: int = 80) -> str:
+#: Regex matching a ``[rec YYYY]`` or ``[rel YYYY-YYYY]``-style date suffix produced by :func:`build_dest_path`.
+_DATE_SUFFIX_RE: re.Pattern[str] = re.compile(r"( \[(?:rec|rel) \d{4}(?:-\d{4})?\])$")
+
+#: Regex matching a zero-padded ``nn - `` numeric prefix used on leaf and intermediate path components.
+_NN_PREFIX_RE: re.Pattern[str] = re.compile(r"^(\d+ - )")
+
+
+def safe_name(s: str) -> str:
     """Sanitise a string for use as a filesystem path component.
 
     Replaces characters forbidden on common filesystems (Windows/POSIX) with underscores, strips leading and trailing
-    dots and spaces, and truncates to ``max_len`` characters.
+    spaces, and replaces leading dots with underscores to prevent hidden files on POSIX systems.  Trailing dots are
+    intentionally preserved — they are legal in filenames and carry semantic meaning (e.g. ``"op."`` in a work title
+    that MB records without an opus number).  No length truncation is applied; length enforcement is the caller's
+    responsibility via :func:`_proposed_short` and :func:`~music_annotator._pipeline._resolve_long_names`.
 
     :param s: The raw name string.
-    :param max_len: Maximum length of the returned string.  Defaults to ``80``.
     :returns: A sanitised string safe for use as a directory or file name.
     """
-    s = _SAFE_RE.sub("_", s).strip(". ")
-    return s[:max_len]
+    s = _SAFE_RE.sub("_", s).strip(" ")
+    # Replace each leading dot with an underscore to avoid creating hidden files on POSIX filesystems.
+    i = 0
+    while i < len(s) and s[i] == ".":
+        i += 1
+    if i:
+        s = "_" * i + s[i:]
+    return s
+
+
+def _proposed_short(component: str) -> str:
+    """Return a shortened version of ``component`` that fits within :data:`_NAME_MAX` UTF-8 bytes.
+
+    Applies a sequence of structure-aware strategies in order, stopping as soon as the result fits.
+    The strategies are ordered from least to most destructive:
+
+    1. **Work-dir subtitle drop**: if the component ends with a ``[rec …]`` or ``[rel …]`` date suffix,
+       try removing the subtitle portion (everything from the last ``" _ "`` before the suffix).
+    2. **Leaf / intermediate subtitle drop**: if the component starts with a numeric ``nn - `` prefix,
+       try removing the subtitle after the last ``" _ "`` in the title portion.
+    3. **Top-dir performer drop**: if the component contains `` - `` (composer–performer separator),
+       try dropping semicolon-separated performer entries from the right until it fits.
+    4. **Word-boundary ellipsis**: truncate at the last space that leaves room for ``"…"`` (U+2026,
+       3 bytes in UTF-8).
+    5. **Hard byte-boundary ellipsis**: encode as UTF-8, cut to ``_NAME_MAX - 3`` bytes at a valid
+       UTF-8 character boundary, then append ``"…"``.
+
+    The returned value is always at most :data:`_NAME_MAX` bytes when encoded as UTF-8.
+
+    :param component: The sanitised path component string that exceeds :data:`_NAME_MAX` bytes.
+    :returns: A shortened component string that fits within :data:`_NAME_MAX` UTF-8 bytes.
+    """
+    limit = _NAME_MAX
+
+    def _fits(s: str) -> bool:
+        return len(s.encode("utf-8")) <= limit
+
+    if _fits(component):
+        return component
+
+    ellipsis_char = "\u2026"  # "…", 3 bytes in UTF-8
+
+    # Strategy 1: work-dir — protect "[rec YYYY]" / "[rel YYYY]" / "[rec YYYY-YYYY]" suffix.
+    m = _DATE_SUFFIX_RE.search(component)
+    if m:
+        suffix = m.group(1)
+        title_part = component[: m.start()]
+        sep_idx = title_part.rfind(" _ ")
+        if sep_idx != -1:
+            candidate = title_part[:sep_idx] + suffix
+            if _fits(candidate):
+                return candidate
+
+    # Strategy 2: leaf / intermediate — protect "nn - " numeric prefix.
+    mp = _NN_PREFIX_RE.match(component)
+    if mp:
+        prefix = mp.group(1)
+        body = component[len(prefix) :]
+        sep_idx = body.rfind(" _ ")
+        if sep_idx != -1:
+            candidate = prefix + body[:sep_idx]
+            if _fits(candidate):
+                return candidate
+
+    # Strategy 3: top-dir — protect everything up to and including " - " (composer separator);
+    # drop performer entries from the right.
+    sep = " - "
+    dash_idx = component.find(sep)
+    if dash_idx != -1:
+        composer_part = component[: dash_idx + len(sep)]
+        performers_str = component[dash_idx + len(sep) :]
+        performers = performers_str.split("; ")
+        while len(performers) > 1:
+            performers.pop()
+            candidate = composer_part + "; ".join(performers)
+            if _fits(candidate):
+                return candidate
+
+    # Strategy 4: word-boundary truncation with ellipsis.
+    encoded = component.encode("utf-8")
+    # Budget: limit bytes total; "…" is 3 bytes.
+    budget = limit - 3
+    # Walk backwards through the string looking for a space whose UTF-8 offset fits in budget.
+    truncated = encoded[:budget].decode("utf-8", errors="ignore")
+    last_space = truncated.rfind(" ")
+    if last_space > 0:
+        candidate = truncated[:last_space] + ellipsis_char
+        if _fits(candidate):  # pragma: no branch — always fits: prefix ≤ budget bytes + "…" (3 bytes) = limit
+            return candidate
+
+    # Strategy 5: hard byte-boundary cut.
+    raw = encoded[:budget]
+    # Trim to valid UTF-8 boundary (drop trailing incomplete multi-byte sequences).
+    while raw and (raw[-1] & 0b11000000) == 0b10000000:
+        raw = raw[:-1]
+    return raw.decode("utf-8", errors="ignore") + ellipsis_char
 
 
 def _rec_title(track: MBTrack) -> str:

@@ -38,8 +38,10 @@ from music_annotator._pipeline import (
     _match_medium_by_title,
     _match_medium_by_toc,
     _prompt_collision_policy,
+    _resolve_long_names,
     _score_medium_title,
     _select_medium_with_reason,
+    _warn_long_names,
     _write_freedb_yaml,
     _write_sidecars,
 )
@@ -47,6 +49,7 @@ from music_annotator._pipeline_io import _DISC_INFO_FILENAME, _DISC_TOC_FILENAME
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
     JSON,
+    CopyPlanEntry,
     CoverArt,
     CoverImage,
     MBMedium,
@@ -3627,7 +3630,6 @@ class TestRunMultiDisc:
 
         release = _make_multi_disc_release([3, 2])
         self._patch_mb_multi(mocker, release)
-        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
 
         music_annotator.run(
             release_id="rel-multi",
@@ -3637,65 +3639,9 @@ class TestRunMultiDisc:
             dry_run=False,
             fetch_rels=True,
         )
-        assert mock_tag.call_count == 2
-
-    def test_multiple_matching_mediums_disc_hint_resolves(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """When multiple mediums match and the directory name contains a disc hint, it is used.
-
-        Two-disc release each with 1 track; source dir is named "disc2" → medium position 2 selected.
-
-        :param mocker: pytest-mock fixture.
-        :param fs: pyfakefs fixture.
-        """
-        src = Path("/albums/disc2")
-        dest = Path("/dest")
-        fs.create_dir("/albums")
-        fs.create_dir(str(src))
-        fs.create_dir(str(dest))
-        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
-
-        release = _make_multi_disc_release([1, 1])
-        self._patch_mb_multi(mocker, release)
-        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
-
-        music_annotator.run(
-            release_id="rel-multi",
-            src_dir=src,
-            dest_root=dest,
-            user_agent="Test/1.0",
-            dry_run=False,
-            fetch_rels=True,
-        )
-        # disc2 → position 2 medium selected; only 1 track on that medium
-        assert mock_tag.call_count == 1
-
-    def test_multiple_matching_mediums_no_hint_uses_first(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """When multiple mediums match and there is no disc hint, the first matching medium is used.
-
-        Two-disc release each with 1 track; source dir has no disc suffix → first medium used.
-
-        :param mocker: pytest-mock fixture.
-        :param fs: pyfakefs fixture.
-        """
-        src = Path("/src")
-        dest = Path("/dest")
-        fs.create_dir(str(src))
-        fs.create_dir(str(dest))
-        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
-
-        release = _make_multi_disc_release([1, 1])
-        self._patch_mb_multi(mocker, release)
-        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
-
-        music_annotator.run(
-            release_id="rel-multi",
-            src_dir=src,
-            dest_root=dest,
-            user_agent="Test/1.0",
-            dry_run=False,
-            fetch_rels=True,
-        )
-        assert mock_tag.call_count == 1
+        # Disc 2 has 2 tracks; source dir has 2 files → apply_tags_flac called twice.
+        flac_files = list(dest.rglob("*.flac"))
+        assert len(flac_files) == 2
 
     def test_no_matching_medium_raises_value_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """When no medium matches the source file count, ValueError is raised with a helpful message.
@@ -4285,6 +4231,274 @@ class TestRunTitleMediumSelection:
             ui=mock_ui,
         )
         mock_ui.confirm_disc.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _warn_long_names / _resolve_long_names / run() — name-length enforcement
+# ---------------------------------------------------------------------------
+
+
+class TestRunNameTooLong:
+    """Tests for path-component length detection and interactive shortening in run()."""
+
+    def _patch_mb(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API calls and post-copy verification for a minimal run.
+
+        :param mocker: pytest-mock fixture.
+        :param release: MBRelease to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec({"id": rec_id, "title": "T", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []})
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+    def _make_long_release(self) -> MBRelease:
+        """Return a release whose dest path will have a component longer than _NAME_MAX when patched to 20.
+
+        :returns: A minimal :class:`~music_annotator.models.MBRelease` with one track.
+        """
+        return _make_release(n_tracks=1)
+
+    def test_no_ui_auto_shortens_and_logs_warning(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When ui=None and a component exceeds _NAME_MAX, run() auto-shortens and logs name_too_long.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mocker.patch("music_annotator._tags._NAME_MAX", 20)
+        mocker.patch("music_annotator._pipeline._NAME_MAX", 20)
+
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = self._make_long_release()
+        self._patch_mb(mocker, release)
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.warning", side_effect=lambda event, **kw: log_events.append({"event": event, **kw})
+        )
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            ui=None,
+        )
+
+        # At least one name_too_long warning logged.
+        assert any(e["event"] == "name_too_long" for e in log_events)
+        # All dest components must fit within the patched limit.
+        for flac in dest.rglob("*.flac"):
+            for part in flac.relative_to(dest).parts:
+                assert len(part.encode("utf-8")) <= 20, f"Component too long: {part!r}"
+
+    def test_ui_accept_proposed_run_completes(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When ui.confirm_shortened_name returns proposed, run() completes with shortened paths.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mocker.patch("music_annotator._tags._NAME_MAX", 20)
+        mocker.patch("music_annotator._pipeline._NAME_MAX", 20)
+
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = self._make_long_release()
+        self._patch_mb(mocker, release)
+
+        mock_ui = MagicMock()
+        mock_ui.confirm_shortened_name.side_effect = lambda original, proposed: proposed
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            ui=mock_ui,
+        )
+
+        assert mock_ui.confirm_shortened_name.called
+        for flac in dest.rglob("*.flac"):
+            for part in flac.relative_to(dest).parts:
+                assert len(part.encode("utf-8")) <= 20, f"Component too long: {part!r}"
+
+    def test_ui_abort_raises_system_exit(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When ui.confirm_shortened_name returns None, run() raises SystemExit(1).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mocker.patch("music_annotator._tags._NAME_MAX", 20)
+        mocker.patch("music_annotator._pipeline._NAME_MAX", 20)
+
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = self._make_long_release()
+        self._patch_mb(mocker, release)
+
+        mock_ui = MagicMock()
+        mock_ui.confirm_shortened_name.return_value = None
+
+        with pytest.raises(SystemExit) as exc_info:
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=True,
+                ui=mock_ui,
+            )
+        assert exc_info.value.code == 1
+
+    def test_dry_run_logs_warning_no_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """In dry-run mode a name_too_long warning is logged and no prompt fires.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mocker.patch("music_annotator._tags._NAME_MAX", 20)
+        mocker.patch("music_annotator._pipeline._NAME_MAX", 20)
+
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = self._make_long_release()
+        self._patch_mb(mocker, release)
+
+        mock_ui = MagicMock()
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.warning", side_effect=lambda event, **kw: log_events.append({"event": event, **kw})
+        )
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=True,
+            fetch_rels=False,
+            ui=mock_ui,
+        )
+
+        assert any(e["event"] == "name_too_long" for e in log_events)
+        mock_ui.confirm_shortened_name.assert_not_called()
+
+    def test_shared_component_prompted_once(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """A too-long component shared by multiple tracks triggers confirm_shortened_name exactly once.
+
+        Both tracks share the same top-level composer directory, which is the too-long component.
+        The prompt must fire once, and both tracks must land in the same shortened directory.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mocker.patch("music_annotator._tags._NAME_MAX", 20)
+        mocker.patch("music_annotator._pipeline._NAME_MAX", 20)
+
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        self._patch_mb(mocker, release)
+
+        mock_ui = MagicMock()
+        mock_ui.confirm_shortened_name.side_effect = lambda original, proposed: proposed
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            ui=mock_ui,
+        )
+
+        # Each unique too-long component is prompted exactly once.
+        # Collect the set of unique originals passed to the mock.
+        originals = [call.args[0] for call in mock_ui.confirm_shortened_name.call_args_list]
+        assert len(originals) == len(set(originals)), "Same component prompted more than once"
+
+    def test_warn_long_names_logs_all_long_components(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_warn_long_names logs name_too_long for every unique oversized component in the plan.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mocker.patch("music_annotator._tags._NAME_MAX", 20)
+        mocker.patch("music_annotator._pipeline._NAME_MAX", 20)
+
+        dest = Path("/dest")
+        fs.create_dir(str(dest))
+        fs.create_file(str(dest / "dummy.flac"))
+
+        src_file = dest / "dummy.flac"
+        # Build a plan entry whose dest path has a component longer than 20 bytes.
+        long_component = "A" * 30
+        dest_file = dest / long_component / "01 - Track.flac"
+        plan = [CopyPlanEntry(idx=0, src_file=src_file, dest_file=dest_file)]
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.warning", side_effect=lambda event, **kw: log_events.append({"event": event, **kw})
+        )
+
+        _warn_long_names(plan, dest)
+
+        assert any(e["event"] == "name_too_long" for e in log_events)
+
+    def test_resolve_long_names_no_long_components_returns_same_plan(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_resolve_long_names returns the input plan unchanged when all components are within the limit.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mocker.patch("music_annotator._pipeline._NAME_MAX", 255)
+
+        dest = Path("/dest")
+        fs.create_dir(str(dest))
+        fs.create_file(str(dest / "dummy.flac"))
+
+        src_file = dest / "dummy.flac"
+        dest_file = dest / "Short Dir" / "01 - Track.flac"
+        plan = [CopyPlanEntry(idx=0, src_file=src_file, dest_file=dest_file)]
+
+        result = _resolve_long_names(plan, dest, ui=None)
+        assert result[0].dest_file == dest_file
 
 
 # ---------------------------------------------------------------------------

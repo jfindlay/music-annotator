@@ -757,6 +757,10 @@ class TestDiscoverEndToEnd:
                 """Always accept the proposed disc."""
                 return proposed
 
+            def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
+                """Always accept the proposed shortened name."""
+                return proposed
+
             def confirm_delete(self, _src_dir: object) -> bool:
                 """Decline deletion."""
                 return False
@@ -803,6 +807,10 @@ class TestDiscoverEndToEnd:
 
             def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
                 """Always accept the proposed disc."""
+                return proposed
+
+            def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
+                """Always accept the proposed shortened name."""
                 return proposed
 
             def confirm_delete(self, _src_dir: object) -> bool:
@@ -854,6 +862,10 @@ class TestDiscoverEndToEnd:
                 """Should never be called when skipping."""
                 return proposed
 
+            def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:  # pragma: no cover
+                """Should never be called when skipping."""
+                return proposed
+
             def confirm_delete(self, _src_dir: object) -> bool:
                 """Should never be called when skipping."""
                 return False  # pragma: no cover
@@ -892,6 +904,10 @@ class TestDiscoverEndToEnd:
 
             def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
                 """Always accept the proposed disc."""
+                return proposed
+
+            def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
+                """Always accept the proposed shortened name."""
                 return proposed
 
             def confirm_delete(self, _src_dir: object) -> bool:
@@ -1419,6 +1435,10 @@ class TestDiscoverDryRun:
                 """Always accept the proposed disc."""
                 return proposed
 
+            def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
+                """Always accept the proposed shortened name."""
+                return proposed
+
             def confirm_delete(self, _src_dir: object) -> bool:
                 """Must not be reached in dry-run mode."""
                 raise AssertionError("confirm_delete called during dry_run")  # pragma: no cover
@@ -1483,6 +1503,10 @@ class TestDiscoverSearchError:
 
             def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
                 """Always accept the proposed disc."""
+                return proposed
+
+            def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
+                """Always accept the proposed shortened name."""
                 return proposed
 
             def confirm_delete(self, _src_dir: object) -> bool:
@@ -1558,6 +1582,10 @@ class TestDiscoverRunError:
             def confirm_disc(
                 self, _m: object, proposed: MBMedium, _d: object, _u: object
             ) -> MBMedium | None:  # pragma: no cover
+                """Should not be reached because run is patched."""
+                return proposed
+
+            def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:  # pragma: no cover
                 """Should not be reached because run is patched."""
                 return proposed
 

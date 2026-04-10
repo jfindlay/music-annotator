@@ -32,7 +32,7 @@ from music_annotator import (
     strip_common_prefix,
 )
 from music_annotator._mb_api import _extract_session_date
-from music_annotator._tags import _work_aliases
+from music_annotator._tags import _NAME_MAX, _proposed_short, _work_aliases
 from music_annotator._works import _date_range, _score_top_work, select_primary_performance_work
 from music_annotator.models import (
     JSON,
@@ -427,23 +427,169 @@ class TestSafeName:
         """Characters forbidden in filenames are replaced with underscores."""
         assert safe_name('Hello: "World"') == "Hello_ _World_"
 
-    def test_truncates_to_max_len(self) -> None:
-        """String is truncated to max_len characters."""
-        long_str = "A" * 200
-        result = safe_name(long_str, max_len=80)
-        assert len(result) == 80
+    def test_trailing_dot_preserved(self) -> None:
+        """Trailing dots are NOT stripped — they carry semantic meaning in titles like 'op.'."""
+        assert safe_name("Sphärenklänge, op.") == "Sphärenklänge, op."
 
-    def test_strips_leading_trailing_dots_and_spaces(self) -> None:
-        """Leading/trailing dots and spaces are stripped."""
-        assert safe_name("  ..My Title..  ") == "My Title"
+    def test_leading_dot_replaced_with_underscore(self) -> None:
+        """A leading dot is replaced with underscore to prevent hidden files on POSIX."""
+        assert safe_name(".hidden") == "_hidden"
+
+    def test_multiple_leading_dots_replaced(self) -> None:
+        """Multiple leading dots are each replaced with an underscore."""
+        assert safe_name("...foo") == "___foo"
+
+    def test_leading_space_stripped(self) -> None:
+        """Leading spaces are stripped."""
+        assert safe_name("  foo") == "foo"
+
+    def test_trailing_space_stripped(self) -> None:
+        """Trailing spaces are stripped."""
+        assert safe_name("foo  ") == "foo"
+
+    def test_dots_and_spaces_combined(self) -> None:
+        """Leading spaces are stripped but leading dots become underscores (no dot stripping)."""
+        assert safe_name("  ..My Title..  ") == "__My Title.."
 
     def test_normal_string_unchanged(self) -> None:
         """A normal ASCII string is returned unchanged."""
         assert safe_name("Fontane di Roma") == "Fontane di Roma"
 
-    def test_custom_max_len(self) -> None:
-        """Custom max_len is respected."""
-        assert safe_name("Hello World", max_len=5) == "Hello"
+    def test_no_length_cap(self) -> None:
+        """Strings longer than 255 characters are not truncated — length enforcement is the caller's responsibility."""
+        long_str = "A" * 300
+        assert len(safe_name(long_str)) == 300
+
+
+class TestProposedShort:
+    """Tests for _proposed_short — structure-aware shortening to fit within _NAME_MAX bytes."""
+
+    def test_within_limit_returned_unchanged(self) -> None:
+        """A component already within the limit is returned as-is."""
+        s = "Brahms - Herbert von Karajan; Berliner Philharmoniker"
+        assert len(s.encode("utf-8")) <= _NAME_MAX
+        assert _proposed_short(s) == s
+
+    def test_result_always_fits(self) -> None:
+        """The result of _proposed_short always fits within _NAME_MAX bytes."""
+        # 300-byte component — must be shortened to fit.
+        long = "A" * 300
+        result = _proposed_short(long)
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+
+    def test_work_dir_drops_subtitle_before_date(self) -> None:
+        """Work-dir strategy: subtitle after ' _ ' is dropped before the date suffix."""
+        # Build a component that is too long due to a verbose subtitle.
+        base = "Symphonie fantastique, op. 14"
+        subtitle = " _ " + "Épisode de la vie d'un artiste en cinq parties " * 6
+        date = " [rec 1974-1975]"
+        component = base + subtitle + date
+        assert len(component.encode("utf-8")) > _NAME_MAX, f"Test data too short: {len(component.encode('utf-8'))} bytes"
+        result = _proposed_short(component)
+        assert result.endswith(date)
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+        # The result should contain the base work title, not the subtitle.
+        assert base in result
+        assert "Épisode" not in result
+
+    def test_leaf_drops_subtitle_after_separator(self) -> None:
+        """Leaf strategy: movement subtitle after ' _ ' is dropped, 'nn - ' prefix preserved."""
+        prefix = "01 - "
+        body = "Messe in C-Dur, KV 317 _Krönungsmesse_"
+        subtitle = " _ " + "Kyrie_ Andante maestoso - Più andante molto " * 6
+        component = prefix + body + subtitle
+        assert len(component.encode("utf-8")) > _NAME_MAX, f"Test data too short: {len(component.encode('utf-8'))} bytes"
+        result = _proposed_short(component)
+        assert result.startswith(prefix)
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+        assert body in result
+
+    def test_top_dir_drops_rightmost_performer(self) -> None:
+        """Top-dir strategy: performer entries are dropped from the right until it fits."""
+        composer = "Bach"
+        # Make the performer list long enough to exceed NAME_MAX.
+        performers = "; ".join([f"Performer Number {i:02d} With A Very Long Name" for i in range(10)])
+        component = f"{composer} - {performers}"
+        assert len(component.encode("utf-8")) > _NAME_MAX
+        result = _proposed_short(component)
+        assert result.startswith(f"{composer} - ")
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+        # At least the first performer should still be present.
+        assert "Performer Number 00" in result
+
+    def test_word_boundary_ellipsis(self) -> None:
+        """Fallback strategy: truncation at last word boundary with ellipsis appended."""
+        # A long string with no structural separators.
+        component = "Abcdefghij " * 30  # repeating words, all ASCII, no _ or - separators
+        assert len(component.encode("utf-8")) > _NAME_MAX
+        result = _proposed_short(component)
+        assert result.endswith("…")
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+
+    def test_hard_truncation_no_space(self) -> None:
+        """Hard-cut fallback: no spaces in string, truncated at UTF-8 byte boundary + ellipsis."""
+        component = "X" * 300  # no spaces
+        result = _proposed_short(component)
+        assert result.endswith("…")
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+
+    def test_multibyte_not_split(self) -> None:
+        """Hard-cut fallback never splits a multi-byte UTF-8 sequence."""
+        # "ä" is 2 bytes; fill exactly to the boundary so a naive cut would split it.
+        component = "ä" * 200  # 400 bytes, all 2-byte chars
+        result = _proposed_short(component)
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+        # Must be valid UTF-8 (decodeable without errors).
+        result.encode("utf-8").decode("utf-8")
+
+    def test_work_dir_no_subtitle_separator_falls_through(self) -> None:
+        """Work-dir with date suffix but no ' _ ' separator falls through to later strategies.
+
+        Covers the ``sep_idx == -1`` branch in strategy 1 (161->167).
+        """
+        # Date suffix present but no ' _ ' subtitle separator in the title.
+        base = "A" * 250  # very long, no ' _ '
+        component = base + " [rec 1974]"
+        assert len(component.encode("utf-8")) > _NAME_MAX
+        result = _proposed_short(component)
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+
+    def test_work_dir_subtitle_drop_still_too_long_falls_through(self) -> None:
+        """Work-dir where dropping subtitle still exceeds the limit falls through to later strategies.
+
+        Covers the candidate-too-long branch in strategy 1 (163->167).
+        """
+        # Make base title alone exceed the limit — dropping subtitle won't help.
+        base = "B" * 250 + " _ Long Subtitle"
+        component = base + " [rec 1974]"
+        assert len(component.encode("utf-8")) > _NAME_MAX
+        result = _proposed_short(component)
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+
+    def test_leaf_no_subtitle_separator_falls_through(self) -> None:
+        """Leaf with 'nn - ' prefix but no ' _ ' subtitle separator falls through to later strategies.
+
+        Covers the ``sep_idx == -1`` branch in strategy 2 (172->179).
+        """
+        component = "01 - " + "C" * 260  # over limit, no ' _ '
+        assert len(component.encode("utf-8")) > _NAME_MAX
+        result = _proposed_short(component)
+        assert result.startswith("01 - ") or result.endswith("…")
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+
+    def test_leaf_subtitle_drop_still_too_long_falls_through(self) -> None:
+        """Leaf where dropping subtitle still exceeds the limit falls through to later strategies.
+
+        Covers the candidate-too-long branch in strategy 2 (174->179).
+        """
+        # Body alone exceeds limit even without the subtitle (251 + 5-byte prefix = 256 bytes > 255).
+        body = "D" * 251
+        component = "01 - " + body + " _ subtitle"
+        assert len(component.encode("utf-8")) > _NAME_MAX
+        # After dropping subtitle the candidate is "01 - " + body = 256 bytes > limit → falls through.
+        assert len(("01 - " + body).encode("utf-8")) > _NAME_MAX
+        result = _proposed_short(component)
+        assert len(result.encode("utf-8")) <= _NAME_MAX
 
 
 # ---------------------------------------------------------------------------

@@ -42,7 +42,7 @@ from music_annotator._pipeline_io import (
     write_transaction_log,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
-from music_annotator._tags import build_dest_path, build_track_tags
+from music_annotator._tags import _NAME_MAX, _proposed_short, build_dest_path, build_track_tags
 from music_annotator._works import build_work_hierarchy, select_primary_performance_work
 from music_annotator.models import CopyPlanEntry, CoverArt, CoverImage, MBMedium, MBTrack, MBWork, TrackTags, TransactionEntry
 
@@ -71,12 +71,12 @@ class CollisionPolicy(enum.Enum):
 
 
 class DiscUI(Protocol):
-    """Minimal UI protocol for disc-selection confirmation in :func:`run`.
+    """Minimal UI protocol for disc-selection and name-shortening confirmation in :func:`run`.
 
     A structural subset of :class:`~music_annotator._discover.DiscoverUI` — any object that
-    implements :meth:`confirm_disc` satisfies this protocol.  Defined here (rather than importing
-    from ``_discover``) to avoid a circular import: ``_discover`` imports :func:`run` from this
-    module.
+    implements :meth:`confirm_disc` and :meth:`confirm_shortened_name` satisfies this protocol.
+    Defined here (rather than importing from ``_discover``) to avoid a circular import:
+    ``_discover`` imports :func:`run` from this module.
     """
 
     def confirm_disc(
@@ -94,6 +94,19 @@ class DiscUI(Protocol):
         :param release_url: MusicBrainz release URL.
         :returns: The confirmed or user-chosen :class:`~music_annotator.models.MBMedium`, or ``None``
             to abort.
+        """  # pragma: no cover
+
+    def confirm_shortened_name(self, original: str, proposed: str) -> str | None:
+        """Confirm or override a path component that exceeds :data:`~music_annotator._tags._NAME_MAX` bytes.
+
+        Called once per unique too-long component before any files are written.  The user may
+        accept the proposed shortened name, type a custom replacement, or abort the run.
+
+        :param original: The full computed path component that exceeds the byte limit (displayed for context).
+        :param proposed: The auto-shortened component produced by
+            :func:`~music_annotator._tags._proposed_short` (displayed as the default choice).
+        :returns: The confirmed replacement string (either ``proposed`` or a user-supplied override),
+            or ``None`` to abort.
         """  # pragma: no cover
 
 
@@ -469,6 +482,90 @@ def _write_freedb_yaml(
     )
 
 
+def _warn_long_names(plan: list[CopyPlanEntry], dest_root: Path) -> None:
+    """Log a warning for every path component in ``plan`` that exceeds :data:`~music_annotator._tags._NAME_MAX` bytes.
+
+    Called in dry-run mode so the operator can identify problems without touching the filesystem.
+    No prompting or shortening is performed.
+
+    :param plan: The list of planned copy operations.
+    :param dest_root: Root of the destination library, used to isolate relative components.
+    """
+    seen: set[str] = set()
+    for entry in plan:
+        for part in entry.dest_file.relative_to(dest_root).parts:
+            if len(part.encode("utf-8")) > _NAME_MAX and part not in seen:
+                seen.add(part)
+                log.warning(
+                    "name_too_long",
+                    component=part,
+                    bytes=len(part.encode("utf-8")),
+                    limit=_NAME_MAX,
+                )
+
+
+def _resolve_long_names(plan: list[CopyPlanEntry], dest_root: Path, ui: DiscUI | None) -> list[CopyPlanEntry]:
+    """Detect path components that exceed :data:`~music_annotator._tags._NAME_MAX` bytes and resolve them.
+
+    Iterates every component of every destination path in ``plan``.  For each unique component
+    that is too long, a shortened replacement is determined:
+
+    - If ``ui`` is provided: calls :meth:`DiscUI.confirm_shortened_name` with the original and
+      the auto-proposed shortened name.  If the user aborts (returns ``None``), raises
+      :exc:`SystemExit` with code 1.
+    - If ``ui`` is ``None``: silently accepts :func:`~music_annotator._tags._proposed_short` and
+      logs a ``name_too_long`` warning.
+
+    The substitution table is built first (prompting once per unique too-long component), then
+    applied to every entry in the plan so that shared components (e.g. the top-level composer
+    directory) are renamed consistently across all tracks.
+
+    :param plan: The list of planned copy operations.
+    :param dest_root: Root of the destination library.
+    :param ui: Optional :class:`DiscUI` instance.  When ``None``, shortened names are accepted
+        automatically.
+    :returns: A new plan list with updated destination paths.
+    :raises SystemExit: With code 1 if the user aborts any name-shortening prompt.
+    """
+    # Build substitution table: original component → replacement.
+    subs: dict[str, str] = {}
+    for entry in plan:
+        rel_parts = entry.dest_file.relative_to(dest_root).parts
+        for part in rel_parts:
+            # For the leaf, measure the stem only (the extension is not part of NAME_MAX for the stem;
+            # actually the whole filename including extension counts, but the extension is short and
+            # we store stems before adding the suffix — measure the full part).
+            if len(part.encode("utf-8")) > _NAME_MAX and part not in subs:
+                proposed = _proposed_short(part)
+                if ui is not None:
+                    replacement = ui.confirm_shortened_name(part, proposed)
+                    if replacement is None:
+                        log.warning("name_shortening_aborted", component=part)
+                        raise SystemExit(1)
+                else:
+                    replacement = proposed
+                    log.warning(
+                        "name_too_long",
+                        component=part,
+                        bytes=len(part.encode("utf-8")),
+                        limit=_NAME_MAX,
+                        shortened=replacement,
+                    )
+                subs[part] = replacement
+
+    if not subs:
+        return plan
+
+    # Apply substitutions to all plan entries.
+    new_plan: list[CopyPlanEntry] = []
+    for entry in plan:
+        orig_parts = entry.dest_file.relative_to(dest_root).parts
+        new_parts = [subs.get(p, p) for p in orig_parts]
+        new_dest = dest_root.joinpath(*new_parts)
+        new_plan.append(CopyPlanEntry(idx=entry.idx, src_file=entry.src_file, dest_file=new_dest))
+    return new_plan
+
+
 def run(
     release_id: str,
     src_dir: Path,
@@ -522,8 +619,10 @@ def run(
         Composer, conductor, work hierarchy, and Classical Extras tags will be absent.
     :param collision_policy: How to handle pre-existing destination files.  Defaults to
         :attr:`CollisionPolicy.ASK` which prompts interactively.
-    :param ui: Optional :class:`DiscUI` instance for interactive disc-selection confirmation.  When ``None`` and a
-        title-match heuristic is used, the selection proceeds without confirmation (useful for automated runs and tests).
+    :param ui: Optional :class:`DiscUI` instance for interactive disc-selection and name-shortening confirmation.  When
+        ``None`` and a title-match heuristic is used, the selection proceeds without confirmation.  When ``None`` and a
+        path component exceeds :data:`~music_annotator._tags._NAME_MAX` bytes, the shortened name is accepted
+        automatically and a ``name_too_long`` warning is logged.
     :param no_cache: When ``True``, bypass the cover art on-disk cache and always fetch from the network.  Defaults to
         ``False``.
     :raises mb.ResponseError: On a non-retryable MusicBrainz API error.
@@ -531,8 +630,8 @@ def run(
         integrity, tag round-trip, cover art, or mtime mismatch).
     :raises ValueError: If no medium in the release matches the source file count for a multi-medium release.
     :raises OSError: If source files cannot be read or destination files cannot be written.
-    :raises SystemExit: With code 1 if the collision policy is ABORT (or the user chooses abort interactively), or if
-        the user aborts the disc-selection confirmation prompt.
+    :raises SystemExit: With code 1 if the collision policy is ABORT (or the user chooses abort interactively), if the
+        user aborts the disc-selection confirmation prompt, or if the user aborts a name-shortening prompt.
     """
     init_mb(user_agent)
 
@@ -683,6 +782,13 @@ def run(
         dest_file = dest_base.with_suffix(src_file.suffix.lower())
         log.info("copy_track", src=src_file.name, dest=str(dest_file.relative_to(dest_root)))
         plan.append(CopyPlanEntry(idx=idx, src_file=src_file, dest_file=dest_file))
+
+    # --- Name-length check and resolution ---
+    # In dry-run mode: log warnings only.  Otherwise: prompt via UI or auto-shorten when no UI.
+    if dry_run:
+        _warn_long_names(plan, dest_root)
+    else:
+        plan = _resolve_long_names(plan, dest_root, ui)
 
     # --- Collision detection and resolution ---
     skip_dest: set[Path] = set()

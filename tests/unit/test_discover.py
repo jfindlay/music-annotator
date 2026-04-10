@@ -27,6 +27,7 @@ from music_annotator._discover import (
     _score_toc_release,
     _toc_lookup_mb_releases,
 )
+from music_annotator._tags import _NAME_MAX
 from music_annotator.models import MBMedium, MBReleaseCandidate
 
 # ---------------------------------------------------------------------------
@@ -1300,6 +1301,10 @@ class TestDiscover:
                 """Always accept the proposed disc."""
                 return proposed
 
+            def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
+                """Always accept the proposed shortened name."""
+                return proposed
+
             def confirm_delete(self, _src_dir: object) -> bool:
                 """Always decline deletion."""
                 return False
@@ -2208,3 +2213,114 @@ class TestTerminalDiscoverUIConfirmDisc:
         result = self._ui().confirm_disc([empty_medium], empty_medium, "dtitle", "url")
         assert result is empty_medium
         assert any("no tracks" in line for line in printed)
+
+
+# ---------------------------------------------------------------------------
+# TerminalDiscoverUI.confirm_shortened_name
+# ---------------------------------------------------------------------------
+
+
+class TestTerminalDiscoverUIConfirmShortenedName:
+    """Tests for TerminalDiscoverUI.confirm_shortened_name."""
+
+    def _ui(self) -> TerminalDiscoverUI:
+        """Return a fresh TerminalDiscoverUI instance.
+
+        :returns: A :class:`~music_annotator._discover.TerminalDiscoverUI` instance.
+        """
+        return TerminalDiscoverUI()
+
+    _ORIGINAL = "A" * 300
+    _PROPOSED = "A" * 20
+
+    def test_y_accepts_proposed(self, mocker: MockerFixture) -> None:
+        """Entering 'y' returns the proposed shortened name.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="y")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_shortened_name(self._ORIGINAL, self._PROPOSED)
+        assert result == self._PROPOSED
+
+    def test_yes_accepts_proposed(self, mocker: MockerFixture) -> None:
+        """Entering 'yes' also returns the proposed shortened name.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="yes")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_shortened_name(self._ORIGINAL, self._PROPOSED)
+        assert result == self._PROPOSED
+
+    def test_q_returns_none(self, mocker: MockerFixture) -> None:
+        """Entering 'q' aborts and returns None.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="q")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_shortened_name(self._ORIGINAL, self._PROPOSED)
+        assert result is None
+
+    def test_quit_returns_none(self, mocker: MockerFixture) -> None:
+        """Entering 'quit' aborts and returns None.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="quit")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_shortened_name(self._ORIGINAL, self._PROPOSED)
+        assert result is None
+
+    def test_a_returns_none(self, mocker: MockerFixture) -> None:
+        """Entering 'a' aborts and returns None.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="a")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_shortened_name(self._ORIGINAL, self._PROPOSED)
+        assert result is None
+
+    def test_custom_name_within_limit_accepted(self, mocker: MockerFixture) -> None:
+        """Typing a short custom name returns it after safe_name sanitisation.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="My Custom Name")
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_shortened_name(self._ORIGINAL, self._PROPOSED)
+        assert result == "My Custom Name"
+
+    def test_custom_name_sanitised(self, mocker: MockerFixture) -> None:
+        """Custom names with forbidden characters are sanitised via safe_name before acceptance.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value='My: "Custom" Name')
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_shortened_name(self._ORIGINAL, self._PROPOSED)
+        assert result == "My_ _Custom_ Name"
+
+    def test_custom_name_too_long_reprompts(self, mocker: MockerFixture) -> None:
+        """A custom name that still exceeds _NAME_MAX bytes triggers a re-prompt.
+
+        :param mocker: pytest-mock fixture.
+        """
+        too_long = "B" * (_NAME_MAX + 1)
+        mocker.patch("builtins.input", side_effect=[too_long, "y"])
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_shortened_name(self._ORIGINAL, self._PROPOSED)
+        # Falls back to accepting proposed after re-prompt with 'y'.
+        assert result == self._PROPOSED
+
+    def test_empty_input_reprompts(self, mocker: MockerFixture) -> None:
+        """Empty input triggers a re-prompt; subsequent 'y' is accepted.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", side_effect=["", "y"])
+        mocker.patch("music_annotator._discover._console.print")
+        result = self._ui().confirm_shortened_name(self._ORIGINAL, self._PROPOSED)
+        assert result == self._PROPOSED
