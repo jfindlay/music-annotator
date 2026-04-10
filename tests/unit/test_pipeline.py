@@ -1463,6 +1463,94 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
+    def test_dest_root_created_if_absent(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """run() creates dest_root (and any missing parents) when it does not already exist.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/new/library/dest")
+        fs.create_dir(str(src))
+        # Deliberately do NOT create dest or its parents.
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        assert dest.is_dir()
+        assert len(list(dest.rglob("*.flac"))) == 1
+
+    def test_dest_root_created_logs_info(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """A dest_root_created info event is logged when the directory is newly created.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/new/dest")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info", side_effect=lambda event, **kw: log_events.append({"event": event, **kw})
+        )
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        assert any(e["event"] == "dest_root_created" for e in log_events)
+
+    def test_dest_root_existing_no_log(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """No dest_root_created event is logged when dest_root already exists.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info", side_effect=lambda event, **kw: log_events.append({"event": event, **kw})
+        )
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        assert not any(e["event"] == "dest_root_created" for e in log_events)
+
     def test_files_copied_to_dest(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """FLAC files are copied to dest_root in non-dry-run mode.
 

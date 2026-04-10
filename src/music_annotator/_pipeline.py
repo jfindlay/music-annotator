@@ -677,6 +677,13 @@ def run(
         )
 
     # Fetch all cover art once for the whole release
+    # Create the destination root if it does not exist yet.  All intermediate directories are also
+    # created so that a fresh library path (e.g. /mnt/music/done) works on the first invocation
+    # without requiring the user to pre-create it.  exist_ok=True makes this idempotent.
+    if not dest_root.exists():
+        dest_root.mkdir(parents=True, exist_ok=True)
+        log.info("dest_root_created", path=str(dest_root))
+
     rg_id = release.release_group.id
     cover = CoverArt()
     if not dry_run:
