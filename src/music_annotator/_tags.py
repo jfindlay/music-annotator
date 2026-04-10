@@ -120,6 +120,12 @@ def build_cea_performers(recording_detail: MBRecording) -> CeaPerformers:
     entries with a vocal keyword in the instrument label go to ``vocalists``; all others go to ``instrumentalists`` (with
     an instrument label) or ``other_soloists`` (without).
 
+    Duplicate relations — where MusicBrainz returns the same artist MBID more than once for the same relation type on a
+    single recording — are silently suppressed.  This occurs in the wild (e.g. the conductor and performing-orchestra
+    relations on some DG recordings have duplicate entries) and would otherwise produce repeated values in all derived
+    tags and in the filesystem path.  Deduplication is per-bucket and keyed on MBID; entries without an MBID are always
+    appended because MBID-based deduplication is not possible for them.
+
     :param recording_detail: The :class:`~music_annotator.models.MBRecording` instance as returned by
         :func:`fetch_recording_detail`.
     :returns: A populated :class:`~music_annotator.models.CeaPerformers` instance.
@@ -127,6 +133,34 @@ def build_cea_performers(recording_detail: MBRecording) -> CeaPerformers:
     from music_annotator._artists import is_ensemble  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
 
     cea = CeaPerformers()
+    # Per-bucket seen-sets keyed on MBID to suppress duplicate MB relations for the same artist+type.
+    seen: dict[str, set[str]] = {
+        "conductors": set(),
+        "chorusmasters": set(),
+        "leaders": set(),
+        "arrangers": set(),
+        "orchestrators": set(),
+        "composers": set(),
+        "producers": set(),
+        "engineers": set(),
+        "ensembles": set(),
+        "vocalists": set(),
+        "instrumentalists": set(),
+        "other_soloists": set(),
+    }
+
+    def _append(bucket: str, entry: ArtistEntry) -> None:
+        """Append ``entry`` to the named bucket, skipping entries whose MBID is already present.
+
+        :param bucket: Name of the :class:`~music_annotator.models.CeaPerformers` list attribute to append to.
+        :param entry: The :class:`~music_annotator.models.ArtistEntry` to conditionally append.
+        """
+        if entry.mbid and entry.mbid in seen[bucket]:
+            return
+        if entry.mbid:
+            seen[bucket].add(entry.mbid)
+        getattr(cea, bucket).append(entry)
+
     for rel in recording_detail.artist_relation_list:
         name = rel.artist.name
         sort = rel.artist.sort_name or name
@@ -135,35 +169,37 @@ def build_cea_performers(recording_detail: MBRecording) -> CeaPerformers:
 
         match rel.type:
             case "conductor":
-                cea.conductors.append(entry)
+                _append("conductors", entry)
             case "chorus master":
-                cea.chorusmasters.append(entry)
+                _append("chorusmasters", entry)
             case "concertmaster":
-                cea.leaders.append(entry)
+                _append("leaders", entry)
             case "arranger" | "instrument arranger" | "vocal arranger":
-                cea.arrangers.append(entry)
+                _append("arrangers", entry)
             case "orchestrator":
-                cea.orchestrators.append(entry)
+                _append("orchestrators", entry)
             case "composer" | "writer":
-                cea.composers.append(entry)  # recording-level: CE merges both into composer host tag
+                _append("composers", entry)  # recording-level: CE merges both into composer host tag
             case "producer":
-                cea.producers.append(entry)
+                _append("producers", entry)
             case "balance" | "engineer" | "mix" | "recording" | "audio" | "sound":
-                cea.engineers.append(entry)
+                _append("engineers", entry)
             case "performer" | "instrument" | "vocal" | "performing orchestra":
                 if is_ensemble(name):
-                    cea.ensembles.append(entry)
+                    _append("ensembles", entry)
                 else:
                     first_attr = rel.attribute_list[0] if rel.attribute_list else ""
                     instr: str = first_attr.value if isinstance(first_attr, MBAttribute) else first_attr
                     entry = ArtistEntry(name=name, sort=sort, mbid=mid, instrument=instr)
                     vocal_keywords = ("soprano", "mezzo", "tenor", "baritone", "bass", "contralto", "voice", "vocal", "singer")
                     if any(v in instr.lower() for v in vocal_keywords):
-                        cea.vocalists.append(entry)
+                        _append("vocalists", entry)
                     elif instr:
-                        cea.instrumentalists.append(entry)
+                        _append("instrumentalists", entry)
                     else:
-                        cea.other_soloists.append(entry)
+                        _append("other_soloists", entry)
+            case _:
+                pass
 
     return cea
 

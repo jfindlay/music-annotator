@@ -370,6 +370,85 @@ class TestBuildCeaPerformers:
         assert not cea.composers
         assert not cea.all_soloists
 
+    @staticmethod
+    def _rel(rtype: str, mbid: str, name: str, sort: str, attrs: list[JSON] | None = None) -> JSON:
+        """Build a typed artist-relation dict for use in ``artist-relation-list``.
+
+        :param rtype: Relation type string (e.g. ``"conductor"``).
+        :param mbid: Artist MBID string (may be empty).
+        :param name: Artist display name.
+        :param sort: Artist sort name.
+        :param attrs: Optional ``attribute-list`` entries.
+        :returns: A :data:`~music_annotator.models.JSON`-typed relation dict.
+        """
+        return {
+            "type": rtype,
+            "artist": {"id": mbid, "name": name, "sort-name": sort},
+            "attribute-list": attrs or [],
+        }
+
+    def _recording_multi(self, rels: list[JSON]) -> MBRecording:
+        """Build a minimal MBRecording with multiple artist relations.
+
+        :param rels: List of relation dicts (each with ``type``, ``artist``, ``attribute-list`` keys).
+        :returns: An :class:`~music_annotator.models.MBRecording` instance.
+        """
+        return _rec(
+            {
+                "id": "rec-multi",
+                "title": "T",
+                "artist-credit": [],
+                "artist-relation-list": rels,
+                "work-relation-list": [],
+            }
+        )
+
+    def test_duplicate_conductor_deduplicated(self) -> None:
+        """Two conductor relations with the same MBID yield exactly one entry in cea.conductors.
+
+        This mirrors the real-world case where MusicBrainz returns the same conductor relation
+        twice on a recording (observed with several DG recordings under musicbrainzngs).
+        """
+        rel = self._rel("conductor", "cond-1", "Karajan", "Karajan, Herbert von")
+        cea = build_cea_performers(self._recording_multi([rel, rel]))
+        assert len(cea.conductors) == 1
+        assert cea.conductors[0].name == "Karajan"
+
+    def test_duplicate_ensemble_deduplicated(self) -> None:
+        """Two performing-orchestra relations with the same MBID yield exactly one ensemble entry."""
+        rel = self._rel("performing orchestra", "ens-1", "Berliner Philharmoniker", "Berliner Philharmoniker")
+        cea = build_cea_performers(self._recording_multi([rel, rel]))
+        assert len(cea.ensembles) == 1
+        assert cea.ensembles[0].name == "Berliner Philharmoniker"
+
+    def test_duplicate_conductor_and_ensemble_both_deduplicated(self) -> None:
+        """Duplicate conductor + duplicate ensemble (mirroring real MB data) → one of each."""
+        cond = self._rel("conductor", "cond-1", "Karajan", "Karajan, Herbert von")
+        orch = self._rel("performing orchestra", "ens-1", "Berliner Philharmoniker", "Berliner Philharmoniker")
+        cea = build_cea_performers(self._recording_multi([cond, cond, orch, orch]))
+        assert len(cea.conductors) == 1
+        assert len(cea.ensembles) == 1
+
+    def test_two_distinct_conductors_both_kept(self) -> None:
+        """Two conductor relations with different MBIDs are both retained."""
+        cond1 = self._rel("conductor", "cond-1", "Karajan", "Karajan, Herbert von")
+        cond2 = self._rel("conductor", "cond-2", "Böhm", "Böhm, Karl")
+        cea = build_cea_performers(self._recording_multi([cond1, cond2]))
+        assert len(cea.conductors) == 2
+
+    def test_duplicate_instrumentalist_deduplicated(self) -> None:
+        """Two instrument relations with the same MBID yield exactly one instrumentalist entry."""
+        attr: JSON = {"type": "", "value": "violin"}
+        rel = self._rel("instrument", "instr-1", "Violinist X", "X, Violinist", [attr])
+        cea = build_cea_performers(self._recording_multi([rel, rel]))
+        assert len(cea.instrumentalists) == 1
+
+    def test_duplicate_no_mbid_both_kept(self) -> None:
+        """Relations without an MBID cannot be deduplicated by MBID and are both appended."""
+        rel = self._rel("conductor", "", "Unknown Conductor", "")
+        cea = build_cea_performers(self._recording_multi([rel, rel]))
+        assert len(cea.conductors) == 2
+
 
 # ---------------------------------------------------------------------------
 # build_track_tags
