@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import xml.etree.ElementTree as ET
+from http.client import BadStatusLine, HTTPException, HTTPMessage
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch as stdlib_patch
+from urllib.error import HTTPError, URLError
 
 import musicbrainzngs as mb
 import musicbrainzngs.mbxml as _mbxml
+import musicbrainzngs.musicbrainz as mzmz
 import pytest
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
@@ -30,6 +34,7 @@ from music_annotator._mb_api import (
     _mb_call,
     _mb_retry,
     _patched_parse_recording,
+    _patched_safe_read,
     _sidecar_filename,
 )
 from music_annotator._pipeline_io import _check_collisions
@@ -394,8 +399,8 @@ class TestFetchCoverArt:
         # Same CoverImage object
         assert result.back[0] is result.spine[0]
 
-    def test_multi_type_primary_fetch_failure_skips_secondary(self, mocker: MockerFixture) -> None:
-        """When a multi-type image fails to fetch in its primary bucket, secondary buckets also skip it.
+    def test_multi_type_primary_fetch_failure_raises(self, mocker: MockerFixture) -> None:
+        """When a multi-type image fetch fails, the error propagates to the caller.
 
         :param mocker: pytest-mock fixture.
         """
@@ -406,12 +411,31 @@ class TestFetchCoverArt:
         }
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
         mocker.patch("music_annotator._mb_api.mb.get_image", side_effect=mb.ResponseError(cause=Exception("503")))
+        with pytest.raises(mb.ResponseError):
+            fetch_cover_art("rel-1", no_cache=True)
+
+    def test_multi_type_primary_empty_bytes_skips_secondary(self, mocker: MockerFixture) -> None:
+        """When a multi-type image returns empty bytes in the primary bucket, secondary buckets skip it.
+
+        This exercises the ``if existing is not None`` False branch in the non-front bucket loop
+        where the coverid is already recorded as ``None`` (empty-bytes result) from a primary fetch.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        listing = {
+            "images": [{"types": ["Back", "Spine"], "id": "77", "image": "https://caa/77"}],
+            "release": "https://mb/release/r1",
+        }
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
+        # Return empty bytes so _fetch_raw returns None without raising
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=b"")
         result = fetch_cover_art("rel-1", no_cache=True)
         assert result.back == []
         assert result.spine == []
 
-    def test_image_fetch_error_skipped(self, mocker: MockerFixture) -> None:
-        """A ResponseError on a single image fetch is logged and that image is skipped.
+    def test_image_fetch_error_raises(self, mocker: MockerFixture) -> None:
+        """A ResponseError on an image fetch propagates to the caller.
 
         :param mocker: pytest-mock fixture.
         """
@@ -421,8 +445,8 @@ class TestFetchCoverArt:
             "music_annotator._mb_api.mb.get_image",
             side_effect=mb.ResponseError(cause=Exception("503 error")),
         )
-        result = fetch_cover_art("rel-1", no_cache=True)
-        assert not result.available
+        with pytest.raises(mb.ResponseError):
+            fetch_cover_art("rel-1", no_cache=True)
 
     def test_image_fetch_returns_empty_bytes_skipped(self, mocker: MockerFixture) -> None:
         """An image that returns empty bytes is not added to the result.
@@ -464,8 +488,8 @@ class TestFetchCoverArt:
         result = fetch_cover_art("rel-1", release_group_id="", no_cache=True)
         assert not result.available
 
-    def test_listing_non_404_error_returns_empty(self, mocker: MockerFixture) -> None:
-        """A non-404 listing error returns empty CoverArt (no fallback attempted).
+    def test_listing_non_404_error_raises(self, mocker: MockerFixture) -> None:
+        """A non-404 listing error raises RuntimeError immediately (no fallback attempted).
 
         :param mocker: pytest-mock fixture.
         """
@@ -474,11 +498,11 @@ class TestFetchCoverArt:
             "music_annotator._mb_api.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("500 Internal Server Error")),
         )
-        result = fetch_cover_art("rel-1", no_cache=True)
-        assert not result.available
+        with pytest.raises(RuntimeError, match="cover art listing failed"):
+            fetch_cover_art("rel-1", no_cache=True)
 
-    def test_release_group_fallback_fails_returns_empty(self, mocker: MockerFixture) -> None:
-        """When both release listing and release-group fallback fail, returns empty.
+    def test_release_group_fallback_fails_raises(self, mocker: MockerFixture) -> None:
+        """When the release-group fallback call fails, the error propagates to the caller.
 
         :param mocker: pytest-mock fixture.
         """
@@ -491,8 +515,8 @@ class TestFetchCoverArt:
             "music_annotator._mb_api.mb.get_release_group_image_front",
             side_effect=mb.ResponseError(cause=Exception("500 error")),
         )
-        result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
-        assert not result.available
+        with pytest.raises(mb.ResponseError):
+            fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
 
     def test_release_group_fallback_returns_empty_bytes(self, mocker: MockerFixture) -> None:
         """When release-group fallback returns empty bytes, result is empty.
@@ -883,6 +907,224 @@ class TestPatchMbxmlParseRecording:
 
 
 # ---------------------------------------------------------------------------
+# _patched_safe_read
+# ---------------------------------------------------------------------------
+
+
+class TestPatchedSafeRead:
+    """Tests for the _patched_safe_read workaround that fast-fails on non-retryable HTTP codes."""
+
+    def _make_opener(self, mocker: MockerFixture, exc: Exception | None = None, data: bytes = b"") -> Any:
+        """Build a mock opener that raises ``exc`` or returns a mock file object yielding ``data``.
+
+        :param mocker: pytest-mock fixture.
+        :param exc: If provided, ``open()`` raises this exception.
+        :param data: Bytes returned by ``open().read()`` when ``exc`` is ``None``.
+        :returns: A MagicMock with an ``open`` method matching the ``_HttpOpener`` protocol.
+        """
+        opener = mocker.MagicMock()
+        if exc is not None:
+            opener.open.side_effect = exc
+        else:
+            fake_file = mocker.MagicMock()
+            fake_file.read.return_value = data
+            opener.open.return_value = fake_file
+        return opener
+
+    def test_success_returns_bytes(self, mocker: MockerFixture) -> None:
+        """Returns the bytes from the response when the request succeeds.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        opener = self._make_opener(mocker, data=b"ok")
+        assert _patched_safe_read(opener, mocker.MagicMock()) == b"ok"
+
+    def test_success_with_body_uses_post(self, mocker: MockerFixture) -> None:
+        """When a request body is provided, ``open()`` is called with it (POST path).
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        opener = self._make_opener(mocker, data=b"post-ok")
+        req = mocker.MagicMock()
+        result = _patched_safe_read(opener, req, body=b"payload")
+        assert result == b"post-ok"
+        opener.open.assert_called_once_with(req, b"payload")
+
+    def test_307_redirect_raises_response_error_immediately(self, mocker: MockerFixture) -> None:
+        """A 307 redirect loop raises ResponseError on the first attempt with no retries.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        http_exc = HTTPError("http://example.com", 307, "Temporary Redirect", HTTPMessage(), None)
+        opener = self._make_opener(mocker, exc=http_exc)
+        req = mocker.MagicMock()
+        with pytest.raises(mzmz.ResponseError):
+            _patched_safe_read(opener, req)
+        # open() was called exactly once — no retries
+        assert opener.open.call_count == 1
+
+    def test_unknown_code_raises_response_error_immediately(self, mocker: MockerFixture) -> None:
+        """An arbitrary unknown HTTP code raises ResponseError on the first attempt with no retries.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        http_exc = HTTPError("http://example.com", 418, "I'm a teapot", HTTPMessage(), None)
+        opener = self._make_opener(mocker, exc=http_exc)
+        req = mocker.MagicMock()
+        with pytest.raises(mzmz.ResponseError):
+            _patched_safe_read(opener, req)
+        assert opener.open.call_count == 1
+
+    def test_404_raises_response_error_immediately(self, mocker: MockerFixture) -> None:
+        """HTTP 404 raises ResponseError on the first attempt with no retries.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        http_exc = HTTPError("http://example.com", 404, "Not Found", HTTPMessage(), None)
+        opener = self._make_opener(mocker, exc=http_exc)
+        with pytest.raises(mzmz.ResponseError):
+            _patched_safe_read(opener, mocker.MagicMock())
+        assert opener.open.call_count == 1
+
+    def test_401_raises_authentication_error(self, mocker: MockerFixture) -> None:
+        """HTTP 401 raises AuthenticationError on the first attempt.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        http_exc = HTTPError("http://example.com", 401, "Unauthorized", HTTPMessage(), None)
+        opener = self._make_opener(mocker, exc=http_exc)
+        with pytest.raises(mzmz.AuthenticationError):
+            _patched_safe_read(opener, mocker.MagicMock())
+        assert opener.open.call_count == 1
+
+    def test_503_retries_and_raises_network_error(self, mocker: MockerFixture) -> None:
+        """HTTP 503 is retried up to max_retries times before raising NetworkError.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+        http_exc = HTTPError("http://example.com", 503, "Service Unavailable", HTTPMessage(), None)
+        opener = self._make_opener(mocker, exc=http_exc)
+        with pytest.raises(mzmz.NetworkError):
+            _patched_safe_read(opener, mocker.MagicMock(), max_retries=3, retry_delay_delta=0.0)
+        assert opener.open.call_count == 3
+        # Sleep is called for retries 1 and 2 (not the first attempt).
+        assert mock_sleep.call_count == 2
+
+    def test_url_error_non_104_raises_network_error(self, mocker: MockerFixture) -> None:
+        """A URLError with a non-104 socket error raises NetworkError immediately.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        reason = socket.error(111, "Connection refused")
+        opener = self._make_opener(mocker, exc=URLError(reason))
+        with pytest.raises(mzmz.NetworkError):
+            _patched_safe_read(opener, mocker.MagicMock())
+
+    def test_url_error_non_socket_reason_raises_network_error(self, mocker: MockerFixture) -> None:
+        """A URLError with a string reason (not a socket.error) raises NetworkError.
+
+        This exercises the ``if isinstance(exc.reason, socket.error)`` False branch.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        opener = self._make_opener(mocker, exc=URLError("name or service not known"))
+        with pytest.raises(mzmz.NetworkError):
+            _patched_safe_read(opener, mocker.MagicMock())
+
+    def test_url_error_104_retries(self, mocker: MockerFixture) -> None:
+        """A URLError with errno 104 (connection reset) triggers a retry.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        reason = socket.error(104, "Connection reset by peer")
+        opener = mocker.MagicMock()
+        # First call raises URLError(104), second call succeeds.
+        fake_file = mocker.MagicMock()
+        fake_file.read.return_value = b"ok"
+        opener.open.side_effect = [URLError(reason), fake_file]
+        result = _patched_safe_read(opener, mocker.MagicMock(), max_retries=2)
+        assert result == b"ok"
+
+    def test_socket_error_104_retries(self, mocker: MockerFixture) -> None:
+        """A socket.error with errno 104 triggers a retry.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        sock_err = socket.error(104, "Connection reset by peer")
+        opener = mocker.MagicMock()
+        fake_file = mocker.MagicMock()
+        fake_file.read.return_value = b"ok"
+        opener.open.side_effect = [sock_err, fake_file]
+        result = _patched_safe_read(opener, mocker.MagicMock(), max_retries=2)
+        assert result == b"ok"
+
+    def test_socket_error_non_104_raises_network_error(self, mocker: MockerFixture) -> None:
+        """A socket.error with non-104 errno raises NetworkError immediately.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        sock_err = socket.error(111, "Connection refused")
+        opener = self._make_opener(mocker, exc=sock_err)
+        with pytest.raises(mzmz.NetworkError):
+            _patched_safe_read(opener, mocker.MagicMock())
+
+    def test_oserror_raises_network_error(self, mocker: MockerFixture) -> None:
+        """A generic OSError raises NetworkError immediately.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        opener = self._make_opener(mocker, exc=OSError("disk gone"))
+        with pytest.raises(mzmz.NetworkError):
+            _patched_safe_read(opener, mocker.MagicMock())
+
+    def test_timeout_error_retries_and_raises_network_error(self, mocker: MockerFixture) -> None:
+        """A TimeoutError is retried up to max_retries times before raising NetworkError.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        opener = self._make_opener(mocker, exc=TimeoutError("timed out"))
+        with pytest.raises(mzmz.NetworkError):
+            _patched_safe_read(opener, mocker.MagicMock(), max_retries=2, retry_delay_delta=0.0)
+        assert opener.open.call_count == 2
+
+    def test_bad_status_line_retries_and_raises_network_error(self, mocker: MockerFixture) -> None:
+        """A BadStatusLine is retried up to max_retries times before raising NetworkError.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        opener = self._make_opener(mocker, exc=BadStatusLine(""))
+        with pytest.raises(mzmz.NetworkError):
+            _patched_safe_read(opener, mocker.MagicMock(), max_retries=2, retry_delay_delta=0.0)
+        assert opener.open.call_count == 2
+
+    def test_http_exception_retries_and_raises_network_error(self, mocker: MockerFixture) -> None:
+        """A generic HTTPException is retried up to max_retries times before raising NetworkError.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        opener = self._make_opener(mocker, exc=HTTPException("misc"))
+        with pytest.raises(mzmz.NetworkError):
+            _patched_safe_read(opener, mocker.MagicMock(), max_retries=2, retry_delay_delta=0.0)
+        assert opener.open.call_count == 2
+
+
+# ---------------------------------------------------------------------------
 # MBRecording.first_release_date
 # ---------------------------------------------------------------------------
 
@@ -1022,22 +1264,19 @@ class TestFetchCoverArtReleaseGroupFallback:
         assert result.front_full[0].filename == "cover.jpg"
         assert mock_rg.call_count == 2
 
-    def test_release_group_fallback_500_error_still_fetches_original(self, mocker: MockerFixture) -> None:
-        """If 500px fetch fails, original fetch still proceeds.
+    def test_release_group_fallback_error_raises(self, mocker: MockerFixture) -> None:
+        """Any error from the release-group fallback call propagates to the caller.
 
         :param mocker: pytest-mock fixture.
         """
-        jpeg_orig = b"\xff\xd8" + b"\x00" * 2000
         mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=mb.ResponseError("404 Not Found"))
         mocker.patch(
             "music_annotator._mb_api.mb.get_release_group_image_front",
-            side_effect=[mb.ResponseError("503"), jpeg_orig],
+            side_effect=mb.ResponseError("503"),
         )
         mocker.patch("music_annotator._mb_api.time.sleep")
-        result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
-        assert result.front == []
-        assert len(result.front_full) == 1
-        assert result.front_full[0].filename == "cover.jpg"
+        with pytest.raises(mb.ResponseError):
+            fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
 
 
 # ---------------------------------------------------------------------------

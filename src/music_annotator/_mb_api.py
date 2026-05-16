@@ -9,15 +9,18 @@ from __future__ import annotations
 import functools
 import json
 import os
+import socket
 import time
 import urllib.request
 import xml.etree.ElementTree as _ET
 from collections.abc import Callable
 from pathlib import Path
-from typing import ParamSpec, TypeVar
+from typing import ParamSpec, Protocol, TypeVar
 
 import musicbrainzngs as mb
+import musicbrainzngs.compat as _mbcompat
 import musicbrainzngs.mbxml as _mbxml
+import musicbrainzngs.musicbrainz as _mbmz
 import structlog
 
 from music_annotator.models import JSON, CoverArt, CoverImage, MBArtistRelation, MBRecording, MBRelease, MBWork
@@ -61,6 +64,134 @@ def _patched_parse_recording(recording: _ET.Element) -> dict[str, JSON]:
 
 
 _mbxml.parse_recording = _patched_parse_recording
+
+# ---------------------------------------------------------------------------
+# Workaround for a musicbrainzngs bug: _safe_read retries any "unknown" HTTP
+# status code (including 307 redirect loops detected by Python's redirect
+# handler) up to 8 times with growing delays (~60 s total) before raising
+# NetworkError.  The correct behaviour for any non-retryable status is to fail
+# immediately with ResponseError.
+#
+# The patch below replaces the ``else: # retrying for now`` branch in
+# _safe_read with ``raise ResponseError(cause=exc)``.  Retryable codes (503,
+# 502, 500) and auth failures (401) are left unchanged.
+#
+# Upstream fix: mbngs2-1 — replace the else branch in _safe_read.
+# Remove this patch once musicbrainzngs2 ships the fix.
+# ---------------------------------------------------------------------------
+
+# Aliases for private musicbrainzngs.musicbrainz members used by the patch.  The # noqa
+# suppresses ruff SLF001; the pylint disable suppresses the equivalent W0212 warning.
+# Both are intentional: the monkey-patch must mirror the library's own internal calls.
+_mbmz_original_safe_read = _mbmz._safe_read  # noqa: SLF001  # pylint: disable=protected-access
+_mbmz_log = _mbmz._log  # noqa: SLF001  # pylint: disable=protected-access
+
+
+class _HttpResponse(Protocol):
+    """Structural interface for the file-like object returned by an opener's ``open()`` call.
+
+    Only the ``read()`` method is used by ``_patched_safe_read``; the rest of the HTTP response
+    interface is irrelevant to the patch.
+    """
+
+    def read(self) -> bytes:
+        """Read and return the response body as bytes.
+
+        :returns: The raw response bytes.
+        """
+
+
+class _HttpOpener(Protocol):
+    """Structural interface for the urllib opener used by ``_patched_safe_read``.
+
+    musicbrainzngs passes an ``OpenerDirector`` instance here; the only method exercised
+    by ``_safe_read`` is ``open``.  The Protocol avoids ``object`` in the signature while
+    keeping the patch free of ``Any``.
+    """
+
+    def open(self, req: object, body: object = None) -> _HttpResponse:
+        """Open an HTTP request, optionally with a request body.
+
+        :param req: The request object.
+        :param body: Optional POST body.
+        :returns: An HTTP response object whose ``read()`` yields the body bytes.
+        """
+
+
+def _patched_safe_read(
+    opener: _HttpOpener,
+    req: object,
+    body: object = None,
+    max_retries: int = 8,
+    retry_delay_delta: float = 2.0,
+) -> bytes:
+    """Replacement for ``musicbrainzngs.musicbrainz._safe_read`` that fails fast on non-retryable HTTP errors.
+
+    The original ``_safe_read`` retries any HTTP status code not explicitly handled (including 307
+    redirect loops) up to ``max_retries`` times with growing delays, producing a hang of up to
+    ~60 seconds before raising ``NetworkError``.  This patch raises ``ResponseError`` immediately
+    for such codes instead, matching the user's preference that data fetch errors are fatal and fast.
+
+    Retryable codes (503, 502, 500) and auth errors (401) are handled identically to the original.
+
+    Remove this function once musicbrainzngs2 ships the upstream fix (mbngs2-1: replace the
+    ``else: retrying for now`` branch with ``raise ResponseError(cause=exc)``).
+
+    :param opener: The ``urllib`` opener used to perform the HTTP request.
+    :param req: The ``urllib.request.Request`` object describing the request.
+    :param body: Optional request body bytes (for POST requests).
+    :param max_retries: Maximum number of attempts before raising ``NetworkError``.
+    :param retry_delay_delta: Seconds added per retry for the increasing delay.
+    :returns: The raw response bytes on success.
+    :raises mb.ResponseError: On any permanent HTTP error (400, 404, 411, or any unknown code).
+    :raises mb.AuthenticationError: On HTTP 401.
+    :raises mb.NetworkError: After all retries are exhausted or on a network-level failure.
+    """
+    last_exc: Exception | None = None
+    for retry_num in range(max_retries):
+        if retry_num:
+            _mbmz_log.info(f"retrying after delay (#{retry_num})")
+            time.sleep(retry_num * retry_delay_delta)
+        try:
+            f = opener.open(req, body) if body else opener.open(req)
+            return f.read()
+        except _mbcompat.HTTPError as exc:
+            if exc.code in (400, 404, 411):
+                raise _mbmz.ResponseError(cause=exc)
+            if exc.code in (503, 502, 500):
+                _mbmz_log.info(f"HTTP error {exc.code}")
+            elif exc.code in (401,):
+                raise _mbmz.AuthenticationError(cause=exc)
+            else:
+                # Any other HTTP status (e.g. 307 redirect loop) is a permanent failure.
+                # The original code retried here — that can produce ~60 s hangs on redirect loops.
+                raise _mbmz.ResponseError(cause=exc)
+            last_exc = exc
+        except _mbcompat.BadStatusLine as exc:
+            _mbmz_log.info("bad status line")
+            last_exc = exc
+        except _mbcompat.HTTPException as exc:
+            _mbmz_log.info(f"miscellaneous HTTP exception: {exc}")
+            last_exc = exc
+        except _mbcompat.URLError as exc:
+            if isinstance(exc.reason, socket.error):
+                code = exc.reason.errno
+                if code == 104:  # "Connection reset by peer."
+                    continue
+            raise _mbmz.NetworkError(cause=exc)
+        except TimeoutError as exc:
+            _mbmz_log.info("socket timeout")
+            last_exc = exc
+        except OSError as exc:
+            # socket.error is OSError in Python 3; handles both socket-level errors and
+            # the original IOError branch from musicbrainzngs.  Code 104 = connection reset.
+            if exc.errno == 104:
+                continue
+            raise _mbmz.NetworkError(cause=exc)
+    raise _mbmz.NetworkError(f"retried {max_retries} times", last_exc)
+
+
+_mbmz._safe_read = _patched_safe_read  # noqa: SLF001  # pylint: disable=protected-access
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -337,7 +468,7 @@ def _fetch_rg_image(
     """Fetch one release-group front image (either 500 px or original) and append to ``imgs``.
 
     Checks the cache directory for a pre-downloaded copy before hitting the network.  Writes the
-    fetched bytes back to the cache on a miss.  Silently skips when the network call fails.
+    fetched bytes back to the cache on a miss.  Any network error propagates to the caller.
 
     :param release_group_id: MusicBrainz release-group MBID.
     :param size: Size string for ``mb.get_release_group_image_front`` (e.g. ``"500"``); ``""`` for original.
@@ -345,6 +476,7 @@ def _fetch_rg_image(
     :param filename: ``filename`` attribute to set on the image (empty string leaves it unset).
     :param url: Canonical CAA URL to record on the image.
     :param cache_dir: Cache directory, or ``None`` when caching is disabled.
+    :raises mb.ResponseError: On any network or HTTP error from the CAA API.
     """
     key = _cover_art_cache_key(f"rg_{release_group_id}", size)
     data: bytes | None = None
@@ -354,19 +486,16 @@ def _fetch_rg_image(
             data = cached.read_bytes()
             log.debug("cover_art_cache_hit", key=key, bytes=len(data))
     if data is None:
-        try:
-            if size:
-                raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id, size=size))
-            else:
-                raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id))
-            if raw:
-                data = bytes(raw)
-                if cache_dir is not None:
-                    cache_path = cache_dir / f"{key}.bin"
-                    cache_path.write_bytes(data)
-                    log.debug("cover_art_cache_written", key=key, bytes=len(data))
-        except mb.ResponseError as exc:
-            log.warning("cover_art_release_group_error", size=size or "original", code=str(exc)[:40])
+        if size:
+            raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id, size=size))
+        else:
+            raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id))
+        if raw:
+            data = bytes(raw)
+            if cache_dir is not None:
+                cache_path = cache_dir / f"{key}.bin"
+                cache_path.write_bytes(data)
+                log.debug("cover_art_cache_written", key=key, bytes=len(data))
     if data is not None:
         img = CoverImage(data=data, mime=_infer_mime(data), url=url)
         if filename:
@@ -426,7 +555,9 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
         no CAA listing.  Pass an empty string to skip the fallback.
     :param no_cache: When ``True``, bypass the on-disk image cache entirely — always fetch from the
         network and do not write new cache entries.  Defaults to ``False``.
-    :returns: A :class:`~music_annotator.models.CoverArt` instance, or an empty one on failure.
+    :returns: A :class:`~music_annotator.models.CoverArt` instance.
+    :raises RuntimeError: If the image listing call fails with a non-404 HTTP error.
+    :raises mb.ResponseError: If any individual image fetch fails.
     """
     cache_dir: Path | None = None if no_cache else _cover_art_cache_dir()
 
@@ -436,12 +567,14 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
         Checks ``$XDG_CACHE_HOME/music-annotator/cover-art/`` for a previously downloaded copy before
         making a network request.  On a cache miss the image is fetched and written to the cache
         directory.  When ``no_cache`` is ``True`` the cache directory is ``None`` and both read and
-        write are skipped.
+        write are skipped.  Returns ``None`` only when the API returns empty bytes; any network or
+        HTTP error propagates to the caller.
 
         :param rel_id: MusicBrainz release MBID.
         :param coverid: CAA image identifier.
         :param bucket: The destination bucket name (e.g. ``"front"``, ``"back"``), logged with the fetch.
         :param size: Optional size string passed to ``mb.get_image`` (e.g. ``"500"``); omit for original.
+        :raises mb.ResponseError: On any network or HTTP error from the CAA API.
         """
         key = _cover_art_cache_key(str(coverid), size)
         if cache_dir is not None:
@@ -450,30 +583,27 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
                 data = cached.read_bytes()
                 log.debug("cover_art_cache_hit", key=key, bytes=len(data))
                 return CoverImage(data=data, mime=_infer_mime(data))
-        try:
-            if size:
-                raw = _mb_call(lambda: mb.get_image(rel_id, coverid, size=size))
-            else:
-                raw = _mb_call(lambda: mb.get_image(rel_id, coverid))
-            if raw:
-                data = bytes(raw)
-                if cache_dir is not None:
-                    cache_path = cache_dir / f"{key}.bin"
-                    cache_path.write_bytes(data)
-                    log.debug("cover_art_cache_written", key=key, bytes=len(data))
-                img = CoverImage(data=data, mime=_infer_mime(data))
-                log.info(
-                    "cover_art_image_fetched",
-                    coverid=str(coverid),
-                    size=size or "original",
-                    mime=img.mime,
-                    bytes=len(data),
-                    bucket=bucket,
-                )
-                return img
-        except mb.ResponseError as exc:
-            log.warning("cover_art_image_error", coverid=str(coverid), size=size or "original", code=str(exc)[:40])
-        return None
+        if size:
+            raw = _mb_call(lambda: mb.get_image(rel_id, coverid, size=size))
+        else:
+            raw = _mb_call(lambda: mb.get_image(rel_id, coverid))
+        if not raw:
+            return None
+        data = bytes(raw)
+        if cache_dir is not None:
+            cache_path = cache_dir / f"{key}.bin"
+            cache_path.write_bytes(data)
+            log.debug("cover_art_cache_written", key=key, bytes=len(data))
+        img = CoverImage(data=data, mime=_infer_mime(data))
+        log.info(
+            "cover_art_image_fetched",
+            coverid=str(coverid),
+            size=size or "original",
+            mime=img.mime,
+            bytes=len(data),
+            bucket=bucket,
+        )
+        return img
 
     log.info("fetch_cover_art", release_id=release_id)
 
@@ -492,7 +622,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
             case s if "404" in s:
                 log.info("cover_art_no_release_listing", release_id=release_id)
             case _:
-                log.warning("cover_art_listing_error", code=code[:40])
+                raise RuntimeError(f"cover art listing failed for release {release_id!r}: {code[:80]}") from exc
 
     # Step 2: classify images by type (first pass — no fetching yet).
     # Each image may carry multiple types (e.g. ["Back", "Spine"]).  We route each image to

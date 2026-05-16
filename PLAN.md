@@ -2,38 +2,6 @@
 
 ## Next up
 
-### Cover art fetch errors — make fatal + fast-fail on redirect loops
-
-Currently `_fetch_raw` and `_fetch_rg_image` swallow `mb.ResponseError` and silently return
-empty / `None`; non-404 `get_image_list` errors are logged as warnings and annotation continues
-without cover art.  The user's stated preference is that all data fetch errors are fatal.
-
-Additionally, `_safe_read` in musicbrainzngs retries any "unknown" HTTP code (including 307
-redirect loops) 8× with growing delays, producing a ~60-second hang before raising
-`NetworkError` rather than failing immediately.
-
-Four changes to `_mb_api.py` (one commit):
-
-1. **`_patched_safe_read` monkey-patch** — same pattern as `_patched_parse_recording`.  Replace
-   the `else: # Other, unknown error — retrying for now` branch in `_safe_read` with
-   `raise ResponseError(cause=exc)`, so any non-retryable HTTP status (including 307) fails
-   immediately rather than spinning through 8 retries with growing delays.  Apply via
-   `musicbrainzngs.musicbrainz._safe_read = _patched_safe_read`.  Document the upstream bug and
-   removal condition pointing to the musicbrainzngs2 PR.
-
-2. **`_fetch_raw` fatal** — remove the `except mb.ResponseError` swallow; replace with
-   `raise RuntimeError(...)` carrying the coverid and size.  `NetworkError` already propagates
-   naturally and needs no change.
-
-3. **`_fetch_rg_image` fatal** — same treatment as `_fetch_raw`.
-
-4. **`get_image_list` non-404 errors fatal** — keep 404 as non-fatal (legitimate: release has
-   no CAA listing; continue to release-group fallback); raise `RuntimeError` for all other
-   `ResponseError` codes.
-
-Update `test_mb_helpers.py`: ~5 tests change assertion from "swallowed / returns empty" to
-`pytest.raises(RuntimeError)`; 2 new tests for the patched `_safe_read` fast-fail path.
-
 ---
 
 ## Open questions (decision needed before implementation)
