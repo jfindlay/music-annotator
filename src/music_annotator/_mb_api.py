@@ -468,7 +468,10 @@ def _fetch_rg_image(
     """Fetch one release-group front image (either 500 px or original) and append to ``imgs``.
 
     Checks the cache directory for a pre-downloaded copy before hitting the network.  Writes the
-    fetched bytes back to the cache on a miss.  Any network error propagates to the caller.
+    fetched bytes back to the cache on a miss.  A 404 from the CAA is treated as "image not
+    available" — a warning is logged and the function returns without appending anything.  This
+    handles the known CAA data-integrity condition where the MB metadata still references an image
+    that has since been deleted from object storage.
 
     :param release_group_id: MusicBrainz release-group MBID.
     :param size: Size string for ``mb.get_release_group_image_front`` (e.g. ``"500"``); ``""`` for original.
@@ -476,7 +479,7 @@ def _fetch_rg_image(
     :param filename: ``filename`` attribute to set on the image (empty string leaves it unset).
     :param url: Canonical CAA URL to record on the image.
     :param cache_dir: Cache directory, or ``None`` when caching is disabled.
-    :raises mb.ResponseError: On any network or HTTP error from the CAA API.
+    :raises mb.ResponseError: On any non-404 network or HTTP error from the CAA API.
     """
     key = _cover_art_cache_key(f"rg_{release_group_id}", size)
     data: bytes | None = None
@@ -486,10 +489,20 @@ def _fetch_rg_image(
             data = cached.read_bytes()
             log.debug("cover_art_cache_hit", key=key, bytes=len(data))
     if data is None:
-        if size:
-            raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id, size=size))
-        else:
-            raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id))
+        try:
+            if size:
+                raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id, size=size))
+            else:
+                raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id))
+        except mb.ResponseError as exc:
+            if "404" in str(exc):
+                log.warning(
+                    "cover_art_rg_image_not_found",
+                    release_group_id=release_group_id,
+                    size=size or "original",
+                )
+                return
+            raise
         if raw:
             data = bytes(raw)
             if cache_dir is not None:
@@ -557,7 +570,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
         network and do not write new cache entries.  Defaults to ``False``.
     :returns: A :class:`~music_annotator.models.CoverArt` instance.
     :raises RuntimeError: If the image listing call fails with a non-404 HTTP error.
-    :raises mb.ResponseError: If any individual image fetch fails.
+    :raises mb.ResponseError: If any individual image fetch fails with a non-404 HTTP error.
     """
     cache_dir: Path | None = None if no_cache else _cover_art_cache_dir()
 
@@ -567,14 +580,15 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
         Checks ``$XDG_CACHE_HOME/music-annotator/cover-art/`` for a previously downloaded copy before
         making a network request.  On a cache miss the image is fetched and written to the cache
         directory.  When ``no_cache`` is ``True`` the cache directory is ``None`` and both read and
-        write are skipped.  Returns ``None`` only when the API returns empty bytes; any network or
-        HTTP error propagates to the caller.
+        write are skipped.  Returns ``None`` when the API returns empty bytes or a 404 (image was
+        deleted from CAA after the listing was fetched — a known CAA data-integrity condition).
+        Non-404 HTTP errors propagate to the caller.
 
         :param rel_id: MusicBrainz release MBID.
         :param coverid: CAA image identifier.
         :param bucket: The destination bucket name (e.g. ``"front"``, ``"back"``), logged with the fetch.
         :param size: Optional size string passed to ``mb.get_image`` (e.g. ``"500"``); omit for original.
-        :raises mb.ResponseError: On any network or HTTP error from the CAA API.
+        :raises mb.ResponseError: On any non-404 network or HTTP error from the CAA API.
         """
         key = _cover_art_cache_key(str(coverid), size)
         if cache_dir is not None:
@@ -583,10 +597,16 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
                 data = cached.read_bytes()
                 log.debug("cover_art_cache_hit", key=key, bytes=len(data))
                 return CoverImage(data=data, mime=_infer_mime(data))
-        if size:
-            raw = _mb_call(lambda: mb.get_image(rel_id, coverid, size=size))
-        else:
-            raw = _mb_call(lambda: mb.get_image(rel_id, coverid))
+        try:
+            if size:
+                raw = _mb_call(lambda: mb.get_image(rel_id, coverid, size=size))
+            else:
+                raw = _mb_call(lambda: mb.get_image(rel_id, coverid))
+        except mb.ResponseError as exc:
+            if "404" in str(exc):
+                log.warning("cover_art_image_not_found", coverid=str(coverid), bucket=bucket, size=size or "original")
+                return None
+            raise
         if not raw:
             return None
         data = bytes(raw)

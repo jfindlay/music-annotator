@@ -435,7 +435,7 @@ class TestFetchCoverArt:
         assert result.spine == []
 
     def test_image_fetch_error_raises(self, mocker: MockerFixture) -> None:
-        """A ResponseError on an image fetch propagates to the caller.
+        """A non-404 ResponseError on an image fetch propagates to the caller.
 
         :param mocker: pytest-mock fixture.
         """
@@ -447,6 +447,63 @@ class TestFetchCoverArt:
         )
         with pytest.raises(mb.ResponseError):
             fetch_cover_art("rel-1", no_cache=True)
+
+    def test_front_image_404_returns_empty(self, mocker: MockerFixture) -> None:
+        """A 404 on a front image fetch is treated as unavailable; result has no front image.
+
+        This models the CAA data-integrity condition where the MB listing references an image
+        that has since been deleted from object storage.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("55", "Front")))
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_image",
+            side_effect=mb.ResponseError(cause=Exception("HTTP Error 404: NOT FOUND")),
+        )
+        result = fetch_cover_art("rel-1", no_cache=True)
+        assert not result.available
+        assert result.front == []
+
+    def test_non_front_image_404_returns_empty(self, mocker: MockerFixture) -> None:
+        """A 404 on a non-front (back) image fetch is treated as unavailable; result has no back image.
+
+        Non-front images use the same ``_fetch_raw`` path as front images, so the same 404 handling
+        applies.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("77", "Back")))
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_image",
+            side_effect=mb.ResponseError(cause=Exception("HTTP Error 404: NOT FOUND")),
+        )
+        result = fetch_cover_art("rel-1", no_cache=True)
+        assert not result.available
+        assert result.back == []
+
+    def test_release_group_fallback_404_returns_empty(self, mocker: MockerFixture) -> None:
+        """A 404 on the release-group fallback is treated as unavailable; result has no front image.
+
+        This is the exact scenario from the error trace: listing returns 404 triggering the RG
+        fallback, then the RG front image URL also returns 404.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_image_list",
+            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+        )
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_release_group_image_front",
+            side_effect=mb.ResponseError(cause=Exception("HTTP Error 404: NOT FOUND")),
+        )
+        result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
+        assert not result.available
+        assert result.front == []
 
     def test_image_fetch_returns_empty_bytes_skipped(self, mocker: MockerFixture) -> None:
         """An image that returns empty bytes is not added to the result.
