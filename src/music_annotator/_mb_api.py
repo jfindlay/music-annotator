@@ -538,9 +538,18 @@ def _cover_art_cache_key(coverid: str, size: str) -> str:
     The key encodes both the CAA image identifier and the requested size so that the 500 px
     thumbnail and the original resolution image are stored as separate cache entries.
 
-    :param coverid: The CAA numeric image identifier (or a release-group key string).
+    For release-specific images, callers prefix ``coverid`` with the release MBID
+    (e.g. ``f"{rel_id}_{caa_image_id}"``), scoping the cache entry to that release and
+    preventing stale hits when a CAA image ID is reused or referenced by multiple releases.
+    For release-group fallback images, callers prefix with ``f"rg_{release_group_id}"``.
+    MusicBrainz UUIDs contain only hex digits and hyphens (no underscores), and CAA image
+    IDs are plain integers, so the underscore separator is unambiguous in both cases.
+
+    :param coverid: The prefixed identifier string — either ``"<rel_id>_<caa_image_id>"``
+        for release-specific images or ``"rg_<release_group_id>"`` for release-group fallback
+        images.
     :param size: The size string passed to ``mb.get_image`` (e.g. ``"500"``), or ``""`` for original.
-    :returns: A filename-safe string such as ``"12345678_500"`` or ``"12345678_original"``.
+    :returns: A filename-safe string such as ``"<rel_id>_12345678_500"`` or ``"rg_<rg_id>_original"``.
     """
     return f"{coverid}_{size or 'original'}"
 
@@ -590,7 +599,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
         :param size: Optional size string passed to ``mb.get_image`` (e.g. ``"500"``); omit for original.
         :raises mb.ResponseError: On any non-404 network or HTTP error from the CAA API.
         """
-        key = _cover_art_cache_key(str(coverid), size)
+        key = _cover_art_cache_key(f"{rel_id}_{coverid}", size)
         if cache_dir is not None:
             cached = cache_dir / f"{key}.bin"
             if cached.is_file():

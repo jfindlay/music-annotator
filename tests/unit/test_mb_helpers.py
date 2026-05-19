@@ -1432,8 +1432,8 @@ class TestFetchCoverArtCacheMissAndHit:
         assert mock_get_image.call_count >= 1
         # Result contains image data.
         assert result.front[0].data == _JPEG_BYTES
-        # Cache file was written.
-        cache_file_500 = Path("/cache/music-annotator/cover-art/99_500.bin")
+        # Cache file was written under the release-scoped key.
+        cache_file_500 = Path("/cache/music-annotator/cover-art/rel-1_99_500.bin")
         assert cache_file_500.exists()
         assert cache_file_500.read_bytes() == _JPEG_BYTES
 
@@ -1446,9 +1446,9 @@ class TestFetchCoverArtCacheMissAndHit:
 
         cache_dir = Path("/cache/music-annotator/cover-art")
         fs.create_dir(str(cache_dir))
-        # Pre-populate cache for both 500 and original sizes.
-        (cache_dir / "99_500.bin").write_bytes(_JPEG_BYTES)
-        (cache_dir / "99_original.bin").write_bytes(_JPEG_BYTES)
+        # Pre-populate cache for both 500 and original sizes using the release-scoped key.
+        (cache_dir / "rel-1_99_500.bin").write_bytes(_JPEG_BYTES)
+        (cache_dir / "rel-1_99_original.bin").write_bytes(_JPEG_BYTES)
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
         mocker.patch("music_annotator._mb_api.time.sleep")
@@ -1470,8 +1470,8 @@ class TestFetchCoverArtCacheMissAndHit:
 
         cache_dir = Path("/cache/music-annotator/cover-art")
         fs.create_dir(str(cache_dir))
-        (cache_dir / "99_500.bin").write_bytes(_JPEG_BYTES)
-        (cache_dir / "99_original.bin").write_bytes(_JPEG_BYTES)
+        (cache_dir / "rel-1_99_500.bin").write_bytes(_JPEG_BYTES)
+        (cache_dir / "rel-1_99_original.bin").write_bytes(_JPEG_BYTES)
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
         mocker.patch("music_annotator._mb_api.time.sleep")
@@ -1528,3 +1528,44 @@ class TestFetchCoverArtCacheMissAndHit:
         cache_dir = Path("/cache/music-annotator/cover-art")
         assert (cache_dir / "rg_rg-1_500.bin").exists()
         assert (cache_dir / "rg_rg-1_original.bin").exists()
+
+    def test_cache_is_scoped_to_release_id(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Cache entries for the same CAA image ID are isolated per release MBID.
+
+        Two releases that both reference CAA image ID "99" must not share a cache entry.
+        Release B's fetch must go to the network even when release A has already populated
+        the cache for the same CAA image ID, and the result must contain release B's image
+        data rather than release A's.
+
+        This is the regression test for the latent bug where ``_fetch_raw`` used only the
+        CAA numeric image ID as the cache key, omitting ``rel_id``.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        jpeg_a = b"\xff\xd8" + b"\xaa" * 100
+        jpeg_b = b"\xff\xd8" + b"\xbb" * 100
+
+        cache_dir = Path("/cache/music-annotator/cover-art")
+        fs.create_dir(str(cache_dir))
+        # Pre-populate cache as if release A was already processed.
+        (cache_dir / "rel-A_99_500.bin").write_bytes(jpeg_a)
+        (cache_dir / "rel-A_99_original.bin").write_bytes(jpeg_a)
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=self._make_listing("99"))
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg_b)
+
+        # Fetch for release B — same CAA image ID "99", different release MBID.
+        result = fetch_cover_art("rel-B")
+
+        # Network must have been called: "rel-B_99_*.bin" was not in the cache.
+        assert mock_get.call_count >= 1
+        # Result must contain release B's image, not release A's stale cached image.
+        assert result.front[0].data == jpeg_b
+        # Release B's cache entry must have been written.
+        assert (cache_dir / "rel-B_99_500.bin").exists()
+        assert (cache_dir / "rel-B_99_500.bin").read_bytes() == jpeg_b
+        # Release A's cache entry must be untouched.
+        assert (cache_dir / "rel-A_99_500.bin").read_bytes() == jpeg_a
