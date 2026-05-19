@@ -754,6 +754,43 @@ def run(
                 tags_obj.cwp_movt_tot = str(total)
                 tags_obj.cwp_single_work_album = "1" if single else "0"
 
+            # Unify cwp_composer_lastnames / cwp_composers across all movements of this
+            # work on this medium.  When MB credits a completion or arranger as "composer"
+            # with the "additional" attribute on only some movements, those movements have
+            # an empty role_buckets.composers and fall back to additional_composers.
+            # build_track_tags marks this case with cwp_composers_is_fallback="1".  The
+            # result is a different CWP_COMPOSER_LASTNAMES — and therefore a different
+            # top_dir — than the movements that carry a plain primary-composer relation.
+            # Fix: propagate the primary-composer values from any movement that has them
+            # (cwp_composers_is_fallback empty) to all movements that used the fallback,
+            # so every movement in the group lands in the same top-level directory.
+            #
+            # Note: this spans movements on the same medium only.  Cross-medium
+            # unification is not supported (music-annotator operates on a
+            # single-medium workspace).
+            _primary_cwp_composers = ""
+            _primary_cwp_composers_sort = ""
+            _primary_cwp_composer_lastnames = ""
+            for grp_idx in group_idxs:
+                t = tags_map[grp_idx]
+                if t.cwp_composers and not t.cwp_composers_is_fallback:
+                    _primary_cwp_composers = t.cwp_composers
+                    _primary_cwp_composers_sort = t.cwp_composers_sort
+                    _primary_cwp_composer_lastnames = t.cwp_composer_lastnames
+                    break
+            if _primary_cwp_composers:
+                for grp_idx in group_idxs:
+                    t = tags_map[grp_idx]
+                    if t.cwp_composers_is_fallback:
+                        t.cwp_composers = _primary_cwp_composers
+                        t.cwp_composers_sort = _primary_cwp_composers_sort
+                        t.cwp_composer_lastnames = _primary_cwp_composer_lastnames
+                        t.cwp_composers_is_fallback = ""
+                        t.composer = t.composer or _primary_cwp_composers
+                        t.composersort = t.composersort or _primary_cwp_composers_sort
+                        t.cea_composers = t.cea_composers or _primary_cwp_composers
+                        t.cea_composer_lastnames = t.cea_composer_lastnames or _primary_cwp_composer_lastnames
+
             # Compute recording_date_work: the minimum interval spanning all movements of
             # this work on this medium.  All tracks in the group use this unified value for
             # the destination directory label so movements recorded in different sessions land

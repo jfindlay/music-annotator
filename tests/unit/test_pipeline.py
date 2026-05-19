@@ -2274,6 +2274,383 @@ class TestRunFullPipeline:
         )
         spy.assert_not_called()
 
+    def test_composer_unified_across_movements_when_additional_only_on_some(
+        self, mocker: MockerFixture, fs: FakeFilesystem
+    ) -> None:
+        """Movements with only an additional composer inherit the primary composer from other movements.
+
+        When MB credits a finisher as "composer" with the "additional" attribute on only some
+        movements, those movements have an empty cwp_composers and fall back to
+        additional_composers, producing a different CWP_COMPOSER_LASTNAMES — and therefore a
+        different top_dir — than movements that carry a plain primary-composer relation.  run()
+        must propagate the primary-composer values so every movement gets the same top-level
+        directory.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        # Both movements share the same top work (twid).  Movement 1 links to a movement work
+        # (w-mvt1) that has a plain composer relation; movement 2 links to a movement work
+        # (w-mvt2) that has only an "additional" composer relation (e.g. a completion credit).
+        # Both movement works have a "parts" backward relation to the same root work (w-root),
+        # which itself carries the primary composer — but the current per-track RoleBuckets does
+        # not see the root via the second movement if the root is not reached in the hierarchy.
+        # We deliberately attach the primary composer only to the movement-1 work to isolate the
+        # propagation path from the cross-track pass.
+        top_work_id = "w-root"
+
+        work_mvt1 = _w(
+            {
+                "id": "w-mvt1",
+                "title": "I. Allegro",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-mozart", "name": "Mozart", "sort-name": "Mozart, Wolfgang Amadeus"},
+                        "attribute-list": [],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Concerto"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        work_mvt2 = _w(
+            {
+                "id": "w-mvt2",
+                "title": "II. Rondo",
+                "type": "",
+                "artist-relation-list": [
+                    # Only an additional composer (completion credit) — no plain primary composer.
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-sussmayr", "name": "Süßmayr", "sort-name": "Süßmayr, Franz Xaver"},
+                        "attribute-list": ["additional"],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Concerto"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        work_root = _w(
+            {
+                "id": top_work_id,
+                "title": "Concerto",
+                "type": "Concerto",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        call_count = [0]
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            call_count[0] += 1
+            work_id = "w-mvt1" if call_count[0] == 1 else "w-mvt2"
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "T",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [{"type": "performance", "work": {"id": work_id, "title": "Mvt"}}],
+                }
+            )
+
+        def _fetch_work(work_id: str) -> MBWork:
+            return {"w-mvt1": work_mvt1, "w-mvt2": work_mvt2, top_work_id: work_root}[work_id]
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        # Patch in both locations: _mb_api (used by _get_bottom_work) and _works (used by build_work_hierarchy)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+
+        # Both movements should carry the primary composer from movement 1.
+        assert tags1.cwp_composers == tags2.cwp_composers == "Mozart"
+        assert tags1.cwp_composer_lastnames == tags2.cwp_composer_lastnames == "Mozart"
+        # Movement 2's additional composer (Süßmayr) must NOT have been erased from its own
+        # cwp_arrangers / arranger tags — the fix must only touch the missing-composer fields.
+        assert tags1.cwp_composers_sort == tags2.cwp_composers_sort
+
+    def test_composer_unified_produces_same_top_dir(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Movements with mismatched composer credits all land in the same top-level directory.
+
+        This is the directory-grouping counterpart to
+        test_composer_unified_across_movements_when_additional_only_on_some: it verifies that the
+        actual destination paths share the same parent, not just that the tag fields are equal.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        top_work_id = "w-root"
+        work_mvt1 = _w(
+            {
+                "id": "w-mvt1",
+                "title": "I. Allegro",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-mozart", "name": "Mozart", "sort-name": "Mozart, Wolfgang Amadeus"},
+                        "attribute-list": [],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Concerto"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        work_mvt2 = _w(
+            {
+                "id": "w-mvt2",
+                "title": "II. Rondo",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-sussmayr", "name": "Süßmayr", "sort-name": "Süßmayr, Franz Xaver"},
+                        "attribute-list": ["additional"],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Concerto"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        work_root = _w(
+            {
+                "id": top_work_id,
+                "title": "Concerto",
+                "type": "Concerto",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        call_count = [0]
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            call_count[0] += 1
+            work_id = "w-mvt1" if call_count[0] == 1 else "w-mvt2"
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "T",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [{"type": "performance", "work": {"id": work_id, "title": "Mvt"}}],
+                }
+            )
+
+        def _fetch_work(work_id: str) -> MBWork:
+            return {"w-mvt1": work_mvt1, "w-mvt2": work_mvt2, top_work_id: work_root}[work_id]
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        # Patch in both locations: _mb_api (used by _get_bottom_work) and _works (used by build_work_hierarchy)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        captured_dests: list[Path] = []
+        real_build = music_annotator._tags.build_dest_path  # pylint: disable=protected-access
+
+        def _capture_dest(dest_root: Path, rel: MBRelease, track: MBTrack, tags: TrackTags) -> Path:
+            p = real_build(dest_root, rel, track, tags)
+            captured_dests.append(p)
+            return p
+
+        mocker.patch("music_annotator._pipeline.build_dest_path", side_effect=_capture_dest)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        assert len(captured_dests) == 2
+        # Both movements must share the same top-level directory (parts[0]).
+        tops = {p.relative_to(dest).parts[0] for p in captured_dests}
+        assert len(tops) == 1, f"Movements landed in different top dirs: {sorted(tops)}"
+        # The shared top-level directory must be Mozart's, not Süßmayr's.
+        assert "Mozart" in tops.pop()
+
+    def test_composer_not_modified_when_all_movements_are_additional_only(
+        self, mocker: MockerFixture, fs: FakeFilesystem
+    ) -> None:
+        """When no movement in a group has a primary composer, cwp_composers is left unchanged.
+
+        If every movement has only additional_composers (no plain primary composer exists
+        anywhere in the group), the unification pass must not modify any tag — each movement
+        retains its own fallback additional-composer value.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        top_work_id = "w-root"
+        # Both movements have only additional-composer relations — no plain primary anywhere.
+        work_mvt1 = _w(
+            {
+                "id": "w-mvt1",
+                "title": "Mvt I",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-x", "name": "Arranger X", "sort-name": "X, Arranger"},
+                        "attribute-list": ["additional"],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Work"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        work_mvt2 = _w(
+            {
+                "id": "w-mvt2",
+                "title": "Mvt II",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-y", "name": "Arranger Y", "sort-name": "Y, Arranger"},
+                        "attribute-list": ["additional"],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Work"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        work_root = _w(
+            {
+                "id": top_work_id,
+                "title": "Work",
+                "type": "",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        call_count = [0]
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            call_count[0] += 1
+            work_id = "w-mvt1" if call_count[0] == 1 else "w-mvt2"
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "T",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [{"type": "performance", "work": {"id": work_id, "title": "Mvt"}}],
+                }
+            )
+
+        def _fetch_work(work_id: str) -> MBWork:
+            return {"w-mvt1": work_mvt1, "w-mvt2": work_mvt2, top_work_id: work_root}[work_id]
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        # Patch in both locations: _mb_api (used by _get_bottom_work) and _works (used by build_work_hierarchy)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+
+        # Both movements fell back to their own additional-composer.  No cross-propagation
+        # should have occurred — the additional-only fallback values must be preserved.
+        assert tags1.cwp_composers == "Arranger X"
+        assert tags2.cwp_composers == "Arranger Y"
+
     def test_mp3_tagged_in_non_dry_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """MP3 files are tagged with apply_tags_mp3 in non-dry-run mode.
 

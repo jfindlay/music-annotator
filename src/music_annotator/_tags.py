@@ -830,6 +830,13 @@ def build_track_tags(
         cwp_worktype_genres=cwp.worktype_genres,
     )
 
+    # Mark when cwp_composers was populated from the additional_composers fallback rather than
+    # from a plain primary-composer relation.  The cross-track composer unification pass in
+    # _pipeline.py uses this flag to identify movements that should inherit the primary composer
+    # from another movement in the same work group.
+    if cwp.composers and not role_buckets.composers:
+        tags.cwp_composers_is_fallback = "1"
+
     # Add per-level fields as model_extra
     for level in cwp.levels:
         i = level.index

@@ -1216,6 +1216,12 @@ class TrackTags(BaseModel):
     cwp_premiered_dates: str = ""
     cwp_worktype_genres: str = ""
     acoustid_id: str = ""
+    # Internal flag: set to "1" when cwp_composers / cwp_composer_lastnames were populated from
+    # the additional_composers fallback (i.e. no plain primary composer relation was found).  Used
+    # by the cross-track composer unification pass in _pipeline.py to identify movements whose
+    # composer credit came from the fallback path so the primary can be propagated to them.
+    # Never written to audio files (excluded in to_file_dict).
+    cwp_composers_is_fallback: str = ""
 
     # Per-level work/workid/part tags are stored as extra fields
     model_config = {"extra": "allow"}
@@ -1223,7 +1229,8 @@ class TrackTags(BaseModel):
     def to_file_dict(self) -> dict[str, str]:
         """Return a ``{tag_name: value}`` mapping suitable for writing to an audio file.
 
-        Internal fields (``cea_conductors_list``, ``cea_ensembles_list``, ``recording_date_work``) are excluded.
+        Internal fields (``cea_conductors_list``, ``cea_ensembles_list``, ``recording_date_work``,
+        ``cwp_composers_is_fallback``) are excluded.
         Empty values are excluded.  All
         keys are uppercased to match Vorbis Comment / ID3 conventions.  Dynamically-added per-level
         ``cwp_work_N`` / ``cwp_workid_N`` / ``cwp_part_N`` extra fields are included.
@@ -1231,7 +1238,7 @@ class TrackTags(BaseModel):
         :returns: A flat ``dict[str, str]`` of non-empty tag key/value pairs with uppercase keys, excluding internal list
             fields.
         """
-        excluded = {"cea_conductors_list", "cea_ensembles_list", "recording_date_work"}
+        excluded = {"cea_conductors_list", "cea_ensembles_list", "recording_date_work", "cwp_composers_is_fallback"}
         out: dict[str, str] = {}
         for field_name, value in self.model_dump(exclude=excluded).items():
             if isinstance(value, str) and value:

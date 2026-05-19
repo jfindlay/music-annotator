@@ -168,3 +168,21 @@ This is the most open-ended item and should follow mbngs2-1 through mbngs2-3.
 - Discogs integration (fallback search and release creation)
 - Audit CE-derived tags: every field populated or explicitly `""`
 - Performer cardinality: add soloists to top-level directory for concerto-type works
+- **Arranger/finisher in directory path — work-level only:** When a finisher, completion credit,
+  or arranger is credited in MB as `"composer"` with the `"additional"` attribute on only some
+  movements, the per-track `role_buckets.composers` is empty for those movements and
+  `effective_composers` falls back to `additional_composers`, producing a different
+  `CWP_COMPOSER_LASTNAMES` — and therefore a different `top_dir` — than movements that carry a
+  plain primary-composer relation.  Example: Mozart K. 626 movements completed by Süßmayr land
+  in `Mozart; Süßmayr - …` while the rest land in `Mozart - …`.  The cross-track composer
+  unification pass in `_pipeline.py` (analogous to the `recording_date_work` pass) fixes this
+  within a single medium.  Any future change that adds new arranger-style credits to the directory
+  must be applied at the work level (using the group-wide aggregated value) rather than per-track.
+- **Multi-medium limitation — per-medium processing:** music-annotator processes one medium
+  (disc) at a time.  Any post-processing that aggregates across all movements of a work is
+  silently incorrect or absent when those movements span multiple media.  Affected operations
+  include: the `recording_date_work` union label (`_pipeline.py` lines 757–825), the
+  `recording_first_release_date` normalisation, the composer unification pass, and any future
+  work-spanning normalisations.  A future phase will need a cross-medium aggregation pass, or the
+  pipeline will need to be restructured to collect all media for a release before running these
+  post-processing steps.
