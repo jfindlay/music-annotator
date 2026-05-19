@@ -351,17 +351,31 @@ def _write_sidecars(
 ) -> None:
     """Write sidecar cover art files for ``work_top_dir`` and append journal entries.
 
-    Called after every successful :func:`_verify_copy` for a track.  A :class:`~pathlib.Path`
-    set ``sidecars_written`` ensures each work top directory receives its sidecar files exactly
-    once per run, even when the directory contains multiple tracks.
+    Called after every successful :func:`_verify_copy` for a track.  Two deduplication guards
+    ensure correct behaviour:
+
+    1. **Directory-level**: ``sidecars_written`` (keyed on ``work_top_dir``) prevents the
+       function from running more than once for the same work directory within a run — i.e. when
+       the directory contains multiple tracks.
+
+    2. **Path-level**: ``seen_sidecar_paths`` (local, keyed on the resolved destination path)
+       prevents a CAA image that carries multiple type tags (e.g. ``["Back", "Spine"]``) from
+       being written and journalled twice.  The Cover Art Archive API allows a single image to
+       belong to more than one type, and :func:`~music_annotator._mb_api.fetch_cover_art` reuses
+       the same :class:`~music_annotator.models.CoverImage` object across the corresponding
+       :class:`~music_annotator.models.CoverArt` bucket lists to avoid duplicate downloads.
+       Without the path-level guard the concatenated ``sidecar_images`` list would contain the
+       same object twice — once per bucket — producing a duplicate journal entry and a redundant
+       overwrite of the file on disk.
 
     Writes every :class:`~music_annotator.models.CoverImage` from all non-front sidecar lists
     on ``cover`` (``front_full``, ``back``, ``booklet``, ``medium``, ``tray``, ``obi``,
     ``spine``, ``track``, ``liner``, ``sticker``, ``poster``, ``matrix``, ``top``, ``bottom``,
-    ``panel``, ``watermark``, ``raw``, ``other``, ``unknown``) that has a non-empty ``filename`` field.
-    For each written sidecar an ``action="downloaded"`` :class:`~music_annotator.models.TransactionEntry`
-    is appended to ``journal_entries`` with ``source`` set to the canonical CAA URL (so the file
-    can be re-downloaded from the journal alone).
+    ``panel``, ``watermark``, ``raw``, ``other``, ``unknown``) that has a non-empty ``filename``
+    field.  For each written sidecar an ``action="downloaded"``
+    :class:`~music_annotator.models.TransactionEntry` is appended to ``journal_entries`` with
+    ``source`` set to the canonical CAA URL (so the file can be re-downloaded from the journal
+    alone).
 
     :param cover: The :class:`~music_annotator.models.CoverArt` instance for this release.
     :param work_top_dir: The work top directory (``<dest_root>/<composer-dir>/<work-dir>``).
@@ -395,10 +409,14 @@ def _write_sidecars(
         + list(cover.other)
         + list(cover.unknown)
     )
+    seen_sidecar_paths: set[Path] = set()
     for img in sidecar_images:
         if not img.filename:
             continue
         sidecar_path = work_top_dir / img.filename
+        if sidecar_path in seen_sidecar_paths:
+            continue
+        seen_sidecar_paths.add(sidecar_path)
         sidecar_path.parent.mkdir(parents=True, exist_ok=True)
         expected_hash = hashlib.sha256(img.data).hexdigest()
         sidecar_path.write_bytes(img.data)
@@ -736,11 +754,18 @@ def run(
                 tags_obj.cwp_movt_tot = str(total)
                 tags_obj.cwp_single_work_album = "1" if single else "0"
 
-            # Compute recording_date_work: the minimum year range spanning all movements of
-            # this work.  All tracks in the group use this unified value for the destination
-            # directory label so movements recorded in different sessions land in the same dir.
-            # The per-track RECORDING_DATE tag is NOT modified — only this path-construction
-            # helper is set.
+            # Compute recording_date_work: the minimum interval spanning all movements of
+            # this work on this medium.  All tracks in the group use this unified value for
+            # the destination directory label so movements recorded in different sessions land
+            # in the same dir.  The per-track RECORDING_DATE tag is NOT modified — only this
+            # path-construction helper is set.
+            #
+            # For each per-track RECORDING_DATE:
+            #   - ISO interval "begin/end": contribute begin to _begins, end to _ends.
+            #   - Single date "begin":      contribute begin to both _begins and _ends so that
+            #     the max-end calculation captures the latest point-in-time session date.
+            #
+            # Result: _unified = min(_begins)/max(_ends) when the years differ, else min(_begins).
             _begins: list[str] = []
             _ends: list[str] = []
             for grp_idx in group_idxs:
@@ -751,16 +776,46 @@ def run(
                     b, _, e = rd.partition("/")
                     if b:  # pragma: no branch — begin is always non-empty for valid ISO intervals
                         _begins.append(b)
+                        _ends.append(b)  # use begin as a floor for the end-side span
                     if e:  # pragma: no branch — end is always non-empty for valid ISO intervals
                         _ends.append(e)
                 else:
                     _begins.append(rd)
+                    _ends.append(rd)
             if _begins:
                 _min_begin = min(_begins)
-                _max_end = max(_ends) if _ends else ""
-                _unified = f"{_min_begin}/{_max_end}" if _max_end and _max_end != _min_begin else _min_begin
+                _max_end = max(_ends)
+                _unified = f"{_min_begin}/{_max_end}" if _max_end != _min_begin else _min_begin
                 for grp_idx in group_idxs:
                     tags_map[grp_idx].recording_date_work = _unified
+
+            # Normalize recording_first_release_date across all movements so the [rel YYYY]
+            # fallback in build_dest_path is uniform when no session date is available.
+            # This normalization only applies when recording_date_work is empty (i.e. no
+            # movement in the group has a session date); if any movement has a session date
+            # then recording_date_work is set and build_dest_path uses [rec …] for all
+            # movements, bypassing the [rel] fallback entirely.
+            #
+            # recording_first_release_date is per-recording and can vary across movements
+            # (e.g. a movement that first appeared on a different pressing year).  The release
+            # date (release.date) is attached to the release itself and is therefore identical
+            # for every track, making it the correct normalising source.  We use 4-digit year
+            # precision only (matching [rel YYYY] output) and fall back to the release group's
+            # first-release-date when release.date is absent.
+            #
+            # Note: this spans movements on the same medium only.  Cross-medium unification is
+            # not supported (music-annotator operates on a single-medium workspace).
+            if not _begins:
+                _rel_year = (release.date[:4] if len(release.date) >= 4 and release.date[:4].isdigit() else "") or (
+                    release.release_group.first_release_date[:4]
+                    if len(release.release_group.first_release_date) >= 4
+                    and release.release_group.first_release_date[:4].isdigit()
+                    else ""
+                )
+                if _rel_year:
+                    for grp_idx in group_idxs:
+                        if tags_map[grp_idx].recording_first_release_date:
+                            tags_map[grp_idx].recording_first_release_date = _rel_year
 
     else:
         label_info = release.label_info_list[0] if release.label_info_list else None

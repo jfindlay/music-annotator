@@ -19,6 +19,7 @@ from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
 import music_annotator
+import music_annotator._tags
 from music_annotator import (
     JOURNAL_FILENAME,
     CollisionPolicy,
@@ -1107,6 +1108,57 @@ class TestWriteSidecars:
         _write_sidecars(cover, work_top, sidecars_written, journal, "now", "rel-1")  # pylint: disable=protected-access
         assert journal == []
 
+    def test_multi_type_image_written_and_journalled_once(self, fs: FakeFilesystem) -> None:
+        """A CoverImage shared across two CoverArt bucket lists is written and journalled once.
+
+        The Cover Art Archive allows a single image to carry multiple type tags (e.g. Back +
+        Spine).  fetch_cover_art reuses the same CoverImage object in both bucket lists to avoid
+        duplicate downloads.  _write_sidecars must deduplicate by destination path so the file is
+        written exactly once and only one action="downloaded" journal entry is produced.
+
+        :param fs: pyfakefs fixture.
+        """
+        work_top = Path("/dest/Composer/Work")
+        fs.create_dir(str(work_top))
+
+        shared_img = CoverImage(data=b"\xff\xd8\xff\xe0" + b"\x00" * 20, mime="image/jpeg", filename="back.jpg")
+        cover = CoverArt(back=[shared_img], spine=[shared_img])
+
+        journal: list[TransactionEntry] = []
+        sidecars_written: set[Path] = set()
+        _write_sidecars(cover, work_top, sidecars_written, journal, "2026-01-01T00:00:00+00:00", "rel-x")  # pylint: disable=protected-access
+
+        assert (work_top / "back.jpg").exists()
+        assert len(journal) == 1
+        assert journal[0].action == "downloaded"
+        assert journal[0].destination == str(work_top / "back.jpg")
+
+    def test_distinct_images_in_different_buckets_all_written(self, fs: FakeFilesystem) -> None:
+        """Distinct CoverImage objects in different buckets are each written and journalled.
+
+        When back and spine hold different images (distinct objects, distinct filenames), both
+        should be written and produce separate journal entries — the path-level guard must not
+        suppress legitimate distinct images.
+
+        :param fs: pyfakefs fixture.
+        """
+        work_top = Path("/dest/Composer/Work")
+        fs.create_dir(str(work_top))
+
+        back_img = CoverImage(data=b"\xff\xd8\xff\xe0" + b"\x00" * 20, mime="image/jpeg", filename="back.jpg")
+        spine_img = CoverImage(data=b"\xff\xd8\xff\xe0" + b"\x01" * 20, mime="image/jpeg", filename="spine.jpg")
+        cover = CoverArt(back=[back_img], spine=[spine_img])
+
+        journal: list[TransactionEntry] = []
+        sidecars_written: set[Path] = set()
+        _write_sidecars(cover, work_top, sidecars_written, journal, "2026-01-01T00:00:00+00:00", "rel-x")  # pylint: disable=protected-access
+
+        assert (work_top / "back.jpg").exists()
+        assert (work_top / "spine.jpg").exists()
+        assert len(journal) == 2
+        destinations = {e.destination for e in journal}
+        assert destinations == {str(work_top / "back.jpg"), str(work_top / "spine.jpg")}
+
 
 # ---------------------------------------------------------------------------
 # _write_sidecars — hash verification
@@ -1764,6 +1816,270 @@ class TestRunFullPipeline:
         tags1: TrackTags = mock_tag.call_args_list[0][0][1]
         # No session date relations → recording_date_work stays empty
         assert tags1.recording_date_work == ""
+
+    def test_recording_date_work_produces_unified_dest_dir(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Movements with different RECORDING_DATE values land in the same destination directory.
+
+        run() sets recording_date_work to the union range across all movements and
+        build_dest_path reads it directly (not via to_file_dict()), so all movements of the
+        work get the same directory label even when individual session dates differ.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        call_count = [0]
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            call_count[0] += 1
+            # movement 1: session 1981, movement 2: session 1984 — different years
+            begin = "1981-03-01" if call_count[0] == 1 else "1984-05-10"
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "T",
+                    "artist-credit": [],
+                    "artist-relation-list": [
+                        {
+                            "type": "conductor",
+                            "direction": "backward",
+                            "begin": begin,
+                            "end": "",
+                            "artist": {"id": "a1", "name": "K", "sort-name": "K"},
+                        }
+                    ],
+                    "work-relation-list": [],
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        captured_dests: list[Path] = []
+        real_build = music_annotator._tags.build_dest_path  # pylint: disable=protected-access
+
+        def _capture_dest(dest_root: Path, rel: MBRelease, track: MBTrack, tags: TrackTags) -> Path:
+            p = real_build(dest_root, rel, track, tags)
+            captured_dests.append(p)
+            return p
+
+        mocker.patch("music_annotator._pipeline.build_dest_path", side_effect=_capture_dest)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        assert len(captured_dests) == 2
+        # Both movements should share the same parent directory
+        assert captured_dests[0].parent == captured_dests[1].parent, (
+            f"Movements landed in different directories: {captured_dests[0].parent} vs {captured_dests[1].parent}"
+        )
+        # The shared directory should include a [rec 1981-1984] label
+        assert "[rec 1981-1984]" in str(captured_dests[0].parent)
+
+    def test_recording_first_release_date_normalized_across_movements(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Movements with different recording_first_release_date values are normalized to the release year.
+
+        When no session date is available, the [rel YYYY] fallback is driven by
+        recording_first_release_date.  Movements can have different values here (e.g. a
+        movement that first appeared on an earlier pressing).  run() normalizes all movements
+        to the release date year so they all land in the same directory.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        # Release dated 1965; movements have differing first-release-date values
+        release = MBRelease.model_validate(
+            {
+                "id": "rel-norm",
+                "title": "Test Album",
+                "date": "1965",
+                "status": "Official",
+                "barcode": "",
+                "artist-credit": [{"name": "Composer", "artist": {"id": "c1", "name": "Composer", "sort-name": "Composer"}}],
+                "release-group": {"id": "rg-1", "primary-type": "Album", "first-release-date": "1965"},
+                "label-info-list": [],
+                "text-representation": {"script": "Latn", "language": "eng"},
+                "medium-list": [
+                    {
+                        "position": 1,
+                        "format": "CD",
+                        "track-list": [
+                            {
+                                "id": "trk-1",
+                                "position": 1,
+                                "recording": {"id": "rec-1", "title": "Movement I", "artist-credit": []},
+                            },
+                            {
+                                "id": "trk-2",
+                                "position": 2,
+                                "recording": {"id": "rec-2", "title": "Movement II", "artist-credit": []},
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        call_count = [0]
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            call_count[0] += 1
+            # No session dates; differing first-release-date: rec-1 says 1963, rec-2 says 1965
+            frd = "1963" if call_count[0] == 1 else "1965"
+            return MBRecording.model_validate(
+                {
+                    "id": rec_id,
+                    "title": "T",
+                    "first-release-date": frd,
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [],
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-norm",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+        # Both movements should have been normalized to the release year
+        assert tags1.recording_first_release_date == tags2.recording_first_release_date == "1965"
+
+    def test_recording_first_release_date_unchanged_when_release_has_no_date(
+        self, mocker: MockerFixture, fs: FakeFilesystem
+    ) -> None:
+        """recording_first_release_date is left as-is when the release has no date fields.
+
+        When no session date is available and both release.date and
+        release_group.first_release_date are empty, run() cannot compute a normalising year
+        and leaves each track's recording_first_release_date unchanged.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        # Release with no date fields at all
+        release = MBRelease.model_validate(
+            {
+                "id": "rel-nodate",
+                "title": "No Date Album",
+                "date": "",
+                "status": "Official",
+                "barcode": "",
+                "artist-credit": [],
+                "release-group": {"id": "rg-nd", "primary-type": "Album", "first-release-date": ""},
+                "label-info-list": [],
+                "text-representation": {"script": "", "language": ""},
+                "medium-list": [
+                    {
+                        "position": 1,
+                        "format": "CD",
+                        "track-list": [
+                            {
+                                "id": "trk-1",
+                                "position": 1,
+                                "recording": {"id": "rec-nd-1", "title": "Mvt I", "artist-credit": []},
+                            },
+                            {
+                                "id": "trk-2",
+                                "position": 2,
+                                "recording": {"id": "rec-nd-2", "title": "Mvt II", "artist-credit": []},
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        call_count = [0]
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            call_count[0] += 1
+            frd = "1963" if call_count[0] == 1 else "1965"
+            return MBRecording.model_validate(
+                {
+                    "id": rec_id,
+                    "title": "T",
+                    "first-release-date": frd,
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [],
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-nodate",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+        # No normalising year available — per-track values are preserved unchanged
+        assert tags1.recording_first_release_date == "1963"
+        assert tags2.recording_first_release_date == "1965"
 
     def test_tag_error_raises_runtime_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """A MutagenError during tagging is re-raised as RuntimeError (provenance invariant).
@@ -3543,6 +3859,11 @@ class TestRunCopyIntegrity:
                 dry_run=False,
                 fetch_rels=False,
             )
+
+
+# ---------------------------------------------------------------------------
+# _write_sidecars
+# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

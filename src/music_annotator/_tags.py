@@ -869,11 +869,14 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     ``MOVEMENTNUMBER`` in the tag/title string is the composer's global numbering across the whole
     work (e.g. No. 39 in the Handel Messiah) and is distinct from the directory-local ``nn`` prefix.
 
-    The year suffix uses ``[rec YYYY]`` when ``RECORDING_FIRST_RELEASE_DATE``
-    (``recording.first-release-date``) is known — the year this specific audio was first
-    commercially released.  Falls back to ``[rel YYYY]`` using ``ORIGINALDATE``
-    (``release_group.first_release_date``) or ``DATE`` (``release.date``) when the
-    recording-level date is absent.  Omitted entirely when no date is available.
+    The year suffix uses ``[rec YYYY]`` when a session date is known — sourced from
+    ``tags.recording_date_work`` (the minimum interval spanning all movements of the work on
+    this medium, set by :func:`~music_annotator._pipeline.run`) or, when that is absent, from
+    the per-track ``RECORDING_DATE`` (artist-relation begin/end dates).  Falls back to
+    ``[rel YYYY]`` using ``RECORDING_FIRST_RELEASE_DATE`` (year this audio first appeared
+    commercially), ``ORIGINALDATE`` (``release_group.first_release_date``), or ``DATE``
+    (``release.date``) — in that priority order — when no session date is available.
+    Omitted entirely when no date is available.
 
     :param dest_root: The root destination directory.
     :param release: The :class:`~music_annotator.models.MBRelease` from :func:`fetch_release`.
@@ -939,11 +942,16 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     #   - Single year:    [rec 1984]
     #   - Multi-year:     [rec 1983-1984]
     # rel_year falls back to publication-era MB fields when no session date is known.
-    # Prefer the work-level union date (computed by run() across all movements of the work)
-    # so that all movements of a work land in the same destination directory even when
-    # individual recordings have different session date ranges.
-    # RECORDING_DATE_WORK is excluded from to_file_dict() — it is a path-construction helper only.
-    rec_date = file_dict.get("RECORDING_DATE_WORK") or file_dict.get("RECORDING_DATE", "")
+    #
+    # Prefer the work-level union date (tags.recording_date_work, set by run() to the minimum
+    # interval spanning all movements of the work on this medium) so that all movements land in
+    # the same destination directory even when individual recordings have different session date
+    # ranges.  recording_date_work is excluded from to_file_dict() — it is a path-construction
+    # helper only — so it must be read directly from the tags object, not via file_dict.
+    #
+    # Note: recording_date_work only spans movements on the same medium.  Cross-medium
+    # unification (e.g. a work split across two CDs) is not supported.
+    rec_date = tags.recording_date_work or file_dict.get("RECORDING_DATE", "")
     rec_label = ""
     if rec_date:
         if "/" in rec_date:

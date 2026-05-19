@@ -1983,6 +1983,41 @@ class TestBuildDestPathYear:
         """
         assert "[rel 2003]" in self._dest(self._make_tags(date="2003"), fs)
 
+    def test_recording_date_work_overrides_per_track_recording_date(self, fs: FakeFilesystem) -> None:
+        """recording_date_work takes priority over per-track recording_date for the directory label.
+
+        When recording_date_work is set (by run() to the union range across all movements of the
+        work), build_dest_path must use it so that movements with different individual session dates
+        still land in the same destination directory.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        # Per-track date says 1981; work-level union says 1981-1984.  The directory should
+        # reflect the union range, not the per-track value.
+        tags = TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony No. 5",
+            cwp_composer_lastnames="Beethoven",
+            recording_date="1981-10-01",
+            recording_date_work="1981-01-15/1984-02-20",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        result = str(
+            build_dest_path(
+                dest_root,
+                self._make_rel(),
+                _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+                tags,
+            )
+        )
+        assert "[rec 1981-1984]" in result
+        assert "[rec 1981]" not in result.replace("[rec 1981-1984]", "")
+
     def test_no_year_suffix_when_all_dates_absent(self, fs: FakeFilesystem) -> None:
         """No year suffix when no date fields are present.
 
