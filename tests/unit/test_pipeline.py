@@ -36,6 +36,7 @@ from music_annotator import (
 )
 from music_annotator._pipeline import (
     SelectionMethod,
+    _dedup_plan_entries,
     _match_medium_by_title,
     _match_medium_by_toc,
     _prompt_collision_policy,
@@ -3502,10 +3503,11 @@ class TestPromptCollisionPolicy:
         _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
 
         # The work-top-dir with the date suffix must appear in the directory summary line.
-        assert any("Sinfonie Nr. 2 D-Dur, op. 73 [rec 1977-1978]" in line for line in printed)
+        # Path strings are passed through rich.markup.escape, so brackets become \[…].
+        assert any("Sinfonie Nr. 2 D-Dur, op. 73 \\[rec 1977-1978]" in line for line in printed)
         # The absolute dest prefix must NOT appear in the directory lines (relative paths only).
         assert not any(str(dest) in line and "Sinfonie" in line for line in printed)
-        # Both individual filenames must appear in the flat filename list.
+        # Both individual filenames must appear in the flat filename list (as relative paths).
         assert any("01 - Symphony no. 2 in D major, op. 73_ I.flac" in line for line in printed)
         assert any("02 - Symphony no. 2 in D major, op. 73_ II.flac" in line for line in printed)
 
@@ -3527,11 +3529,197 @@ class TestPromptCollisionPolicy:
 
         _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
 
-        assert any("Sinfonie Nr. 1 c-Moll, op. 68 [rec 1977-1978]" in line for line in printed)
-        assert any("Sinfonie Nr. 3 F-Dur, op. 90 [rec 1977-1978]" in line for line in printed)
-        # Should show 2 work dirs, not 3 file paths — count lines containing the work dir pattern
-        work_lines = [line for line in printed if "Sinfonie" in line]
-        assert len(work_lines) == 2
+        # Path strings are passed through rich.markup.escape, so brackets become \[…].
+        assert any("Sinfonie Nr. 1 c-Moll, op. 68 \\[rec 1977-1978]" in line for line in printed)
+        assert any("Sinfonie Nr. 3 F-Dur, op. 90 \\[rec 1977-1978]" in line for line in printed)
+        # The work-dir grouping summary should list each work dir exactly once (not once per file).
+        # Individual file lines also contain "Sinfonie" now that they are relative paths, so
+        # restrict the count to lines that end with the work-dir pattern (no trailing filename).
+        work_dir_lines = [line for line in printed if "Sinfonie" in line and not line.rstrip("[/]").endswith(".flac")]
+        assert len(work_dir_lines) == 2
+
+    def test_rich_escape_applied_to_dest_root_in_warning(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_prompt_collision_policy escapes dest_root so [rel YYYY] brackets are not eaten by Rich.
+
+        Rich interprets ``[rel 1999]`` as an unknown markup tag and silently discards it.
+        The fix wraps every path interpolated into a Rich format string with
+        ``rich.markup.escape``.  This test verifies the escape is applied by patching the escape
+        function and asserting it was called with the dest_root string.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/dest [rel 1999]")
+        work_dir = dest / "Wagner - Karajan" / "Die Meistersinger [rel 1999]"
+        fs.create_dir(str(work_dir))
+        collisions = [work_dir / "03 - Scene III.flac"]
+        mocker.patch("music_annotator._pipeline._console.print")
+        mocker.patch("builtins.input", return_value="s")
+        mock_escape = mocker.patch("music_annotator._pipeline._markup_escape", side_effect=lambda s: s)
+
+        _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
+
+        escaped_strings = [call.args[0] for call in mock_escape.call_args_list]
+        assert str(dest) in escaped_strings
+
+    def test_rich_escape_applied_to_work_dir_in_warning(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Work-dir path in collision warning is Rich-escaped so [rec YYYY] suffix is not stripped.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/dest")
+        work_dir = dest / "Wagner - Karajan" / "Die Meistersinger [rel 1999]"
+        fs.create_dir(str(work_dir))
+        collisions = [work_dir / "03 - Scene III.flac"]
+        mocker.patch("music_annotator._pipeline._console.print")
+        mocker.patch("builtins.input", return_value="s")
+        mock_escape = mocker.patch("music_annotator._pipeline._markup_escape", side_effect=lambda s: s)
+
+        _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
+
+        escaped_strings = [call.args[0] for call in mock_escape.call_args_list]
+        # The work-dir relative path ("Wagner - Karajan/Die Meistersinger [rel 1999]") must be escaped.
+        assert any("Die Meistersinger [rel 1999]" in s for s in escaped_strings)
+
+    def test_conflicting_files_shown_as_relative_path_not_basename(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Individual conflicting files are listed as relative paths, not just basenames.
+
+        For a 3-level opera path (…/02 - Akt I/03 - Scene.flac) the intermediate Act subdir
+        must appear in the per-file display so the user can distinguish which Act each file
+        belongs to.  Previously p.name was used, hiding the subdirectory context.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/dest")
+        w1 = dest / "Wagner - Karajan" / "Meistersinger [rel 1999]" / "02 - Akt I"
+        w2 = dest / "Wagner - Karajan" / "Meistersinger [rel 1999]" / "03 - Akt II"
+        fs.create_dir(str(w1))
+        fs.create_dir(str(w2))
+        collisions = [
+            w1 / "03 - Scene III.flac",
+            w2 / "01 - Scene I.flac",
+        ]
+        printed: list[str] = []
+        mocker.patch("music_annotator._pipeline._console.print", side_effect=lambda s, **_: printed.append(s))
+        mocker.patch("music_annotator._pipeline._markup_escape", side_effect=lambda s: s)
+        mocker.patch("builtins.input", return_value="s")
+
+        _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
+
+        # The intermediate Act directory must appear in the per-file listing.
+        assert any("02 - Akt I" in line and "03 - Scene III.flac" in line for line in printed)
+        assert any("03 - Akt II" in line and "01 - Scene I.flac" in line for line in printed)
+        # Bare basenames without subdirectory context must NOT appear as standalone entries.
+        assert not any(line.strip().endswith("03 - Scene III.flac") and "Akt" not in line for line in printed)
+
+
+class TestDedupPlanEntries:
+    """Tests for _dedup_plan_entries — post-plan deduplication of shared ordering-key paths."""
+
+    def _make_pairs(self, n: int, start_pos: int = 1) -> list[tuple[Path, tuple[MBTrack, int]]]:
+        """Build ``n`` minimal file_track_pairs entries starting at position ``start_pos``.
+
+        :param n: Number of pairs to create.
+        :param start_pos: First track position (1-based within medium).
+        :returns: A list of ``(src_file, (MBTrack, medium_pos))`` tuples.
+        """
+        pairs = []
+        for i in range(n):
+            pos = start_pos + i
+            track = _trk(
+                {
+                    "id": f"trk-{pos}",
+                    "position": pos,
+                    "recording": {"id": f"rec-{pos}", "title": f"Track {pos}", "artist-credit": []},
+                }
+            )
+            pairs.append((Path(f"/src/{pos:02d}.flac"), (track, 1)))
+        return pairs
+
+    def test_unique_destinations_unchanged(self) -> None:
+        """When all dest_file values are already unique the plan is returned unchanged.
+
+        :raises AssertionError: If any entry is modified when no dedup is needed.
+        """
+        parent = Path("/dest/Wagner/Work")
+        pairs = self._make_pairs(3, start_pos=10)
+        plan = [
+            CopyPlanEntry(idx=0, src_file=pairs[0][0], dest_file=parent / "10 - Scene I.flac"),
+            CopyPlanEntry(idx=1, src_file=pairs[1][0], dest_file=parent / "11 - Scene II.flac"),
+            CopyPlanEntry(idx=2, src_file=pairs[2][0], dest_file=parent / "12 - Scene III.flac"),
+        ]
+        result = _dedup_plan_entries(plan, pairs)  # pylint: disable=protected-access
+        assert [e.dest_file for e in result] == [e.dest_file for e in plan]
+
+    def test_duplicate_destinations_get_position_suffix(self) -> None:
+        """Tracks sharing the same dest path are renamed to {ok}.{position:02d} - {title}.
+
+        Three tracks at positions 10, 11, 12 all mapping to "03 - Scene III.flac" must
+        become "03.10 - Scene III.flac", "03.11 - Scene III.flac", "03.12 - Scene III.flac".
+
+        :raises AssertionError: If renamed destinations are not unique or wrongly formatted.
+        """
+        parent = Path("/dest/Wagner/Work/02 - Akt I")
+        shared_name = "03 - Die Meistersinger von Nürnberg_ Akt I, Szene III.flac"
+        pairs = self._make_pairs(3, start_pos=10)
+        plan = [
+            CopyPlanEntry(idx=0, src_file=pairs[0][0], dest_file=parent / shared_name),
+            CopyPlanEntry(idx=1, src_file=pairs[1][0], dest_file=parent / shared_name),
+            CopyPlanEntry(idx=2, src_file=pairs[2][0], dest_file=parent / shared_name),
+        ]
+        result = _dedup_plan_entries(plan, pairs)  # pylint: disable=protected-access
+
+        names = [e.dest_file.name for e in result]
+        assert names[0] == "03.10 - Die Meistersinger von Nürnberg_ Akt I, Szene III.flac"
+        assert names[1] == "03.11 - Die Meistersinger von Nürnberg_ Akt I, Szene III.flac"
+        assert names[2] == "03.12 - Die Meistersinger von Nürnberg_ Akt I, Szene III.flac"
+        # All must land in the same parent directory
+        assert all(e.dest_file.parent == parent for e in result)
+        # All must be unique
+        assert len({e.dest_file for e in result}) == 3
+
+    def test_dedup_only_affects_colliding_group(self) -> None:
+        """Non-colliding entries in the same plan are untouched when some entries collide.
+
+        :raises AssertionError: If a non-duplicate entry is modified.
+        """
+        parent = Path("/dest/Wagner/Work/02 - Akt I")
+        shared_name = "03 - Scene III.flac"
+        unique_name = "01 - Vorspiel.flac"
+        pairs = self._make_pairs(3, start_pos=10)
+        plan = [
+            CopyPlanEntry(idx=0, src_file=pairs[0][0], dest_file=parent / unique_name),
+            CopyPlanEntry(idx=1, src_file=pairs[1][0], dest_file=parent / shared_name),
+            CopyPlanEntry(idx=2, src_file=pairs[2][0], dest_file=parent / shared_name),
+        ]
+        result = _dedup_plan_entries(plan, pairs)  # pylint: disable=protected-access
+
+        # The unique entry is unchanged
+        assert result[0].dest_file == parent / unique_name
+        # The two duplicates are renamed
+        assert result[1].dest_file.name == "03.11 - Scene III.flac"
+        assert result[2].dest_file.name == "03.12 - Scene III.flac"
+
+    def test_dedup_preserves_source_and_idx(self) -> None:
+        """After dedup the src_file and idx on renamed entries remain correct.
+
+        :raises AssertionError: If src_file or idx is inadvertently altered.
+        """
+        parent = Path("/dest/Work")
+        shared_name = "05 - Movement.flac"
+        pairs = self._make_pairs(2, start_pos=3)
+        plan = [
+            CopyPlanEntry(idx=0, src_file=pairs[0][0], dest_file=parent / shared_name),
+            CopyPlanEntry(idx=1, src_file=pairs[1][0], dest_file=parent / shared_name),
+        ]
+        result = _dedup_plan_entries(plan, pairs)  # pylint: disable=protected-access
+
+        assert result[0].idx == 0
+        assert result[0].src_file == pairs[0][0]
+        assert result[1].idx == 1
+        assert result[1].src_file == pairs[1][0]
 
 
 class TestRunCollisionAndJournal:

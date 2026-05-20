@@ -1,8 +1,8 @@
 """Top-level annotation pipeline for music-annotator.
 
 Provides :func:`run`, the main entry point that copies and tags a classical music album using
-MusicBrainz metadata.  Also provides :class:`CollisionPolicy`, :func:`_select_medium`, and
-:func:`_prompt_collision_policy` as extracted helpers.
+MusicBrainz metadata.  Also provides :class:`CollisionPolicy`, :func:`_select_medium`,
+:func:`_prompt_collision_policy`, and :func:`_dedup_plan_entries` as extracted helpers.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from typing import Protocol
 
 import structlog
 from mutagen._util import MutagenError
+from rich.markup import escape as _markup_escape
 
 from music_annotator._artists import artist_credit_phrase
 from music_annotator._console import _console
@@ -310,8 +311,10 @@ def _prompt_collision_policy(collisions: list[Path], dest_root: Path) -> Collisi
     Groups the conflicting files by their work directory (``parts[0] / parts[1]`` relative to
     ``dest_root``) so the user sees the ``[rec YYYY]`` / ``[rel YYYY]`` date suffix on each
     destination without the absolute prefix overwhelming the terminal width.  Individual
-    conflicting filenames are then listed flat beneath the directory summary.  Re-prompts until a
-    valid choice is entered.
+    conflicting files are listed as relative paths (including any intermediate Act subdirectory)
+    beneath the directory summary.  All path strings are escaped before passing to Rich so that
+    ``[rec YYYY]`` / ``[rel YYYY]`` brackets are not interpreted as markup tags.
+    Re-prompts until a valid choice is entered.
 
     :param collisions: Destination files that already exist on disk.
     :param dest_root: Root directory of the destination library, used to derive the work dir
@@ -319,12 +322,15 @@ def _prompt_collision_policy(collisions: list[Path], dest_root: Path) -> Collisi
     :returns: The :class:`CollisionPolicy` chosen by the user.
     """
     work_dirs = sorted({p.relative_to(dest_root).parts[0] / Path(p.relative_to(dest_root).parts[1]) for p in collisions})
-    _console.print(f"\n[bold red]WARNING:[/] [red]{len(collisions)} destination file(s) already exist under {dest_root}:[/]")
+    _console.print(
+        f"\n[bold red]WARNING:[/] [red]{len(collisions)} destination file(s) already exist under "
+        f"{_markup_escape(str(dest_root))}:[/]"
+    )
     for d in work_dirs:
-        _console.print(f"  [red]{d}[/]")
+        _console.print(f"  [red]{_markup_escape(str(d))}[/]")
     _console.print("\n[red]Conflicting files:[/]")
     for p in sorted(collisions, key=lambda x: x.name):
-        _console.print(f"  [red]{p.name}[/]")
+        _console.print(f"  [red]{_markup_escape(str(p.relative_to(dest_root)))}[/]")
     _console.print("\n[bold]Choose an action:[/]")
     _console.print("  [bold red]\\[a] abort[/]     — quit without copying anything")
     _console.print("  [bold yellow]\\[s] skip[/]      — copy only new files, leave existing untouched")
@@ -503,6 +509,52 @@ def _write_freedb_yaml(
             action="sidecar",
         )
     )
+
+
+def _dedup_plan_entries(
+    plan: list[CopyPlanEntry],
+    file_track_pairs: list[tuple[Path, tuple[MBTrack, int]]],
+) -> list[CopyPlanEntry]:
+    """Resolve duplicate destination paths caused by multiple tracks sharing the same MB ordering-key.
+
+    When several recordings are all partial performances of the same bottom-level MB work they receive
+    identical ``CWP_ORDERING_KEY_0`` values (e.g. ``3``), which causes ``build_dest_path`` to produce
+    the same leaf filename for every one of them.  This function detects such duplicates *after* the
+    initial plan is built and re-numbers the conflicting entries using a compound prefix of the form
+    ``{ordering_key}.{track_position:02d}`` (e.g. ``03.10``, ``03.11``, …, ``03.16``), where
+    ``track_position`` is ``MBTrack.position`` — the 1-based position within the medium.
+
+    Plan entries whose destination file is already unique are not modified.
+
+    :param plan: The list of :class:`~music_annotator.models.CopyPlanEntry` items produced by ``run()``.
+    :param file_track_pairs: Zipped ``(src_file, (MBTrack, medium_pos))`` pairs in the same order as
+        ``plan`` entries (``entry.idx`` is the index into this list).
+    :returns: A new :class:`~music_annotator.models.CopyPlanEntry` list with duplicate destinations
+        renamed.  Non-duplicate entries are returned unchanged (same objects).
+    """
+    # Group plan indices by destination path
+    by_dest: dict[Path, list[int]] = defaultdict(list)
+    for plan_i, entry in enumerate(plan):
+        by_dest[entry.dest_file].append(plan_i)
+
+    result = list(plan)
+    for dest, plan_indices in by_dest.items():
+        if len(plan_indices) <= 1:
+            continue
+        # Extract the nn prefix from the stem (e.g. "03" from "03 - Title")
+        stem = dest.stem
+        nn, _, rest = stem.partition(" - ")
+        suffix = dest.suffix
+        parent = dest.parent
+        # Re-number each duplicate in track.position order so file ordering is preserved
+        for plan_i in sorted(plan_indices, key=lambda i: file_track_pairs[plan[i].idx][1][0].position):
+            track = file_track_pairs[plan[plan_i].idx][1][0]
+            new_stem = f"{nn}.{track.position:02d} - {rest}"
+            new_dest = parent / f"{new_stem}{suffix}"
+            result[plan_i] = CopyPlanEntry(idx=plan[plan_i].idx, src_file=plan[plan_i].src_file, dest_file=new_dest)
+            log.info("dedup_rename", original=dest.name, renamed=new_dest.name, track_position=track.position)
+
+    return result
 
 
 def _warn_long_names(plan: list[CopyPlanEntry], dest_root: Path) -> None:
@@ -887,6 +939,12 @@ def run(
         log.info("copy_track", src=src_file.name, dest=str(dest_file.relative_to(dest_root)))
         plan.append(CopyPlanEntry(idx=idx, src_file=src_file, dest_file=dest_file))
 
+    # Resolve duplicate destination paths that arise when multiple tracks are all partial
+    # performances of the same bottom-level MB work (same CWP_ORDERING_KEY_0).  The dedup
+    # pass appends ".{track.position:02d}" to the ordering-key prefix so each file gets a
+    # unique name (e.g. "03.10 - Title.flac", "03.11 - Title.flac", …).
+    plan = _dedup_plan_entries(plan, file_track_pairs)
+
     # --- Name-length check and resolution ---
     # In dry-run mode: log warnings only.  Otherwise: prompt via UI or auto-shorten when no UI.
     if dry_run:
@@ -1058,10 +1116,11 @@ def run(
         )
         if copied:
             _console.print(
-                f"\n[bold green]Verified OK:[/] [green]{len(copied)} file(s) written and confirmed under {dest_root}:[/]"
+                f"\n[bold green]Verified OK:[/] [green]{len(copied)} file(s) written and confirmed under "
+                f"{_markup_escape(str(dest_root))}:[/]"
             )
             for d in dest_dirs:
-                _console.print(f"  [green]{d}[/]")
+                _console.print(f"  [green]{_markup_escape(str(d))}[/]")
             _console.print("[bold green]It is safe to delete the source directory.[/]\n")
 
     log.info("run_complete", dest=str(dest_root))

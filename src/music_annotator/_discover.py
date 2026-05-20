@@ -16,6 +16,7 @@ from typing import Protocol
 
 import musicbrainzngs as mb
 import structlog
+from rich.markup import escape as _markup_escape
 
 from music_annotator._console import _console
 from music_annotator._mb_api import _mb_call, _mb_retry, init_mb
@@ -119,7 +120,7 @@ class TerminalDiscoverUI:
         :param candidates: Ordered list of candidates to display.
         :returns: A release MBID string, or ``None`` when the user enters ``s`` / ``skip`` / empty.
         """
-        _console.print(f"\n  [bold]Candidates for[/] [bold cyan]{src_dir.name}[/]:")
+        _console.print(f"\n  [bold]Candidates for[/] [bold cyan]{_markup_escape(src_dir.name)}[/]:")
         for i, candidate in enumerate(candidates, 1):
             _console.print(_format_candidate(i, candidate))
             _console.print()
@@ -238,7 +239,9 @@ class TerminalDiscoverUI:
         :param src_dir: The source directory to potentially delete.
         :returns: ``True`` when the user answers ``y`` or ``yes``.
         """
-        _console.print(f"\n[bold red]Delete original directory[/] [red]{src_dir}[/][bold red]?[/] [dim](y/n)[/]")
+        _console.print(
+            f"\n[bold red]Delete original directory[/] [red]{_markup_escape(str(src_dir))}[/][bold red]?[/] [dim](y/n)[/]"
+        )
         _console.print("\n[bold cyan]>[/] ", end="")
         return input("").strip().lower() in {"y", "yes"}
 
@@ -724,10 +727,10 @@ def prune_sources(
 
     # Step 5 — summary, confirmation, delete
     dest_dirs = sorted({Path(e.destination).parent for e in tagged})
-    _console.print(f"\n[bold]Source:[/] [cyan]{src_dir}[/]")
+    _console.print(f"\n[bold]Source:[/] [cyan]{_markup_escape(str(src_dir))}[/]")
     _console.print("[bold]Annotated tracks written to:[/]")
     for d in dest_dirs:
-        _console.print(f"  [green]{d}[/]")
+        _console.print(f"  [green]{_markup_escape(str(d))}[/]")
 
     if yes:
         shutil.rmtree(src_dir)
@@ -782,7 +785,7 @@ def discover(
         log.info("discover_dir", path=str(src_dir))
         rule = f"[bold cyan]{'=' * 72}[/]"
         _console.print(f"\n{rule}")
-        _console.print(f"[bold cyan]Directory:[/] [bold]{src_dir}[/]")
+        _console.print(f"[bold cyan]Directory:[/] [bold]{_markup_escape(str(src_dir))}[/]")
         _console.print(rule)
 
         try:
