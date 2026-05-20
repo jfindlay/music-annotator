@@ -157,6 +157,29 @@ All mock return values for `fetch_release`, `fetch_recording_detail`, and `fetch
 
 ## Invariants that must never be broken
 
+### Defensive download posture — all remote content
+
+Every network fetch (MB API, Cover Art Archive, AcoustID) uses the same two-layer retry pattern:
+
+1. **`@_mb_retry` inner function** — retries on `"503"`, `"429"`, `"500"`, and `"307"` with exponential backoff (up to 6
+   attempts, `2**attempt` seconds between retries).  `"307"` covers the temporary-redirect-loop condition from the CAA/Internet
+   Archive path; the fast-fail at the transport layer (`_patched_safe_read`) is still correct — the application-layer backoff
+   in `_mb_retry` is the right place for patience.
+2. **`_mb_call(...)` wrapper** — adds the 1 req/s polite delay after every call.
+
+Download failures are **data integrity errors**.  If any required remote content cannot be fetched after all retries:
+- Raise `RuntimeError` (or let `mb.ResponseError` propagate) — do **not** silently degrade, skip, or substitute placeholder
+  data.
+- The release is not actioned.  `discover()`'s error handler catches the error, logs it for the user, and continues to the
+  next release.
+
+The sole exception: a **404** on an individual CAA image means the image was deleted after the listing was fetched (a known
+CAA data-integrity gap at the source).  Log a warning and skip that image.  A 404 on a listing means no release-level art
+exists; fall back to the release-group image.  All other errors are hard failures.
+
+Any future network call must follow this pattern.  A call that uses only `_mb_call` without `@_mb_retry`, or makes a raw
+`urlopen` without distinguishing 4xx (permanent, fast-fail) from 5xx (transient, retry), violates this invariant.
+
 ### Transaction journal and user confirmation provenance
 
 The `action="copied"` entries in `journal_entries` (and therefore in the on-disk journal) and the "Verified OK" console message

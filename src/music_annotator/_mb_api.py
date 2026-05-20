@@ -220,14 +220,17 @@ def init_mb(user_agent: str) -> None:
 
 
 def _mb_retry(fn: Callable[_P, _T]) -> Callable[_P, _T]:
-    """Decorator that wraps a callable with exponential-backoff retry on MB rate-limit errors.
+    """Decorator that wraps a callable with exponential-backoff retry on transient MB / CAA errors.
 
     Attempts the call up to six times, sleeping ``2 ** attempt`` seconds between retries when the response error contains
-    ``"429"``, ``"503"``, or ``"500"``.  Any other :class:`~musicbrainzngs.ResponseError` is re-raised immediately.
+    ``"429"``, ``"503"``, ``"500"``, or ``"307"``.  ``"307"`` covers the temporary-redirect-loop condition that arises when the
+    Cover Art Archive routes through Internet Archive and the redirect target is temporarily unavailable; because the redirect
+    loop is detected and fast-failed at the transport layer (see :func:`_patched_safe_read`), the application-layer backoff here
+    is the right place to introduce patience.  Any other :class:`~musicbrainzngs.ResponseError` is re-raised immediately.
 
     :param fn: The callable to wrap.
     :returns: A wrapped version of ``fn`` with the same signature.
-    :raises mb.ResponseError: If the error is not a rate-limit or server error.
+    :raises mb.ResponseError: If the error is not a retryable transient error.
     :raises RuntimeError: If all six retry attempts are exhausted.
     """
 
@@ -238,7 +241,7 @@ def _mb_retry(fn: Callable[_P, _T]) -> Callable[_P, _T]:
                 return fn(*args, **kwargs)
             except mb.ResponseError as exc:
                 code = str(exc)
-                if any(s in code for s in ("503", "429", "500")):
+                if any(s in code for s in ("503", "429", "500", "307")):
                     wait = 2**attempt
                     log.warning("mb_rate_limit", code=code[:20], wait_s=wait, attempt=attempt)
                     time.sleep(wait)
@@ -489,11 +492,15 @@ def _fetch_rg_image(
             data = cached.read_bytes()
             log.debug("cover_art_cache_hit", key=key, bytes=len(data))
     if data is None:
-        try:
+
+        @_mb_retry
+        def _call() -> bytes | None:
             if size:
-                raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id, size=size))
-            else:
-                raw = _mb_call(lambda: mb.get_release_group_image_front(release_group_id))
+                return mb.get_release_group_image_front(release_group_id, size=size)  # type: ignore[no-any-return]
+            return mb.get_release_group_image_front(release_group_id)  # type: ignore[no-any-return]
+
+        try:
+            raw = _mb_call(_call)
         except mb.ResponseError as exc:
             if "404" in str(exc):
                 log.warning(
@@ -606,11 +613,15 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
                 data = cached.read_bytes()
                 log.debug("cover_art_cache_hit", key=key, bytes=len(data))
                 return CoverImage(data=data, mime=_infer_mime(data))
-        try:
+
+        @_mb_retry
+        def _call() -> bytes | None:
             if size:
-                raw = _mb_call(lambda: mb.get_image(rel_id, coverid, size=size))
-            else:
-                raw = _mb_call(lambda: mb.get_image(rel_id, coverid))
+                return mb.get_image(rel_id, coverid, size=size)  # type: ignore[no-any-return]
+            return mb.get_image(rel_id, coverid)  # type: ignore[no-any-return]
+
+        try:
+            raw = _mb_call(_call)
         except mb.ResponseError as exc:
             if "404" in str(exc):
                 log.warning("cover_art_image_not_found", coverid=str(coverid), bucket=bucket, size=size or "original")
@@ -637,10 +648,16 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
     log.info("fetch_cover_art", release_id=release_id)
 
     # Step 1: obtain the image listing.
+    # Use the standard two-layer pattern: @_mb_retry inner for transient-error backoff,
+    # _mb_call wrapper for the 1 req/s polite delay.
+    @_mb_retry
+    def _get_image_list() -> dict[str, object]:
+        return mb.get_image_list(release_id)  # type: ignore[no-any-return]
+
     listing: list[dict[str, JSON]] = []
     has_release_listing = False
     try:
-        result = mb.get_image_list(release_id)
+        result = _mb_call(_get_image_list)
         images = result.get("images", [])
         if isinstance(images, list):
             listing = [img for img in images if isinstance(img, dict)]
@@ -803,10 +820,11 @@ def fetch_acoustid_id(recording_mbid: str) -> str:
     (ID3), matching the convention used by MusicBrainz Picard.
 
     No API key is required for this endpoint.  The call uses a 10-second socket timeout.  Up to three attempts are made on
-    transient network errors (``OSError``), sleeping ``2 ** attempt`` seconds between retries.  A ``JSONDecodeError`` (malformed
-    response) is not retried because the response content is unlikely to change.  The function always returns ``""`` on failure
-    so that the rest of the annotation pipeline is never blocked by AcoustID being unavailable.  On success a 1-second polite
-    delay is observed before returning.
+    transient network errors (``OSError``) and 5xx HTTP errors, sleeping ``2 ** attempt`` seconds between retries.  4xx HTTP
+    errors (client errors, including 404) are treated as permanent failures and return ``""`` immediately without retrying.  A
+    ``JSONDecodeError`` (malformed response) is also not retried because the response content is unlikely to change.  The
+    function always returns ``""`` on failure so that the rest of the annotation pipeline is never blocked by AcoustID being
+    unavailable.  On success a 1-second polite delay is observed before returning.
 
     :param recording_mbid: The MusicBrainz recording MBID (UUID string).
     :returns: The first AcoustID track ID UUID string, or ``""`` when none is found or the request fails.
@@ -819,19 +837,25 @@ def fetch_acoustid_id(recording_mbid: str) -> str:
                 raw = resp.read()
             time.sleep(1)
             data: JSON = json.loads(raw)
-            if not isinstance(data, dict):
-                return ""
-            tracks = data.get("tracks")
-            if not isinstance(tracks, list) or not tracks:
-                return ""
-            first = tracks[0]
-            if not isinstance(first, dict):
-                return ""
-            track_id = first.get("id", "")
-            return str(track_id) if track_id else ""
+            if isinstance(data, dict):
+                tracks = data.get("tracks")
+                if isinstance(tracks, list) and tracks:
+                    first = tracks[0]
+                    if isinstance(first, dict):
+                        track_id = first.get("id", "")
+                        return str(track_id) if track_id else ""
+            return ""
         except json.JSONDecodeError:
             log.warning("acoustid_parse_failed", recording_mbid=recording_mbid)
             return ""
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                # 4xx: permanent client error — do not retry.
+                log.warning("acoustid_http_error", recording_mbid=recording_mbid, code=exc.code, error=str(exc))
+                return ""
+            wait = 2**attempt
+            log.warning("acoustid_lookup_failed", recording_mbid=recording_mbid, attempt=attempt, wait_s=wait, error=str(exc))
+            time.sleep(wait)
         except OSError as exc:
             wait = 2**attempt
             log.warning("acoustid_lookup_failed", recording_mbid=recording_mbid, attempt=attempt, wait_s=wait, error=str(exc))

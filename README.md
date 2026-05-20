@@ -136,10 +136,17 @@ music-annotator prune \
 5. **Movement numbers** — assigned after all tracks are processed by grouping under each top-level work MBID.
 6. **Write files** — copy source to destination, apply tags, embed cover art, restore original atime/mtime.
 
-### Rate limiting
+### Rate limiting and download reliability
 
-All MusicBrainz API calls are wrapped with a 6-attempt exponential backoff (2ⁿ seconds) on HTTP 429, 503, and 500 responses,
-plus a 1-second polite delay after each successful call.
+All network calls (MusicBrainz API, Cover Art Archive, AcoustID) follow a two-layer defensive pattern:
+
+1. **Exponential backoff retry** — up to 6 attempts with 2ⁿ-second delays on HTTP 429, 500, 503, and 307 (transient redirect
+   loop from the CAA/Internet Archive path).  Non-retryable errors (4xx other than those above) fail immediately.
+2. **Polite delay** — 1 second after each successful call to respect the MB / CAA rate limit.
+
+Download failures are treated as data integrity errors: if required remote content cannot be fetched after all retries, the
+release is not actioned and the error is logged to the user.  The sole exception is a 404 on an individual Cover Art Archive
+image (image deleted after the listing was fetched), which logs a warning and skips that image.
 
 ## Dependencies
 

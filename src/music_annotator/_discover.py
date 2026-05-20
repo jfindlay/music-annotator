@@ -18,7 +18,7 @@ import musicbrainzngs as mb
 import structlog
 
 from music_annotator._console import _console
-from music_annotator._mb_api import _mb_retry, init_mb
+from music_annotator._mb_api import _mb_call, _mb_retry, init_mb
 from music_annotator._pipeline import CollisionPolicy, run
 from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
@@ -287,7 +287,8 @@ def _toc_lookup_mb_releases(toc_string: str, limit: int) -> list[dict[str, objec
 
     Calls ``mb.get_releases_by_discid`` with ``toc=toc_string`` so that the MB server performs a fuzzy TOC match even when the
     exact disc ID is not in the database.  The call uses a sentinel disc ID (``"intentionally-invalid-id"``) that will never
-    match, ensuring the server always falls through to the fuzzy TOC path and returns a ``"release-list"`` dict.
+    match, ensuring the server always falls through to the fuzzy TOC path and returns a ``"release-list"`` dict.  The result is
+    routed through :func:`_mb_call` for the 1 req/s polite delay.
 
     Response shapes handled:
 
@@ -309,7 +310,7 @@ def _toc_lookup_mb_releases(toc_string: str, limit: int) -> list[dict[str, objec
         )
 
     try:
-        response: dict[str, object] = _call()
+        response: dict[str, object] = _mb_call(_call)
     except mb.ResponseError as exc:
         if "404" in str(exc):
             return []
@@ -416,7 +417,7 @@ def _search_mb_releases(query: str, tracks: int, limit: int) -> dict[str, JSON]:
     """Call ``mb.search_releases`` and return the raw response dict.
 
     Wraps the call with the ``_mb_retry`` decorator indirectly by delegating to a decorated inner function, so transient 503/429
-    errors are automatically retried.
+    errors are automatically retried.  The result is routed through :func:`_mb_call` for the 1 req/s polite delay.
 
     :param query: Lucene query string for the ``release`` field.
     :param tracks: Expected total track count; added as a ``tracks`` field constraint when non-zero.
@@ -430,7 +431,7 @@ def _search_mb_releases(query: str, tracks: int, limit: int) -> dict[str, JSON]:
             return mb.search_releases(query, limit=limit, tracks=tracks)  # type: ignore[no-any-return]
         return mb.search_releases(query, limit=limit)  # type: ignore[no-any-return]
 
-    return _call()
+    return _mb_call(_call)
 
 
 def _parse_release_item(item: Mapping[str, object], score: int) -> MBReleaseCandidate:

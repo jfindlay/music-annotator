@@ -36,6 +36,7 @@ from music_annotator._mb_api import (
     _patched_parse_recording,
     _patched_safe_read,
     _sidecar_filename,
+    fetch_acoustid_id,
 )
 from music_annotator._pipeline_io import _check_collisions
 from music_annotator.models import MBRecording, TransactionEntry
@@ -99,6 +100,27 @@ class TestMbRetry:
         result = wrapped()
         assert result == {"ok": True}
 
+    def test_retries_on_307(self, mocker: MockerFixture) -> None:
+        """Retries on 307 (redirect loop) and succeeds on subsequent attempt.
+
+        307 is a transient CAA/Internet Archive condition and is included in the retry set alongside
+        503/429/500.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
+        inner = mocker.MagicMock(side_effect=[err, {"ok": True}])
+        inner.__name__ = "mock_fn"
+
+        @_mb_retry
+        def wrapped() -> dict[str, object]:
+            return inner()  # type: ignore[no-any-return]
+
+        result = wrapped()
+        assert result == {"ok": True}
+        assert inner.call_count == 2
+
     def test_raises_immediately_on_non_retryable_error(self, mocker: MockerFixture) -> None:
         """Raises ResponseError immediately on a non-retryable status code.
 
@@ -134,6 +156,191 @@ class TestMbRetry:
         with pytest.raises(RuntimeError, match="after retries"):
             wrapped()
         assert inner.call_count == 6
+
+
+# ---------------------------------------------------------------------------
+# fetch_cover_art — retry behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestFetchCoverArtRetry:
+    """Tests for retry behaviour in fetch_cover_art — listing, image, and release-group fetches."""
+
+    def test_listing_307_retried_and_succeeds(self, mocker: MockerFixture) -> None:
+        """A transient 307 on the image listing is retried; success on the second attempt returns art.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        jpeg = b"\xff\xd8" + b"\x00" * 100
+        listing = {"images": [{"types": ["Front"], "id": "1", "image": "https://caa/1"}]}
+        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=[err, listing])
+        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
+        result = fetch_cover_art("rel-1", no_cache=True)
+        assert result.available
+        assert len(result.front) == 1
+
+    def test_listing_307_exhausts_retries_raises(self, mocker: MockerFixture) -> None:
+        """Six consecutive 307 errors on the listing exhaust _mb_retry and raise RuntimeError.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=err)
+        with pytest.raises(RuntimeError, match="MB request failed after retries"):
+            fetch_cover_art("rel-1", no_cache=True)
+
+    def test_image_fetch_307_retried_and_succeeds(self, mocker: MockerFixture) -> None:
+        """A transient 307 on an individual image fetch is retried; success on second attempt returns art.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        jpeg = b"\xff\xd8" + b"\x00" * 100
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("1", "Front")))
+        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
+        mocker.patch("music_annotator._mb_api.mb.get_image", side_effect=[err, jpeg, err, jpeg])
+        result = fetch_cover_art("rel-1", no_cache=True)
+        assert result.available
+        assert len(result.front) == 1
+
+    def test_image_fetch_307_exhausts_retries_raises(self, mocker: MockerFixture) -> None:
+        """Six consecutive 307 errors on an image fetch exhaust _mb_retry and raise RuntimeError.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("1", "Front")))
+        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
+        mocker.patch("music_annotator._mb_api.mb.get_image", side_effect=err)
+        with pytest.raises(RuntimeError, match="MB request failed after retries"):
+            fetch_cover_art("rel-1", no_cache=True)
+
+    def test_rg_image_fetch_307_retried_and_succeeds(self, mocker: MockerFixture) -> None:
+        """A transient 307 on the release-group fallback image is retried; success on second attempt returns art.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        jpeg = b"\xff\xd8" + b"\x00" * 100
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_image_list",
+            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+        )
+        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
+        mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", side_effect=[err, jpeg, err, jpeg])
+        result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
+        assert result.available
+        assert len(result.front) == 1
+
+    def test_rg_image_fetch_307_exhausts_retries_raises(self, mocker: MockerFixture) -> None:
+        """Six consecutive 307 errors on the release-group fallback exhaust _mb_retry and raise RuntimeError.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_image_list",
+            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+        )
+        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
+        mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", side_effect=err)
+        with pytest.raises(RuntimeError, match="MB request failed after retries"):
+            fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
+
+    def test_image_fetch_non_retryable_non_404_raises_response_error(self, mocker: MockerFixture) -> None:
+        """A non-retryable, non-404 error on an image fetch (e.g. 400) re-raises ResponseError immediately.
+
+        400 is not in the _mb_retry retry set and not a 404, so it passes straight through _mb_retry
+        and then through the ``if '404' in str(exc): ... raise`` branch in _fetch_raw.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("1", "Front")))
+        err = mb.ResponseError(cause=Exception("400 Bad Request"))
+        mocker.patch("music_annotator._mb_api.mb.get_image", side_effect=err)
+        with pytest.raises(mb.ResponseError):
+            fetch_cover_art("rel-1", no_cache=True)
+
+    def test_rg_image_fetch_non_retryable_non_404_raises_response_error(self, mocker: MockerFixture) -> None:
+        """A non-retryable, non-404 error on the RG fallback (e.g. 400) re-raises ResponseError immediately.
+
+        400 is not in the _mb_retry retry set and not a 404, so _fetch_rg_image re-raises it.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_image_list",
+            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+        )
+        err = mb.ResponseError(cause=Exception("400 Bad Request"))
+        mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", side_effect=err)
+        with pytest.raises(mb.ResponseError):
+            fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
+
+    def test_listing_non_retryable_non_404_raises_runtime_error(self, mocker: MockerFixture) -> None:
+        """A non-retryable, non-404 listing error (e.g. 400) re-raises ResponseError wrapped as RuntimeError.
+
+        400 is not in the _mb_retry retry set and not a 404, so _mb_retry re-raises it immediately as
+        ResponseError which the ``case _:`` arm then re-raises as RuntimeError.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        err = mb.ResponseError(cause=Exception("400 Bad Request"))
+        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=err)
+        with pytest.raises(RuntimeError, match="cover art listing failed"):
+            fetch_cover_art("rel-1", no_cache=True)
+
+
+# ---------------------------------------------------------------------------
+# fetch_acoustid_id
+# ---------------------------------------------------------------------------
+
+
+class TestFetchAcoustidId:
+    """Tests for fetch_acoustid_id HTTP error handling."""
+
+    def test_4xx_returns_empty_immediately(self, mocker: MockerFixture) -> None:
+        """A 4xx HTTP error returns '' immediately without retrying.
+
+        4xx errors are permanent client errors; retrying them is wasteful and incorrect.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        http_exc = HTTPError("https://acoustid.org/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=http_exc,
+        )
+        result = fetch_acoustid_id("rec-1")
+        assert result == ""
+        # Only one attempt — no retry on 4xx.
+        mock_urlopen.assert_called_once()
+
+    def test_5xx_retried(self, mocker: MockerFixture) -> None:
+        """A 5xx HTTP error is retried up to three times before returning ''.
+
+        5xx errors are transient server errors; retry is appropriate.  After all three attempts fail,
+        the function returns '' rather than raising.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        http_exc = HTTPError("https://acoustid.org/", 503, "Service Unavailable", {}, None)  # type: ignore[arg-type]
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=http_exc,
+        )
+        result = fetch_acoustid_id("rec-1")
+        assert result == ""
+        # All three attempts were made before giving up.
+        assert mock_urlopen.call_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +607,10 @@ class TestFetchCoverArt:
         assert result.back[0] is result.spine[0]
 
     def test_multi_type_primary_fetch_failure_raises(self, mocker: MockerFixture) -> None:
-        """When a multi-type image fetch fails, the error propagates to the caller.
+        """When a multi-type image fetch fails all retries, RuntimeError propagates to the caller.
+
+        The inner _call() is decorated with @_mb_retry, so a persistent 503 error exhausts all six
+        retry attempts and raises RuntimeError rather than mb.ResponseError.
 
         :param mocker: pytest-mock fixture.
         """
@@ -411,7 +621,7 @@ class TestFetchCoverArt:
         }
         mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
         mocker.patch("music_annotator._mb_api.mb.get_image", side_effect=mb.ResponseError(cause=Exception("503")))
-        with pytest.raises(mb.ResponseError):
+        with pytest.raises(RuntimeError, match="MB request failed after retries"):
             fetch_cover_art("rel-1", no_cache=True)
 
     def test_multi_type_primary_empty_bytes_skips_secondary(self, mocker: MockerFixture) -> None:
@@ -435,7 +645,10 @@ class TestFetchCoverArt:
         assert result.spine == []
 
     def test_image_fetch_error_raises(self, mocker: MockerFixture) -> None:
-        """A non-404 ResponseError on an image fetch propagates to the caller.
+        """A persistent non-404 ResponseError on an image fetch raises RuntimeError after retries.
+
+        The inner _call() in _fetch_raw is decorated with @_mb_retry, so a persistent 503 error
+        exhausts all six retry attempts and raises RuntimeError.
 
         :param mocker: pytest-mock fixture.
         """
@@ -445,7 +658,7 @@ class TestFetchCoverArt:
             "music_annotator._mb_api.mb.get_image",
             side_effect=mb.ResponseError(cause=Exception("503 error")),
         )
-        with pytest.raises(mb.ResponseError):
+        with pytest.raises(RuntimeError, match="MB request failed after retries"):
             fetch_cover_art("rel-1", no_cache=True)
 
     def test_front_image_404_returns_empty(self, mocker: MockerFixture) -> None:
@@ -546,7 +759,11 @@ class TestFetchCoverArt:
         assert not result.available
 
     def test_listing_non_404_error_raises(self, mocker: MockerFixture) -> None:
-        """A non-404 listing error raises RuntimeError immediately (no fallback attempted).
+        """A persistent non-404 listing error raises RuntimeError after all retries are exhausted.
+
+        The inner _get_image_list() is decorated with @_mb_retry, so a persistent 500 error exhausts
+        all six retry attempts; _mb_retry raises RuntimeError("MB request failed after retries: ...")
+        which propagates unchanged through the ResponseError handler.
 
         :param mocker: pytest-mock fixture.
         """
@@ -555,11 +772,14 @@ class TestFetchCoverArt:
             "music_annotator._mb_api.mb.get_image_list",
             side_effect=mb.ResponseError(cause=Exception("500 Internal Server Error")),
         )
-        with pytest.raises(RuntimeError, match="cover art listing failed"):
+        with pytest.raises(RuntimeError, match="MB request failed after retries"):
             fetch_cover_art("rel-1", no_cache=True)
 
     def test_release_group_fallback_fails_raises(self, mocker: MockerFixture) -> None:
-        """When the release-group fallback call fails, the error propagates to the caller.
+        """When the release-group fallback call fails all retries, RuntimeError propagates.
+
+        The inner _call() in _fetch_rg_image is decorated with @_mb_retry, so a persistent 500 error
+        exhausts all six retry attempts and raises RuntimeError.
 
         :param mocker: pytest-mock fixture.
         """
@@ -572,7 +792,7 @@ class TestFetchCoverArt:
             "music_annotator._mb_api.mb.get_release_group_image_front",
             side_effect=mb.ResponseError(cause=Exception("500 error")),
         )
-        with pytest.raises(mb.ResponseError):
+        with pytest.raises(RuntimeError, match="MB request failed after retries"):
             fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
 
     def test_release_group_fallback_returns_empty_bytes(self, mocker: MockerFixture) -> None:
@@ -1322,7 +1542,10 @@ class TestFetchCoverArtReleaseGroupFallback:
         assert mock_rg.call_count == 2
 
     def test_release_group_fallback_error_raises(self, mocker: MockerFixture) -> None:
-        """Any error from the release-group fallback call propagates to the caller.
+        """A persistent error from the release-group fallback raises RuntimeError after retries.
+
+        The inner _call() in _fetch_rg_image is decorated with @_mb_retry, so a persistent 503 error
+        exhausts all six retry attempts and raises RuntimeError.
 
         :param mocker: pytest-mock fixture.
         """
@@ -1332,7 +1555,7 @@ class TestFetchCoverArtReleaseGroupFallback:
             side_effect=mb.ResponseError("503"),
         )
         mocker.patch("music_annotator._mb_api.time.sleep")
-        with pytest.raises(mb.ResponseError):
+        with pytest.raises(RuntimeError, match="MB request failed after retries"):
             fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
 
 

@@ -833,6 +833,7 @@ class TestSearchReleasesByDir:
 
         :param mocker: pytest-mock fixture.
         """
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mock_mb_search = mocker.patch(
             "music_annotator._discover.mb.search_releases",
             return_value={"release-list": []},
@@ -847,6 +848,7 @@ class TestSearchReleasesByDir:
 
         :param mocker: pytest-mock fixture.
         """
+        mocker.patch("music_annotator._mb_api.time.sleep")
         mock_mb_search = mocker.patch(
             "music_annotator._discover.mb.search_releases",
             return_value={"release-list": []},
@@ -1716,6 +1718,14 @@ class TestScoreTocRelease:
 class TestTocLookupMbReleases:
     """Tests for _toc_lookup_mb_releases."""
 
+    @pytest.fixture(autouse=True)
+    def _patch_sleep(self, mocker: MockerFixture) -> None:
+        """Suppress the _mb_call polite sleep so tests remain fast.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+
     def _toc_release(self, release_id: str = "rel-toc-1", track_count: int = 4) -> dict[str, object]:
         """Build a minimal raw release dict for TOC response tests.
 
@@ -1871,6 +1881,41 @@ class TestTocLookupMbReleases:
         )
         result = _toc_lookup_mb_releases("1 1 15000 150", 10)
         assert result == []
+
+    def test_polite_delay_observed_on_success(self, mocker: MockerFixture) -> None:
+        """_mb_call's 1-second polite delay is observed after a successful TOC lookup.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch(
+            "music_annotator._discover.mb.get_releases_by_discid",
+            return_value={"release-list": [self._toc_release()]},
+        )
+        _toc_lookup_mb_releases("1 1 15000 150", 10)
+        mock_sleep.assert_called_once_with(1)
+
+
+# ---------------------------------------------------------------------------
+# _search_mb_releases — polite delay
+# ---------------------------------------------------------------------------
+
+
+class TestSearchMbReleasesPoliteDelay:
+    """Tests for the _mb_call polite delay in _search_mb_releases."""
+
+    def test_polite_delay_observed_on_success(self, mocker: MockerFixture) -> None:
+        """_mb_call's 1-second polite delay is observed after a successful search.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch(
+            "music_annotator._discover.mb.search_releases",
+            return_value={"release-list": []},
+        )
+        music_annotator._discover._search_mb_releases("Respighi", 0, 10)  # pylint: disable=protected-access
+        mock_sleep.assert_called_once_with(1)
 
 
 # ---------------------------------------------------------------------------
