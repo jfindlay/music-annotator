@@ -3478,9 +3478,12 @@ class TestPromptCollisionPolicy:
     """Tests for _prompt_collision_policy."""
 
     def test_displays_work_top_dirs_not_file_paths(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Collision warning shows the work-top-dir (parts[0]/parts[1]) with date suffix, not individual files.
+        """Collision warning shows the work-top-dir (parts[0]/parts[1]) with date suffix as a relative path.
 
-        Two files in the same work directory should produce one grouped directory in the output.
+        Two files in the same work directory should produce one grouped directory entry in the
+        output, displayed as a path relative to dest_root so the [rec/rel YYYY] suffix is visible
+        even on narrow terminals.  Individual filenames are listed flat beneath the directory
+        summary.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -3498,10 +3501,13 @@ class TestPromptCollisionPolicy:
 
         _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
 
-        # The work-top-dir with the date suffix must appear exactly once in printed output.
+        # The work-top-dir with the date suffix must appear in the directory summary line.
         assert any("Sinfonie Nr. 2 D-Dur, op. 73 [rec 1977-1978]" in line for line in printed)
-        # Individual file names must not appear.
-        assert not any("Symphony no. 2 in D major" in line for line in printed)
+        # The absolute dest prefix must NOT appear in the directory lines (relative paths only).
+        assert not any(str(dest) in line and "Sinfonie" in line for line in printed)
+        # Both individual filenames must appear in the flat filename list.
+        assert any("01 - Symphony no. 2 in D major, op. 73_ I.flac" in line for line in printed)
+        assert any("02 - Symphony no. 2 in D major, op. 73_ II.flac" in line for line in printed)
 
     def test_multiple_work_dirs_shown_grouped(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """When collisions span two work directories both are shown, each once.
@@ -3875,11 +3881,13 @@ class TestRunConfirmationMessage:
     """Tests for the post-copy 'Verified OK' confirmation message in run()."""
 
     def test_confirmation_shows_work_top_dir_with_date_suffix(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """The 'Verified OK' message shows the work-top-dir (parts[0]/parts[1]) with [rec/rel] suffix.
+        """The 'Verified OK' message shows the work-top-dir as a relative path with [rec/rel] suffix.
 
-        For a 3-level hierarchy the immediate parent of a file is a division subdirectory, not the
-        work directory.  This test verifies that the confirmation message always shows the
-        work-top-dir (dest_root / composer_dir / work_dir) regardless of hierarchy depth.
+        Paths are printed relative to dest_root so the [rec YYYY] / [rel YYYY] suffix is visible
+        without the absolute prefix overflowing the terminal width.  The confirmation header
+        includes the dest_root for context.  For a 3-level hierarchy the immediate parent of a
+        file is a division subdirectory, not the work directory; this test verifies that the
+        confirmation message groups at exactly parts[0]/parts[1] depth regardless of hierarchy.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -3899,16 +3907,19 @@ class TestRunConfirmationMessage:
             fetch_rels=False,
         )
 
-        # A 'Verified OK' line must appear.
-        assert any("Verified OK" in line for line in printed)
-        # The destination shown must be at exactly parts[0]/parts[1] depth relative to dest:
-        # it must be a direct child of a direct child of dest — not the file's immediate parent.
-        dest_lines = [line for line in printed if str(dest) in line and "Verified" not in line and "safe" not in line]
-        for line in dest_lines:
-            # Extract the path from the rich markup.
-            raw = line.replace("[green]", "").replace("[/]", "").strip().lstrip()
+        # A 'Verified OK' header line must appear and it must name dest_root.
+        assert any("Verified OK" in line and str(dest) in line for line in printed)
+        # The directory lines must be relative paths (exactly parts[0]/parts[1] deep).
+        # They appear as indented lines after the header, containing no "Verified" or "safe".
+        dir_lines = [
+            line for line in printed if "Verified" not in line and "safe" not in line and line.strip().startswith("[green]")
+        ]
+        for line in dir_lines:
+            raw = line.replace("[green]", "").replace("[/]", "").strip()
             p = Path(raw)
-            assert len(p.relative_to(dest).parts) == 2  # noqa: PLR2004 — exactly composer/work depth
+            # Relative path must not contain dest prefix and must be exactly 2 parts deep.
+            assert not p.is_absolute()
+            assert len(p.parts) == 2  # noqa: PLR2004 — exactly composer/work depth
 
 
 # ---------------------------------------------------------------------------

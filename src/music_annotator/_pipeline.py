@@ -307,19 +307,24 @@ def _select_medium_with_reason(
 def _prompt_collision_policy(collisions: list[Path], dest_root: Path) -> CollisionPolicy:
     """Print a collision warning and prompt the user for a resolution policy.
 
-    Groups the conflicting files by their work-top directory (``dest_root / parts[0] / parts[1]``)
-    so the user sees the ``[rec YYYY]`` / ``[rel YYYY]`` date suffix on each destination rather than
-    a flat list of individual file paths.  Re-prompts until a valid choice is entered.
+    Groups the conflicting files by their work directory (``parts[0] / parts[1]`` relative to
+    ``dest_root``) so the user sees the ``[rec YYYY]`` / ``[rel YYYY]`` date suffix on each
+    destination without the absolute prefix overwhelming the terminal width.  Individual
+    conflicting filenames are then listed flat beneath the directory summary.  Re-prompts until a
+    valid choice is entered.
 
     :param collisions: Destination files that already exist on disk.
-    :param dest_root: Root directory of the destination library, used to derive the work-top-dir
+    :param dest_root: Root directory of the destination library, used to derive the work dir
         for display grouping.
     :returns: The :class:`CollisionPolicy` chosen by the user.
     """
-    work_dirs = sorted({dest_root / p.relative_to(dest_root).parts[0] / p.relative_to(dest_root).parts[1] for p in collisions})
-    _console.print(f"\n[bold red]WARNING:[/] [red]{len(collisions)} destination file(s) already exist in:[/]")
+    work_dirs = sorted({p.relative_to(dest_root).parts[0] / Path(p.relative_to(dest_root).parts[1]) for p in collisions})
+    _console.print(f"\n[bold red]WARNING:[/] [red]{len(collisions)} destination file(s) already exist under {dest_root}:[/]")
     for d in work_dirs:
         _console.print(f"  [red]{d}[/]")
+    _console.print("\n[red]Conflicting files:[/]")
+    for p in sorted(collisions, key=lambda x: x.name):
+        _console.print(f"  [red]{p.name}[/]")
     _console.print("\n[bold]Choose an action:[/]")
     _console.print("  [bold red]\\[a] abort[/]     — quit without copying anything")
     _console.print("  [bold yellow]\\[s] skip[/]      — copy only new files, leave existing untouched")
@@ -1047,14 +1052,14 @@ def run(
         copied = [e for e in journal_entries if e.action == "tagged"]
         dest_dirs = sorted(
             {
-                dest_root
-                / Path(e.destination).relative_to(dest_root).parts[0]
-                / Path(e.destination).relative_to(dest_root).parts[1]
+                Path(e.destination).relative_to(dest_root).parts[0] / Path(Path(e.destination).relative_to(dest_root).parts[1])
                 for e in copied
             }
         )
         if copied:
-            _console.print(f"\n[bold green]Verified OK:[/] [green]{len(copied)} file(s) written and confirmed to:[/]")
+            _console.print(
+                f"\n[bold green]Verified OK:[/] [green]{len(copied)} file(s) written and confirmed under {dest_root}:[/]"
+            )
             for d in dest_dirs:
                 _console.print(f"  [green]{d}[/]")
             _console.print("[bold green]It is safe to delete the source directory.[/]\n")
