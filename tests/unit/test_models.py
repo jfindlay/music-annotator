@@ -21,6 +21,7 @@ from music_annotator.models import (
     MBPlaceRelation,
     MBRecording,
     MBRelease,
+    MBReleaseCandidate,
     MBReleaseEvent,
     MBReleaseGroup,
     MBSeriesRelation,
@@ -1228,3 +1229,31 @@ class TestMBMediumDiscList:
         assert medium.disc_list[0].offsets == [182, 67232, 113807, 136232, 175832, 233432, 283307, 310607]
         assert medium.disc_list[0].sectors == 355382
         assert medium.disc_list[1].offsets == [183, 67233, 113808, 136233, 175833, 233433, 283308, 310608]
+
+
+# ---------------------------------------------------------------------------
+# MBReleaseCandidate
+# ---------------------------------------------------------------------------
+
+
+class TestMBReleaseCandidate:
+    """Tests for MBReleaseCandidate model."""
+
+    def test_from_journal_defaults_false(self) -> None:
+        """MBReleaseCandidate.from_journal defaults to False when not supplied."""
+        candidate = MBReleaseCandidate(release_id="rel-1", score=90, title="My Release")
+        assert candidate.from_journal is False
+
+    def test_from_journal_true_accepted(self) -> None:
+        """MBReleaseCandidate accepts from_journal=True."""
+        candidate = MBReleaseCandidate(release_id="rel-1", score=101, from_journal=True)
+        assert candidate.from_journal is True
+
+    def test_model_copy_preserves_from_journal(self) -> None:
+        """model_copy with from_journal update round-trips correctly."""
+        original = MBReleaseCandidate(release_id="rel-1", score=80, title="T")
+        enriched = original.model_copy(update={"from_journal": True, "score": 101})
+        assert enriched.from_journal is True
+        assert enriched.score == 101
+        assert enriched.title == "T"
+        assert enriched.release_id == "rel-1"

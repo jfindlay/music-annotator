@@ -23,12 +23,14 @@ import music_annotator._discover
 from music_annotator._discover import (
     DiscoverUI,
     TerminalDiscoverUI,
+    _build_journal_release_ids,
+    _enrich_candidates_from_journal,
     _format_candidate,
     _score_toc_release,
     _toc_lookup_mb_releases,
 )
 from music_annotator._tags import _NAME_MAX
-from music_annotator.models import MBMedium, MBReleaseCandidate
+from music_annotator.models import MBMedium, MBReleaseCandidate, TransactionEntry, TransactionLog
 
 # ---------------------------------------------------------------------------
 # Minimal FLAC factory (same technique as test_example.py)
@@ -934,6 +936,28 @@ class TestFormatCandidate:
         """Empty artist field shows '(unknown)' in output."""
         result = _format_candidate(1, _candidate(artist=""))
         assert "(unknown)" in result
+
+    def test_from_journal_renders_compact_block(self) -> None:
+        """A from_journal candidate renders a compact block with 'journal match' label and MBID."""
+        candidate = MBReleaseCandidate(
+            release_id="abc-def",
+            score=101,
+            from_journal=True,
+            mb_url="https://musicbrainz.org/release/abc-def",
+        )
+        result = _format_candidate(2, candidate)
+        assert "journal match" in result
+        assert "abc-def" in result
+        assert "musicbrainz.org/release/abc-def" in result
+        # Compact block must NOT contain metadata noise from the full layout
+        assert "(unknown)" not in result
+        assert "artist" not in result
+
+    def test_from_journal_false_uses_full_layout(self) -> None:
+        """A candidate with from_journal=False uses the standard seven-line layout."""
+        result = _format_candidate(1, _candidate(score=90))
+        assert "artist" in result
+        assert "journal match" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -2369,3 +2393,349 @@ class TestTerminalDiscoverUIConfirmShortenedName:
         mocker.patch("music_annotator._discover._console.print")
         result = self._ui().confirm_shortened_name(self._ORIGINAL, self._PROPOSED)
         assert result == self._PROPOSED
+
+
+# ---------------------------------------------------------------------------
+# _build_journal_release_ids
+# ---------------------------------------------------------------------------
+
+
+def _make_entry(
+    action: str = "tagged",
+    release_id: str = "rel-1",
+    source: str = "/src/01.flac",
+    destination: str = "/dest/01.flac",
+) -> TransactionEntry:
+    """Build a minimal TransactionEntry for journal helper tests.
+
+    :param action: Journal action string.
+    :param release_id: MusicBrainz release MBID.
+    :param source: Source file path string.
+    :param destination: Destination file path string.
+    :returns: A :class:`~music_annotator.models.TransactionEntry` instance.
+    """
+    return TransactionEntry(
+        timestamp="2026-01-01T00:00:00+00:00", release_id=release_id, source=source, destination=destination, action=action
+    )
+
+
+class TestBuildJournalReleaseIds:
+    """Tests for _build_journal_release_ids."""
+
+    def test_empty_journal_returns_empty_set(self) -> None:
+        """An empty journal produces an empty set."""
+        result = _build_journal_release_ids(TransactionLog())
+        assert result == set()
+
+    def test_tagged_entries_included(self) -> None:
+        """release_id values from action='tagged' entries are returned."""
+        journal = TransactionLog(entries=[_make_entry(action="tagged", release_id="rel-1")])
+        assert _build_journal_release_ids(journal) == {"rel-1"}
+
+    def test_non_tagged_actions_excluded(self) -> None:
+        """action='skipped', 'dry_run', 'downloaded', 'sidecar' entries are excluded."""
+        journal = TransactionLog(
+            entries=[
+                _make_entry(action="skipped", release_id="rel-skip"),
+                _make_entry(action="dry_run", release_id="rel-dry"),
+                _make_entry(action="downloaded", release_id="rel-dl"),
+                _make_entry(action="sidecar", release_id="rel-sc"),
+            ]
+        )
+        assert _build_journal_release_ids(journal) == set()
+
+    def test_deduplication(self) -> None:
+        """Multiple tagged entries with the same release_id are deduplicated."""
+        journal = TransactionLog(
+            entries=[
+                _make_entry(action="tagged", release_id="rel-1", source="/src/01.flac"),
+                _make_entry(action="tagged", release_id="rel-1", source="/src/02.flac"),
+            ]
+        )
+        assert _build_journal_release_ids(journal) == {"rel-1"}
+
+    def test_multiple_release_ids(self) -> None:
+        """Multiple distinct release_ids are all returned."""
+        journal = TransactionLog(
+            entries=[
+                _make_entry(action="tagged", release_id="rel-1"),
+                _make_entry(action="tagged", release_id="rel-2"),
+                _make_entry(action="skipped", release_id="rel-3"),
+            ]
+        )
+        assert _build_journal_release_ids(journal) == {"rel-1", "rel-2"}
+
+
+# ---------------------------------------------------------------------------
+# _enrich_candidates_from_journal
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichCandidatesFromJournal:
+    """Tests for _enrich_candidates_from_journal."""
+
+    def test_empty_candidates_returns_empty(self) -> None:
+        """Empty candidate list returns an empty list regardless of journal_ids."""
+        result = _enrich_candidates_from_journal([], {"rel-1"})
+        assert result == []
+
+    def test_empty_journal_ids_returns_unchanged(self) -> None:
+        """Empty journal_ids set leaves candidates unchanged."""
+        candidates = [_candidate(release_id="rel-1", score=90)]
+        result = _enrich_candidates_from_journal(candidates, set())
+        assert len(result) == 1
+        assert result[0].from_journal is False
+        assert result[0].score == 90
+
+    def test_matching_candidate_flagged_and_boosted(self) -> None:
+        """A candidate whose release_id is in journal_ids gains from_journal=True and score=101."""
+        candidates = [_candidate(release_id="rel-1", score=85)]
+        result = _enrich_candidates_from_journal(candidates, {"rel-1"})
+        assert len(result) == 1
+        assert result[0].from_journal is True
+        assert result[0].score == 101
+
+    def test_non_matching_candidate_unchanged(self) -> None:
+        """A candidate whose release_id is not in journal_ids is not modified."""
+        candidates = [_candidate(release_id="rel-2", score=85)]
+        result = _enrich_candidates_from_journal(candidates, {"rel-1"})
+        assert result[0].from_journal is False
+        assert result[0].score == 85
+
+    def test_metadata_preserved_on_enriched_candidate(self) -> None:
+        """All metadata fields are preserved when a candidate is enriched."""
+        candidates = [_candidate(release_id="rel-1", score=72, title="My Title", artist="Karajan")]
+        result = _enrich_candidates_from_journal(candidates, {"rel-1"})
+        hit = result[0]
+        assert hit.title == "My Title"
+        assert hit.artist == "Karajan"
+        assert hit.release_id == "rel-1"
+
+    def test_score_above_101_not_lowered(self) -> None:
+        """A candidate already scoring above 101 is not lowered (score stays at max(score, 101))."""
+        # max(105, 101) == 105, so the candidate keeps its higher score
+        candidates = [_candidate(release_id="rel-1", score=105)]
+        result = _enrich_candidates_from_journal(candidates, {"rel-1"})
+        assert result[0].score == 105
+
+    def test_sort_order_journal_hits_float_to_top(self) -> None:
+        """After enrichment, journal-flagged candidates sort above lower-scoring organic results."""
+        candidates = [
+            _candidate(release_id="rel-organic", score=95),
+            _candidate(release_id="rel-journal", score=80),
+        ]
+        result = _enrich_candidates_from_journal(candidates, {"rel-journal"})
+        assert result[0].release_id == "rel-journal"
+        assert result[0].score == 101
+        assert result[1].release_id == "rel-organic"
+
+    def test_mixed_journal_and_non_journal(self) -> None:
+        """Multiple candidates: journal hits are boosted, others unchanged, result sorted."""
+        candidates = [
+            _candidate(release_id="rel-a", score=90),
+            _candidate(release_id="rel-b", score=75),
+            _candidate(release_id="rel-c", score=60),
+        ]
+        result = _enrich_candidates_from_journal(candidates, {"rel-b"})
+        # rel-b boosted to 101, rel-a stays 90, rel-c stays 60 → order: b, a, c
+        assert [c.release_id for c in result] == ["rel-b", "rel-a", "rel-c"]
+        assert result[0].from_journal is True
+        assert result[1].from_journal is False
+        assert result[2].from_journal is False
+
+
+# ---------------------------------------------------------------------------
+# discover — journal integration
+# ---------------------------------------------------------------------------
+
+
+class TestDiscoverJournalIntegration:
+    """Tests for journal-enrichment integration in discover()."""
+
+    def _patch_base(self, mocker: MockerFixture, candidates: list[MBReleaseCandidate]) -> MagicMock:
+        """Patch init_mb, search_releases_by_dir, and run for discover journal tests.
+
+        :param mocker: pytest-mock fixture.
+        :param candidates: Candidate list returned by search_releases_by_dir.
+        :returns: The mock for music_annotator._discover.run.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=candidates)
+        return mocker.patch("music_annotator._discover.run")
+
+    def test_journal_candidate_flagged_when_mbid_in_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When an organic MB result's release_id appears in the journal, it is flagged from_journal=True.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        # Pre-populate the journal with rel-1 already tagged
+        journal_path = dest / "music_annotator_journal.json"
+        fs.create_dir(str(dest))
+        fs.create_file(
+            str(journal_path),
+            contents='[{"timestamp":"2026-01-01T00:00:00+00:00","release_id":"rel-1",'
+            '"source":"/other/01.flac","destination":"/dest/01.flac","action":"tagged"}]',
+        )
+
+        # The organic MB search returns rel-1 at score 90
+        captured_candidates: list[list[MBReleaseCandidate]] = []
+
+        class _CapturingUI:
+            def choose_release(  # pylint: disable=useless-return
+                self, _src_dir: object, candidates: list[MBReleaseCandidate]
+            ) -> str | None:
+                """Capture candidates and return None to skip."""
+                captured_candidates.append(list(candidates))
+                return None
+
+            def confirm_disc(self, *_: object) -> None:  # pragma: no cover
+                """Not called in this test."""
+
+            def confirm_shortened_name(self, *_: object) -> None:  # pragma: no cover
+                """Not called in this test."""
+
+            def confirm_delete(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
+
+        self._patch_base(mocker, [_candidate(release_id="rel-1", score=90)])
+        music_annotator.discover(src_dirs=[src], dest_root=dest, user_agent="Test/1.0", ui=_CapturingUI())
+
+        assert len(captured_candidates) == 1
+        assert captured_candidates[0][0].from_journal is True
+        assert captured_candidates[0][0].score == 101
+
+    def test_journal_not_flagged_when_mbid_absent(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When no organic result's release_id appears in the journal, from_journal stays False.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        journal_path = dest / "music_annotator_journal.json"
+        fs.create_dir(str(dest))
+        # Journal has rel-OTHER — not the same as organic result rel-1
+        fs.create_file(
+            str(journal_path),
+            contents='[{"timestamp":"2026-01-01T00:00:00+00:00","release_id":"rel-other",'
+            '"source":"/other/01.flac","destination":"/dest/01.flac","action":"tagged"}]',
+        )
+
+        captured_candidates: list[list[MBReleaseCandidate]] = []
+
+        class _CapturingUI:
+            def choose_release(  # pylint: disable=useless-return
+                self, _src_dir: object, candidates: list[MBReleaseCandidate]
+            ) -> str | None:
+                """Capture candidates and return None to skip."""
+                captured_candidates.append(list(candidates))
+                return None
+
+            def confirm_disc(self, *_: object) -> None:  # pragma: no cover
+                """Not called in this test."""
+
+            def confirm_shortened_name(self, *_: object) -> None:  # pragma: no cover
+                """Not called in this test."""
+
+            def confirm_delete(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
+
+        self._patch_base(mocker, [_candidate(release_id="rel-1", score=90)])
+        music_annotator.discover(src_dirs=[src], dest_root=dest, user_agent="Test/1.0", ui=_CapturingUI())
+
+        assert len(captured_candidates) == 1
+        assert captured_candidates[0][0].from_journal is False
+
+    def test_journal_refreshed_after_run_so_sibling_disc_sees_it(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """After run() writes a journal entry, the next src_dir iteration sees the MBID as from_journal.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src1 = Path("/music/Disc1")
+        src2 = Path("/music/Disc2")
+        dest = Path("/dest")
+        for src in (src1, src2):
+            fs.create_dir(str(src))
+            fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_dir(str(dest))
+
+        # Simulate run() for src1 writing a journal entry for rel-1
+        import json  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+        journal_path = dest / "music_annotator_journal.json"
+
+        def _fake_run(**kwargs: object) -> None:
+            """Write a journal entry for rel-1 when src1 is processed."""
+            if kwargs.get("src_dir") == src1:
+                entry = {
+                    "timestamp": "2026-01-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": str(src1 / "01.flac"),
+                    "destination": str(dest / "01.flac"),
+                    "action": "tagged",
+                }
+                journal_path.write_text(json.dumps([entry]))
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.run", side_effect=_fake_run)
+        # Both dirs return rel-1 from MB search
+        mocker.patch(
+            "music_annotator._discover.search_releases_by_dir", return_value=[_candidate(release_id="rel-1", score=85)]
+        )
+
+        captured: list[list[MBReleaseCandidate]] = []
+
+        class _CapturingUI:
+            def choose_release(self, _src_dir: object, candidates: list[MBReleaseCandidate]) -> str | None:
+                """Capture candidates and pick the first one."""
+                captured.append(list(candidates))
+                return candidates[0].release_id  # always pick first
+
+            def confirm_disc(self, *_: object) -> None:  # pragma: no cover
+                """Not called in this test."""
+
+            def confirm_shortened_name(self, *_: object) -> None:  # pragma: no cover
+                """Not called in this test."""
+
+            def confirm_delete(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
+
+        music_annotator.discover(src_dirs=[src1, src2], dest_root=dest, user_agent="Test/1.0", ui=_CapturingUI())
+
+        # src1 had no prior journal → rel-1 was not flagged
+        assert captured[0][0].from_journal is False
+        # src2 sees the journal entry written by src1's run() → rel-1 is now flagged
+        assert captured[1][0].from_journal is True
+        assert captured[1][0].score == 101
+
+    def test_no_journal_file_discover_works_normally(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When no journal file exists, discover proceeds normally without error.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        mock_run = self._patch_base(mocker, [_candidate(release_id="rel-1", score=90)])
+        mocker.patch("builtins.input", return_value="1")
+
+        # No journal file at dest — should not raise
+        music_annotator.discover(src_dirs=[src], dest_root=dest, user_agent="Test/1.0")
+        mock_run.assert_called_once()

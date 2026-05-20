@@ -1261,7 +1261,10 @@ class MBReleaseCandidate(BaseModel):
         ``title`` (release title), ``artist`` (credit phrase), ``date`` (release date),
         ``format`` (medium format, e.g. ``"CD"``), ``tracks`` (total track count),
         ``label`` (label name), ``catalog_number``, ``country``, ``status``,
-        ``mb_url`` (canonical MusicBrainz URL for the release).
+        ``mb_url`` (canonical MusicBrainz URL for the release),
+        ``from_journal`` (``True`` when this candidate was confirmed by a prior journal entry rather
+        than from the MB search results alone; drives a compact display in
+        :func:`~music_annotator._discover._format_candidate`).
     """
 
     release_id: str = ""
@@ -1276,6 +1279,7 @@ class MBReleaseCandidate(BaseModel):
     country: str = ""
     status: str = ""
     mb_url: str = ""
+    from_journal: bool = False
 
 
 class CoverImage(BaseModel):

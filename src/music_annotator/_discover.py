@@ -29,7 +29,7 @@ from music_annotator._pipeline_io import (
     read_journal,
 )
 from music_annotator._tags import _NAME_MAX
-from music_annotator.models import JSON, DirHint, MBMedium, MBReleaseCandidate
+from music_annotator.models import JSON, DirHint, MBMedium, MBReleaseCandidate, TransactionLog
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -556,13 +556,69 @@ def search_releases_by_dir(src_dir: Path, limit: int = 10) -> list[MBReleaseCand
     return candidates
 
 
+def _build_journal_release_ids(journal: TransactionLog) -> set[str]:
+    """Extract the set of all release MBIDs that have been applied to tagged files.
+
+    Reads only ``action == "tagged"`` entries from the journal.  Other actions (``"skipped"``,
+    ``"dry_run"``, ``"downloaded"``, ``"sidecar"``) are excluded because only ``"tagged"`` entries
+    represent a confirmed, verified copy-and-tag operation.
+
+    :param journal: The :class:`~music_annotator.models.TransactionLog` to scan.
+    :returns: A set of release MBID strings (deduplicated).
+    """
+    return {e.release_id for e in journal.entries if e.action == "tagged"}
+
+
+def _enrich_candidates_from_journal(
+    candidates: list[MBReleaseCandidate],
+    journal_ids: set[str],
+) -> list[MBReleaseCandidate]:
+    """Flag and boost any MB candidate whose release MBID appears in the journal.
+
+    For each candidate whose ``release_id`` is in ``journal_ids``, return a copy with
+    ``from_journal=True`` and ``score`` raised to at least 101.  Candidates with no journal match
+    are returned unchanged.  The result list is re-sorted by score descending so that journal-backed
+    candidates float to the top, where the user will see them first.
+
+    Score 101 is chosen to exceed the maximum MB relevance score (100), ensuring that any
+    journal-confirmed candidate ranks above every purely organic search result.
+
+    :param candidates: Ordered list of :class:`~music_annotator.models.MBReleaseCandidate` from
+        :func:`search_releases_by_dir`.
+    :param journal_ids: Set of release MBIDs known to the journal (from
+        :func:`_build_journal_release_ids`).
+    :returns: A new list of candidates sorted by score descending, with journal hits boosted.
+    """
+    enriched: list[MBReleaseCandidate] = []
+    for candidate in candidates:
+        if candidate.release_id in journal_ids:
+            enriched.append(candidate.model_copy(update={"from_journal": True, "score": max(candidate.score, 101)}))
+        else:
+            enriched.append(candidate)
+    enriched.sort(key=lambda c: c.score, reverse=True)
+    return enriched
+
+
 def _format_candidate(index: int, candidate: MBReleaseCandidate) -> str:
     """Format a single :class:`~music_annotator.models.MBReleaseCandidate` as a human-readable numbered entry.
+
+    Journal-confirmed candidates (``candidate.from_journal is True``) render as a compact two-line
+    block showing only the MBID and URL — the full metadata fields are omitted because they describe
+    a previously-applied release already known to the user.  All other candidates use the full
+    seven-line display.
 
     :param index: 1-based display index.
     :param candidate: The candidate to format.
     :returns: A multi-line string ready to print to stdout.
     """
+    if candidate.from_journal:
+        lines = [
+            f"  [bold yellow]\\[{index}][/] [bold green][journal match][/]  [dim]score={candidate.score}[/]",
+            f"  [dim]     mbid   :[/] {candidate.release_id}",
+            f"  [dim]     url    :[/] [dim cyan]{candidate.mb_url}[/]",
+        ]
+        return "\n".join(lines)
+
     lines = [
         f"  [bold yellow]\\[{index}][/] [dim]score={candidate.score}[/]  [bold white]{candidate.title}[/]",
         f"  [dim]     artist :[/] {candidate.artist or '(unknown)'}",
@@ -716,6 +772,12 @@ def discover(
     if ui is None:
         ui = TerminalDiscoverUI()
     init_mb(user_agent)
+
+    # Read the journal once before the loop so all iterations start with the same baseline
+    # snapshot.  The snapshot is refreshed after each successful run() call so that subsequent
+    # directories in the same session immediately benefit from MBIDs just written.
+    journal = read_journal(dest_root / JOURNAL_FILENAME)
+
     for src_dir in src_dirs:
         log.info("discover_dir", path=str(src_dir))
         rule = f"[bold cyan]{'=' * 72}[/]"
@@ -729,6 +791,13 @@ def discover(
             log.warning("discover_skip", reason=str(exc))
             _console.print(f"  [bold yellow]Skipped:[/] [yellow]{exc}[/]")
             continue
+
+        # Enrich organic MB results with journal provenance: any MBID that has already been applied
+        # to a tagged file in dest_root is flagged and boosted to score 101 so the user sees it
+        # first.  This is the primary mechanism for ensuring multi-disc releases reuse the same
+        # MBID across sessions and across discs processed in a single search run.
+        journal_ids = _build_journal_release_ids(journal)
+        candidates = _enrich_candidates_from_journal(candidates, journal_ids)
 
         if not candidates:
             _console.print("  [bold yellow]No candidates found.[/]")
@@ -755,6 +824,11 @@ def discover(
         except (ValueError, mb.WebServiceError, RuntimeError, OSError) as exc:
             log.error("discover_run_error", release_id=release_id, error=str(exc), exc_info=True)
             continue
+
+        # Refresh the journal snapshot so the next directory in this session sees the MBID just
+        # written by run().  This is what makes sibling-disc consistency work within a single
+        # multi-directory search invocation.
+        journal = read_journal(dest_root / JOURNAL_FILENAME)
 
         if not dry_run and delete:
             prompt_delete_src(src_dir, ui=ui)
