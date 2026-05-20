@@ -850,7 +850,7 @@ def build_track_tags(
     return tags
 
 
-def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: TrackTags) -> Path:
+def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: TrackTags, global_track_idx: int = 0) -> Path:
     """Compute the destination path (without extension) for one annotated track.
 
     Layout (2-level work hierarchy — e.g. symphony with movements)::
@@ -871,10 +871,16 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     One intermediate directory is introduced for each compositional subdivision level between the
     root work and the leaf (i.e. when ``CWP_PART_LEVELS`` ≥ 2).  All ``nn`` prefixes are
     directory-scoped zero-padded integers derived from the MB ``ordering-key`` (stored as
-    ``CWP_ORDERING_KEY_{i}``), falling back to ``MOVEMENTNUMBER``, then ``track.position``.
+    ``CWP_ORDERING_KEY_{i}``), falling back to ``MOVEMENTNUMBER``, then ``global_track_idx``.
 
     ``MOVEMENTNUMBER`` in the tag/title string is the composer's global numbering across the whole
     work (e.g. No. 39 in the Handel Messiah) and is distinct from the directory-local ``nn`` prefix.
+
+    The leaf ``nn`` fallback chain is: MB ``ordering-key`` → ``MOVEMENTNUMBER`` → ``global_track_idx``
+    (1-based global running index of the source file across all media in the session).
+    Using ``global_track_idx`` as the ultimate fallback — rather than ``track.position``, which
+    resets to 1 for every disc — guarantees globally unique, monotonically increasing filenames even
+    when MB ordering-key data is absent and the work spans multiple discs.
 
     The year suffix uses ``[rec YYYY]`` when a session date is known — sourced from
     ``tags.recording_date_work`` (the minimum interval spanning all movements of the work on
@@ -890,6 +896,10 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     :param track: The :class:`~music_annotator.models.MBTrack` for this track.
     :param tags: The :class:`~music_annotator.models.TrackTags` instance for this track, which must already have
         ``movementnumber`` and ``movementtotal`` filled in.
+    :param global_track_idx: 1-based global index of this track across all source files in the session.
+        Used as the ultimate leaf ``nn`` fallback when ``CWP_ORDERING_KEY_0`` is zero/absent and
+        ``MOVEMENTNUMBER`` is also absent.  Defaults to ``0``, which causes the function to fall back
+        to ``track.position`` (the legacy behaviour used when the caller does not supply this argument).
     :returns: A :class:`~pathlib.Path` for the destination file *without* extension (callers append ``.flac``, ``.mp3``,
         etc.).
     """
@@ -1016,9 +1026,14 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
             nn = _nn(ok_str, i)
             intermediate.append(safe_name(f"{nn} - {part_title}") if part_title else nn)
 
-        # Leaf nn: from ordering-key of level 0, then MOVEMENTNUMBER, then track position
+        # Leaf nn: from ordering-key of level 0, then MOVEMENTNUMBER, then global_track_idx.
+        # global_track_idx (1-based, monotonically increasing across all media in the session) is
+        # the correct fallback for multi-disc works where track.position resets to 1 per disc.
+        # When global_track_idx is 0 (caller omitted it) fall back to track.position for
+        # compatibility with callers that do not supply a global index.
         leaf_ok = file_dict.get("CWP_ORDERING_KEY_0", "0")
-        leaf_fallback = int(file_dict.get("MOVEMENTNUMBER") or str(track.position))
+        movt_num = file_dict.get("MOVEMENTNUMBER", "")
+        leaf_fallback = int(movt_num) if movt_num else (global_track_idx or track.position)
         leaf_nn = _nn(leaf_ok, leaf_fallback, width)
 
         path: Path = dest_root / top_dir / work_dir
@@ -1028,9 +1043,10 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
 
     # 1- or 2-level hierarchy: single work directory + leaf file.
     # Use CWP_ORDERING_KEY_0 (MB ordering-key, gives correct global position across all discs
-    # of a multi-disc work) before falling back to MOVEMENTNUMBER or track.position.  This is
+    # of a multi-disc work) before falling back to MOVEMENTNUMBER or global_track_idx.  This is
     # the same priority chain used in the part_levels >= 2 branch above.
     leaf_ok = file_dict.get("CWP_ORDERING_KEY_0", "0")
-    leaf_fallback = int(file_dict.get("MOVEMENTNUMBER") or str(track.position))
+    movt_num = file_dict.get("MOVEMENTNUMBER", "")
+    leaf_fallback = int(movt_num) if movt_num else (global_track_idx or track.position)
     track_num = _nn(leaf_ok, leaf_fallback, width)
     return dest_root / top_dir / work_dir / f"{track_num} - {track_title}"

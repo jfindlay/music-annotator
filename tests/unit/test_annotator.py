@@ -2072,6 +2072,31 @@ class TestBuildDestPathYear:
         )
         assert result.name.startswith("03 -")
 
+    def test_2level_falls_back_to_global_track_idx_when_ordering_key_and_movementnumber_absent(
+        self, fs: FakeFilesystem
+    ) -> None:
+        """Without ordering-key or MOVEMENTNUMBER, global_track_idx drives the 2-level file prefix.
+
+        This is the multi-disc fallback: track.position resets to 1 for each disc, so using it
+        as the leaf nn would produce collisions across discs.  global_track_idx is the 1-based
+        running index across all source files in the session and is always globally unique.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        # No cwp_ordering_key_0 and no movementnumber → global_track_idx must win.
+        tags = self._make_tags(originaldate="1974")
+        tags.movementnumber = ""  # absent
+        result = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+            tags,
+            global_track_idx=17,
+        )
+        assert result.name.startswith("17 -")
+
     def test_mbid_no_longer_in_path(self, fs: FakeFilesystem) -> None:
         """Full MBID UUID is not present in the path (replaced by [rec/rel YYYY]).
 
@@ -2338,6 +2363,30 @@ class TestBuildDestPathIntermediateDirs:
             tags,
         )
         assert result.name.startswith("17")
+
+    def test_leaf_nn_falls_back_to_global_track_idx_when_ordering_key_and_movementnumber_absent(
+        self, fs: FakeFilesystem
+    ) -> None:
+        """Leaf nn in 3-level hierarchy falls back to global_track_idx when both ordering-key and MOVEMENTNUMBER are absent.
+
+        For multi-disc works where MB ordering-key data is missing, track.position resets per disc
+        and is an unreliable fallback.  global_track_idx provides a globally unique running index.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_tags_3level(leaf_ordering_key="0", movementnumber="0")
+        # Override movementnumber to empty string — "0" would be treated as a valid int by old code
+        tags.movementnumber = ""
+        result = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
+            tags,
+            global_track_idx=23,
+        )
+        assert result.name.startswith("23")
 
     def test_intermediate_nn_falls_back_to_ordinal_when_ordering_key_zero(self, fs: FakeFilesystem) -> None:
         """Intermediate directory nn falls back to 1-based ordinal when ordering-key is 0.

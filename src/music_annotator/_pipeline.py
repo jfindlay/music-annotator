@@ -513,22 +513,21 @@ def _write_freedb_yaml(
 
 def _dedup_plan_entries(
     plan: list[CopyPlanEntry],
-    file_track_pairs: list[tuple[Path, tuple[MBTrack, int]]],
 ) -> list[CopyPlanEntry]:
     """Resolve duplicate destination paths caused by multiple tracks sharing the same MB ordering-key.
 
-    When several recordings are all partial performances of the same bottom-level MB work they receive
+    When several recordings are all partial performances of the same bottom-level MB work they carry
     identical ``CWP_ORDERING_KEY_0`` values (e.g. ``3``), which causes ``build_dest_path`` to produce
     the same leaf filename for every one of them.  This function detects such duplicates *after* the
     initial plan is built and re-numbers the conflicting entries using a compound prefix of the form
-    ``{ordering_key}.{track_position:02d}`` (e.g. ``03.10``, ``03.11``, …, ``03.16``), where
-    ``track_position`` is ``MBTrack.position`` — the 1-based position within the medium.
+    ``{ordering_key}.{global_idx:02d}`` (e.g. ``03.10``, ``03.11``, …, ``03.16``), where
+    ``global_idx`` is ``CopyPlanEntry.idx + 1`` — the 1-based global running index of the source
+    file across all media in the session.  Using the global index (rather than the per-disc
+    ``MBTrack.position``) guarantees uniqueness even when the work spans multiple discs.
 
     Plan entries whose destination file is already unique are not modified.
 
     :param plan: The list of :class:`~music_annotator.models.CopyPlanEntry` items produced by ``run()``.
-    :param file_track_pairs: Zipped ``(src_file, (MBTrack, medium_pos))`` pairs in the same order as
-        ``plan`` entries (``entry.idx`` is the index into this list).
     :returns: A new :class:`~music_annotator.models.CopyPlanEntry` list with duplicate destinations
         renamed.  Non-duplicate entries are returned unchanged (same objects).
     """
@@ -546,13 +545,13 @@ def _dedup_plan_entries(
         nn, _, rest = stem.partition(" - ")
         suffix = dest.suffix
         parent = dest.parent
-        # Re-number each duplicate in track.position order so file ordering is preserved
-        for plan_i in sorted(plan_indices, key=lambda i: file_track_pairs[plan[i].idx][1][0].position):
-            track = file_track_pairs[plan[plan_i].idx][1][0]
-            new_stem = f"{nn}.{track.position:02d} - {rest}"
+        # Re-number each duplicate in global index order so file ordering is preserved
+        for plan_i in sorted(plan_indices, key=lambda i: plan[i].idx):
+            global_idx = plan[plan_i].idx + 1  # 1-based global running index
+            new_stem = f"{nn}.{global_idx:02d} - {rest}"
             new_dest = parent / f"{new_stem}{suffix}"
             result[plan_i] = CopyPlanEntry(idx=plan[plan_i].idx, src_file=plan[plan_i].src_file, dest_file=new_dest)
-            log.info("dedup_rename", original=dest.name, renamed=new_dest.name, track_position=track.position)
+            log.info("dedup_rename", original=dest.name, renamed=new_dest.name, global_idx=global_idx)
 
     return result
 
@@ -934,16 +933,19 @@ def run(
     plan: list[CopyPlanEntry] = []
     for idx, (src_file, (track, _medium_pos)) in enumerate(file_track_pairs):
         final_tags = tags_map[idx]
-        dest_base = build_dest_path(dest_root, release, track, final_tags)
+        # Pass 1-based global track index so build_dest_path can use it as the leaf nn
+        # fallback when CWP_ORDERING_KEY_0 is absent.  This guarantees globally unique,
+        # monotonically increasing filenames for multi-disc works with sparse MB ordering-key data.
+        dest_base = build_dest_path(dest_root, release, track, final_tags, global_track_idx=idx + 1)
         dest_file = dest_base.with_suffix(src_file.suffix.lower())
         log.info("copy_track", src=src_file.name, dest=str(dest_file.relative_to(dest_root)))
         plan.append(CopyPlanEntry(idx=idx, src_file=src_file, dest_file=dest_file))
 
-    # Resolve duplicate destination paths that arise when multiple tracks are all partial
-    # performances of the same bottom-level MB work (same CWP_ORDERING_KEY_0).  The dedup
-    # pass appends ".{track.position:02d}" to the ordering-key prefix so each file gets a
-    # unique name (e.g. "03.10 - Title.flac", "03.11 - Title.flac", …).
-    plan = _dedup_plan_entries(plan, file_track_pairs)
+    # Resolve duplicate destination paths that arise when multiple tracks share the same
+    # non-zero CWP_ORDERING_KEY_0.  The dedup pass appends ".{global_idx:02d}" to the
+    # ordering-key prefix so each file gets a unique name using the global 1-based running
+    # index across all source files (e.g. "03.10 - Title.flac", "03.11 - Title.flac", …).
+    plan = _dedup_plan_entries(plan)
 
     # --- Name-length check and resolution ---
     # In dry-run mode: log warnings only.  Otherwise: prompt via UI or auto-shorten when no UI.

@@ -1873,8 +1873,8 @@ class TestRunFullPipeline:
         captured_dests: list[Path] = []
         real_build = music_annotator._tags.build_dest_path  # pylint: disable=protected-access
 
-        def _capture_dest(dest_root: Path, rel: MBRelease, track: MBTrack, tags: TrackTags) -> Path:
-            p = real_build(dest_root, rel, track, tags)
+        def _capture_dest(dest_root: Path, rel: MBRelease, track: MBTrack, tags: TrackTags, global_track_idx: int = 0) -> Path:
+            p = real_build(dest_root, rel, track, tags, global_track_idx)
             captured_dests.append(p)
             return p
 
@@ -2510,8 +2510,8 @@ class TestRunFullPipeline:
         captured_dests: list[Path] = []
         real_build = music_annotator._tags.build_dest_path  # pylint: disable=protected-access
 
-        def _capture_dest(dest_root: Path, rel: MBRelease, track: MBTrack, tags: TrackTags) -> Path:
-            p = real_build(dest_root, rel, track, tags)
+        def _capture_dest(dest_root: Path, rel: MBRelease, track: MBTrack, tags: TrackTags, global_track_idx: int = 0) -> Path:
+            p = real_build(dest_root, rel, track, tags, global_track_idx)
             captured_dests.append(p)
             return p
 
@@ -3618,25 +3618,13 @@ class TestPromptCollisionPolicy:
 class TestDedupPlanEntries:
     """Tests for _dedup_plan_entries — post-plan deduplication of shared ordering-key paths."""
 
-    def _make_pairs(self, n: int, start_pos: int = 1) -> list[tuple[Path, tuple[MBTrack, int]]]:
-        """Build ``n`` minimal file_track_pairs entries starting at position ``start_pos``.
+    def _make_src(self, idx: int) -> Path:
+        """Return a minimal source path for plan entry at the given global index.
 
-        :param n: Number of pairs to create.
-        :param start_pos: First track position (1-based within medium).
-        :returns: A list of ``(src_file, (MBTrack, medium_pos))`` tuples.
+        :param idx: 0-based global index.
+        :returns: A Path under ``/src/``.
         """
-        pairs = []
-        for i in range(n):
-            pos = start_pos + i
-            track = _trk(
-                {
-                    "id": f"trk-{pos}",
-                    "position": pos,
-                    "recording": {"id": f"rec-{pos}", "title": f"Track {pos}", "artist-credit": []},
-                }
-            )
-            pairs.append((Path(f"/src/{pos:02d}.flac"), (track, 1)))
-        return pairs
+        return Path(f"/src/{idx:02d}.flac")
 
     def test_unique_destinations_unchanged(self) -> None:
         """When all dest_file values are already unique the plan is returned unchanged.
@@ -3644,32 +3632,32 @@ class TestDedupPlanEntries:
         :raises AssertionError: If any entry is modified when no dedup is needed.
         """
         parent = Path("/dest/Wagner/Work")
-        pairs = self._make_pairs(3, start_pos=10)
         plan = [
-            CopyPlanEntry(idx=0, src_file=pairs[0][0], dest_file=parent / "10 - Scene I.flac"),
-            CopyPlanEntry(idx=1, src_file=pairs[1][0], dest_file=parent / "11 - Scene II.flac"),
-            CopyPlanEntry(idx=2, src_file=pairs[2][0], dest_file=parent / "12 - Scene III.flac"),
+            CopyPlanEntry(idx=0, src_file=self._make_src(0), dest_file=parent / "10 - Scene I.flac"),
+            CopyPlanEntry(idx=1, src_file=self._make_src(1), dest_file=parent / "11 - Scene II.flac"),
+            CopyPlanEntry(idx=2, src_file=self._make_src(2), dest_file=parent / "12 - Scene III.flac"),
         ]
-        result = _dedup_plan_entries(plan, pairs)  # pylint: disable=protected-access
+        result = _dedup_plan_entries(plan)  # pylint: disable=protected-access
         assert [e.dest_file for e in result] == [e.dest_file for e in plan]
 
-    def test_duplicate_destinations_get_position_suffix(self) -> None:
-        """Tracks sharing the same dest path are renamed to {ok}.{position:02d} - {title}.
+    def test_duplicate_destinations_renamed_with_global_idx(self) -> None:
+        """Tracks sharing the same dest path are renamed to {ok}.{idx+1:02d} - {title}.
 
-        Three tracks at positions 10, 11, 12 all mapping to "03 - Scene III.flac" must
-        become "03.10 - Scene III.flac", "03.11 - Scene III.flac", "03.12 - Scene III.flac".
+        Three entries at global indices 9, 10, 11 (1-based: 10, 11, 12) all mapping to
+        "03 - Scene III.flac" must become "03.10 - Scene III.flac", "03.11 - …", "03.12 - …".
+        The suffix uses entry.idx+1 (global 1-based running index) not track.position, so
+        multi-disc works with overlapping per-disc positions are never incorrectly numbered.
 
         :raises AssertionError: If renamed destinations are not unique or wrongly formatted.
         """
         parent = Path("/dest/Wagner/Work/02 - Akt I")
         shared_name = "03 - Die Meistersinger von Nürnberg_ Akt I, Szene III.flac"
-        pairs = self._make_pairs(3, start_pos=10)
         plan = [
-            CopyPlanEntry(idx=0, src_file=pairs[0][0], dest_file=parent / shared_name),
-            CopyPlanEntry(idx=1, src_file=pairs[1][0], dest_file=parent / shared_name),
-            CopyPlanEntry(idx=2, src_file=pairs[2][0], dest_file=parent / shared_name),
+            CopyPlanEntry(idx=9, src_file=self._make_src(9), dest_file=parent / shared_name),
+            CopyPlanEntry(idx=10, src_file=self._make_src(10), dest_file=parent / shared_name),
+            CopyPlanEntry(idx=11, src_file=self._make_src(11), dest_file=parent / shared_name),
         ]
-        result = _dedup_plan_entries(plan, pairs)  # pylint: disable=protected-access
+        result = _dedup_plan_entries(plan)  # pylint: disable=protected-access
 
         names = [e.dest_file.name for e in result]
         assert names[0] == "03.10 - Die Meistersinger von Nürnberg_ Akt I, Szene III.flac"
@@ -3688,19 +3676,18 @@ class TestDedupPlanEntries:
         parent = Path("/dest/Wagner/Work/02 - Akt I")
         shared_name = "03 - Scene III.flac"
         unique_name = "01 - Vorspiel.flac"
-        pairs = self._make_pairs(3, start_pos=10)
         plan = [
-            CopyPlanEntry(idx=0, src_file=pairs[0][0], dest_file=parent / unique_name),
-            CopyPlanEntry(idx=1, src_file=pairs[1][0], dest_file=parent / shared_name),
-            CopyPlanEntry(idx=2, src_file=pairs[2][0], dest_file=parent / shared_name),
+            CopyPlanEntry(idx=0, src_file=self._make_src(0), dest_file=parent / unique_name),
+            CopyPlanEntry(idx=1, src_file=self._make_src(1), dest_file=parent / shared_name),
+            CopyPlanEntry(idx=2, src_file=self._make_src(2), dest_file=parent / shared_name),
         ]
-        result = _dedup_plan_entries(plan, pairs)  # pylint: disable=protected-access
+        result = _dedup_plan_entries(plan)  # pylint: disable=protected-access
 
         # The unique entry is unchanged
         assert result[0].dest_file == parent / unique_name
-        # The two duplicates are renamed
-        assert result[1].dest_file.name == "03.11 - Scene III.flac"
-        assert result[2].dest_file.name == "03.12 - Scene III.flac"
+        # The two duplicates are renamed using their global idx+1
+        assert result[1].dest_file.name == "03.02 - Scene III.flac"
+        assert result[2].dest_file.name == "03.03 - Scene III.flac"
 
     def test_dedup_preserves_source_and_idx(self) -> None:
         """After dedup the src_file and idx on renamed entries remain correct.
@@ -3709,17 +3696,16 @@ class TestDedupPlanEntries:
         """
         parent = Path("/dest/Work")
         shared_name = "05 - Movement.flac"
-        pairs = self._make_pairs(2, start_pos=3)
         plan = [
-            CopyPlanEntry(idx=0, src_file=pairs[0][0], dest_file=parent / shared_name),
-            CopyPlanEntry(idx=1, src_file=pairs[1][0], dest_file=parent / shared_name),
+            CopyPlanEntry(idx=0, src_file=self._make_src(0), dest_file=parent / shared_name),
+            CopyPlanEntry(idx=1, src_file=self._make_src(1), dest_file=parent / shared_name),
         ]
-        result = _dedup_plan_entries(plan, pairs)  # pylint: disable=protected-access
+        result = _dedup_plan_entries(plan)  # pylint: disable=protected-access
 
         assert result[0].idx == 0
-        assert result[0].src_file == pairs[0][0]
+        assert result[0].src_file == self._make_src(0)
         assert result[1].idx == 1
-        assert result[1].src_file == pairs[1][0]
+        assert result[1].src_file == self._make_src(1)
 
 
 class TestRunCollisionAndJournal:
