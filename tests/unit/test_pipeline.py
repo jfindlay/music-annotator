@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -19,6 +20,7 @@ from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
 import music_annotator
+import music_annotator._pipeline_io as _pio
 import music_annotator._tags
 from music_annotator import (
     JOURNAL_FILENAME,
@@ -36,6 +38,8 @@ from music_annotator import (
 )
 from music_annotator._pipeline import (
     SelectionMethod,
+    _apply_collision_suffix,
+    _collision_suffix,
     _dedup_plan_entries,
     _match_medium_by_title,
     _match_medium_by_toc,
@@ -47,7 +51,16 @@ from music_annotator._pipeline import (
     _write_freedb_yaml,
     _write_sidecars,
 )
-from music_annotator._pipeline_io import _DISC_INFO_FILENAME, _DISC_TOC_FILENAME
+from music_annotator._pipeline_io import (
+    _DISC_INFO_FILENAME,
+    _DISC_TOC_FILENAME,
+    AudioCompareResult,
+    _assess_collisions,
+    _read_acoustid_tag,
+    _read_duration_ms,
+    _run_fpcalc,
+    compare_audio_collision,
+)
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
     JSON,
@@ -3478,6 +3491,21 @@ def _setup_single_track_run(mocker: MockerFixture, fs: FakeFilesystem, src: Path
 class TestPromptCollisionPolicy:
     """Tests for _prompt_collision_policy."""
 
+    def _make_result(self, dest: Path, match: bool | None = None) -> AudioCompareResult:
+        """Build an AudioCompareResult for a collision path, defaulting to inconclusive.
+
+        :param dest: The destination path that collides.
+        :param match: ``True``, ``False``, or ``None`` (default).
+        :returns: An :class:`~music_annotator._pipeline_io.AudioCompareResult`.
+        """
+        return AudioCompareResult(
+            src=Path("/src/dummy.flac"),
+            dest=dest,
+            match=match,
+            method="unknown",
+            detail="test fixture",
+        )
+
     def test_displays_work_top_dirs_not_file_paths(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Collision warning shows the work-top-dir (parts[0]/parts[1]) with date suffix as a relative path.
 
@@ -3492,15 +3520,15 @@ class TestPromptCollisionPolicy:
         dest = Path("/dest")
         work_dir = dest / "Brahms - Karajan" / "Sinfonie Nr. 2 D-Dur, op. 73 [rec 1977-1978]"
         fs.create_dir(str(work_dir))
-        collisions = [
-            work_dir / "01 - Symphony no. 2 in D major, op. 73_ I.flac",
-            work_dir / "02 - Symphony no. 2 in D major, op. 73_ II.flac",
+        results = [
+            self._make_result(work_dir / "01 - Symphony no. 2 in D major, op. 73_ I.flac"),
+            self._make_result(work_dir / "02 - Symphony no. 2 in D major, op. 73_ II.flac"),
         ]
         printed: list[str] = []
         mocker.patch("music_annotator._pipeline._console.print", side_effect=lambda s, **_: printed.append(s))
         mocker.patch("builtins.input", return_value="s")
 
-        _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
+        _prompt_collision_policy(results, dest)  # pylint: disable=protected-access
 
         # The work-top-dir with the date suffix must appear in the directory summary line.
         # Path strings are passed through rich.markup.escape, so brackets become \[…].
@@ -3522,20 +3550,20 @@ class TestPromptCollisionPolicy:
         w2 = dest / "Brahms - Karajan" / "Sinfonie Nr. 3 F-Dur, op. 90 [rec 1977-1978]"
         for d in (w1, w2):
             fs.create_dir(str(d))
-        collisions = [w1 / "01.flac", w1 / "02.flac", w2 / "01.flac"]
+        results = [self._make_result(w1 / "01.flac"), self._make_result(w1 / "02.flac"), self._make_result(w2 / "01.flac")]
         printed: list[str] = []
         mocker.patch("music_annotator._pipeline._console.print", side_effect=lambda s, **_: printed.append(s))
         mocker.patch("builtins.input", return_value="s")
 
-        _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
+        _prompt_collision_policy(results, dest)  # pylint: disable=protected-access
 
         # Path strings are passed through rich.markup.escape, so brackets become \[…].
         assert any("Sinfonie Nr. 1 c-Moll, op. 68 \\[rec 1977-1978]" in line for line in printed)
         assert any("Sinfonie Nr. 3 F-Dur, op. 90 \\[rec 1977-1978]" in line for line in printed)
         # The work-dir grouping summary should list each work dir exactly once (not once per file).
-        # Individual file lines also contain "Sinfonie" now that they are relative paths, so
-        # restrict the count to lines that end with the work-dir pattern (no trailing filename).
-        work_dir_lines = [line for line in printed if "Sinfonie" in line and not line.rstrip("[/]").endswith(".flac")]
+        # Work-dir summary lines contain "Sinfonie" but no ".flac" extension anywhere in the line;
+        # per-file lines contain ".flac" (with appended comparison context after the path).
+        work_dir_lines = [line for line in printed if "Sinfonie" in line and ".flac" not in line]
         assert len(work_dir_lines) == 2
 
     def test_rich_escape_applied_to_dest_root_in_warning(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -3552,12 +3580,12 @@ class TestPromptCollisionPolicy:
         dest = Path("/dest [rel 1999]")
         work_dir = dest / "Wagner - Karajan" / "Die Meistersinger [rel 1999]"
         fs.create_dir(str(work_dir))
-        collisions = [work_dir / "03 - Scene III.flac"]
+        results = [self._make_result(work_dir / "03 - Scene III.flac")]
         mocker.patch("music_annotator._pipeline._console.print")
         mocker.patch("builtins.input", return_value="s")
         mock_escape = mocker.patch("music_annotator._pipeline._markup_escape", side_effect=lambda s: s)
 
-        _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
+        _prompt_collision_policy(results, dest)  # pylint: disable=protected-access
 
         escaped_strings = [call.args[0] for call in mock_escape.call_args_list]
         assert str(dest) in escaped_strings
@@ -3571,12 +3599,12 @@ class TestPromptCollisionPolicy:
         dest = Path("/dest")
         work_dir = dest / "Wagner - Karajan" / "Die Meistersinger [rel 1999]"
         fs.create_dir(str(work_dir))
-        collisions = [work_dir / "03 - Scene III.flac"]
+        results = [self._make_result(work_dir / "03 - Scene III.flac")]
         mocker.patch("music_annotator._pipeline._console.print")
         mocker.patch("builtins.input", return_value="s")
         mock_escape = mocker.patch("music_annotator._pipeline._markup_escape", side_effect=lambda s: s)
 
-        _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
+        _prompt_collision_policy(results, dest)  # pylint: disable=protected-access
 
         escaped_strings = [call.args[0] for call in mock_escape.call_args_list]
         # The work-dir relative path ("Wagner - Karajan/Die Meistersinger [rel 1999]") must be escaped.
@@ -3597,16 +3625,16 @@ class TestPromptCollisionPolicy:
         w2 = dest / "Wagner - Karajan" / "Meistersinger [rel 1999]" / "03 - Akt II"
         fs.create_dir(str(w1))
         fs.create_dir(str(w2))
-        collisions = [
-            w1 / "03 - Scene III.flac",
-            w2 / "01 - Scene I.flac",
+        results = [
+            self._make_result(w1 / "03 - Scene III.flac"),
+            self._make_result(w2 / "01 - Scene I.flac"),
         ]
         printed: list[str] = []
         mocker.patch("music_annotator._pipeline._console.print", side_effect=lambda s, **_: printed.append(s))
         mocker.patch("music_annotator._pipeline._markup_escape", side_effect=lambda s: s)
         mocker.patch("builtins.input", return_value="s")
 
-        _prompt_collision_policy(collisions, dest)  # pylint: disable=protected-access
+        _prompt_collision_policy(results, dest)  # pylint: disable=protected-access
 
         # The intermediate Act directory must appear in the per-file listing.
         assert any("02 - Akt I" in line and "03 - Scene III.flac" in line for line in printed)
@@ -3777,6 +3805,22 @@ class TestRunCollisionAndJournal:
         )
         mock_input.assert_not_called()
 
+    def _make_collision_result(self, dest: Path, collision_path: Path, match: bool | None = None) -> AudioCompareResult:
+        """Build an AudioCompareResult representing an inconclusive collision at ``collision_path``.
+
+        :param dest: Dummy source path.
+        :param collision_path: The existing destination path that collides.
+        :param match: Comparison outcome (default ``None`` = inconclusive).
+        :returns: An :class:`~music_annotator._pipeline_io.AudioCompareResult`.
+        """
+        return AudioCompareResult(
+            src=dest / "dummy_src.flac",
+            dest=collision_path,
+            match=match,
+            method="unknown",
+            detail="test fixture",
+        )
+
     def test_collision_overwrite_copies_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Choosing 'overwrite' when a collision exists still copies and tags the file.
 
@@ -3788,13 +3832,14 @@ class TestRunCollisionAndJournal:
         _setup_single_track_run(mocker, fs, src, dest)
 
         # Pre-populate the destination with any file to create a guaranteed collision.
-        # We patch _check_collisions to return a fixed path so we don't depend on the
-        # exact dest path that build_dest_path would compute.
+        # We patch _assess_collisions to return a fixed AudioCompareResult (inconclusive) so we
+        # don't depend on the exact dest path that build_dest_path would compute.
         # Path must be at least 2 levels deep relative to dest_root so _prompt_collision_policy
         # can extract parts[0]/parts[1] for the work-dir display.
         collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
-        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
+        collision_result = self._make_collision_result(dest, collision_path)
+        mocker.patch("music_annotator._pipeline._assess_collisions", return_value=[collision_result])
         mocker.patch("builtins.input", return_value="o")
 
         music_annotator.run(
@@ -3821,7 +3866,8 @@ class TestRunCollisionAndJournal:
 
         collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
-        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
+        collision_result = self._make_collision_result(dest, collision_path)
+        mocker.patch("music_annotator._pipeline._assess_collisions", return_value=[collision_result])
         mocker.patch("builtins.input", return_value="overwrite")
 
         music_annotator.run(
@@ -3865,15 +3911,16 @@ class TestRunCollisionAndJournal:
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
-        # We'll capture the planned dest paths by letting build_dest_path run, then
-        # intercept _check_collisions to report the first dest as a collision.
+        # We'll intercept _assess_collisions to report the first dest as an inconclusive collision.
         captured_dests: list[Path] = []
 
-        def _capture_check(paths: list[Path]) -> list[Path]:
-            captured_dests.extend(paths)
-            return [paths[0]]  # first file is the collision
+        def _capture_assess(pairs: list[tuple[Path, Path, str, int]]) -> list[AudioCompareResult]:
+            for _src, dest_p, _acoustid, _len in pairs:
+                captured_dests.append(dest_p)
+            first_src, first_dest, _, _ = pairs[0]
+            return [AudioCompareResult(src=first_src, dest=first_dest, match=None, method="unknown", detail="test")]
 
-        mocker.patch("music_annotator._pipeline._check_collisions", side_effect=_capture_check)  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._assess_collisions", side_effect=_capture_assess)  # pylint: disable=protected-access
         mocker.patch("builtins.input", return_value="s")
 
         music_annotator.run(
@@ -3906,7 +3953,8 @@ class TestRunCollisionAndJournal:
 
         collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
-        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
+        collision_result = self._make_collision_result(dest, collision_path)
+        mocker.patch("music_annotator._pipeline._assess_collisions", return_value=[collision_result])
         mocker.patch("builtins.input", return_value="a")
 
         with pytest.raises(SystemExit) as exc_info:
@@ -3934,7 +3982,8 @@ class TestRunCollisionAndJournal:
 
         collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
-        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
+        collision_result = self._make_collision_result(dest, collision_path)
+        mocker.patch("music_annotator._pipeline._assess_collisions", return_value=[collision_result])
         mocker.patch("builtins.input", return_value="abort")
 
         with pytest.raises(SystemExit) as exc_info:
@@ -3960,7 +4009,8 @@ class TestRunCollisionAndJournal:
 
         collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
-        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
+        collision_result = self._make_collision_result(dest, collision_path)
+        mocker.patch("music_annotator._pipeline._assess_collisions", return_value=[collision_result])
         # First two inputs are invalid; third is valid "skip"
         mocker.patch("builtins.input", side_effect=["x", "yes", "skip"])
 
@@ -4000,7 +4050,7 @@ class TestRunCollisionAndJournal:
         # Patch so the second run doesn't try to re-copy (would be a no-op anyway in fake fs,
         # but reset the MB mock return to avoid interaction with the first run's cache).
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
-        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[])  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._assess_collisions", return_value=[])  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
 
@@ -4030,7 +4080,8 @@ class TestRunCollisionAndJournal:
 
         collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
         fs.create_file(str(collision_path))
-        mocker.patch("music_annotator._pipeline._check_collisions", return_value=[collision_path])
+        collision_result = self._make_collision_result(dest, collision_path)
+        mocker.patch("music_annotator._pipeline._assess_collisions", return_value=[collision_result])
         mock_prompt = mocker.patch("music_annotator._pipeline._prompt_collision_policy")
 
         music_annotator.run(
@@ -4688,12 +4739,12 @@ class TestRunMultiDisc:
 # ---------------------------------------------------------------------------
 
 #: CD frame offsets for a fictional disc 1 (4 tracks).
-_DISC1_OFFSETS: list[int] = [182, 50000, 100000, 150000]
+_DISC1_OFFSETS_MULTI: list[int] = [182, 50000, 100000, 150000]
 #: CD frame offsets for a fictional disc 2 (4 tracks).
-_DISC2_OFFSETS: list[int] = [182, 60000, 110000, 160000]
+_DISC2_OFFSETS_MULTI: list[int] = [182, 60000, 110000, 160000]
 
 
-def _medium_with_toc(position: int, offsets: list[int]) -> MBMedium:
+def _medium_with_toc_multi(position: int, offsets: list[int]) -> MBMedium:
     """Build a minimal MBMedium with one MBDisc entry carrying ``offsets``.
 
     :param position: 1-based disc position.
@@ -4718,22 +4769,22 @@ class TestMatchMediumByToc:
 
         Two mediums with different offsets; disc 2 offsets supplied → disc 2 returned.
         """
-        m1 = _medium_with_toc(1, _DISC1_OFFSETS)
-        m2 = _medium_with_toc(2, _DISC2_OFFSETS)
-        result = _match_medium_by_toc([m1, m2], _DISC2_OFFSETS)
+        m1 = _medium_with_toc_multi(1, _DISC1_OFFSETS_MULTI)
+        m2 = _medium_with_toc_multi(2, _DISC2_OFFSETS_MULTI)
+        result = _match_medium_by_toc([m1, m2], _DISC2_OFFSETS_MULTI)
         assert result is m2
 
     def test_matches_disc1_offsets(self) -> None:
         """Returns disc 1 when disc 1 offsets are supplied."""
-        m1 = _medium_with_toc(1, _DISC1_OFFSETS)
-        m2 = _medium_with_toc(2, _DISC2_OFFSETS)
-        result = _match_medium_by_toc([m1, m2], _DISC1_OFFSETS)
+        m1 = _medium_with_toc_multi(1, _DISC1_OFFSETS_MULTI)
+        m2 = _medium_with_toc_multi(2, _DISC2_OFFSETS_MULTI)
+        result = _match_medium_by_toc([m1, m2], _DISC1_OFFSETS_MULTI)
         assert result is m1
 
     def test_no_match_returns_none(self) -> None:
         """Returns None when no medium's disc offsets match the supplied track_frames."""
-        m1 = _medium_with_toc(1, _DISC1_OFFSETS)
-        m2 = _medium_with_toc(2, _DISC2_OFFSETS)
+        m1 = _medium_with_toc_multi(1, _DISC1_OFFSETS_MULTI)
+        m2 = _medium_with_toc_multi(2, _DISC2_OFFSETS_MULTI)
         result = _match_medium_by_toc([m1, m2], [182, 99999, 199999, 299999])
         assert result is None
 
@@ -4741,7 +4792,7 @@ class TestMatchMediumByToc:
         """Returns None when mediums have no disc entries (discids not fetched)."""
         m1 = MBMedium.model_validate({"position": 1, "format": "CD", "track-list": []})
         m2 = MBMedium.model_validate({"position": 2, "format": "CD", "track-list": []})
-        result = _match_medium_by_toc([m1, m2], _DISC1_OFFSETS)
+        result = _match_medium_by_toc([m1, m2], _DISC1_OFFSETS_MULTI)
         assert result is None
 
     def test_multiple_discs_per_medium_second_entry_matches(self) -> None:
@@ -4757,11 +4808,11 @@ class TestMatchMediumByToc:
                 "track-list": [],
                 "disc-list": [
                     {"offset-list": pressing_a, "sectors": str(pressing_a[-1] + 1000)},
-                    {"offset-list": _DISC1_OFFSETS, "sectors": str(_DISC1_OFFSETS[-1] + 1000)},
+                    {"offset-list": _DISC1_OFFSETS_MULTI, "sectors": str(_DISC1_OFFSETS_MULTI[-1] + 1000)},
                 ],
             }
         )
-        result = _match_medium_by_toc([medium], _DISC1_OFFSETS)
+        result = _match_medium_by_toc([medium], _DISC1_OFFSETS_MULTI)
         assert result is medium
 
     def test_fuzzy_match_plus_one_per_track(self) -> None:
@@ -4771,7 +4822,7 @@ class TestMatchMediumByToc:
         """
         mb_offsets = [183, 114258]
         yaml_offsets = [182, 114257]  # each off by -1
-        medium = _medium_with_toc(2, mb_offsets)
+        medium = _medium_with_toc_multi(2, mb_offsets)
         result = _match_medium_by_toc([medium], yaml_offsets)
         assert result is medium
 
@@ -4779,7 +4830,7 @@ class TestMatchMediumByToc:
         """Matches when every YAML offset is exactly 1 frame more than the MB offset."""
         mb_offsets = [182, 114257]
         yaml_offsets = [183, 114258]  # each off by +1
-        medium = _medium_with_toc(2, mb_offsets)
+        medium = _medium_with_toc_multi(2, mb_offsets)
         result = _match_medium_by_toc([medium], yaml_offsets)
         assert result is medium
 
@@ -4790,7 +4841,7 @@ class TestMatchMediumByToc:
         """
         mb_offsets = [183, 114258]
         yaml_offsets = [182, 114257]
-        medium = _medium_with_toc(2, mb_offsets)
+        medium = _medium_with_toc_multi(2, mb_offsets)
         mock_warn = mocker.patch("music_annotator._pipeline.log.warning")
         _match_medium_by_toc([medium], yaml_offsets)
         mock_warn.assert_called_once()
@@ -4802,16 +4853,16 @@ class TestMatchMediumByToc:
 
         :param mocker: pytest-mock fixture.
         """
-        medium = _medium_with_toc(1, _DISC1_OFFSETS)
+        medium = _medium_with_toc_multi(1, _DISC1_OFFSETS_MULTI)
         mock_warn = mocker.patch("music_annotator._pipeline.log.warning")
-        _match_medium_by_toc([medium], _DISC1_OFFSETS)
+        _match_medium_by_toc([medium], _DISC1_OFFSETS_MULTI)
         mock_warn.assert_not_called()
 
     def test_offset_diff_of_two_does_not_match(self) -> None:
         """Offsets differing by 2 frames are outside tolerance and do not match."""
         mb_offsets = [183, 114258]
         yaml_offsets = [181, 114256]  # each off by -2
-        medium = _medium_with_toc(2, mb_offsets)
+        medium = _medium_with_toc_multi(2, mb_offsets)
         result = _match_medium_by_toc([medium], yaml_offsets)
         assert result is None
 
@@ -4819,7 +4870,7 @@ class TestMatchMediumByToc:
         """Lists of different lengths never match, even if individual values are close."""
         mb_offsets = [183, 114258, 200000]
         yaml_offsets = [183, 114258]
-        medium = _medium_with_toc(2, mb_offsets)
+        medium = _medium_with_toc_multi(2, mb_offsets)
         result = _match_medium_by_toc([medium], yaml_offsets)
         assert result is None
 
@@ -4952,9 +5003,9 @@ class TestSelectMediumWithReason:
 
     def test_toc_match_returns_toc_method(self) -> None:
         """TOC match returns SelectionMethod.TOC."""
-        m1 = _medium_with_toc(1, _DISC1_OFFSETS)
-        m2 = _medium_with_toc(2, _DISC2_OFFSETS)
-        result, method = _select_medium_with_reason([m1, m2], 4, "dir", track_frames=_DISC2_OFFSETS)
+        m1 = _medium_with_toc_multi(1, _DISC1_OFFSETS_MULTI)
+        m2 = _medium_with_toc_multi(2, _DISC2_OFFSETS_MULTI)
+        result, method = _select_medium_with_reason([m1, m2], 4, "dir", track_frames=_DISC2_OFFSETS_MULTI)
         assert result is m2
         assert method is SelectionMethod.TOC
 
@@ -5202,6 +5253,757 @@ class TestRunTitleMediumSelection:
             ui=mock_ui,
         )
         mock_ui.confirm_disc.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# compare_audio_collision / _assess_collisions / _collision_suffix /
+# _apply_collision_suffix
+# ---------------------------------------------------------------------------
+
+
+class TestCompareAudioCollision:
+    """Tests for compare_audio_collision — the layered audio comparison function."""
+
+    def test_sha256_match_returns_match_true(self, fs: FakeFilesystem) -> None:
+        """Byte-identical src and dest produce match=True, method='sha256'.
+
+        :param fs: pyfakefs fixture.
+        """
+        data = b"audio bytes"
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=data)
+        fs.create_file(str(dest), contents=data)
+
+        result = compare_audio_collision(src, dest, "", 0)
+        assert result.match is True
+        assert result.method == "sha256"
+
+    def test_acoustid_match_returns_match_true(self, fs: FakeFilesystem) -> None:
+        """Matching AcoustID UUIDs produce match=True, method='acoustid'.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        fs.create_file(str(dest), contents=_MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:])
+        apply_tags_flac(dest, TrackTags(title="X", acoustid_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"))
+
+        result = compare_audio_collision(src, dest, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 0)
+        assert result.match is True
+        assert result.method == "acoustid"
+
+    def test_acoustid_mismatch_returns_match_false(self, fs: FakeFilesystem) -> None:
+        """Differing AcoustID UUIDs produce match=False, method='acoustid'.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        apply_tags_flac(dest, TrackTags(title="X", acoustid_id="11111111-2222-3333-4444-555555555555"))
+
+        result = compare_audio_collision(src, dest, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", 0)
+        assert result.match is False
+        assert result.method == "acoustid"
+
+    def test_duration_outside_tolerance_returns_match_false(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Duration difference > 2000 ms produces match=False, method='duration'.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value=None)
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", return_value=60_000)
+
+        # incoming 45_000 ms, dest 60_000 ms → delta 15_000 ms >> 2000 ms tolerance
+        result = compare_audio_collision(src, dest, "", 45_000)
+        assert result.match is False
+        assert result.method == "duration"
+
+    def test_duration_within_tolerance_no_fpcalc_returns_inconclusive(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Duration within ±2000 ms with no fpcalc produces match=None, method='duration'.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value=None)
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", return_value=60_500)
+
+        result = compare_audio_collision(src, dest, "", 60_000)
+        assert result.match is None
+        assert result.method == "duration"
+
+    def test_fpcalc_match_returns_match_true(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Identical fpcalc fingerprints produce match=True, method='chromaprint'.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value="/usr/bin/fpcalc")
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="FINGERPRINT123")
+
+        result = compare_audio_collision(src, dest, "", 0)
+        assert result.match is True
+        assert result.method == "chromaprint"
+
+    def test_fpcalc_mismatch_returns_match_false(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Different fpcalc fingerprints produce match=False, method='chromaprint'.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value="/usr/bin/fpcalc")
+        fingerprints = iter(["FP_SRC", "FP_DEST"])
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", side_effect=lambda _p: next(fingerprints))
+
+        result = compare_audio_collision(src, dest, "", 0)
+        assert result.match is False
+        assert result.method == "chromaprint"
+
+    def test_no_acoustid_no_fpcalc_no_duration_returns_unknown(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """With no AcoustID, no fpcalc, and no length data the result is match=None, method='unknown'.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value=None)
+
+        result = compare_audio_collision(src, dest, "", 0)
+        assert result.match is None
+        assert result.method == "unknown"
+
+    def test_fpcalc_warning_emitted_once_when_duration_candidate(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """A structlog warning is emitted when fpcalc is absent and duration flagged a candidate match.
+
+        The warning is emitted at most once per process lifetime (module-level flag).  We reset the
+        flag before calling to ensure a deterministic result.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value=None)
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", return_value=60_500)
+        mock_warn = mocker.patch("music_annotator._pipeline_io.log.warning")
+        _pio._FPCALC_WARNED[0] = False  # reset module-level flag  # pylint: disable=protected-access  # noqa: SLF001
+
+        compare_audio_collision(src, dest, "", 60_000)
+
+        assert mock_warn.called
+        assert any("fpcalc_not_found" in str(call) for call in mock_warn.call_args_list)
+
+    def test_read_acoustid_tag_mp3_returns_value(self, fs: FakeFilesystem) -> None:
+        """_read_acoustid_tag reads the ACOUSTID_ID TXXX frame from an MP3 file.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        tags = TrackTags(title="X", acoustid_id="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        apply_tags_mp3(path, tags)
+        assert _read_acoustid_tag(path) == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    def test_read_acoustid_tag_mp3_no_txxx_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_acoustid_tag returns '' for an MP3 file that has no 'Acoustid Id' TXXX frame.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        # Write tags with no acoustid_id so no TXXX 'Acoustid Id' frame is present.
+        apply_tags_mp3(path, TrackTags(title="X"))
+        assert _read_acoustid_tag(path) == ""
+
+    def test_read_duration_ms_info_no_length_attr_returns_zero(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_read_duration_ms returns 0 when the mutagen object's info has no 'length' attribute.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+
+        class _FakeInfo:
+            pass  # no 'length' attribute
+
+        class _FakeAudio:
+            info = _FakeInfo()
+
+        mocker.patch("music_annotator._pipeline_io.MutagenFile", return_value=_FakeAudio())
+        assert _read_duration_ms(path) == 0
+
+    def test_duration_comparison_dest_length_zero_falls_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When _read_duration_ms returns 0 for dest, duration comparison is skipped.
+
+        The condition ``if dest_length_ms > 0`` is False, so we fall through to 'unknown'.
+        Covers the branch 242->268 (dest_length_ms == 0 arm).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value=None)
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", return_value=0)
+
+        # incoming_length_ms=60_000 so we enter the duration block, but dest returns 0
+        result = compare_audio_collision(src, dest, "", 60_000)
+        assert result.match is None
+        assert result.method == "unknown"
+
+    def test_read_acoustid_tag_unsupported_extension_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_acoustid_tag returns '' for unsupported file extensions.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.wav")
+        fs.create_file(str(path), contents=b"RIFF")
+        assert _read_acoustid_tag(path) == ""
+
+    def test_read_acoustid_tag_exception_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_acoustid_tag returns '' when mutagen raises an exception.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_file(str(path), contents=b"not a real flac")
+        # Corrupt content causes mutagen to raise; the function must swallow it.
+        assert _read_acoustid_tag(path) == ""
+
+    def test_read_duration_ms_returns_milliseconds(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_read_duration_ms returns duration in milliseconds when mutagen reads info.length.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+
+        class _FakeInfo:
+            length: float = 60.5
+
+        class _FakeAudio:
+            info = _FakeInfo()
+
+        mocker.patch("music_annotator._pipeline_io.MutagenFile", return_value=_FakeAudio())
+        assert _read_duration_ms(path) == 60_500
+
+    def test_read_duration_ms_no_info_returns_zero(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_read_duration_ms returns 0 when mutagen returns a file object with no info attribute.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+
+        class _FakeAudioNoInfo:
+            pass  # no 'info' attribute
+
+        mocker.patch("music_annotator._pipeline_io.MutagenFile", return_value=_FakeAudioNoInfo())
+        assert _read_duration_ms(path) == 0
+
+    def test_read_duration_ms_exception_returns_zero(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_read_duration_ms returns 0 when mutagen raises an exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_file(str(path), contents=b"not a real flac")
+        mocker.patch("music_annotator._pipeline_io.MutagenFile", side_effect=OSError("read error"))
+        assert _read_duration_ms(path) == 0
+
+    def test_run_fpcalc_nonzero_returncode_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_run_fpcalc returns '' when fpcalc exits with a non-zero return code.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        mocker.patch(
+            "music_annotator._pipeline_io.subprocess.run",
+            return_value=subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr=""),
+        )
+        assert _run_fpcalc(path) == ""
+
+    def test_run_fpcalc_non_dict_json_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_run_fpcalc returns '' when fpcalc outputs valid JSON that is not a dict.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        mocker.patch(
+            "music_annotator._pipeline_io.subprocess.run",
+            return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="[1, 2, 3]", stderr=""),
+        )
+        assert _run_fpcalc(path) == ""
+
+    def test_run_fpcalc_json_decode_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_run_fpcalc returns '' when fpcalc output cannot be parsed as JSON.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        mocker.patch(
+            "music_annotator._pipeline_io.subprocess.run",
+            return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout="not json", stderr=""),
+        )
+        assert _run_fpcalc(path) == ""
+
+    def test_run_fpcalc_fingerprint_key_missing_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_run_fpcalc returns '' when fpcalc JSON has no 'fingerprint' key.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        mocker.patch(
+            "music_annotator._pipeline_io.subprocess.run",
+            return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout='{"duration": 60.0}', stderr=""),
+        )
+        assert _run_fpcalc(path) == ""
+
+    def test_fpcalc_present_but_empty_fingerprints_falls_through_to_unknown(
+        self, mocker: MockerFixture, fs: FakeFilesystem
+    ) -> None:
+        """When fpcalc is present but returns empty fingerprints, the result falls through to 'unknown'.
+
+        This exercises the branch where fpcalc_path is set but _run_fpcalc returns ''.
+        No AcoustID tags, no length → match=None, method='unknown'.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value="/usr/bin/fpcalc")
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="")
+
+        result = compare_audio_collision(src, dest, "", 0)
+        assert result.match is None
+        assert result.method == "unknown"
+
+    def test_fpcalc_present_duration_within_tolerance_falls_through_to_unknown(
+        self, mocker: MockerFixture, fs: FakeFilesystem
+    ) -> None:
+        """When fpcalc is present but returns no fingerprint and duration is within tolerance.
+
+        The result should be match=None, method='unknown' because fpcalc is present (line 259
+        guarded by ``if fpcalc_path is None`` is skipped), so we don't return early from
+        duration, and fall through to the final 'unknown' result.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value="/usr/bin/fpcalc")
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", return_value=60_500)
+
+        result = compare_audio_collision(src, dest, "", 60_000)
+        assert result.match is None
+        assert result.method == "unknown"
+
+
+class TestAssessCollisions:
+    """Tests for _assess_collisions — aggregates compare_audio_collision per plan entry."""
+
+    def test_no_existing_dest_returns_empty(self, fs: FakeFilesystem) -> None:
+        """When no destination files exist the result list is empty.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        # dest does NOT exist
+
+        result = _assess_collisions([(src, dest, "", 0)])
+        assert result == []
+
+    def test_existing_dest_returned(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When a destination file exists its AudioCompareResult is included in the output.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        fs.create_file(str(dest), contents=_MINIMAL_FLAC)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value=None)
+
+        results = _assess_collisions([(src, dest, "", 0)])
+        assert len(results) == 1
+        assert results[0].src == src
+        assert results[0].dest == dest
+
+    def test_mixed_existing_and_new(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Only the existing destination appears in the result, not the missing one.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src1 = Path("/src/01.flac")
+        src2 = Path("/src/02.flac")
+        dest1 = Path("/dest/01.flac")
+        dest2 = Path("/dest/02.flac")
+        for p in (src1, src2, dest1):
+            fs.create_file(str(p), contents=_MINIMAL_FLAC)
+        # dest2 does NOT exist
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value=None)
+
+        results = _assess_collisions([(src1, dest1, "", 0), (src2, dest2, "", 0)])
+        assert len(results) == 1
+        assert results[0].dest == dest1
+
+
+class TestCollisionSuffixAndApply:
+    """Tests for _collision_suffix and _apply_collision_suffix."""
+
+    def _make_nonmatch(self, dest: Path) -> AudioCompareResult:
+        """Build a confirmed-nonmatch AudioCompareResult for ``dest``.
+
+        :param dest: The destination path.
+        :returns: An :class:`~music_annotator._pipeline_io.AudioCompareResult` with ``match=False``.
+        """
+        return AudioCompareResult(src=Path("/src/x.flac"), dest=dest, match=False, method="acoustid", detail="test")
+
+    def test_collision_suffix_catalog_number(self) -> None:
+        """_collision_suffix returns the catalog number when present.
+
+        :raises AssertionError: If the returned suffix is not the catalog number.
+        """
+        release = _make_release()
+        assert _collision_suffix(release) == "CAT-001"
+
+    def test_collision_suffix_mbid_fallback(self) -> None:
+        """_collision_suffix falls back to the first 8 chars of the release MBID when no catalog number.
+
+        :raises AssertionError: If the returned suffix is not the expected MBID prefix.
+        """
+        release = _rel(
+            {
+                "id": "abcdef12-3456-7890-abcd-ef1234567890",
+                "title": "Test",
+                "date": "2000",
+                "status": "Official",
+                "barcode": "",
+                "artist-credit": [],
+                "release-group": {"id": "rg-1", "primary-type": "Album", "first-release-date": "2000"},
+                "label-info-list": [{"label": {"id": "l1", "name": "Label"}, "catalog-number": ""}],
+                "text-representation": {"script": "Latn", "language": "eng"},
+                "medium-list": [],
+            }
+        )
+        assert _collision_suffix(release) == "abcdef12"
+
+    def test_collision_suffix_no_label_info(self) -> None:
+        """_collision_suffix falls back to MBID prefix when label_info_list is empty.
+
+        :raises AssertionError: If the returned suffix is not the MBID prefix.
+        """
+        release = _rel(
+            {
+                "id": "12345678-aaaa-bbbb-cccc-dddddddddddd",
+                "title": "Test",
+                "date": "2000",
+                "status": "Official",
+                "barcode": "",
+                "artist-credit": [],
+                "release-group": {"id": "rg-1", "primary-type": "Album", "first-release-date": "2000"},
+                "label-info-list": [],
+                "text-representation": {"script": "Latn", "language": "eng"},
+                "medium-list": [],
+            }
+        )
+        assert _collision_suffix(release) == "12345678"
+
+    def test_apply_collision_suffix_renames_matching_entry(self) -> None:
+        """_apply_collision_suffix rewrites the work_dir component of matching plan entries.
+
+        The plan entry whose dest_file appears in nonmatches should have its parts[1]
+        (work_dir) renamed to ``<work_dir> [<suffix>]``.
+
+        :raises AssertionError: If the destination path is not rewritten correctly.
+        """
+        dest_root = Path("/dest")
+        work_dir = dest_root / "Brahms - Karajan" / "Symphony No. 2 [rec 1977]"
+        dest = work_dir / "01 - Adagio.flac"
+        plan = [CopyPlanEntry(idx=0, src_file=Path("/src/01.flac"), dest_file=dest)]
+        nonmatch = self._make_nonmatch(dest)
+        release = _make_release()  # catalog-number "CAT-001"
+
+        _apply_collision_suffix(plan, [nonmatch], release, dest_root)
+
+        new_dest = plan[0].dest_file
+        assert "Symphony No. 2 [rec 1977] [CAT-001]" in str(new_dest)
+        assert new_dest.name == "01 - Adagio.flac"
+        assert new_dest.parent.parent.parent == dest_root
+
+    def test_apply_collision_suffix_with_intermediate_dir(self) -> None:
+        """_apply_collision_suffix correctly rewrites work_dir even with an intermediate act dir.
+
+        :raises AssertionError: If the intermediate directory is lost or the suffix is misplaced.
+        """
+        dest_root = Path("/dest")
+        work_dir = dest_root / "Wagner - Karajan" / "Meistersinger [rel 1999]"
+        dest = work_dir / "02 - Akt I" / "03 - Scene III.flac"
+        plan = [CopyPlanEntry(idx=0, src_file=Path("/src/03.flac"), dest_file=dest)]
+        nonmatch = self._make_nonmatch(dest)
+        release = _make_release()
+
+        _apply_collision_suffix(plan, [nonmatch], release, dest_root)
+
+        new_dest = plan[0].dest_file
+        assert "Meistersinger [rel 1999] [CAT-001]" in str(new_dest)
+        assert "02 - Akt I" in str(new_dest)
+        assert new_dest.name == "03 - Scene III.flac"
+
+    def test_apply_collision_suffix_unaffected_entry_unchanged(self) -> None:
+        """Plan entries not in nonmatches are not modified.
+
+        :raises AssertionError: If an unaffected entry is changed.
+        """
+        dest_root = Path("/dest")
+        work_dir = dest_root / "Composer" / "Work [rel 2000]"
+        dest1 = work_dir / "01.flac"
+        dest2 = work_dir / "02.flac"
+        plan = [
+            CopyPlanEntry(idx=0, src_file=Path("/src/01.flac"), dest_file=dest1),
+            CopyPlanEntry(idx=1, src_file=Path("/src/02.flac"), dest_file=dest2),
+        ]
+        nonmatch = self._make_nonmatch(dest1)
+        release = _make_release()
+
+        _apply_collision_suffix(plan, [nonmatch], release, dest_root)
+
+        assert plan[1].dest_file == dest2
+
+    def test_apply_collision_suffix_uses_mbid_fallback(self) -> None:
+        """_apply_collision_suffix uses the MBID prefix when catalog number is absent.
+
+        :raises AssertionError: If the MBID prefix is not used as the suffix.
+        """
+        dest_root = Path("/dest")
+        work_dir = dest_root / "Composer" / "Work [rel 2000]"
+        dest = work_dir / "01.flac"
+        plan = [CopyPlanEntry(idx=0, src_file=Path("/src/01.flac"), dest_file=dest)]
+        nonmatch = self._make_nonmatch(dest)
+        release = _rel(
+            {
+                "id": "abcdef12-3456-7890-abcd-ef1234567890",
+                "title": "Test",
+                "date": "2000",
+                "status": "Official",
+                "barcode": "",
+                "artist-credit": [],
+                "release-group": {"id": "rg-1", "primary-type": "Album", "first-release-date": "2000"},
+                "label-info-list": [],
+                "text-representation": {"script": "Latn", "language": "eng"},
+                "medium-list": [],
+            }
+        )
+
+        _apply_collision_suffix(plan, [nonmatch], release, dest_root)
+
+        assert "Work [rel 2000] [abcdef12]" in str(plan[0].dest_file)
+
+
+class TestRunCollisionAudioComparison:
+    """Tests for run() behaviour when _assess_collisions returns confirmed non-matches."""
+
+    def test_nonmatch_collision_auto_suffixes_path_no_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """A confirmed non-matching collision rewrites the destination path without prompting.
+
+        The prompt is not shown; the file is copied to the suffixed path.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
+        fs.create_file(str(collision_path))
+        nonmatch_result = AudioCompareResult(
+            src=src / "01.flac",
+            dest=collision_path,
+            match=False,
+            method="acoustid",
+            detail="different AcoustID clusters",
+        )
+        mocker.patch("music_annotator._pipeline._assess_collisions", return_value=[nonmatch_result])
+        mock_prompt = mocker.patch("music_annotator._pipeline._prompt_collision_policy")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+        mock_prompt.assert_not_called()
+
+    def test_match_collision_shows_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """A confirmed-match collision shows the user prompt (does not auto-suffix).
+
+        Verifies that _prompt_collision_policy is called when match=True (identical audio).
+        Non-matching collisions bypass the prompt entirely; this test checks the match branch.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        collision_path = dest / "Composer - Performer" / "Work [rec 1970]" / "existing.flac"
+        fs.create_file(str(collision_path))
+        match_result = AudioCompareResult(
+            src=src / "01.flac",
+            dest=collision_path,
+            match=True,
+            method="sha256",
+            detail="byte-identical files",
+        )
+        mocker.patch("music_annotator._pipeline._assess_collisions", return_value=[match_result])
+        mock_prompt = mocker.patch("music_annotator._pipeline._prompt_collision_policy", return_value=CollisionPolicy.SKIP)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+        # Prompt must be called for confirmed-match collisions (identical audio).
+        mock_prompt.assert_called_once()
+
+    def test_invalid_length_tag_treated_as_zero(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When TrackTags.length is non-numeric, the ValueError is caught and length_ms is 0.
+
+        Verifies the except ValueError branch in run() when building plan_pairs.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        _setup_single_track_run(mocker, fs, src, dest)
+
+        # Patch build_track_tags to return tags with an invalid length string.
+        orig_build = music_annotator._tags.build_track_tags  # pylint: disable=protected-access
+
+        def _patched_build(
+            release: MBRelease,
+            track: MBTrack,
+            medium_pos: int,
+            recording_detail: MBRecording,
+            work_hierarchy: list[MBWork],
+        ) -> TrackTags:
+            tags = orig_build(release, track, medium_pos, recording_detail, work_hierarchy)
+            tags.length = "not-a-number"
+            return tags
+
+        mocker.patch("music_annotator._pipeline.build_track_tags", side_effect=_patched_build)
+        # No collision; just verify the run completes without error.
+        mocker.patch("music_annotator._pipeline._assess_collisions", return_value=[])
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,  # must be True so build_track_tags is called
+        )
+        assert (dest / JOURNAL_FILENAME).exists()
+
+    def test_prompt_shows_comparison_context(self, mocker: MockerFixture) -> None:
+        """The collision prompt displays the method and detail from AudioCompareResult.
+
+        :param mocker: pytest-mock fixture.
+        """
+        dest = Path("/dest")
+        work_dir = dest / "Brahms - Karajan" / "Symphony No. 1 [rec 1970]"
+        collision_path = work_dir / "01 - Allegro.flac"
+        result = AudioCompareResult(
+            src=Path("/src/01.flac"),
+            dest=collision_path,
+            match=True,
+            method="acoustid",
+            detail="same AcoustID cluster (aabbccdd…)",
+        )
+        printed: list[str] = []
+        mocker.patch("music_annotator._pipeline._console.print", side_effect=lambda s, **_: printed.append(s))
+        mocker.patch("music_annotator._pipeline._markup_escape", side_effect=lambda s: s)
+        mocker.patch("builtins.input", return_value="s")
+
+        _prompt_collision_policy([result], dest)  # pylint: disable=protected-access
+
+        # The detail string must appear in the per-file output.
+        assert any("same AcoustID cluster" in line for line in printed)
+        # The match label ("identical") must appear for match=True.
+        assert any("identical" in line for line in printed)
 
 
 # ---------------------------------------------------------------------------
@@ -5475,6 +6277,11 @@ class TestRunNameTooLong:
 # ---------------------------------------------------------------------------
 # run() — TOC-based medium selection via 00 - disc info.yaml
 # ---------------------------------------------------------------------------
+
+#: CD frame offsets for a fictional disc 1 (4 tracks).
+_DISC1_OFFSETS: list[int] = [182, 50000, 100000, 150000]
+#: CD frame offsets for a fictional disc 2 (4 tracks).
+_DISC2_OFFSETS: list[int] = [182, 60000, 110000, 160000]
 
 #: Minimal valid disc info YAML for a fictional 4-track disc 2.
 _DISC2_YAML: str = (

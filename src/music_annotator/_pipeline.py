@@ -34,7 +34,8 @@ from music_annotator._mb_api import (
 from music_annotator._pipeline_io import (
     _DISC_INFO_FILENAME,
     JOURNAL_FILENAME,
-    _check_collisions,
+    AudioCompareResult,
+    _assess_collisions,
     _sha256_file,
     _verify_copy,
     find_source_files,
@@ -45,7 +46,17 @@ from music_annotator._pipeline_io import (
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import _NAME_MAX, _proposed_short, build_dest_path, build_track_tags
 from music_annotator._works import build_work_hierarchy, select_primary_performance_work
-from music_annotator.models import CopyPlanEntry, CoverArt, CoverImage, MBMedium, MBTrack, MBWork, TrackTags, TransactionEntry
+from music_annotator.models import (
+    CopyPlanEntry,
+    CoverArt,
+    CoverImage,
+    MBMedium,
+    MBRelease,
+    MBTrack,
+    MBWork,
+    TrackTags,
+    TransactionEntry,
+)
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -305,22 +316,28 @@ def _select_medium_with_reason(
     )
 
 
-def _prompt_collision_policy(collisions: list[Path], dest_root: Path) -> CollisionPolicy:
-    """Print a collision warning and prompt the user for a resolution policy.
+def _prompt_collision_policy(results: list[AudioCompareResult], dest_root: Path) -> CollisionPolicy:
+    """Print a collision warning (with audio-comparison context) and prompt the user for a resolution policy.
 
     Groups the conflicting files by their work directory (``parts[0] / parts[1]`` relative to
     ``dest_root``) so the user sees the ``[rec YYYY]`` / ``[rel YYYY]`` date suffix on each
     destination without the absolute prefix overwhelming the terminal width.  Individual
     conflicting files are listed as relative paths (including any intermediate Act subdirectory)
-    beneath the directory summary.  All path strings are escaped before passing to Rich so that
-    ``[rec YYYY]`` / ``[rel YYYY]`` brackets are not interpreted as markup tags.
-    Re-prompts until a valid choice is entered.
+    beneath the directory summary, each annotated with its audio-comparison result.  All path
+    strings are escaped before passing to Rich so that ``[rec YYYY]`` / ``[rel YYYY]`` brackets
+    are not interpreted as markup tags.  Re-prompts until a valid choice is entered.
 
-    :param collisions: Destination files that already exist on disk.
+    Only receives results whose ``match`` is ``True`` or ``None`` (confirmed identical or
+    inconclusive); non-matching collisions are handled by :func:`_apply_collision_suffix` before
+    this function is called.
+
+    :param results: :class:`~music_annotator._pipeline_io.AudioCompareResult` objects for the
+        confirmed-identical and inconclusive collisions.
     :param dest_root: Root directory of the destination library, used to derive the work dir
         for display grouping.
     :returns: The :class:`CollisionPolicy` chosen by the user.
     """
+    collisions = [r.dest for r in results]
     work_dirs = sorted({p.relative_to(dest_root).parts[0] / Path(p.relative_to(dest_root).parts[1]) for p in collisions})
     _console.print(
         f"\n[bold red]WARNING:[/] [red]{len(collisions)} destination file(s) already exist under "
@@ -328,9 +345,14 @@ def _prompt_collision_policy(collisions: list[Path], dest_root: Path) -> Collisi
     )
     for d in work_dirs:
         _console.print(f"  [red]{_markup_escape(str(d))}[/]")
-    _console.print("\n[red]Conflicting files:[/]")
+    _console.print("\n[red]Conflicting files (with audio comparison result):[/]")
+    result_by_dest = {r.dest: r for r in results}
     for p in sorted(collisions, key=lambda x: x.name):
-        _console.print(f"  [red]{_markup_escape(str(p.relative_to(dest_root)))}[/]")
+        r = result_by_dest[p]
+        match_label = "[yellow]inconclusive[/]" if r.match is None else "[cyan]identical[/]"
+        _console.print(
+            f"  [red]{_markup_escape(str(p.relative_to(dest_root)))}[/]  ({match_label}: {_markup_escape(r.detail)})"
+        )
     _console.print("\n[bold]Choose an action:[/]")
     _console.print("  [bold red]\\[a] abort[/]     — quit without copying anything")
     _console.print("  [bold yellow]\\[s] skip[/]      — copy only new files, leave existing untouched")
@@ -350,6 +372,81 @@ def _prompt_collision_policy(collisions: list[Path], dest_root: Path) -> Collisi
                 return CollisionPolicy.ABORT
             case _:
                 _console.print("[yellow]Please enter 'a', 's', or 'o'.[/]")
+
+
+def _collision_suffix(release: MBRelease) -> str:
+    """Return a short release-identifying suffix string for path disambiguation.
+
+    Used by :func:`_apply_collision_suffix` to form the bracketed suffix appended to the
+    ``work_dir`` component of a destination path when the incoming audio is confirmed to be
+    different content from the existing file at that path.
+
+    Preference order:
+
+    1. The catalog number of the first :class:`~music_annotator.models.MBLabelInfo` entry, if
+       non-empty.
+    2. The first 8 characters of the release MBID — guaranteed unique and always present.
+
+    :param release: The :class:`~music_annotator.models.MBRelease` being processed.
+    :returns: A non-empty suffix string suitable for appending as ``[<suffix>]``.
+    """
+    if release.label_info_list:
+        cat = release.label_info_list[0].catalog_number.strip()
+        if cat:
+            return cat
+    return release.id[:8]
+
+
+def _apply_collision_suffix(
+    plan: list[CopyPlanEntry],
+    nonmatches: list[AudioCompareResult],
+    release: MBRelease,
+    dest_root: Path,
+) -> None:
+    """Rewrite destination paths in ``plan`` for confirmed non-matching collisions.
+
+    For each :class:`~music_annotator._pipeline_io.AudioCompareResult` in ``nonmatches``, finds
+    the corresponding :class:`~music_annotator.models.CopyPlanEntry` (matched by ``dest_file``)
+    and appends a release-identifying suffix to the ``work_dir`` component (``parts[1]`` relative
+    to ``dest_root``) of its destination path.
+
+    The suffix is derived by :func:`_collision_suffix` — catalog number when available, 8-char
+    MBID prefix otherwise — and is formatted as ``[<suffix>]`` appended to the existing work-dir
+    name.  This keeps the new destination unique while preserving the work-dir name and date
+    label so the library stays navigable.
+
+    Mutates ``plan`` in-place.  Logs a ``collision_nonmatch_suffix`` warning for each affected
+    entry so the operator can verify the rename in the journal.
+
+    :param plan: The list of :class:`~music_annotator.models.CopyPlanEntry` objects; mutated
+        in-place.
+    :param nonmatches: Confirmed non-matching :class:`~music_annotator._pipeline_io.AudioCompareResult`
+        objects (``match=False``) for which the destination path must be disambiguated.
+    :param release: The :class:`~music_annotator.models.MBRelease` being processed; used to
+        derive the suffix via :func:`_collision_suffix`.
+    :param dest_root: Root of the destination library; used to isolate the ``work_dir`` component
+        at relative depth 1 that receives the suffix.
+    """
+    suffix = _collision_suffix(release)
+    nonmatch_dests = {r.dest for r in nonmatches}
+
+    for i, entry in enumerate(plan):
+        if entry.dest_file not in nonmatch_dests:
+            continue
+        # Rewrite parts[1] (work_dir, at relative depth 1) to add the release suffix.
+        # Destination structure: dest_root / parts[0] / parts[1] / [intermediate/] leaf
+        rel_parts = list(entry.dest_file.relative_to(dest_root).parts)
+        # rel_parts[0] = composer_dir, rel_parts[1] = work_dir, rel_parts[2:] = rest
+        rel_parts[1] = f"{rel_parts[1]} [{suffix}]"
+        new_dest = dest_root.joinpath(*rel_parts)
+        log.warning(
+            "collision_nonmatch_suffix",
+            original=str(entry.dest_file.relative_to(dest_root)),
+            renamed=str(new_dest.relative_to(dest_root)),
+            method=next(r.method for r in nonmatches if r.dest == entry.dest_file),
+            suffix=suffix,
+        )
+        plan[i] = CopyPlanEntry(idx=entry.idx, src_file=entry.src_file, dest_file=new_dest)
 
 
 def _write_sidecars(
@@ -955,24 +1052,48 @@ def run(
         plan = _resolve_long_names(plan, dest_root, ui)
 
     # --- Collision detection and resolution ---
+    # Build (src, dest, acoustid, length_ms) tuples for _assess_collisions.
+    plan_pairs: list[tuple[Path, Path, str, int]] = []
+    for entry in plan:
+        t = tags_map[entry.idx]
+        try:
+            length_ms = int(t.length) if t.length else 0
+        except ValueError:
+            length_ms = 0
+        plan_pairs.append((entry.src_file, entry.dest_file, t.acoustid_id, length_ms))
+
     skip_dest: set[Path] = set()
     if not dry_run:
-        collisions = _check_collisions([e.dest_file for e in plan])
-        if collisions:
-            policy = collision_policy
-            if policy == CollisionPolicy.ASK:
-                policy = _prompt_collision_policy(collisions, dest_root)
-            match policy:
-                case CollisionPolicy.OVERWRITE:
-                    log.info("collision_overwrite", count=len(collisions))
-                case CollisionPolicy.SKIP:
-                    skip_dest = set(collisions)
-                    log.info("collision_skip", skipped=len(skip_dest))
-                case CollisionPolicy.ABORT:
-                    log.warning("collision_abort")
-                    raise SystemExit(1)
-                case _:  # pragma: no cover
-                    pass
+        collision_results = _assess_collisions(plan_pairs)
+        if collision_results:
+            confirmed_matches = [r for r in collision_results if r.match is True]
+            confirmed_nonmatches = [r for r in collision_results if r.match is False]
+            inconclusive = [r for r in collision_results if r.match is None]
+
+            # Non-matches: automatically rewrite the incoming path with a release suffix so both
+            # recordings coexist.  No user prompt is required — log a warning per affected track.
+            if confirmed_nonmatches:
+                _apply_collision_suffix(plan, confirmed_nonmatches, release, dest_root)
+                log.warning("collision_nonmatch_auto_suffix", count=len(confirmed_nonmatches))
+
+            # Identical and inconclusive collisions: present to user with comparison context.
+            prompt_results = confirmed_matches + inconclusive
+            if prompt_results:
+                policy = collision_policy
+                if policy == CollisionPolicy.ASK:
+                    policy = _prompt_collision_policy(prompt_results, dest_root)
+                prompt_dests = {r.dest for r in prompt_results}
+                match policy:
+                    case CollisionPolicy.OVERWRITE:
+                        log.info("collision_overwrite", count=len(prompt_results))
+                    case CollisionPolicy.SKIP:
+                        skip_dest = prompt_dests
+                        log.info("collision_skip", skipped=len(skip_dest))
+                    case CollisionPolicy.ABORT:
+                        log.warning("collision_abort")
+                        raise SystemExit(1)
+                    case _:  # pragma: no cover
+                        pass
 
     # --- Copy, tag, and journal ---
     journal_entries: list[TransactionEntry] = []

@@ -1,17 +1,22 @@
 """Filesystem I/O helpers for the music-annotator pipeline.
 
 Provides functions for finding source audio files, writing the transaction journal, computing SHA-256
-checksums, reading back tags for verification, and verifying copy integrity after tagging.
+checksums, reading back tags for verification, verifying copy integrity after tagging, and assessing
+audio-content similarity for collision resolution.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import shutil
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import structlog
 import yaml
+from mutagen import File as MutagenFile  # type: ignore[attr-defined]
 from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 
@@ -35,6 +40,262 @@ _DISC_INFO_FILENAME: str = "00 - disc info.yaml"
 
 #: Set of filenames that must never be treated as source audio tracks.
 _EXCLUDED_FILENAMES: frozenset[str] = frozenset({_DISC_TOC_FILENAME, _DISC_INFO_FILENAME})
+
+#: Duration tolerance (in milliseconds) used by compare_audio_collision when falling back to
+#: duration comparison.  Two tracks whose durations differ by more than this value are reported
+#: as a definite non-match.
+_DURATION_TOLERANCE_MS: int = 2000
+
+#: Whether a one-time warning about the missing ``fpcalc`` binary has already been emitted this
+#: process lifetime.  Wrapped in a list to avoid a ``global`` statement; only element 0 is used.
+#: Written by :func:`compare_audio_collision`; not thread-safe (acceptable for a single-threaded
+#: CLI tool).
+_FPCALC_WARNED: list[bool] = [False]
+
+
+@dataclass
+class AudioCompareResult:
+    """Result of comparing a planned source file against an already-existing destination file.
+
+    Produced by :func:`compare_audio_collision` and aggregated by :func:`_assess_collisions`.
+    Consumed by :func:`~music_annotator._pipeline.run` to decide whether a collision should
+    trigger a user prompt (identical / inconclusive audio) or an automatic path-disambiguation
+    suffix (definitively different audio).
+    """
+
+    src: Path
+    dest: Path
+    match: bool | None
+    """``True`` = same audio content; ``False`` = different audio content; ``None`` = inconclusive."""
+    method: str
+    """Comparison method used: ``"sha256"``, ``"acoustid"``, ``"chromaprint"``, ``"duration"``, or ``"unknown"``."""
+    detail: str
+    """One-line human-readable summary for display in the collision prompt."""
+
+
+def _read_acoustid_tag(path: Path) -> str:
+    """Read the ``ACOUSTID_ID`` tag from a FLAC or MP3 file and return it, or ``""`` on failure.
+
+    For FLAC files the Vorbis Comment key ``"acoustid_id"`` is looked up (case-insensitive).
+    For MP3 files the TXXX frame with description ``"Acoustid Id"`` is looked up.
+
+    :param path: Path to the audio file to inspect.
+    :returns: The AcoustID UUID string, or ``""`` if absent or unreadable.
+    """
+    try:
+        match path.suffix.lower():
+            case ".flac":
+                audio = FLAC(str(path))
+                values = audio.get("acoustid_id") or audio.get("ACOUSTID_ID") or []
+                return values[0] if values else ""
+            case ".mp3":
+                id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+                for frame in id3.getall("TXXX"):  # type: ignore[no-untyped-call]
+                    if frame.desc == "Acoustid Id" and frame.text:
+                        return str(frame.text[0])
+                return ""
+            case _:
+                return ""
+    except Exception:  # noqa: BLE001 — best-effort tag read; any failure means no AcoustID
+        return ""
+
+
+def _read_duration_ms(path: Path) -> int:
+    """Read the audio duration of ``path`` in milliseconds via mutagen, or ``0`` on failure.
+
+    Uses ``mutagen.File`` to handle any mutagen-supported format.
+
+    :param path: Path to the audio file.
+    :returns: Duration in milliseconds, or ``0`` if the file cannot be read or has no duration.
+    """
+    try:
+        audio = MutagenFile(str(path))
+        if audio is not None and hasattr(audio, "info") and hasattr(audio.info, "length"):
+            return int(audio.info.length * 1000)
+        return 0
+    except Exception:  # noqa: BLE001 — best-effort read
+        return 0
+
+
+def _run_fpcalc(path: Path) -> str:
+    """Run ``fpcalc -json`` on ``path`` and return the fingerprint string, or ``""`` on failure.
+
+    :param path: Path to the audio file to fingerprint.
+    :returns: The Chromaprint fingerprint string from ``fpcalc``'s JSON output, or ``""`` if
+        ``fpcalc`` is not available or the invocation fails.
+    """
+    result = subprocess.run(  # noqa: S603 — path validated by caller via shutil.which
+        ["fpcalc", "-json", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    try:
+        data: object = json.loads(result.stdout)
+        if isinstance(data, dict):
+            fp: object = data.get("fingerprint")
+            return str(fp) if fp else ""
+        return ""
+    except json.JSONDecodeError:
+        return ""
+
+
+def _compare_chromaprint_and_duration(
+    src: Path,
+    dest: Path,
+    incoming_length_ms: int,
+) -> AudioCompareResult | None:
+    """Apply Chromaprint (layer 3) and duration (layer 4) comparison, returning a result or ``None``.
+
+    Called by :func:`compare_audio_collision` after SHA-256 and AcoustID checks have not produced
+    a definitive result.  Returns ``None`` when neither layer yields a usable result so the caller
+    can fall through to the final ``"unknown"`` outcome.
+
+    Emits a one-time ``structlog`` warning when ``fpcalc`` is absent and duration comparison
+    flagged a candidate match, so the operator knows a more reliable check was unavailable.
+
+    :param src: Source file path (for Chromaprint).
+    :param dest: Destination file path (for Chromaprint and duration).
+    :param incoming_length_ms: Incoming track duration in ms; ``0`` skips duration comparison.
+    :returns: A definitive or inconclusive :class:`AudioCompareResult`, or ``None`` when no layer
+        produced usable data.
+    """
+    fpcalc_path = shutil.which("fpcalc")
+
+    if fpcalc_path:
+        src_fp = _run_fpcalc(src)
+        dest_fp = _run_fpcalc(dest)
+        if src_fp and dest_fp:
+            if src_fp == dest_fp:
+                return AudioCompareResult(
+                    src=src, dest=dest, match=True, method="chromaprint", detail="identical Chromaprint fingerprints"
+                )
+            return AudioCompareResult(
+                src=src, dest=dest, match=False, method="chromaprint", detail="different Chromaprint fingerprints"
+            )
+
+    if incoming_length_ms > 0:
+        dest_length_ms = _read_duration_ms(dest)
+        if dest_length_ms > 0:
+            delta = abs(dest_length_ms - incoming_length_ms)
+            if delta > _DURATION_TOLERANCE_MS:
+                return AudioCompareResult(
+                    src=src,
+                    dest=dest,
+                    match=False,
+                    method="duration",
+                    detail=(f"duration mismatch: incoming {incoming_length_ms} ms vs dest {dest_length_ms} ms (Δ{delta} ms)"),
+                )
+            if fpcalc_path is None and not _FPCALC_WARNED[0]:
+                _FPCALC_WARNED[0] = True
+                log.warning(
+                    "fpcalc_not_found",
+                    msg=(
+                        "fpcalc not found; Chromaprint comparison skipped"
+                        " — install chromaprint for more reliable audio matching"
+                    ),
+                )
+            if fpcalc_path is None:
+                return AudioCompareResult(
+                    src=src,
+                    dest=dest,
+                    match=None,
+                    method="duration",
+                    detail=f"duration within ±{_DURATION_TOLERANCE_MS} ms but not confirmed (fpcalc unavailable)",
+                )
+
+    return None
+
+
+def compare_audio_collision(
+    src: Path,
+    dest: Path,
+    incoming_acoustid: str,
+    incoming_length_ms: int,
+) -> AudioCompareResult:
+    """Compare a planned source file against an existing destination file for audio content similarity.
+
+    Applies four comparison layers in order, short-circuiting on the first definitive result:
+
+    1. **SHA-256** — byte-for-byte identity.  A match means the source was already copied; a
+       mismatch here does *not* rule out audio similarity (tagging will have changed the bytes).
+    2. **AcoustID UUID** — reads the ``ACOUSTID_ID`` tag from ``dest`` and compares it to
+       ``incoming_acoustid``.  Requires that ``dest`` was tagged by this pipeline.  A non-empty
+       match on both sides is definitive in either direction.
+    3. **Chromaprint** — invokes ``fpcalc -json`` on both files if the binary is on ``$PATH``.
+       Fingerprint string equality is a strong (though not fuzzy) similarity signal; inequality
+       after an earlier duration-candidate result resolves the inconclusive case.  A one-time
+       ``structlog`` warning is emitted when ``fpcalc`` is absent and duration comparison has
+       already flagged a possible match (so the user knows a better comparison was available).
+    4. **Duration** — compares ``dest``'s mutagen-read duration against ``incoming_length_ms``
+       within a ±:data:`_DURATION_TOLERANCE_MS` window.  Within tolerance →
+       ``match=None`` (inconclusive); outside → ``match=False`` (definitive non-match).
+
+    When none of the above produce a usable result (empty AcoustID, no fpcalc, no duration data),
+    ``match=None, method="unknown"`` is returned.  Layers 3 and 4 are implemented in
+    :func:`_compare_chromaprint_and_duration`.
+
+    :param src: Planned source file path (used for SHA-256 and Chromaprint comparison).
+    :param dest: Already-existing destination file path.
+    :param incoming_acoustid: AcoustID UUID for the incoming track (from
+        :attr:`~music_annotator.models.TrackTags.acoustid_id`); may be ``""``.
+    :param incoming_length_ms: Duration of the incoming track in milliseconds (from
+        :attr:`~music_annotator.models.TrackTags.length` parsed as int); may be ``0``.
+    :returns: An :class:`AudioCompareResult` describing the comparison outcome.
+    """
+    # --- Layer 1: SHA-256 ---
+    if _sha256_file(src) == _sha256_file(dest):
+        return AudioCompareResult(src=src, dest=dest, match=True, method="sha256", detail="byte-identical files (same SHA-256)")
+
+    # --- Layer 2: AcoustID UUID ---
+    dest_acoustid = _read_acoustid_tag(dest)
+    if incoming_acoustid and dest_acoustid:
+        if incoming_acoustid == dest_acoustid:
+            return AudioCompareResult(
+                src=src, dest=dest, match=True, method="acoustid", detail=f"same AcoustID cluster ({incoming_acoustid[:8]}…)"
+            )
+        return AudioCompareResult(
+            src=src,
+            dest=dest,
+            match=False,
+            method="acoustid",
+            detail=f"different AcoustID clusters ({incoming_acoustid[:8]}… vs {dest_acoustid[:8]}…)",
+        )
+
+    # --- Layers 3 + 4: Chromaprint and duration ---
+    if (result := _compare_chromaprint_and_duration(src, dest, incoming_length_ms)) is not None:
+        return result
+
+    return AudioCompareResult(
+        src=src,
+        dest=dest,
+        match=None,
+        method="unknown",
+        detail="insufficient data for audio comparison (no AcoustID tags, no fpcalc, no duration)",
+    )
+
+
+def _assess_collisions(
+    plan_pairs: list[tuple[Path, Path, str, int]],
+) -> list[AudioCompareResult]:
+    """Assess each planned-destination collision against its source for audio content similarity.
+
+    Filters ``plan_pairs`` to entries whose destination already exists on disk, then calls
+    :func:`compare_audio_collision` for each one.  Plan entries with no pre-existing destination
+    are omitted from the result.
+
+    :param plan_pairs: A list of ``(src_file, dest_file, acoustid, length_ms)`` tuples, one per
+        planned copy operation.  ``acoustid`` is the incoming track's AcoustID UUID (may be ``""``);
+        ``length_ms`` is its duration in milliseconds (may be ``0``).
+    :returns: A (possibly empty) list of :class:`AudioCompareResult` objects, one per collision.
+    """
+    results: list[AudioCompareResult] = []
+    for src, dest, acoustid, length_ms in plan_pairs:
+        if dest.exists():
+            results.append(compare_audio_collision(src, dest, acoustid, length_ms))
+    return results
 
 
 def find_source_files(src_dir: Path) -> list[Path]:
@@ -247,8 +508,8 @@ def read_journal(journal_path: Path) -> TransactionLog:
 def _check_collisions(dest_files: list[Path]) -> list[Path]:
     """Return the subset of ``dest_files`` that already exist on disk.
 
-    Used by :func:`run` to identify which planned output files would be overwritten before copying
-    begins, so the user can be warned and asked whether to proceed.
+    This is the low-level existence check used internally by :func:`_assess_collisions`.
+    Callers that need audio-content comparison should use :func:`_assess_collisions` instead.
 
     :param dest_files: Ordered list of absolute destination paths to check.
     :returns: A (possibly empty) list of paths from ``dest_files`` that already exist.
