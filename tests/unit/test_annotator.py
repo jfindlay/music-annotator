@@ -1639,6 +1639,135 @@ class TestBuildDestPathEdgeCases:
         # Conductor name should appear in performers component
         assert "Karajan" in str(result)
 
+    def test_album_conductor_used_over_track_only_conductor(self, fs: FakeFilesystem) -> None:
+        """build_dest_path uses album-level conductor, not track-only conductor.
+
+        When the release artist credit names the conductor, the album-level list is non-empty and
+        that name is used for the directory.  A track-only conductor (not in release.artist_credit)
+        is ignored for the path, even if it is in cea_conductors_list.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        album_conductor = ArtistEntry(name="Marriner", sort="Marriner, N", mbid="m1")
+        track_only_conductor = ArtistEntry(name="TrackOnly", sort="TrackOnly, X", mbid="t0")
+        tags = TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony",
+            cwp_workid_top="w1",
+            cwp_composer_lastnames="Mozart",
+            cea_conductors_list=[album_conductor, track_only_conductor],
+            cea_ensembles_list=[],
+            cea_album_conductors_list=[album_conductor],
+            cea_album_ensembles_list=[],
+        )
+        result = music_annotator.build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
+            tags,
+        )
+        assert "Marriner" in str(result)
+        assert "TrackOnly" not in str(result)
+
+    def test_album_ensemble_used_over_track_only_ensemble(self, fs: FakeFilesystem) -> None:
+        """build_dest_path uses album-level ensemble, not track-only ensemble.
+
+        Same contract as the conductor variant above but for ensembles.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        album_ensemble = ArtistEntry(name="ASMiF", sort="ASMiF", mbid="e1")
+        track_only_ensemble = ArtistEntry(name="ASMiF Chamber Ensemble", sort="ASMiF Chamber Ensemble", mbid="e2")
+        tags = TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony",
+            cwp_workid_top="w1",
+            cwp_composer_lastnames="Mozart",
+            cea_conductors_list=[],
+            cea_ensembles_list=[album_ensemble, track_only_ensemble],
+            cea_album_conductors_list=[],
+            cea_album_ensembles_list=[album_ensemble],
+        )
+        result = music_annotator.build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
+            tags,
+        )
+        assert "ASMiF" in str(result)
+        # Track-only named subgroup must not appear in the directory path.
+        assert "Chamber Ensemble" not in str(result)
+
+    def test_empty_album_lists_fall_back_to_all_conductors_ensembles(self, fs: FakeFilesystem) -> None:
+        """build_dest_path falls back to per-track union when album-level lists are empty.
+
+        When the release artist credit has no conductors or ensembles (e.g. composer-only release),
+        the path must still include the track-level performers.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        conductor = ArtistEntry(name="Gardiner", sort="Gardiner, J", mbid="g1")
+        tags = TrackTags(
+            title="Kyrie",
+            movementnumber="1",
+            movementtotal="6",
+            cwp_work_top="Mass in B minor",
+            cwp_workid_top="w1",
+            cwp_composer_lastnames="Bach",
+            cea_conductors_list=[conductor],
+            cea_ensembles_list=[],
+            cea_album_conductors_list=[],
+            cea_album_ensembles_list=[],
+        )
+        result = music_annotator.build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Kyrie"}}),
+            tags,
+        )
+        assert "Gardiner" in str(result)
+
+    def test_album_conductor_and_ensemble_both_appear(self, fs: FakeFilesystem) -> None:
+        """build_dest_path joins album conductor and ensemble with '; '.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        conductor = ArtistEntry(name="Karajan", sort="Karajan, H", mbid="k1")
+        ensemble = ArtistEntry(name="BPO", sort="BPO", mbid="b1")
+        tags = TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony No. 9",
+            cwp_workid_top="w1",
+            cwp_composer_lastnames="Beethoven",
+            cea_conductors_list=[conductor],
+            cea_ensembles_list=[ensemble],
+            cea_album_conductors_list=[conductor],
+            cea_album_ensembles_list=[ensemble],
+        )
+        result = music_annotator.build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
+            tags,
+        )
+        top_dir = result.parts[2]
+        assert "Karajan" in top_dir
+        assert "BPO" in top_dir
+
 
 # ---------------------------------------------------------------------------
 # build_work_hierarchy — non-backward/parts relation (598->597 branch)

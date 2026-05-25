@@ -2,6 +2,18 @@
 
 ## Backlog
 
+- **Directory path — concerto-like soloist override:** The album-artist filter for conductors and
+  ensembles is implemented (`cea_album_conductors_list` / `cea_album_ensembles_list` in
+  `build_dest_path`).  The remaining open item is soloists: when the soloist is part of the work's
+  canonical identity — concertos, works like Saint-Saëns Symphony no. 3 (organ) or "Cinema
+  Serenade" (violin) — the soloist should enter the directory even when not credited at release
+  level.  Detection is partially mechanical: ``top_work.type == "Concerto"`` covers concertos
+  directly.  Symphonies-with-soloist and other canonical soloist-feature works are harder; candidate
+  signals include "solo X" instrument relation types, dedicated work-title patterns, or an editorial
+  allowlist.  The rule answers "is the soloist part of the work's canonical identity?" not "is the
+  soloist on the release?".  All decisions must refract through the Classical Extras path-vs-tag
+  distinction (primary attribution in path, full credits in tags).  See NOTES.md "Path is a handle,
+  not a manifest."
 - **Codebase audit:** As the project grows, do a thorough review of principles, structure, and
   goals.  Evaluate whether the module boundaries remain natural, whether the public API surface in
   `__init__.py` is still coherent, and whether any accumulated conventions need revisiting.
@@ -14,7 +26,6 @@
     - Unify works split by directory name variations
       - Tracks within the work name the work differently, for example in a different language,
         misspelling, etc.
-      - Performer cardinality: add soloists to top-level directory for concerto-type works
       - **Arranger/finisher in directory path — work-level only:** When a finisher, completion
         credit, or arranger is credited in MB as `"composer"` with the `"additional"` attribute on
         only some movements, the per-track `role_buckets.composers` is empty for those movements and

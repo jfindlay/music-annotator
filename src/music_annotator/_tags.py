@@ -674,6 +674,8 @@ def build_track_tags(
     tags = TrackTags(
         cea_conductors_list=cea.conductors,
         cea_ensembles_list=cea.ensembles,
+        cea_album_conductors_list=album_conductors,
+        cea_album_ensembles_list=album_ensembles,
         title=rec.title,
         artist=rec_artist_phrase,
         artists=rec_artist_phrase,
@@ -868,6 +870,18 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
               <nn> - <Act title>/
                 <nn> - <number title>
 
+    The ``<Conductor; Ensemble>`` component uses the **album-level** performers — i.e. those
+    credited at the release level in ``release.artist_credit`` (``tags.cea_album_conductors_list``
+    and ``tags.cea_album_ensembles_list``).  This prevents the top-level directory from forking
+    when MB credits performers inconsistently across movements (e.g. conductor on some tracks only,
+    or parent ensemble on some tracks and a named subgroup on others).  Support performers (credited
+    per-track but not at release level) are captured in tags only, not in the directory path.
+
+    Fallback when album-level yields no conductors or ensembles (e.g. composer-only or
+    Various-Artists release): uses the per-track union of all conductors + ensembles from
+    ``tags.cea_conductors_list`` + ``tags.cea_ensembles_list``, mirroring the original behaviour.
+    If that is also empty, falls back to ``CEA_ENSEMBLE_NAMES``, then ``ARTIST``.
+
     One intermediate directory is introduced for each compositional subdivision level between the
     root work and the leaf (i.e. when ``CWP_PART_LEVELS`` ≥ 2).  All ``nn`` prefixes are
     directory-scoped zero-padded integers derived from the MB ``ordering-key`` (stored as
@@ -925,13 +939,29 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
         if not composer:
             composer = "Unknown Composer"
 
-    # Performers directory component
-    conductors = [e.name for e in tags.cea_conductors_list]
-    ensembles = [e.name for e in tags.cea_ensembles_list]
-    if conductors or ensembles:
-        performers = "; ".join(conductors + ensembles)
+    # Performers directory component.
+    #
+    # Primary: album-level conductors and ensembles — those credited at the release level in MB
+    # (release.artist_credit).  Using the album-level subset prevents the top-level directory from
+    # forking when MB credits performers inconsistently across movements (e.g. conductor on some
+    # tracks but not others, or parent ensemble on some tracks and named subgroup on others).
+    #
+    # Fallback (album-level yields nothing): use all per-track conductors + ensembles so that
+    # composer-only releases and Various-Artists compilations still produce a meaningful directory.
+    # When even the fallback is empty, use CEA_ENSEMBLE_NAMES, then ARTIST.
+    album_conductors_path = [e.name for e in tags.cea_album_conductors_list]
+    album_ensembles_path = [e.name for e in tags.cea_album_ensembles_list]
+    if album_conductors_path or album_ensembles_path:
+        performers = "; ".join(album_conductors_path + album_ensembles_path)
     else:
-        performers = file_dict.get("CEA_ENSEMBLE_NAMES") or file_dict.get("ARTIST", "Unknown Performers")
+        # Fallback: per-track union (mirrors existing behaviour for releases where no
+        # conductor/ensemble is credited at release level).
+        all_conductors = [e.name for e in tags.cea_conductors_list]
+        all_ensembles = [e.name for e in tags.cea_ensembles_list]
+        if all_conductors or all_ensembles:
+            performers = "; ".join(all_conductors + all_ensembles)
+        else:
+            performers = file_dict.get("CEA_ENSEMBLE_NAMES") or file_dict.get("ARTIST", "Unknown Performers")
 
     # Work directory component — title + [rec YYYY] or [rel YYYY] year suffix.
     #

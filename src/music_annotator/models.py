@@ -987,12 +987,18 @@ class TrackTags(BaseModel):
     Pydantic ``extra`` fields via ``model_config = {"extra": "allow"}``.
 
     Important attributes: all standard Picard tag fields, MusicBrainz ID fields, ``_cea_*`` fields, ``_cwp_*`` fields,
-    and the internal ``cea_conductors_list`` / ``cea_ensembles_list`` lists used for path building.
+    and the internal ``cea_conductors_list`` / ``cea_ensembles_list`` /
+    ``cea_album_conductors_list`` / ``cea_album_ensembles_list`` lists used for path building.
     """
 
     # Internal (not written to file)
     cea_conductors_list: list[ArtistEntry] = Field(default_factory=list)
     cea_ensembles_list: list[ArtistEntry] = Field(default_factory=list)
+    # Album-artist-filtered subsets of the above: conductors/ensembles credited at release level.
+    # Used by build_dest_path to produce a stable top-level directory that does not fork when MB
+    # credits performers inconsistently across movements.  Not written to audio files.
+    cea_album_conductors_list: list[ArtistEntry] = Field(default_factory=list)
+    cea_album_ensembles_list: list[ArtistEntry] = Field(default_factory=list)
 
     # Standard Picard tags
     title: str = ""
@@ -1229,7 +1235,8 @@ class TrackTags(BaseModel):
     def to_file_dict(self) -> dict[str, str]:
         """Return a ``{tag_name: value}`` mapping suitable for writing to an audio file.
 
-        Internal fields (``cea_conductors_list``, ``cea_ensembles_list``, ``recording_date_work``,
+        Internal fields (``cea_conductors_list``, ``cea_ensembles_list``,
+        ``cea_album_conductors_list``, ``cea_album_ensembles_list``, ``recording_date_work``,
         ``cwp_composers_is_fallback``) are excluded.
         Empty values are excluded.  All
         keys are uppercased to match Vorbis Comment / ID3 conventions.  Dynamically-added per-level
@@ -1238,7 +1245,14 @@ class TrackTags(BaseModel):
         :returns: A flat ``dict[str, str]`` of non-empty tag key/value pairs with uppercase keys, excluding internal list
             fields.
         """
-        excluded = {"cea_conductors_list", "cea_ensembles_list", "recording_date_work", "cwp_composers_is_fallback"}
+        excluded = {
+            "cea_conductors_list",
+            "cea_ensembles_list",
+            "cea_album_conductors_list",
+            "cea_album_ensembles_list",
+            "recording_date_work",
+            "cwp_composers_is_fallback",
+        }
         out: dict[str, str] = {}
         for field_name, value in self.model_dump(exclude=excluded).items():
             if isinstance(value, str) and value:
