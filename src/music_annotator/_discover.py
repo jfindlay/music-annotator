@@ -167,11 +167,11 @@ class TerminalDiscoverUI:
             "\n[bold yellow]WARNING:[/] [yellow]No disc IDs in MusicBrainz — disc selected by FreeDB title match.[/]"
         )
         _console.print(f"  [dim]FreeDB title :[/] {dtitle}")
-        _console.print(f"  [dim]Proposed disc:[/] [bold]{proposed.position}[/] — {first_track[:80]}")
+        _console.print(f"  [dim]Proposed disc:[/] [bold]{proposed.position}[/] — {first_track}")
         _console.print(f"  [dim]Release URL  :[/] {release_url}")
         _console.print("\n  [dim]Available discs:[/]")
         for m in mediums:
-            ft = m.track_list[0].recording.title[:60] if m.track_list else "(no tracks)"
+            ft = m.track_list[0].recording.title if m.track_list else "(no tracks)"
             marker = " [bold cyan]←[/]" if m is proposed else ""
             _console.print(f"    [{m.position}] disc {m.position}: {ft}{marker}")
         _console.print(f"\n  [dim]Enter [bold]y[/] to accept, [bold]n[/] to abort, or a disc number (1–{len(mediums)}):[/]")

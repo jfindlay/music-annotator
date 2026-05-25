@@ -872,7 +872,7 @@ def run(
         log.info("fetch_recording_rels_start")
         for idx, (src_file, (track, _medium_pos)) in enumerate(file_track_pairs):
             rec_id = track.recording.id
-            log.info("fetch_recording", position=track.position, title=track.recording.title[:60])
+            log.info("fetch_recording", position=track.position, title=track.recording.title)
 
             rec_detail = fetch_recording_detail(rec_id)
 
