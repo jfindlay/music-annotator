@@ -4735,6 +4735,214 @@ class TestRunMultiDisc:
 
 
 # ---------------------------------------------------------------------------
+# run() — disc_override
+# ---------------------------------------------------------------------------
+
+
+class TestRunDiscOverride:
+    """Tests for run() disc_override parameter."""
+
+    def _patch_mb_multi(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API calls for a multi-disc run.
+
+        :param mocker: pytest-mock fixture.
+        :param release: Release model to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+    def test_override_selects_correct_disc(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """disc_override=2 on a 3-disc release selects disc 2 directly.
+
+        Three-disc release (2 + 3 + 2 tracks); source dir has 3 files.  Without override the
+        unique-track-count heuristic would be ambiguous (discs 1 and 3 both have 2 tracks, disc 2
+        has 3).  With disc_override=2 disc 2 (3 tracks) is selected and the run succeeds.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 4):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_multi_disc_release([2, 3, 2])
+        self._patch_mb_multi(mocker, release)
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            disc_override=2,
+        )
+        flac_files = list(dest.rglob("*.flac"))
+        assert len(flac_files) == 3
+
+    def test_override_bypasses_heuristics(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """disc_override skips _select_medium_with_reason entirely.
+
+        Two-disc release (2 + 2 tracks); without override the fallback heuristic would pick
+        disc 1.  With disc_override=2, disc 2 is used without calling the selector.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 3):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_multi_disc_release([2, 2])
+        self._patch_mb_multi(mocker, release)
+        mock_selector = mocker.patch("music_annotator._pipeline._select_medium_with_reason")
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+            disc_override=2,
+        )
+        mock_selector.assert_not_called()
+        # Disc 2 tracks have ids "trk-d2-1" and "trk-d2-2"; verify the destination files exist.
+        flac_files = list(dest.rglob("*.flac"))
+        assert len(flac_files) == 2
+
+    def test_override_unknown_position_raises_value_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """disc_override pointing to a non-existent position raises ValueError with an informative message.
+
+        Two-disc release (2 + 3 tracks); disc_override=5 → ValueError.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_multi_disc_release([2, 3])
+        self._patch_mb_multi(mocker, release)
+
+        with pytest.raises(ValueError, match="--disc 5 not found"):
+            music_annotator.run(
+                release_id="rel-multi",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=False,
+                disc_override=5,
+            )
+
+    def test_override_on_single_medium_release_correct_position(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """disc_override on a single-medium release at the correct position succeeds normally.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_multi_disc_release([1])
+        self._patch_mb_multi(mocker, release)
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+            disc_override=1,
+        )
+        flac_files = list(dest.rglob("*.flac"))
+        assert len(flac_files) == 1
+
+    def test_override_on_single_medium_wrong_position_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """disc_override with a wrong position on a single-medium release raises ValueError.
+
+        Single-medium release at position 1; disc_override=2 → ValueError.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_multi_disc_release([1])
+        self._patch_mb_multi(mocker, release)
+
+        with pytest.raises(ValueError, match="--disc 2 not found"):
+            music_annotator.run(
+                release_id="rel-multi",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=False,
+                disc_override=2,
+            )
+
+    def test_no_override_behaviour_unchanged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Without disc_override the existing heuristic path runs as before.
+
+        Two-disc release (3 + 2 tracks); source dir has 2 files → disc 2 auto-selected.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 3):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_multi_disc_release([3, 2])
+        self._patch_mb_multi(mocker, release)
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+        flac_files = list(dest.rglob("*.flac"))
+        assert len(flac_files) == 2
+
+
+# ---------------------------------------------------------------------------
 # _match_medium_by_toc
 # ---------------------------------------------------------------------------
 

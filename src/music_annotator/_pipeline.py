@@ -747,6 +747,7 @@ def run(
     collision_policy: CollisionPolicy = CollisionPolicy.ASK,
     ui: DiscUI | None = None,
     no_cache: bool = False,
+    disc_override: int | None = None,
 ) -> None:
     """Copy and tag an album directory using MusicBrainz metadata.
 
@@ -780,7 +781,9 @@ def run(
         ``00 - disc info.yaml`` (if present) against each medium's disc TOC data, then by track count, then by FreeDB
         title token matching, then by a disc-number suffix in the directory name.  When the title-match heuristic is
         used, ``ui.confirm_disc`` is called to prompt the user unless ``dry_run`` is ``True``.  A :exc:`ValueError` is
-        raised when no medium can be matched.
+        raised when no medium can be matched.  When ``disc_override`` is set, all heuristics are bypassed and the
+        medium at that 1-based position is selected directly; a :exc:`ValueError` is raised if the position is not
+        found in the release.
     :param dest_root: Root directory of the destination music library.
     :param user_agent: User-agent string passed to :func:`init_mb`.
     :param dry_run: When ``True``, log planned operations without copying or writing any files.  MB API calls for the
@@ -796,10 +799,15 @@ def run(
         automatically and a ``name_too_long`` warning is logged.
     :param no_cache: When ``True``, bypass the cover art on-disk cache and always fetch from the network.  Defaults to
         ``False``.
+    :param disc_override: When set, bypass all automatic medium-selection heuristics and use the medium at this
+        1-based disc position.  Applies to both single-medium and multi-medium releases.  The downstream track-count
+        validation still runs, so a mismatch between source file count and the selected medium's track count raises
+        :exc:`RuntimeError`.
     :raises mb.ResponseError: On a non-retryable MusicBrainz API error.
     :raises RuntimeError: If all retry attempts are exhausted for any API call, or if post-copy verification fails (copy
         integrity, tag round-trip, cover art, or mtime mismatch).
-    :raises ValueError: If no medium in the release matches the source file count for a multi-medium release.
+    :raises ValueError: If no medium in the release matches the source file count for a multi-medium release, or if
+        ``disc_override`` specifies a position that does not exist in the release.
     :raises OSError: If source files cannot be read or destination files cannot be written.
     :raises SystemExit: With code 1 if the collision policy is ABORT (or the user chooses abort interactively), if the
         user aborts the disc-selection confirmation prompt, or if the user aborts a name-shortening prompt.
@@ -818,21 +826,32 @@ def run(
     dtitle = parse_disc_title(src_dir)
 
     mediums = release.medium_list
-    selected_medium = mediums[0] if mediums else None
 
-    if len(mediums) > 1:
-        selected_medium, selection_method = _select_medium_with_reason(
-            mediums, len(src_files), src_dir.name, track_frames=track_frames, dtitle=dtitle
-        )
-        # When a heuristic (title or fallback) selected the medium, prompt for confirmation
-        # unless we're in dry-run mode or no UI was provided.
-        if selection_method in {SelectionMethod.TITLE, SelectionMethod.FALLBACK} and ui is not None and not dry_run:
-            release_url = f"https://musicbrainz.org/release/{release_id}"
-            confirmed = ui.confirm_disc(mediums, selected_medium, dtitle, release_url)
-            if confirmed is None:
-                log.warning("disc_selection_aborted", release_id=release_id)
-                raise SystemExit(1)
-            selected_medium = confirmed
+    if disc_override is not None:
+        hits = [m for m in mediums if m.position == disc_override]
+        if not hits:
+            medium_info = [(m.position, len(m.track_list)) for m in mediums]
+            raise ValueError(
+                f"--disc {disc_override} not found in release '{release.title}'. Available positions: {medium_info}"
+            )
+        selected_medium: MBMedium | None = hits[0]
+        log.info("disc_override_selected", position=disc_override)
+    else:
+        selected_medium = mediums[0] if mediums else None
+
+        if len(mediums) > 1:
+            selected_medium, selection_method = _select_medium_with_reason(
+                mediums, len(src_files), src_dir.name, track_frames=track_frames, dtitle=dtitle
+            )
+            # When a heuristic (title or fallback) selected the medium, prompt for confirmation
+            # unless we're in dry-run mode or no UI was provided.
+            if selection_method in {SelectionMethod.TITLE, SelectionMethod.FALLBACK} and ui is not None and not dry_run:
+                release_url = f"https://musicbrainz.org/release/{release_id}"
+                confirmed = ui.confirm_disc(mediums, selected_medium, dtitle, release_url)
+                if confirmed is None:
+                    log.warning("disc_selection_aborted", release_id=release_id)
+                    raise SystemExit(1)
+                selected_medium = confirmed
 
     if selected_medium is None:
         raise ValueError(f"release '{release.title}' has no mediums")

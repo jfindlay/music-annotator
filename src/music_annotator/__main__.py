@@ -15,7 +15,7 @@ Usage::
         --release-id 53c4d36c-1032-4f78-baba-fc972249d7d1 \\
         --user-agent-email contact@example.com \\
         [--user-agent-app "MyApp/1.0"] \\
-        [--dry-run] [--no-fetch-rels] [--delete] [--no-cache]
+        [--dry-run] [--no-fetch-rels] [--delete] [--no-cache] [--disc N]
 
     music-annotator search \\
         <src_dir> <dest_dir> \\
@@ -233,6 +233,17 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="MBID",
         help="MusicBrainz release MBID (UUID) to fetch metadata for.",
     )
+    apply_parser.add_argument(
+        "--disc",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Force selection of disc number N (1-based position) in a multi-disc release, "
+            "bypassing automatic medium-selection heuristics.  The source file count must still "
+            "match the selected disc's track count."
+        ),
+    )
     _add_common_args(apply_parser)
 
     # ------------------------------------------------------------------
@@ -354,6 +365,7 @@ def main() -> None:
                     dry_run=args.dry_run,
                     fetch_rels=not args.no_fetch_rels,
                     no_cache=args.no_cache,
+                    disc_override=args.disc,
                 )
             except KeyboardInterrupt:
                 log.warning("interrupted")

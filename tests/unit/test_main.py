@@ -255,6 +255,18 @@ class TestBuildParser:
         ns = parser.parse_args(self._APPLY_BASE)
         assert not ns.no_cache
 
+    def test_apply_disc_flag(self) -> None:
+        """apply --disc N sets disc=N."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._APPLY_BASE, "--disc", "2"])
+        assert ns.disc == 2
+
+    def test_apply_disc_default_none(self) -> None:
+        """apply disc defaults to None when flag is absent."""
+        parser = _build_parser()
+        ns = parser.parse_args(self._APPLY_BASE)
+        assert ns.disc is None
+
     def test_apply_verbose_flag(self) -> None:
         """-v before the subcommand sets verbose=True."""
         parser = _build_parser()
@@ -533,6 +545,34 @@ class TestMain:
             main()
         _, kwargs = mock_run.call_args
         assert kwargs["no_cache"] is True
+
+    def test_apply_disc_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """apply --disc N is passed as disc_override=N to run().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        fs.create_dir("/src")
+        mock_run = mocker.patch("music_annotator.run")
+        with patch.object(sys, "argv", [*self._APPLY_ARGV, "--disc", "2"]):
+            main()
+        _, kwargs = mock_run.call_args
+        assert kwargs["disc_override"] == 2
+
+    def test_apply_disc_none_by_default(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """apply without --disc passes disc_override=None to run().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        fs.create_dir("/src")
+        mock_run = mocker.patch("music_annotator.run")
+        with patch.object(sys, "argv", self._APPLY_ARGV):
+            main()
+        _, kwargs = mock_run.call_args
+        assert kwargs["disc_override"] is None
 
     def test_apply_user_agent_assembled_correctly(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """user_agent passed to run() is '{app} {email}'.
