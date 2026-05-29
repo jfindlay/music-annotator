@@ -1,5 +1,5 @@
 """Unit tests for pipeline functions: build_cea_performers, build_track_tags, apply_tags_flac, apply_tags_mp3,
-find_source_files, and run (non-dry-run).
+find_source_files, check_duration_preflight, _prompt_duration_warnings, and run (non-dry-run).
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ from music_annotator._pipeline import (
     _match_medium_by_title,
     _match_medium_by_toc,
     _prompt_collision_policy,
+    _prompt_duration_warnings,
     _resolve_long_names,
     _score_medium_title,
     _select_medium_with_reason,
@@ -59,6 +60,7 @@ from music_annotator._pipeline_io import (
     _read_acoustid_tag,
     _read_duration_ms,
     _run_fpcalc,
+    check_duration_preflight,
     compare_audio_collision,
 )
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
@@ -6633,3 +6635,370 @@ class TestRunTocMediumSelection:
             fetch_rels=True,
         )
         assert mock_tag.call_count == 4
+
+
+# ---------------------------------------------------------------------------
+# check_duration_preflight / _prompt_duration_warnings / run() duration guard
+# ---------------------------------------------------------------------------
+
+
+class TestCheckDurationPreflight:
+    """Tests for check_duration_preflight — source-vs-MB duration comparison."""
+
+    def _make_track(self, position: int, title: str, length_ms: int) -> MBTrack:
+        """Build a minimal MBTrack with a specific position, title, and length.
+
+        :param position: 1-based track position.
+        :param title: Recording title string.
+        :param length_ms: Track length in milliseconds.
+        :returns: An :class:`~music_annotator.models.MBTrack` instance.
+        """
+        return MBTrack.model_validate(
+            {
+                "id": f"trk-{position}",
+                "position": position,
+                "length": str(length_ms),
+                "recording": {"id": f"rec-{position}", "title": title, "artist-credit": []},
+            }
+        )
+
+    def test_all_within_tolerance_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """No warnings when all source durations are within the tolerance of MB lengths.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src1 = Path("/src/01.flac")
+        src2 = Path("/src/02.flac")
+        fs.create_file(str(src1), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src2), contents=_MINIMAL_FLAC)
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", side_effect=[60_000, 120_000])
+        track_pairs = [
+            (self._make_track(1, "Movement I", 60_500), 1),  # delta 500 ms — within 10 s
+            (self._make_track(2, "Movement II", 120_200), 1),  # delta 200 ms — within 10 s
+        ]
+        result = check_duration_preflight([src1, src2], track_pairs)
+        assert result == []
+
+    def test_one_track_over_tolerance_returns_one_warning(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """One warning is returned when exactly one track exceeds the tolerance.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src1 = Path("/src/01.flac")
+        src2 = Path("/src/02.flac")
+        fs.create_file(str(src1), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src2), contents=_MINIMAL_FLAC)
+        # Track 1: source 30 s, MB 60 s — delta 30 000 ms exceeds 10 000 ms tolerance.
+        # Track 2: source 120 s, MB 120.5 s — delta 500 ms within tolerance.
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", side_effect=[30_000, 120_000])
+        track_pairs = [
+            (self._make_track(1, "Symphony no. 1: I. Allegro", 60_000), 1),
+            (self._make_track(2, "Symphony no. 1: II. Andante", 120_500), 1),
+        ]
+        result = check_duration_preflight([src1, src2], track_pairs)
+        assert len(result) == 1
+        assert "track 1" in result[0]
+        assert "Symphony no. 1: I. Allegro" in result[0]
+        # source 30.0s, MB 60.0s, delta 30.0s
+        assert "30.0s" in result[0]
+        assert "60.0s" in result[0]
+
+    def test_mb_length_zero_skipped(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Tracks with MB length of 0 are silently skipped even when source duration differs greatly.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/01.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", return_value=300_000)
+        # MBTrack with length=0 (MB has no duration data for this recording).
+        track_pairs = [(self._make_track(1, "Unknown Recording", 0), 1)]
+        result = check_duration_preflight([src], track_pairs)
+        assert result == []
+
+    def test_src_length_zero_skipped(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Tracks where mutagen returns 0 for source duration are silently skipped.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/01.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", return_value=0)
+        track_pairs = [(self._make_track(1, "Track One", 60_000), 1)]
+        result = check_duration_preflight([src], track_pairs)
+        assert result == []
+
+    def test_all_tracks_over_tolerance_returns_all_warnings(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """One warning per track when every track exceeds the tolerance.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src1 = Path("/src/01.flac")
+        src2 = Path("/src/02.flac")
+        src3 = Path("/src/03.flac")
+        fs.create_file(str(src1), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src2), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src3), contents=_MINIMAL_FLAC)
+        # Each source is ~2 minutes shorter than the MB length — clearly wrong MBID.
+        mocker.patch(
+            "music_annotator._pipeline_io._read_duration_ms",
+            side_effect=[30_000, 30_000, 30_000],
+        )
+        track_pairs = [
+            (self._make_track(1, "Movement I", 150_000), 1),
+            (self._make_track(2, "Movement II", 150_000), 1),
+            (self._make_track(3, "Movement III", 150_000), 1),
+        ]
+        result = check_duration_preflight([src1, src2, src3], track_pairs)
+        assert len(result) == 3
+
+    def test_custom_tolerance_respected(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """A custom tolerance_ms parameter gates warnings at the specified threshold.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/01.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        # Delta is 3 000 ms; within the default 10 000 ms but above a 2 000 ms custom tolerance.
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", return_value=57_000)
+        track_pairs = [(self._make_track(1, "Track One", 60_000), 1)]
+
+        result_wide = check_duration_preflight([src], track_pairs, tolerance_ms=10_000)
+        assert result_wide == []
+
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", return_value=57_000)
+        result_tight = check_duration_preflight([src], track_pairs, tolerance_ms=2_000)
+        assert len(result_tight) == 1
+
+    def test_warning_message_contains_position_title_and_durations(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Warning message includes track position, title, source seconds, MB seconds, and delta seconds.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/01.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        mocker.patch("music_annotator._pipeline_io._read_duration_ms", return_value=45_000)
+        track_pairs = [(self._make_track(3, "Largo", 90_000), 2)]
+        result = check_duration_preflight([src], track_pairs)
+        assert len(result) == 1
+        msg = result[0]
+        assert "track 3" in msg
+        assert "Largo" in msg
+        assert "45.0s" in msg  # source duration
+        assert "90.0s" in msg  # MB duration
+        assert "45.0s" in msg  # delta (90 - 45 = 45)
+
+
+class TestPromptDurationWarnings:
+    """Tests for _prompt_duration_warnings — interactive duration mismatch prompt."""
+
+    def test_user_proceeds_returns_true(self, mocker: MockerFixture) -> None:
+        """Returns True when the user enters 'p' to proceed.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._pipeline._console.print")
+        mocker.patch("builtins.input", return_value="p")
+        assert _prompt_duration_warnings(["  track 1 'Allegro': source 30.0s, MB 60.0s (delta 30.0s)"]) is True
+
+    def test_user_proceed_word_returns_true(self, mocker: MockerFixture) -> None:
+        """Returns True when the user enters the full word 'proceed'.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._pipeline._console.print")
+        mocker.patch("builtins.input", return_value="proceed")
+        assert _prompt_duration_warnings(["  track 1 'Allegro': source 30.0s, MB 60.0s (delta 30.0s)"]) is True
+
+    def test_user_aborts_returns_false(self, mocker: MockerFixture) -> None:
+        """Returns False when the user enters 'a' to abort.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._pipeline._console.print")
+        mocker.patch("builtins.input", return_value="a")
+        assert _prompt_duration_warnings(["  track 1 'Allegro': source 30.0s, MB 60.0s (delta 30.0s)"]) is False
+
+    def test_user_abort_word_returns_false(self, mocker: MockerFixture) -> None:
+        """Returns False when the user enters the full word 'abort'.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._pipeline._console.print")
+        mocker.patch("builtins.input", return_value="abort")
+        assert _prompt_duration_warnings(["  track 1 'Allegro': source 30.0s, MB 60.0s (delta 30.0s)"]) is False
+
+    def test_invalid_then_valid_input_reprompts(self, mocker: MockerFixture) -> None:
+        """Invalid input causes a re-prompt; subsequent valid input is accepted.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._pipeline._console.print")
+        mocker.patch("builtins.input", side_effect=["x", "bad", "p"])
+        assert _prompt_duration_warnings(["  track 1 'Allegro': source 30.0s, MB 60.0s (delta 30.0s)"]) is True
+
+    def test_warnings_displayed_in_output(self, mocker: MockerFixture) -> None:
+        """Each warning string is printed to the console.
+
+        :param mocker: pytest-mock fixture.
+        """
+        printed: list[str] = []
+        mocker.patch("music_annotator._pipeline._console.print", side_effect=lambda s, **_: printed.append(s))
+        mocker.patch("builtins.input", return_value="a")
+        warnings = [
+            "  track 1 'Allegro': source 30.0s, MB 60.0s (delta 30.0s)",
+            "  track 3 'Largo': source 45.0s, MB 90.0s (delta 45.0s)",
+        ]
+        _prompt_duration_warnings(warnings)
+        assert any("30.0s" in line for line in printed)
+        assert any("45.0s" in line for line in printed)
+
+    def test_warning_count_shown_in_header(self, mocker: MockerFixture) -> None:
+        """The header line includes the number of mismatched tracks.
+
+        :param mocker: pytest-mock fixture.
+        """
+        printed: list[str] = []
+        mocker.patch("music_annotator._pipeline._console.print", side_effect=lambda s, **_: printed.append(s))
+        mocker.patch("builtins.input", return_value="p")
+        _prompt_duration_warnings(["w1", "w2", "w3"])
+        assert any("3" in line for line in printed)
+
+
+class TestRunDurationPreflight:
+    """Tests for the duration pre-flight check wired into run()."""
+
+    def _patch_mb(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API and tagging calls for a run() invocation.
+
+        :param mocker: pytest-mock fixture.
+        :param release: Release model to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch(
+            "music_annotator._pipeline.fetch_recording_detail",
+            return_value=_rec({"id": "rec-1", "title": "Track", "artist-credit": [], "work-relation-list": []}),
+        )
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+    def test_no_warnings_no_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When check_duration_preflight returns an empty list, no prompt is shown.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb(mocker, _make_release(n_tracks=1))
+        mocker.patch("music_annotator._pipeline.check_duration_preflight", return_value=[])
+        mock_input = mocker.patch("builtins.input")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+        mock_input.assert_not_called()
+
+    def test_warnings_present_user_proceeds(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When duration warnings exist and the user enters 'p', run() proceeds normally.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb(mocker, _make_release(n_tracks=1))
+        mocker.patch(
+            "music_annotator._pipeline.check_duration_preflight",
+            return_value=["  track 1 'Track 1': source 30.0s, MB 60.0s (delta 30.0s)"],
+        )
+        mocker.patch("music_annotator._pipeline._console.print")
+        mocker.patch("builtins.input", return_value="p")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+        # Pipeline completed — tagging was called.
+        assert mock_tag.call_count == 1
+
+    def test_warnings_present_user_aborts_raises_system_exit(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When duration warnings exist and the user enters 'a', run() raises SystemExit(1).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb(mocker, _make_release(n_tracks=1))
+        mocker.patch(
+            "music_annotator._pipeline.check_duration_preflight",
+            return_value=["  track 1 'Track 1': source 30.0s, MB 60.0s (delta 30.0s)"],
+        )
+        mocker.patch("music_annotator._pipeline._console.print")
+        mocker.patch("builtins.input", return_value="a")
+
+        with pytest.raises(SystemExit) as exc_info:
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=False,
+            )
+        assert exc_info.value.code == 1
+
+    def test_dry_run_skips_preflight_entirely(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """In dry_run mode, check_duration_preflight is never called.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb(mocker, _make_release(n_tracks=1))
+        mock_preflight = mocker.patch("music_annotator._pipeline.check_duration_preflight")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=True,
+            fetch_rels=False,
+        )
+        mock_preflight.assert_not_called()

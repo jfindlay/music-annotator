@@ -2,7 +2,8 @@
 
 Provides :func:`run`, the main entry point that copies and tags a classical music album using
 MusicBrainz metadata.  Also provides :class:`CollisionPolicy`, :func:`_select_medium`,
-:func:`_prompt_collision_policy`, and :func:`_dedup_plan_entries` as extracted helpers.
+:func:`_prompt_collision_policy`, :func:`_prompt_duration_warnings`, and
+:func:`_dedup_plan_entries` as extracted helpers.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from music_annotator._pipeline_io import (
     _assess_collisions,
     _sha256_file,
     _verify_copy,
+    check_duration_preflight,
     find_source_files,
     parse_disc_title,
     parse_disc_toc,
@@ -372,6 +374,48 @@ def _prompt_collision_policy(results: list[AudioCompareResult], dest_root: Path)
                 return CollisionPolicy.ABORT
             case _:
                 _console.print("[yellow]Please enter 'a', 's', or 'o'.[/]")
+
+
+def _prompt_duration_warnings(warnings: list[str]) -> bool:
+    """Print per-track duration mismatch warnings and prompt the user to confirm or abort.
+
+    Called when :func:`check_duration_preflight` returns a non-empty list.  Displays each
+    warning line and asks the user whether to proceed.  Re-prompts until a valid choice
+    is entered.
+
+    Only called when ``dry_run`` is ``False`` and warnings are present; skipped entirely
+    in dry-run mode to preserve the non-interactive contract for automation.
+
+    :param warnings: List of human-readable warning strings from :func:`check_duration_preflight`,
+        one per mismatched track.
+    :returns: ``True`` if the user chooses to proceed despite the warnings, ``False`` if the user
+        chooses to abort.
+    """
+    _console.print(
+        f"\n[bold yellow]WARNING:[/] [yellow]{len(warnings)} source file(s) have audio durations "
+        "that differ significantly from the MusicBrainz release data:[/]"
+    )
+    for w in warnings:
+        _console.print(f"[yellow]{w}[/]")
+    _console.print(
+        "\n[yellow]This may indicate the wrong release MBID was supplied, or that MB duration data "
+        "is inaccurate for this pressing.[/]"
+    )
+    _console.print("\n[bold]Choose an action:[/]")
+    _console.print("  [bold green]\\[p] proceed[/] — continue despite the duration mismatch(es)")
+    _console.print("  [bold red]\\[a] abort[/]   — quit without copying anything")
+    while True:
+        _console.print("\n[bold cyan]>[/] ", end="")
+        choice = input("").strip().lower()
+        match choice:
+            case "p" | "proceed":
+                log.info("duration_preflight_proceed", mismatched=len(warnings))
+                return True
+            case "a" | "abort":
+                log.warning("duration_preflight_abort", mismatched=len(warnings))
+                return False
+            case _:
+                _console.print("[yellow]Please enter 'p' or 'a'.[/]")
 
 
 def _collision_suffix(release: MBRelease) -> str:
@@ -810,7 +854,8 @@ def run(
         ``disc_override`` specifies a position that does not exist in the release.
     :raises OSError: If source files cannot be read or destination files cannot be written.
     :raises SystemExit: With code 1 if the collision policy is ABORT (or the user chooses abort interactively), if the
-        user aborts the disc-selection confirmation prompt, or if the user aborts a name-shortening prompt.
+        user aborts the disc-selection confirmation prompt, if the user aborts a name-shortening prompt, or if the user
+        aborts the duration pre-flight confirmation prompt.
     """
     init_mb(user_agent)
 
@@ -865,6 +910,16 @@ def run(
             f"track count mismatch for release '{release.title}': "
             f"{len(src_files)} source file(s) but {len(all_track_pairs)} track(s) on disc {medium_pos}"
         )
+
+    # Duration pre-flight: warn when any source file's duration deviates from the corresponding
+    # MB track length by more than 10 s.  Skipped in dry-run mode to preserve non-interactive
+    # behaviour.  MB duration data is crowd-sourced and may be inaccurate for specific pressings,
+    # so a mismatch is a warning requiring user confirmation rather than a hard error.
+    if not dry_run:
+        duration_warnings = check_duration_preflight(src_files, all_track_pairs)
+        if duration_warnings:
+            if not _prompt_duration_warnings(duration_warnings):
+                raise SystemExit(1)
 
     # Fetch all cover art once for the whole release
     # Create the destination root if it does not exist yet.  All intermediate directories are also

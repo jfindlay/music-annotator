@@ -65,6 +65,24 @@
 - Playlist generation for collection/cycle groupings (Ring cycle, symphony cycles, etc.)
 - Audit CE-derived tags: every field populated or explicitly `""`
 - Add cover art type: sleeve front/back
+- **Source verification — Chromaprint `--verify-fingerprints` flag:** The current pre-flight check
+  compares source file durations against MB track lengths (±10 s tolerance) and prompts the user on
+  mismatch.  A stronger check would run `fpcalc` on each source file and submit the resulting
+  Chromaprint fingerprint + duration to the AcoustID `/v2/lookup` endpoint, then compare the
+  returned MB recording MBID against the expected one from the release.  This would catch wrong
+  pressings within the same work — cases the duration check cannot distinguish.  Implementation
+  notes:
+  - Gate behind `--verify-fingerprints` CLI flag so fingerprinting is opt-in (each `fpcalc` call
+    takes ~5–10 s per track).
+  - The AcoustID `/v2/lookup` endpoint requires a registered client API key (different from the
+    keyless `list_by_mbid` endpoint already used by `fetch_acoustid_id`).  A new config mechanism
+    for the API key is needed.
+  - `_run_fpcalc` currently discards the `duration` field from fpcalc's JSON output; the lookup
+    endpoint requires it — update `_run_fpcalc` to return both fingerprint and duration.
+  - AcoustID coverage is incomplete; recordings not yet crowd-submitted will return no results —
+    treat as inconclusive (warn but don't block).
+  - New function: `fetch_acoustid_lookup(fingerprint, duration_s, api_key) -> str` (returns the
+    matched MB recording MBID or `""` on no match / error).
 
 ---
 

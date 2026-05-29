@@ -1,8 +1,9 @@
 """Filesystem I/O helpers for the music-annotator pipeline.
 
 Provides functions for finding source audio files, writing the transaction journal, computing SHA-256
-checksums, reading back tags for verification, verifying copy integrity after tagging, and assessing
-audio-content similarity for collision resolution.
+checksums, reading back tags for verification, verifying copy integrity after tagging, assessing
+audio-content similarity for collision resolution, and performing the pre-flight duration check
+against MB track lengths.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 
 from music_annotator._tagger import _MP3_STD_KEYS, _MP3_TXXX_MAP
-from music_annotator.models import JSON, CoverArt, PictureEntry, TrackTags, TransactionEntry, TransactionLog
+from music_annotator.models import JSON, CoverArt, MBTrack, PictureEntry, TrackTags, TransactionEntry, TransactionLog
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -115,6 +116,50 @@ def _read_duration_ms(path: Path) -> int:
         return 0
     except Exception:  # noqa: BLE001 — best-effort read
         return 0
+
+
+def check_duration_preflight(
+    src_files: list[Path],
+    track_pairs: list[tuple[MBTrack, int]],
+    tolerance_ms: int = 10_000,
+) -> list[str]:
+    """Compare each source file's audio duration against the corresponding MB track length.
+
+    Reads each source file's duration via mutagen and compares it against ``MBTrack.length`` (in
+    milliseconds).  Tracks for which MB has no duration data (``length == 0``) are skipped silently
+    — this is common for classical recordings where MB coverage is incomplete.
+
+    This is a pre-flight check intended to catch flagrantly wrong MBID assignments (e.g. a
+    30-minute symphony matched against a 3-minute pop single) before any files are copied.  It is
+    not a substitute for full AcoustID fingerprint verification: MB duration data is crowd-sourced
+    and may legitimately differ by several seconds from a specific pressing, so false positives are
+    possible even with a generous tolerance.
+
+    :param src_files: Ordered list of source audio file paths, already matched to ``track_pairs``
+        by position.
+    :param track_pairs: Ordered list of ``(MBTrack, medium_position)`` tuples corresponding to
+        each source file.
+    :param tolerance_ms: Maximum acceptable absolute difference between source duration and MB
+        track length, in milliseconds.  Defaults to 10 000 ms (10 s).
+    :returns: A list of human-readable warning strings, one per track whose duration deviates
+        beyond ``tolerance_ms``.  An empty list means all checked tracks are within tolerance.
+    """
+    warnings: list[str] = []
+    for src_file, (track, _medium_pos) in zip(src_files, track_pairs):
+        mb_ms = track.length
+        if mb_ms == 0:
+            continue
+        src_ms = _read_duration_ms(src_file)
+        if src_ms == 0:
+            continue
+        delta_ms = abs(src_ms - mb_ms)
+        if delta_ms > tolerance_ms:
+            warnings.append(
+                f"  track {track.position} '{track.recording.title}': "
+                f"source {src_ms / 1000:.1f}s, MB {mb_ms / 1000:.1f}s "
+                f"(delta {delta_ms / 1000:.1f}s)"
+            )
+    return warnings
 
 
 def _run_fpcalc(path: Path) -> str:
