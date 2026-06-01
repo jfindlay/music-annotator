@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import enum
+import errno
 import hashlib
 import os
 import re
@@ -36,12 +37,15 @@ from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
     AudioCompareResult,
     _assess_collisions,
+    _read_tags_flac,
+    _read_tags_mp3,
     _sha256_file,
     _verify_copy,
     check_duration_preflight,
     find_source_files,
     parse_disc_title,
     parse_disc_toc,
+    read_journal,
     write_transaction_log,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
@@ -1365,8 +1369,315 @@ def run(
     log.info("run_complete", dest=str(dest_root))
 
 
+def _tags_from_file_dict(file_dict: dict[str, str]) -> TrackTags:
+    """Reconstruct a :class:`~music_annotator.models.TrackTags` instance from an on-disk tag dict.
+
+    Reads all uppercase tag keys produced by :func:`~music_annotator._pipeline_io._read_tags_flac`
+    or :func:`~music_annotator._pipeline_io._read_tags_mp3` and populates a :class:`TrackTags`
+    instance so that calling ``to_file_dict()`` on the result produces exactly the same uppercase
+    dict.
+
+    Named :class:`TrackTags` fields are populated by lowercasing the key and passing as keyword
+    arguments via ``model_validate``.  Dynamic per-level fields (``CWP_WORK_0``, ``CWP_WORKID_0``,
+    ``CWP_PART_0``, ``CWP_INTER_INDEX_1``, etc.) that are not named fields are placed in
+    ``model_extra`` as lowercase keys so that ``to_file_dict()`` includes them via its extras loop.
+
+    :param file_dict: Uppercase ``{KEY: value}`` mapping read back from an audio file.
+    :returns: A :class:`TrackTags` with all tags populated, suitable for passing to
+        :func:`~music_annotator._pipeline_io._verify_copy`.
+    """
+    # Split into named fields (known to TrackTags) vs dynamic extras
+    named: dict[str, str] = {}
+    extras: dict[str, str] = {}
+
+    # Build set of known field names (lowercase) from the model
+    known_fields: frozenset[str] = frozenset(TrackTags.model_fields)
+    # Guard against the two fields that ARE named model fields but must not be round-tripped:
+    # - recording_date_work: an in-memory path-construction helper, never written to audio files.
+    # - cwp_composers_is_fallback: an internal flag used only during the ingest pipeline pass.
+    # The other to_file_dict() exclusions (cea_*_list fields) are list-typed model fields and
+    # will never appear in a read-back tag dict (they are not written to audio files), so they
+    # do not need to be explicitly excluded here.
+    _excluded = frozenset({"recording_date_work", "cwp_composers_is_fallback"})
+
+    for key, value in file_dict.items():
+        lower_key = key.lower()
+        if lower_key in known_fields and lower_key not in _excluded:
+            named[lower_key] = value
+        else:
+            # Dynamic per-level field (e.g. cwp_work_0, cwp_workid_0, cwp_inter_index_1) —
+            # store with lowercase key so to_file_dict() uppercases it correctly.
+            extras[lower_key] = value
+
+    tags = TrackTags.model_validate(named)
+    # Merge extras into model_extra (Pydantic's extra="allow" dict).
+    # With extra="allow", model_extra is always a dict (never None) after model_validate —
+    # the None branch is a defensive guard that cannot be reached in practice.
+    if tags.model_extra is None:  # pragma: no cover
+        object.__setattr__(tags, "__pydantic_extra__", extras)
+    else:
+        tags.model_extra.update(extras)
+    return tags
+
+
+def repath(dest_root: Path, *, dry_run: bool = False) -> None:
+    """Re-path all verified library files under ``dest_root`` to their corrected destinations.
+
+    Walks the already-annotated library at ``dest_root``, reads the transaction journal to
+    identify verified library files (``action in {"tagged", "repathed"}``), recomputes each
+    file's destination path from its **embedded tags alone** (no MusicBrainz network calls),
+    and moves files whose current path differs from the recomputed path.
+
+    This maintenance-mode command is the retroactive counterpart to a path-policy change (such as
+    the L0/L1 leaf and intermediate-directory numbering fix): it brings an already-annotated library
+    forward to the new policy without re-ingesting from source.
+
+    **Move semantics (provenance-chain invariant preserved):** for each file that needs moving:
+
+    1. Capture source SHA-256.
+    2. Move atomically via ``os.replace`` (rename within the library); fall back to
+       ``shutil.copy2`` + ``os.unlink`` on ``OSError`` with ``errno.EXDEV`` (cross-filesystem).
+    3. Verify destination SHA-256 == source SHA-256 (``RuntimeError`` on mismatch — NO journal
+       entry written).
+    4. Run ``_verify_copy`` tag round-trip on the new path (``RuntimeError`` on mismatch — NO
+       journal entry written).
+    5. **Only then** append ``TransactionEntry(action="repathed", source=<old path>,
+       destination=<new path>)`` and flush it to the journal before moving the next file, so a
+       crash leaves a complete audit trail.
+
+    No-op: files whose recomputed path matches their current path are skipped silently.
+
+    Collision: when two legacy paths recompute to the same new path, the same
+    ``_assess_collisions`` / ``_apply_collision_suffix`` machinery used by :func:`run` is applied
+    (acoustid+length-aware, single collision authority).
+
+    In ``dry_run`` mode: all planned moves and collisions are logged but **no files are moved
+    and no journal entries are written**.
+
+    .. warning::
+        A bare ``repath <dest>`` invocation **mass-relocates the entire library**.  The
+        ``action="repathed"`` journal entries are the complete recovery record — if something goes
+        wrong, examine ``music_annotator_journal.json`` in ``dest_root`` to reconstruct what
+        moved where.  Use ``--dry-run`` first to preview all planned moves.
+
+    :param dest_root: Root of the annotated music library (contains
+        ``music_annotator_journal.json``).
+    :param dry_run: When ``True``, log planned moves without performing any filesystem
+        operations or writing journal entries.
+    """
+    journal_path = dest_root / JOURNAL_FILENAME
+    journal = read_journal(journal_path)
+
+    # --- Determine the current canonical path for each logical file ---
+    # A "repathed" entry supersedes an earlier "tagged" entry for the same logical file.
+    # Track the latest destination per original source lineage: use the destination of the
+    # latest entry per (source -> latest dest) chain.
+    # Strategy: walk entries in order, building a map from each destination -> (source_lineage).
+    # A "repathed" entry's source is the OLD path = a previous destination.
+    # We want: for each current on-disk file, what was the original ingest source?
+    # Use a union-find-like approach: dest_to_current maps each old dest to the latest dest
+    # in its chain.
+
+    # Build the set of current library file paths from journal.
+    # dest_to_lineage_source: current_dest -> original ingest source
+    # last_dest_for_source: original_source -> latest_dest
+    current_lib: dict[Path, str] = {}  # current_path -> original_source (for journal release_id lookup)
+
+    for entry in journal.entries:
+        if entry.action not in {"tagged", "repathed"}:
+            continue
+        dest_path = Path(entry.destination)
+        source_path = entry.source
+
+        if entry.action == "tagged":
+            # This is an ingest entry; source = original ingest path
+            # Check if this destination was later repathed (it will appear as source of a later
+            # repathed entry).  For now, register it; a later "repathed" entry will update.
+            current_lib[dest_path] = source_path
+        else:
+            # action == "repathed": source = old path, destination = new path
+            old_path = Path(entry.source)
+            # Remove the old path from current_lib (it moved)
+            current_lib.pop(old_path, None)
+            # Register the new path — carry the original source lineage info from old if available
+            original_src = current_lib.get(old_path, source_path)
+            current_lib[dest_path] = original_src
+
+    # Re-walk to carry forward lineage for multi-hop repath chains
+    # (repathed entry's source may itself have been repathed — iterate until stable)
+    # Actually the above loop handles it correctly because we process entries in order:
+    # each "repathed" entry pops the old path and registers the new one, so multi-hop chains
+    # naturally resolve as long as we process in chronological order (which we do).
+
+    # Filter to files that actually exist on disk
+    existing_files: list[Path] = [p for p in current_lib if p.exists()]
+
+    if not existing_files:
+        log.info("repath_nothing_to_move", dest_root=str(dest_root))
+        return
+
+    # --- Build repath plan: (current_path, new_dest, acoustid, length_ms) ---
+    plan_pairs: list[tuple[Path, Path, str, int]] = []
+
+    for current_path in existing_files:
+        ext = current_path.suffix.lower()
+        try:
+            match ext:
+                case ".flac":
+                    file_dict = _read_tags_flac(current_path)
+                case ".mp3":
+                    file_dict = _read_tags_mp3(current_path)
+                case _:  # pragma: no cover — AUDIO_EXTENSIONS may include unsupported types
+                    log.warning("repath_unsupported_format", path=str(current_path), ext=ext)
+                    continue
+        except Exception as exc:  # noqa: BLE001 — tag read failure: log and skip
+            log.warning("repath_tag_read_error", path=str(current_path), error=str(exc))
+            continue
+
+        tags = _tags_from_file_dict(file_dict)
+
+        # Construct minimal stand-in objects for build_dest_path.
+        # build_dest_path reads release.artist_credit only when CWP_COMPOSER_LASTNAMES and
+        # CEA_COMPOSER_LASTNAMES are both absent — an edge case that defaults gracefully to
+        # "Unknown Composer".  track.position is used only as the deepest leaf-nn fallback
+        # (when CWP_MOVT_NUM is absent and global_track_idx=0); zero is acceptable here
+        # because CWP_MOVT_NUM must be present for the repath to produce a meaningful path.
+        stub_release = MBRelease()
+        stub_track = MBTrack()
+
+        new_dest_base = build_dest_path(dest_root, stub_release, stub_track, tags, global_track_idx=0)
+        new_dest = new_dest_base.with_suffix(ext)
+
+        if new_dest == current_path:
+            log.debug("repath_noop", path=str(current_path.relative_to(dest_root)))
+            continue
+
+        acoustid = file_dict.get("ACOUSTID_ID", "")
+        length_str = file_dict.get("LENGTH", "0")
+        try:
+            length_ms = int(length_str) if length_str else 0
+        except ValueError:
+            length_ms = 0
+
+        plan_pairs.append((current_path, new_dest, acoustid, length_ms))
+        log.info(
+            "repath_plan",
+            old=str(current_path.relative_to(dest_root)),
+            new=str(new_dest.relative_to(dest_root)),
+            dry_run=dry_run,
+        )
+
+    if not plan_pairs:
+        log.info("repath_all_current", dest_root=str(dest_root))
+        return
+
+    # --- Collision detection and resolution ---
+    collision_results = _assess_collisions(plan_pairs)
+    confirmed_nonmatches = [r for r in collision_results if r.match is False]
+    if confirmed_nonmatches:
+        # Rewrite destinations for confirmed non-matches using a release-stub suffix.
+        # _apply_collision_suffix expects a list[CopyPlanEntry]; build temporary stubs using
+        # CopyPlanEntry (src_file=current_path, dest_file=new_dest, idx=0).
+        stub_plan = [CopyPlanEntry(idx=0, src_file=src, dest_file=dest) for src, dest, _, _ in plan_pairs]
+        stub_release_for_suffix = MBRelease()
+        _apply_collision_suffix(stub_plan, confirmed_nonmatches, stub_release_for_suffix, dest_root)
+        # Rebuild plan_pairs with updated destinations
+        plan_pairs = [
+            (entry.src_file, entry.dest_file, acust, length) for entry, (_, _, acust, length) in zip(stub_plan, plan_pairs)
+        ]
+        log.warning("repath_collision_suffix_applied", count=len(confirmed_nonmatches))
+
+    if dry_run:
+        for current_path, new_dest, _, _ in plan_pairs:
+            log.info(
+                "repath_dry_run",
+                old=str(current_path.relative_to(dest_root)),
+                new=str(new_dest.relative_to(dest_root)),
+            )
+        return
+
+    # --- Perform moves, verify, journal ---
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    for current_path, new_dest, _, _ in plan_pairs:
+        # a. Capture source SHA-256 and mtime before the move
+        src_hash = _sha256_file(current_path)
+        src_stat = current_path.stat()
+        src_mtime = src_stat.st_mtime
+
+        # b. Ensure parent directory exists; move atomically
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(current_path, new_dest)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            # Cross-filesystem fallback: copy + verify + unlink
+            shutil.copy2(current_path, new_dest)
+            # Verify the copy before unlinking the source
+            cross_hash = _sha256_file(new_dest)
+            if cross_hash != src_hash:
+                new_dest.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"cross-fs copy integrity failure for '{current_path.name}': "
+                    f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {cross_hash[:12]}…"
+                ) from exc
+            os.unlink(current_path)
+
+        # c. Verify destination SHA-256 == source SHA-256
+        dest_hash = _sha256_file(new_dest)
+        if dest_hash != src_hash:
+            raise RuntimeError(
+                f"repath integrity failure for '{new_dest.name}': src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_hash[:12]}…"
+            )
+
+        # d. Reconstruct tags for _verify_copy (tags are unchanged by the move)
+        ext = current_path.suffix.lower()
+        try:
+            match ext:
+                case ".flac":
+                    post_dict = _read_tags_flac(new_dest)
+                case ".mp3":
+                    post_dict = _read_tags_mp3(new_dest)
+                case _:  # pragma: no cover
+                    post_dict = {}
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"repath tag re-read failure for '{new_dest.name}': {exc}") from exc
+        moved_tags = _tags_from_file_dict(post_dict)
+        # _verify_copy checks mtime; for os.replace (same-fs rename) mtime is preserved.
+        # For cross-fs copy2+unlink, shutil.copy2 copies atime/mtime so src_mtime still holds.
+        _verify_copy(current_path, new_dest, moved_tags, None, src_mtime)
+
+        # e. Journal the move and flush before proceeding to the next file
+        entry = TransactionEntry(
+            timestamp=now,
+            release_id="",
+            source=str(current_path),
+            destination=str(new_dest),
+            action="repathed",
+        )
+        write_transaction_log(journal_path, [entry])
+        log.info(
+            "repath_moved",
+            old=str(current_path.relative_to(dest_root)),
+            new=str(new_dest.relative_to(dest_root)),
+        )
+
+        # Clean up now-empty source directories (best-effort; non-empty dirs are skipped)
+        src_dir = current_path.parent
+        while src_dir != dest_root:
+            try:
+                src_dir.rmdir()  # Only succeeds if directory is now empty
+                log.info("repath_removed_empty_dir", dir=str(src_dir.relative_to(dest_root)))
+                src_dir = src_dir.parent
+            except OSError:
+                break
+
+    log.info("repath_complete", dest_root=str(dest_root), moved=len(plan_pairs))
+
+
 # Re-export for __init__.py convenience
 __all__ = [
     "CollisionPolicy",
     "run",
+    "repath",
 ]

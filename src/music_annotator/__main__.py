@@ -1,12 +1,14 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes three subcommands:
+Configures structlog for human-friendly console output and exposes four subcommands:
 
 * ``apply``  — copy and tag a directory of tracks for a known MusicBrainz release MBID.
 * ``search`` — search MusicBrainz for a release matching a source directory, prompt for
   confirmation, then apply tags.
 * ``prune``  — read the journal, verify source and destination file presence, and prompt to
   delete the source directory.
+* ``repath`` — re-path all verified library files to their corrected destinations under
+  the current path-construction policy, using only embedded tags (no network calls).
 
 Usage::
 
@@ -26,6 +28,10 @@ Usage::
     music-annotator prune \\
         <src_dir> <dest_dir> \\
         [-y/--yes]
+
+    music-annotator repath \\
+        <dest_dir> \\
+        [--dry-run]
 """
 
 from __future__ import annotations
@@ -156,7 +162,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Build and return the top-level CLI argument parser with ``apply``, ``search``, and ``prune`` subcommands.
+    """Build and return the top-level CLI argument parser with ``apply``, ``search``, ``prune``, and ``repath`` subcommands.
 
     ``-v``/``--verbose`` is registered on the top-level parser and must appear before the subcommand token.
     ``apply`` takes a single ``src_dir`` positional (one release per invocation, paired with ``--release-id``).
@@ -164,6 +170,7 @@ def _build_parser() -> argparse.ArgumentParser:
     processed in a single invocation.  ``dest_dir`` is always singular — all sources share the same library
     root.  ``apply`` and ``search`` share ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``,
     ``--no-fetch-rels``, and ``--delete`` via :func:`_add_common_args`.  ``prune`` only adds ``-y``/``--yes``.
+    ``repath`` takes only ``dest_dir`` and an optional ``--dry-run`` flag.
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -332,6 +339,43 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip the confirmation prompt and delete the source directory immediately.",
     )
 
+    # ------------------------------------------------------------------
+    # repath subcommand
+    # ------------------------------------------------------------------
+    repath_parser = subparsers.add_parser(
+        "repath",
+        help="Re-path all verified library files to corrected destinations (no network calls).",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            WARNING: A bare 'repath <dest_dir>' invocation MASS-RELOCATES the entire library.
+            The action="repathed" journal entries in music_annotator_journal.json are the
+            complete recovery record.  Use --dry-run first to preview all planned moves.
+
+            repath walks the library at <dest_dir>, reads the journal to identify verified
+            library files (action "tagged" or "repathed"), recomputes each file's destination
+            from its embedded tags alone (no MusicBrainz lookups), and moves files whose
+            current path differs from the recomputed path.
+
+            Use this after a path-policy change (e.g. the L0/L1 leaf-numbering fix) to bring
+            an existing library forward without re-ingesting from source.
+
+            Examples:
+              music-annotator repath /tmp/music_library --dry-run
+              music-annotator repath /tmp/music_library
+            """),
+    )
+    repath_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    repath_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log planned moves without performing any filesystem operations or writing journal entries.",
+    )
+
     return parser
 
 
@@ -413,6 +457,16 @@ def main() -> None:
                     sys.exit(1)
                 except Exception as exc:  # noqa: BLE001
                     log.error("prune_error", src_dir=str(src), error=str(exc), exc_info=True)
+
+        case "repath":
+            try:
+                music_annotator.repath(dest_root=args.dest_dir, dry_run=args.dry_run)
+            except KeyboardInterrupt:
+                log.warning("interrupted")
+                sys.exit(1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("repath_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
+                sys.exit(1)
 
         case _:  # pragma: no cover
             parser.print_help()

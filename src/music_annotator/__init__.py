@@ -144,6 +144,7 @@ from music_annotator._pipeline import (
     _select_medium_with_reason,
     _write_freedb_yaml,
     _write_sidecars,
+    repath,
     run,
 )
 from music_annotator._pipeline_io import (
@@ -238,6 +239,7 @@ __all__ = [
     "_verify_copy",
     "CollisionPolicy",
     "SelectionMethod",
+    "repath",
     "run",
     "parse_disc_info_yaml",
     "parse_disc_title",
