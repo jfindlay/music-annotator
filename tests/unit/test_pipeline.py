@@ -2693,6 +2693,232 @@ class TestRunFullPipeline:
         )
         mock_tag.assert_called_once()
 
+    def test_top_work_groups_span_all_media(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT C-S0: top_work_groups spans all media; copy stays single-medium.
+
+        A 2-medium release where movements of one top work straddle the disc boundary.
+        Disc 1 has 2 tracks (movements I and II); disc 2 has 1 track (movement III).
+        All three movements share the same top work MBID so they form one group.
+        Movement I (disc 1) has recording_date "1981-01-01"; movement III (disc 2) has
+        "1984-12-31".  The unified recording_date_work must span both dates, which is only
+        possible if the aggregation pass fetched disc 2's recording detail.
+
+        Assertions:
+        (a) Both disc-1 tracks receive recording_date_work "1981-01-01/1984-12-31" — the
+            cross-medium unified value.  If the aggregation were single-medium only, the
+            disc-1-only value would be "1981-01-01" (single date, no range).
+        (b) Only the 2 disc-1 files are journalled with action "tagged"; disc 2 is never
+            copied or journalled.
+
+        Single-medium regression: for a 1-medium release, fetch_recording_detail is called
+        exactly once per track (no extra fetches from the all-media aggregation).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        # --- 2-medium release: disc 1 has 2 tracks, disc 2 has 1 track ---
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        # Source directory contains only disc 1's 2 files.
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        top_work_id = "w-symphony"
+        # All three movements share the same top work (w-symphony) via a "parts" backward relation.
+        # Movement I (disc 1, track 1): recording_date "1981-01-01" (single date).
+        # Movement II (disc 1, track 2): recording_date "1982-06-15" (single date).
+        # Movement III (disc 2, track 1): recording_date "1984-12-31" (single date).
+        # The unified span across all three is "1981-01-01/1984-12-31".
+        # If only disc 1 were aggregated, the span would be "1981-01-01/1982-06-15".
+
+        def _make_mvt_work(work_id: str, title: str) -> MBWork:
+            """Build a movement work with a backward 'parts' relation to the top work.
+
+            :param work_id: MBID for this movement work.
+            :param title: Title of the movement.
+            :returns: An :class:`~music_annotator.models.MBWork` instance.
+            """
+            return _w(
+                {
+                    "id": work_id,
+                    "title": title,
+                    "type": "",
+                    "artist-relation-list": [
+                        {
+                            "type": "composer",
+                            "artist": {"id": "a-beethoven", "name": "Beethoven", "sort-name": "Beethoven, Ludwig van"},
+                            "attribute-list": [],
+                        }
+                    ],
+                    "work-relation-list": [
+                        {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Symphony"}},
+                    ],
+                    "attribute-list": [],
+                    "tag-list": [],
+                }
+            )
+
+        work_mvt1 = _make_mvt_work("w-mvt1", "I. Allegro")
+        work_mvt2 = _make_mvt_work("w-mvt2", "II. Andante")
+        work_mvt3 = _make_mvt_work("w-mvt3", "III. Finale")
+        work_root = _w(
+            {
+                "id": top_work_id,
+                "title": "Symphony",
+                "type": "Symphony",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        # Build a 2-medium release: disc 1 has 2 tracks, disc 2 has 1 track.
+        release = _make_multi_disc_release([2, 1])
+
+        # Map recording IDs to their movement works and session dates.
+        # Disc 1: rec-d1-1 → mvt1 (1981-01-01), rec-d1-2 → mvt2 (1982-06-15)
+        # Disc 2: rec-d2-1 → mvt3 (1984-12-31)
+        rec_to_work: dict[str, MBWork] = {
+            "rec-d1-1": work_mvt1,
+            "rec-d1-2": work_mvt2,
+            "rec-d2-1": work_mvt3,
+        }
+        rec_to_date: dict[str, str] = {
+            "rec-d1-1": "1981-01-01",
+            "rec-d1-2": "1982-06-15",
+            "rec-d2-1": "1984-12-31",
+        }
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            """Return a recording with a performance relation to the appropriate movement work.
+
+            :param rec_id: Recording MBID.
+            :returns: An :class:`~music_annotator.models.MBRecording` instance.
+            """
+            work = rec_to_work[rec_id]
+            date = rec_to_date[rec_id]
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": work.title,
+                    "artist-credit": [],
+                    "artist-relation-list": [
+                        {
+                            "type": "conductor",
+                            "direction": "backward",
+                            "begin": date,
+                            "end": "",
+                            "artist": {"id": "a-cond", "name": "Conductor", "sort-name": "Conductor"},
+                        }
+                    ],
+                    "work-relation-list": [{"type": "performance", "work": {"id": work.id, "title": work.title}}],
+                }
+            )
+
+        def _fetch_work(work_id: str) -> MBWork:
+            """Return the work model for the given MBID.
+
+            :param work_id: Work MBID.
+            :returns: An :class:`~music_annotator.models.MBWork` instance.
+            """
+            return {
+                "w-mvt1": work_mvt1,
+                "w-mvt2": work_mvt2,
+                "w-mvt3": work_mvt3,
+                top_work_id: work_root,
+            }[work_id]
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mock_fetch_rec = mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        # (a) Both disc-1 tracks must carry the cross-medium unified recording_date_work.
+        # The unified value spans all three movements including disc 2's "1984-12-31".
+        # If only disc 1 were aggregated, the value would be "1981-01-01/1982-06-15".
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+        assert tags1.recording_date_work == "1981-01-01/1984-12-31", (
+            f"Expected cross-medium unified date '1981-01-01/1984-12-31', got '{tags1.recording_date_work}'. "
+            "This indicates the aggregation pass did not span disc 2."
+        )
+        assert tags2.recording_date_work == "1981-01-01/1984-12-31", (
+            f"Expected cross-medium unified date '1981-01-01/1984-12-31', got '{tags2.recording_date_work}'."
+        )
+
+        # (b) Only disc-1 files are journalled as "tagged"; disc 2 is never copied.
+        # apply_tags_flac must have been called exactly twice (disc 1 only).
+        assert mock_tag.call_count == 2, f"Expected 2 tagging calls (disc 1 only), got {mock_tag.call_count}"
+
+        journal_path = dest / JOURNAL_FILENAME
+        assert journal_path.exists(), "Journal file must exist after a successful run"
+        journal_data = json.loads(journal_path.read_text(encoding="utf-8"))
+        tagged_entries = [e for e in journal_data if e["action"] == "tagged"]
+        assert len(tagged_entries) == 2, f"Expected 2 'tagged' journal entries (disc 1 only), got {len(tagged_entries)}"
+
+        # Verify fetch_recording_detail was called for all 3 tracks (disc 1 + disc 2).
+        assert mock_fetch_rec.call_count == 3, (
+            f"Expected 3 fetch_recording_detail calls (all media), got {mock_fetch_rec.call_count}"
+        )
+
+    def test_top_work_groups_single_medium_regression(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT C-S0 regression: single-medium release fetches exactly one recording per track.
+
+        For a 1-medium release the all-media set equals the selected-medium set, so no extra
+        fetches occur and behaviour is identical to the pre-S0 baseline.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        self._patch_mb(mocker, release)
+        mock_fetch_rec = mocker.patch(
+            "music_annotator._pipeline.fetch_recording_detail",
+            side_effect=lambda rec_id: _rec(
+                {"id": rec_id, "title": "T", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
+            ),
+        )
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        # For a single-medium release, fetch count must equal the track count (no extra fetches).
+        assert mock_fetch_rec.call_count == 2, (
+            f"Expected exactly 2 fetch_recording_detail calls for a 2-track single-medium release, "
+            f"got {mock_fetch_rec.call_count}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # build_cea_performers — first_attr is empty dict (falsy non-string)

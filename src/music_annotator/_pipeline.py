@@ -799,23 +799,24 @@ def run(
 
     1. Initialise the MB user-agent and fetch the release.
     2. Fetch cover art from the Cover Art Archive.
-    3. For each track (paired with a source file by position):
+    3. For every track on every medium of the release (aggregation pass):
 
        a. Fetch the recording's artist and work relationships.
        b. Walk up the work hierarchy to build ``cwp_work_N`` levels.
        c. Build the full :class:`~music_annotator.models.TrackTags` model.
 
-    4. Compute movement numbers and totals grouped by top-work MBID.
-    5. Compute all destination paths and check for collisions with existing files.
-       If any destination files already exist (and ``dry_run`` is ``False``), the ``collision_policy``
-       determines behaviour:
+    4. Compute movement numbers and totals grouped by top-work MBID across all media.
+    5. Compute destination paths and check for collisions for the **selected medium only**
+       (copy-subset).  If any destination files already exist (and ``dry_run`` is ``False``),
+       the ``collision_policy`` determines behaviour:
 
        * :attr:`CollisionPolicy.ASK` — prompt interactively (default).
        * :attr:`CollisionPolicy.OVERWRITE` — replace all conflicting files.
        * :attr:`CollisionPolicy.SKIP` — copy only new files, leave existing files untouched.
        * :attr:`CollisionPolicy.ABORT` — raise :exc:`SystemExit` without copying anything.
 
-    6. Copy each source file to the destination tree, apply tags, and restore source timestamps.
+    6. Copy each source file (selected medium only) to the destination tree, apply tags, and
+       restore source timestamps.
     7. Append a :class:`~music_annotator.models.TransactionEntry` per file to
        ``<dest_root>/music_annotator_journal.json`` (created or updated atomically).
 
@@ -902,21 +903,41 @@ def run(
         raise ValueError(f"release '{release.title}' has no mediums")
 
     medium_pos = selected_medium.position
-    all_track_pairs: list[tuple[MBTrack, int]] = [(t, medium_pos) for t in selected_medium.track_list]
-    log.info("release_tracks", count=len(all_track_pairs), disc=medium_pos)
 
-    if len(src_files) != len(all_track_pairs):
+    # Build all_media_pairs: (MBTrack, medium_pos) for every track on every medium, in
+    # medium-then-track order.  This is the aggregation surface for work-grouping and the three
+    # unification passes; it spans all media of the release so movements of one work that straddle
+    # a disc boundary are grouped correctly.  The global index 0..N_total-1 over this list is the
+    # key for tags_map.
+    all_media_pairs: list[tuple[MBTrack, int]] = [
+        (track, medium.position) for medium in release.medium_list for track in medium.track_list
+    ]
+    log.info("release_tracks_total", count=len(all_media_pairs))
+
+    # Build copy_subset: the list of (global_idx, MBTrack, medium_pos) for the selected medium
+    # only, in track order.  The copy/tag/verify/journal loop operates exclusively on this subset,
+    # preserving the single-medium copy semantics (P3).
+    copy_subset: list[tuple[int, MBTrack, int]] = [
+        (global_idx, track, med_pos) for global_idx, (track, med_pos) in enumerate(all_media_pairs) if med_pos == medium_pos
+    ]
+    log.info("release_tracks", count=len(copy_subset), disc=medium_pos)
+
+    # Track-count mismatch check uses the copy-subset count (selected medium only), not the
+    # all-media count, so the error message and guard remain scoped to the actioned medium.
+    if len(src_files) != len(copy_subset):
         raise RuntimeError(
             f"track count mismatch for release '{release.title}': "
-            f"{len(src_files)} source file(s) but {len(all_track_pairs)} track(s) on disc {medium_pos}"
+            f"{len(src_files)} source file(s) but {len(copy_subset)} track(s) on disc {medium_pos}"
         )
 
     # Duration pre-flight: warn when any source file's duration deviates from the corresponding
     # MB track length by more than 10 s.  Skipped in dry-run mode to preserve non-interactive
     # behaviour.  MB duration data is crowd-sourced and may be inaccurate for specific pressings,
     # so a mismatch is a warning requiring user confirmation rather than a hard error.
+    # The preflight uses copy_subset track pairs (selected medium only).
     if not dry_run:
-        duration_warnings = check_duration_preflight(src_files, all_track_pairs)
+        copy_subset_track_pairs: list[tuple[MBTrack, int]] = [(track, med_pos) for _, track, med_pos in copy_subset]
+        duration_warnings = check_duration_preflight(src_files, copy_subset_track_pairs)
         if duration_warnings:
             if not _prompt_duration_warnings(duration_warnings):
                 raise SystemExit(1)
@@ -936,15 +957,13 @@ def run(
         if not cover.available:
             log.warning("cover_art_not_available", release_id=release_id)
 
-    # Pair each source file with its (MBTrack, medium_pos)
-    file_track_pairs = list(zip(src_files, all_track_pairs))
-
-    # tags_map: index → TrackTags
+    # tags_map: global_idx → TrackTags, keyed over all_media_pairs (all media).
+    # This allows top_work_groups and the three unification passes to span disc boundaries.
     tags_map: dict[int, TrackTags] = {}
 
     if fetch_rels and not dry_run:
         log.info("fetch_recording_rels_start")
-        for idx, (src_file, (track, _medium_pos)) in enumerate(file_track_pairs):
+        for global_idx, (track, _med_pos) in enumerate(all_media_pairs):
             rec_id = track.recording.id
             log.info("fetch_recording", position=track.position, title=track.recording.title)
 
@@ -960,15 +979,17 @@ def run(
                 primary_work = select_primary_performance_work(performance_works)
                 work_hierarchy = build_work_hierarchy(primary_work)
 
-            tags_map[idx] = build_track_tags(release, track, _medium_pos, rec_detail, work_hierarchy)
-            tags_map[idx].acoustid_id = fetch_acoustid_id(rec_id)
+            tags_map[global_idx] = build_track_tags(release, track, _med_pos, rec_detail, work_hierarchy)
+            tags_map[global_idx].acoustid_id = fetch_acoustid_id(rec_id)
 
-        # Compute movement numbers grouped by top work MBID
+        # Compute movement numbers grouped by top work MBID.
+        # Iterates the full tags_map (all media) so movements of one work that straddle a disc
+        # boundary are grouped together — this is the C-S0 contract.
         top_work_groups: dict[str, list[int]] = defaultdict(list)
-        for idx, (_, (track, _medium_pos)) in enumerate(file_track_pairs):
-            t = tags_map[idx]
+        for global_idx in range(len(all_media_pairs)):
+            t = tags_map[global_idx]
             twid = t.cwp_workid_top or t.musicbrainz_workid
-            top_work_groups[twid].append(idx)
+            top_work_groups[twid].append(global_idx)
 
         for _twid, group_idxs in top_work_groups.items():
             total = len(group_idxs)
@@ -982,9 +1003,9 @@ def run(
                 tags_obj.cwp_single_work_album = "1" if single else "0"
 
             # Unify cwp_composer_lastnames / cwp_composers across all movements of this
-            # work on this medium.  When MB credits a completion or arranger as "composer"
-            # with the "additional" attribute on only some movements, those movements have
-            # an empty role_buckets.composers and fall back to additional_composers.
+            # work.  When MB credits a completion or arranger as "composer" with the
+            # "additional" attribute on only some movements, those movements have an empty
+            # role_buckets.composers and fall back to additional_composers.
             # build_track_tags marks this case with cwp_composers_is_fallback="1".  The
             # result is a different CWP_COMPOSER_LASTNAMES — and therefore a different
             # top_dir — than the movements that carry a plain primary-composer relation.
@@ -992,9 +1013,8 @@ def run(
             # (cwp_composers_is_fallback empty) to all movements that used the fallback,
             # so every movement in the group lands in the same top-level directory.
             #
-            # Note: this spans movements on the same medium only.  Cross-medium
-            # unification is not supported (music-annotator operates on a
-            # single-medium workspace).
+            # group_idxs are global indices over all_media_pairs so this pass spans all
+            # media of the release (C-S0 contract).
             _primary_cwp_composers = ""
             _primary_cwp_composers_sort = ""
             _primary_cwp_composer_lastnames = ""
@@ -1019,7 +1039,7 @@ def run(
                         t.cea_composer_lastnames = t.cea_composer_lastnames or _primary_cwp_composer_lastnames
 
             # Compute recording_date_work: the minimum interval spanning all movements of
-            # this work on this medium.  All tracks in the group use this unified value for
+            # this work across all media.  All tracks in the group use this unified value for
             # the destination directory label so movements recorded in different sessions land
             # in the same dir.  The per-track RECORDING_DATE tag is NOT modified — only this
             # path-construction helper is set.
@@ -1067,8 +1087,8 @@ def run(
             # precision only (matching [rel YYYY] output) and fall back to the release group's
             # first-release-date when release.date is absent.
             #
-            # Note: this spans movements on the same medium only.  Cross-medium unification is
-            # not supported (music-annotator operates on a single-medium workspace).
+            # group_idxs are global indices over all_media_pairs so this pass spans all
+            # media of the release (C-S0 contract).
             if not _begins:
                 _rel_year = (release.date[:4] if len(release.date) >= 4 and release.date[:4].isdigit() else "") or (
                     release.release_group.first_release_date[:4]
@@ -1082,9 +1102,11 @@ def run(
                             tags_map[grp_idx].recording_first_release_date = _rel_year
 
     else:
+        # Minimal tags for every track on every medium (uniform map shape regardless of branch).
+        # This ensures tags_map is always keyed 0..N_total-1 over all_media_pairs.
         label_info = release.label_info_list[0] if release.label_info_list else None
-        for idx, (_src_file, (track, _medium_pos)) in enumerate(file_track_pairs):
-            tags_map[idx] = TrackTags(
+        for global_idx, (track, _med_pos) in enumerate(all_media_pairs):
+            tags_map[global_idx] = TrackTags(
                 title=track.recording.title,
                 artist=artist_credit_phrase(track.recording.artist_credit),
                 albumartist=artist_credit_phrase(release.artist_credit),
@@ -1100,17 +1122,23 @@ def run(
                 barcode=release.barcode,
             )
 
-    # Build the full copy plan before touching the filesystem.
+    # Build the copy plan from the copy_subset only (selected medium).
+    # CopyPlanEntry.idx is the GLOBAL index into tags_map so tags_map[entry.idx] resolves
+    # correctly even though the plan only covers the selected medium.
+    # global_track_idx passed to build_dest_path is the 1-based enumeration over the copy
+    # subset (not the all-media global index) to preserve today's per-run unique-filename
+    # behaviour for the actioned medium.
     plan: list[CopyPlanEntry] = []
-    for idx, (src_file, (track, _medium_pos)) in enumerate(file_track_pairs):
-        final_tags = tags_map[idx]
-        # Pass 1-based global track index so build_dest_path can use it as the leaf nn
-        # fallback when CWP_ORDERING_KEY_0 is absent.  This guarantees globally unique,
-        # monotonically increasing filenames for multi-disc works with sparse MB ordering-key data.
-        dest_base = build_dest_path(dest_root, release, track, final_tags, global_track_idx=idx + 1)
+    for copy_subset_pos, (global_idx, track, _med_pos) in enumerate(copy_subset):
+        src_file = src_files[copy_subset_pos]
+        final_tags = tags_map[global_idx]
+        # 1-based position within the copy subset — used as the leaf nn fallback when
+        # CWP_ORDERING_KEY_0 is absent.  Scoped to the copy subset so filenames are
+        # monotonically increasing within the actioned medium regardless of disc position.
+        dest_base = build_dest_path(dest_root, release, track, final_tags, global_track_idx=copy_subset_pos + 1)
         dest_file = dest_base.with_suffix(src_file.suffix.lower())
         log.info("copy_track", src=src_file.name, dest=str(dest_file.relative_to(dest_root)))
-        plan.append(CopyPlanEntry(idx=idx, src_file=src_file, dest_file=dest_file))
+        plan.append(CopyPlanEntry(idx=global_idx, src_file=src_file, dest_file=dest_file))
 
     # Resolve duplicate destination paths that arise when multiple tracks share the same
     # non-zero CWP_ORDERING_KEY_0.  The dedup pass appends ".{global_idx:02d}" to the
