@@ -55,6 +55,36 @@ Scope when reopened (from the census of 36 non-uniform groups in 6 shapes):
 - **Reopen criteria:** when the library is complete (more depth shapes likely), or sooner if a new
   shape appears that the uniform-ceiling rule mishandles.
 
+### Non-uniform-depth census (library scan)
+
+Full scan of `~/Remote/hades/Music/Done/` at the time of the L2 design — **3663 FLACs, 0 MP3, 1006
+work-groups** (a work-group = all tracks of one release sharing a `CWP_WORKID_TOP`).  A group is
+*non-uniform* when its tracks carry differing `CWP_PART_LEVELS`.  **36 groups (3.6%)** were
+non-uniform, in six shapes.  Re-run the scan when L2 reopens to refresh against a more complete
+library: `scripts/scan_nonuniform_depth.py` (depends only on `mutagen`; adjust its `ROOT`).
+
+| Shape | n | What it is | Correct? | L2 treatment |
+|-------|---|------------|----------|--------------|
+| **A** | 20 | Overture/sinfonia/epilogue at PL=1 among PL=2 acts/numbers (Die Meistersinger Vorspiel, Così Ouverture, Nutcracker Ouverture ×3, Verdi Requiem Offertory, Missa solemnis Agnus Dei) | **YES — overture genuinely sits at top of the opera** | **Out of scope — preserve. Must not over-normalise.** |
+| **B** | 9 | Mixed flat/split movements: some movements single-track (PL=1), others split into sub-movements (PL=2) (Mozart Missa c-Moll, Requiem K.626, Verdi Requiem, Mendelssohn *Lobgesang*, four Grumiaux violin sonatas, Divertimento K.287) | Arguably correct | Decide at reopen (likely acceptable as-is) |
+| **C** | 1 | Suite with one multi-part movement (Handel Water Music — Suite 1 movt III has sub-parts IIIa/IIIb → PL=3 among PL=2) | **NO — ragged depth** | **Primary target** |
+| **D** | 2 | Oratorio with multi-part numbers (Bach Matthäus-Passion: 14 PL=3 tracks from lettered recits; Haydn *Schöpfung*: Nr.18/19 → XIXa/b) | **NO — ragged depth** | **Primary target** |
+| **E** | 2 | PL=0 orphan: a movement's MB work has no `part of` link → resolved as standalone top work (Mozart Divertimento K.136 "II. Andante"; Litaniae K.243 "X. Miserere") | **NO — different bug** | **Out of scope → see next item** |
+| **F** | 2 | Highlights disc with depth-mismatched excerpts (Tannhäuser: Overtüre PL=1 vs Bacchanale PL=3; Tristan: Vorspiel PL=2 vs Liebestod PL=3) | Edge case | Defer / decide at reopen |
+
+**Extreme case:** Tannhäuser highlights — depth spread of 2 (PL={1,3}) in a 2-track group; the only
+true spread-≥2 case among non-zero depths.
+
+**The bigger, orthogonal signal — multi-recording-per-bottom-work (16 groups).**  Independently of
+depth, 16 groups had at least one bottom work (`CWP_WORKID_0`) holding >1 recording — the *direct*
+driver of the leaf-collision bug that L0 fixed.  Only **3** of these 16 overlapped the
+non-uniform-depth set (Handel, Così, Die Meistersinger — the last has 12 bottom-works holding >1 rec,
+max 10, the worst leaf-collision in the library).  The other **13 were uniform-depth** (Mahler 9 — 4
+bottom-works ×up to 8 recs; Boccherini *Musica notturna* ×5; Sibelius Symphony 7 ×4; …).  This is why
+L0/L1 (per-group leaf index) was the load-bearing fix — it covers all 16 multi-rec groups regardless
+of depth — and L2 (depth) is the smaller, secondary concern touching only Shapes C/D (3 groups).
+Do not let L2's intricacy inflate its priority.
+
 ## PL=0 orphan tracks — hierarchy-resolution / MB-data-gap defect
 
 Two groups in the census (Mozart Divertimento K.136 "II. Andante"; Litaniae K.243 "X. Miserere")
