@@ -232,6 +232,12 @@ that reintroduces single-medium-only aggregation breaks them.
 
 Source of truth for resuming the chain cold.  `/run-plan` updates this on each successful commit.
 
+**Run bindings (resolved at loop start; reuse on cold resume):** `PLAN = docs/PLAN-multimedium.md`.
+`VERIFY = ~/.local/bin/tox -m analyze` — a single combined gate (build + test + check_type +
+check_format + check_lint + check_upgrade) that satisfies the test-green AND types-clean gates in one
+green run, and additionally enforces 100% branch coverage, pylint 10.00/10, ruff, and pyupgrade.
+Run config: default (self-review-and-continue at ◆; halt only at the four halt classes).
+
 | #  | Status   | Commit | Froze / widened        | Notes |
 |----|----------|--------|------------------------|-------|
 | S0 | done     | 5b41781 | C-S0 (FROZEN)         | Opus sign-off done; Shape A + eager fetch + global-index filter; scoped to ingest |
