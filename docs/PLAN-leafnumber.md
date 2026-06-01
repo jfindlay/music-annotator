@@ -274,7 +274,7 @@ Source of truth for resuming cold.  `/run-plan` updates this on each successful 
 | L1 | done    | c8ee525 | C-L1 **FROZEN** (◆ sub-track A) | RE-SHARDED (additive): widened to touch `_pipeline.py`; added `cwp_inter_index_{i}` substrate (mirror of `cwp_movt_num`), gap-free per-group sibling index; `build_dest_path` consumes it, raw ordering-key = fallback. KAT `test_opera_scene_intermediate_dir_numbered` + pipeline substrate test assert it. One legitimate `# pragma: no cover` arm (unreachable empty-node-order guard) verified by orchestrator. consumes C-L0. tox -m analyze green. |
 | L2 | DEFERRED | —     | — (Opus inflection) | Design *converged* at HALT (uniform-ceiling rule — see Discovery), but user deferred shipping until the library is complete and the full depth-shape distribution is known (maintenance position). Deps for L3/L4 softened to L0,L1. No code. |
 | L3 | done    | b5ef8e8 | — (◆ sub-track B closed) | `_dedup_plan_entries` + call site + comment + docstring ref FULLY REMOVED (not repurposed — repurposing would re-create a second renumbering authority). `defaultdict` import retained (still used by `top_work_groups`). Per-group indices (C-L0/C-L1) are now the SOLE numbering authority; genuine byte-identical dupes still covered by the acoustid-aware `_assess_collisions`/`_apply_collision_suffix` path. KAT `test_no_dd_suffix_on_distinct_titles` added to test_pipeline.py; old `TestDedupPlanEntries` class deleted. Files: `_pipeline.py`, `test_pipeline.py`. tox -m analyze green (1024 passed, 100% cov, pylint 10.00). |
-| L4 | pending | —      | C-L4 (◆ sub-track C; dep L0,L1) | Opus inflection; `repath` mode; user-flagged hard requirement. Re-paths for the L0/L1 leaf+intermediate numbering change (L2 depth change deferred). |
+| L4 | done    | f1ab378 | C-L4 **FROZEN** (◆ sub-track C closed) | Opus inflection — interface designed at HALT (5ad774f), approved, implemented. `repath <dest_dir> [--dry-run]` subcommand: offline (no MB fetch), recomputes dest from embedded tags via `build_dest_path` driven by minimal `MBRelease()`/`MBTrack()` stubs + `_tags_from_file_dict`; atomic `os.replace` move w/ EXDEV copy2+unlink fallback; SHA-equality + `_verify_copy` BEFORE journalling `action="repathed"` (provenance chain preserved verbatim); per-file journal flush; collision via reused `_assess_collisions`/`_apply_collision_suffix`; empty-dir cleanup. `TransactionEntry.action` doc/comment widened (no type change). KAT `test_repath_moves_and_journals_legacy_layout` + 23 supporting tests (dry-run, no-op, collision, EXDEV, MP3, supersession, error skips). Files: `__main__.py`, `_pipeline.py`, `models.py`, `__init__.py`, `test_main.py` (the last two were pre-approved in-unit extensions for the public `repath()` + export; `_pipeline_io.py` not needed). tox -m analyze green (1048 passed, 100% cov, pylint 10.00). |
 | L5 | pending | —      | — (◆ capstone)      | writeup + invariants |
 
 ---
@@ -362,6 +362,22 @@ Append during execution; evaluate at sub-track boundaries.
   user approval despite the run lacking `may-reshard`.  Lesson: *a fix that is clean at the leaf
   because a substrate index already exists is not automatically clean one level up — verify the
   analogous substrate before scoping the sibling session to the same file set.*
+- **DISCOVERY (L4, non-blocking) — `build_dest_path` is offline-drivable from embedded tags.**  L4
+  confirmed `build_dest_path` recomputes a correct destination from the embedded `CWP_*` tags alone
+  using minimal `MBRelease()`/`MBTrack()` stand-ins: `release.artist_credit` is read only when both
+  `CWP_COMPOSER_LASTNAMES` and `CEA_COMPOSER_LASTNAMES` are absent (graceful → "Unknown Composer"),
+  and `track.position` is only the deepest leaf fallback (when `CWP_MOVT_NUM` is absent).  No
+  signature change to the frozen function was needed — `repath` recompute is genuinely offline.
+- **DISCOVERY (L4, non-blocking limitation) — `CWP_INTER_INDEX_{i}` persists to FLAC but not MP3.**
+  `CWP_MOVT_NUM` is a named `TrackTags` field and is in `_MP3_TXXX_MAP`, so it is written to BOTH
+  FLAC and MP3.  `CWP_INTER_INDEX_{i}` lives in `model_extra`; `to_file_dict()` uppercases it and
+  `apply_tags_flac` writes all keys → present on FLAC, but it is NOT in `_MP3_TXXX_MAP` → absent on
+  MP3.  Acceptable: the production library is 100% FLAC (census: 3663 FLAC, 0 MP3), and
+  `build_dest_path` degrades to `CWP_ORDERING_KEY_{i}` (which IS in `_MP3_TXXX_MAP`) when
+  `CWP_INTER_INDEX_{i}` is absent.  So `repath`'s offline recompute reproduces intermediate
+  numbering correctly for all FLAC files; an MP3 library would re-path leaves correctly but could
+  mis-number intermediate dirs.  If MP3 support ever matters for repath, add `CWP_INTER_INDEX_{i}`
+  to `_MP3_TXXX_MAP`.  Does not affect any frozen contract.
 - **RISK (CLOSED at L3) — double numbering authority.**  Until L3 removed the dedup pass, both
   `cwp_movt_num` and `_dedup_plan_entries` could assign leaf numbers.  L3 fully removed
   `_dedup_plan_entries` (commit b5ef8e8), making the per-group index the sole authority.  Verified at
