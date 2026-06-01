@@ -29,6 +29,44 @@ MB via the `/ws/2/discid` endpoint, permanently enriching the database and enabl
 selection for all users.  Requires an authenticated MB session; defer until a login/credential flow
 is designed.
 
+## Hierarchy-depth normalisation (deferred L2 of the leaf-numbering plan)
+
+The leaf/intermediate numbering fix (L0/L1 of the now-complete `PLAN-leafnumber.md`) shipped; the
+**depth-uniformity** half (L2) was designed at an Opus-inflection HALT and then **deferred** — the
+user elected not to ship depth normalisation until the library is complete and the full distribution
+of depth shapes is known (designing from a maintenance position rather than the 36-group census).
+The converged design is preserved as two durable rules in `docs/NOTES.md` ("Tree-to-path rendering:
+two durable rules") — ragged depth has two opposite-routing sources, and the *uniform-ceiling /
+ragged-floor* rule (render each leaf at `min(own tree depth, group modal depth)`: clamp
+over-resolution down, never pad under-resolution up).  When reopened it materialises as an additive
+pipeline pass writing `cwp_render_levels` as model_extra, consumed by `build_dest_path`'s depth
+branch, falling back to raw `cwp_part_levels` when absent.
+
+Scope when reopened (from the census of 36 non-uniform groups in 6 shapes):
+- **Shape A (20 groups) — out of scope, preserve.**  Overture/sinfonia at PL=1 among PL=2 acts is
+  genuinely top-level (ragged *floor*); the rule must not over-normalise it.
+- **Shapes C/D (3 groups: Handel Water Music, Bach Matthäus-Passion, Haydn Schöpfung) — the target.**
+  A movement has MB sub-parts (IIIa/IIIb; lettered recits) nesting deeper than flat siblings; clamp
+  the over-resolution down.
+- **Shape B (9 groups, mixed flat/split movements)** and **Shape F (2 groups, excerpt discs, depth
+  spread {1,3})** — per-shape call deferred to reopen (likely acceptable as-is / near-arbitrary modal).
+- Pinned corner cases: modal ties → shallower depth; PL=0 orphans (Shape E) excluded from the modal
+  computation (see next item).
+- **Reopen criteria:** when the library is complete (more depth shapes likely), or sooner if a new
+  shape appears that the uniform-ceiling rule mishandles.
+
+## PL=0 orphan tracks — hierarchy-resolution / MB-data-gap defect
+
+Two groups in the census (Mozart Divertimento K.136 "II. Andante"; Litaniae K.243 "X. Miserere")
+have a single movement whose MB work record carries **no `part of` relation**, so
+`build_work_hierarchy` (`_works.py`) resolves it as a standalone top work (`CWP_PART_LEVELS=0`,
+`workid_0 == workid_top`).  This is a hierarchy-resolution / MB-data-gap defect, **not** a
+numbering-policy question — it was explicitly scoped out of the leaf-numbering plan's L2 so it would
+not contaminate the depth-rendering policy.  Candidate fixes: a `_works.py` resolution improvement,
+an MB submit-mode correction (add the missing `part of` link upstream), or an editorial allowlist.
+Per the "ragged depth has two sources" rule in `docs/NOTES.md`, the defect should be kept *visible*
+in the path until fixed at the data/resolution layer, never papered over in the renderer.
+
 ## Other unsharded backlog
 
 - Playlist generation for collection/cycle groupings (Ring cycle, symphony cycles, etc.).
