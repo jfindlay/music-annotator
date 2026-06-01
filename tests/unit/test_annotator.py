@@ -2683,6 +2683,160 @@ class TestBuildDestPathLeafSequential:
 
 
 # ---------------------------------------------------------------------------
+# build_dest_path — intermediate sibling numbering (KAT for C-L1)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDestPathIntermediateSiblingIndex:
+    """KAT: intermediate directory nn is gap-free per-group sibling index (C-L1).
+
+    Exercises the CWP_INTER_INDEX_{i} consumption path in build_dest_path and verifies
+    that a non-contiguous ordering-key is overridden by the gap-free substrate index.
+    """
+
+    def _make_rel(self) -> MBRelease:
+        """Build a minimal release.
+
+        :returns: An MBRelease instance.
+        """
+        return _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []})
+
+    def _make_opera_track(
+        self,
+        cwp_movt_num: str,
+        act_part: str,
+        act_workid: str,
+        act_ordering_key: str,
+        act_inter_index: str,
+        scene_part: str = "",
+        scene_workid: str = "",
+        scene_ordering_key: str = "",
+        scene_inter_index: str = "",
+    ) -> TrackTags:
+        """Build TrackTags for a 3-level opera track (leaf → act → opera).
+
+        :param cwp_movt_num: Per-group track index (C-L0 leaf authority).
+        :param act_part: Part title for the act (level 1).
+        :param act_workid: MBID for the act (level 1) — used as node identity by the substrate.
+        :param act_ordering_key: MB ordering-key for the act (may be non-contiguous).
+        :param act_inter_index: Gap-free sibling index for the act (from the C-L1 substrate pass).
+        :param scene_part: Optional part title for level 2 (4-level hierarchy).
+        :param scene_workid: Optional MBID for level 2 (4-level hierarchy).
+        :param scene_ordering_key: Optional ordering-key for level 2.
+        :param scene_inter_index: Optional gap-free sibling index for level 2.
+        :returns: A TrackTags instance with per-level extras set.
+        """
+        part_levels = "3" if scene_part else "2"
+        tags = TrackTags(
+            title="Aria",
+            movementnumber=cwp_movt_num,
+            movementtotal="10",
+            cwp_work_top="Opera",
+            cwp_composer_lastnames="Wagner",
+            originaldate="1983",
+            cwp_part_levels=part_levels,
+            cwp_movt_num=cwp_movt_num,
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        tags.model_extra["cwp_part_0"] = "Aria"  # type: ignore[index]
+        tags.model_extra["cwp_workid_0"] = f"w-aria-{cwp_movt_num}"  # type: ignore[index]
+        tags.model_extra["cwp_part_1"] = act_part  # type: ignore[index]
+        tags.model_extra["cwp_workid_1"] = act_workid  # type: ignore[index]
+        tags.model_extra["cwp_ordering_key_1"] = act_ordering_key  # type: ignore[index]
+        tags.model_extra["cwp_inter_index_1"] = act_inter_index  # type: ignore[index]
+        if scene_part:
+            tags.model_extra["cwp_part_2"] = scene_part  # type: ignore[index]
+            tags.model_extra["cwp_workid_2"] = scene_workid  # type: ignore[index]
+            tags.model_extra["cwp_ordering_key_2"] = scene_ordering_key  # type: ignore[index]
+            tags.model_extra["cwp_inter_index_2"] = scene_inter_index  # type: ignore[index]
+        return tags
+
+    def test_opera_scene_intermediate_dir_numbered(self, fs: FakeFilesystem) -> None:
+        """Intermediate act dirs use gap-free CWP_INTER_INDEX_{i}, not the raw ordering-key.
+
+        KAT for C-L1: Wagner-shaped opera where two acts have non-contiguous ordering-keys
+        (e.g. 2 and 5 — as if MB assigned them with a gap).  The CWP_INTER_INDEX_1 substrate
+        index provides gap-free values (1 and 2), so the rendered act directory prefixes must
+        be ``01`` and ``02``, NOT ``02`` and ``05``.
+
+        Also verifies that within each act the leaf nn comes from CWP_MOVT_NUM (C-L0), not the
+        ordering-key.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        release = self._make_rel()
+        trk = _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "Aria"}})
+
+        # Act I: ordering-key=2 but sibling index=1 (gap-free).
+        tags_act1 = self._make_opera_track(
+            cwp_movt_num="1",
+            act_part="Akt I",
+            act_workid="w-act1",
+            act_ordering_key="2",
+            act_inter_index="1",
+        )
+        # Act II: ordering-key=5 but sibling index=2 (gap-free).
+        tags_act2 = self._make_opera_track(
+            cwp_movt_num="2",
+            act_part="Akt II",
+            act_workid="w-act2",
+            act_ordering_key="5",
+            act_inter_index="2",
+        )
+
+        path_act1 = build_dest_path(dest_root, release, trk, tags_act1)
+        path_act2 = build_dest_path(dest_root, release, trk, tags_act2)
+
+        # Assert: intermediate act prefix is from the gap-free sibling index, not the ordering-key.
+        # With raw ordering-key=2/5 the prefixes would be "02" / "05".
+        # With cwp_inter_index_1=1/2 the prefixes must be "01" / "02".
+        act1_dir = next(p for p in path_act1.parts if "Akt I" in p)
+        act2_dir = next(p for p in path_act2.parts if "Akt II" in p)
+        assert act1_dir.startswith("01"), f"Act I dir should start with '01' (gap-free index=1), got '{act1_dir}'"
+        assert act2_dir.startswith("02"), f"Act II dir should start with '02' (gap-free index=2), got '{act2_dir}'"
+        # Leaf nn is from CWP_MOVT_NUM (C-L0) — not the ordering-key.
+        assert path_act1.name.startswith("01"), f"Act I leaf should start with '01', got '{path_act1.name}'"
+        assert path_act2.name.startswith("02"), f"Act II leaf should start with '02', got '{path_act2.name}'"
+
+    def test_inter_index_absent_falls_back_to_ordering_key(self, fs: FakeFilesystem) -> None:
+        """When CWP_INTER_INDEX_{i} is absent, the ordering-key is used for the intermediate nn.
+
+        This exercises the no-group/no-hierarchy fallback path (escape hatch) introduced by C-L1.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        release = self._make_rel()
+        trk = _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "Aria"}})
+
+        # Construct a track with cwp_ordering_key_1=3 but no cwp_inter_index_1 set.
+        tags = TrackTags(
+            title="Aria",
+            movementnumber="1",
+            movementtotal="5",
+            cwp_work_top="Opera",
+            cwp_composer_lastnames="Verdi",
+            originaldate="1980",
+            cwp_part_levels="2",
+            cwp_movt_num="1",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        tags.model_extra["cwp_part_0"] = "Aria"  # type: ignore[index]
+        tags.model_extra["cwp_part_1"] = "Atto III"  # type: ignore[index]
+        tags.model_extra["cwp_ordering_key_1"] = "3"  # type: ignore[index]
+        # cwp_inter_index_1 is deliberately absent → fallback to ordering-key.
+
+        result = build_dest_path(dest_root, release, trk, tags)
+        act_dir = next(p for p in result.parts if "Atto III" in p)
+        assert act_dir.startswith("03"), f"Fallback to ordering-key=3 expected '03', got '{act_dir}'"
+
+
+# ---------------------------------------------------------------------------
 # MBAlias model
 # ---------------------------------------------------------------------------
 

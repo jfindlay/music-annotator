@@ -2921,6 +2921,392 @@ class TestRunFullPipeline:
 
 
 # ---------------------------------------------------------------------------
+# KAT C-L1 — intermediate sibling index substrate (run() enumeration pass)
+# ---------------------------------------------------------------------------
+
+
+class TestIntermediateSiblingIndexSubstrate:
+    """KAT C-L1: run() assigns gap-free cwp_inter_index_{i} for intermediate hierarchy nodes.
+
+    Exercises the enumeration pass added to _pipeline.py: for each top-work group, for each
+    intermediate level i >= 1, distinct sibling nodes are ranked by ascending
+    cwp_ordering_key_{i}, and the resulting gap-free 1-based index is stored as
+    cwp_inter_index_{i} on every track of that node.
+    """
+
+    def _patch_mb(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API calls and post-copy verification.
+
+        :param mocker: pytest-mock fixture.
+        :param release: MBRelease to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+    def test_inter_index_gap_free_for_non_contiguous_ordering_keys(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """cwp_inter_index_1 is gap-free (1, 2) even when ordering-keys are non-contiguous (2, 5).
+
+        KAT for C-L1 substrate: a 3-track opera release where tracks 1-2 share Act I
+        (ordering-key=2) and track 3 belongs to Act II (ordering-key=5).  The pipeline
+        enumeration pass must assign cwp_inter_index_1="1" to Act I tracks and
+        cwp_inter_index_1="2" to the Act II track.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "03.flac"), contents=_MINIMAL_FLAC)
+
+        opera_id = "w-opera"
+        act1_id = "w-act1"
+        act2_id = "w-act2"
+
+        # Opera (top work) — no composer, no backward parent relation.
+        opera_work = _w(
+            {
+                "id": opera_id,
+                "title": "Die Walküre",
+                "type": "Opera",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        def _make_act(act_id: str, title: str, ordering_key: str) -> MBWork:
+            """Build an act work with a backward parts relation to the opera.
+
+            :param act_id: MBID for this act.
+            :param title: Title of the act.
+            :param ordering_key: MB ordering-key in the parts/backward relation to the opera.
+            :returns: An :class:`~music_annotator.models.MBWork` instance.
+            """
+            return _w(
+                {
+                    "id": act_id,
+                    "title": title,
+                    "type": "",
+                    "artist-relation-list": [],
+                    "work-relation-list": [
+                        {
+                            "type": "parts",
+                            "direction": "backward",
+                            "ordering-key": ordering_key,
+                            "work": {"id": opera_id, "title": "Die Walküre"},
+                        }
+                    ],
+                    "attribute-list": [],
+                    "tag-list": [],
+                }
+            )
+
+        act1_work = _make_act(act1_id, "Akt I", ordering_key="2")
+        act2_work = _make_act(act2_id, "Akt II", ordering_key="5")
+
+        def _make_aria(aria_id: str, act_id: str, act_title: str, ordering_key: str) -> MBWork:
+            """Build an aria work with a backward parts relation to its act.
+
+            :param aria_id: MBID for this aria.
+            :param act_id: MBID of the parent act.
+            :param act_title: Title of the parent act.
+            :param ordering_key: MB ordering-key in the parts/backward relation to the act.
+            :returns: An :class:`~music_annotator.models.MBWork` instance.
+            """
+            return _w(
+                {
+                    "id": aria_id,
+                    "title": f"Aria {aria_id}",
+                    "type": "",
+                    "artist-relation-list": [],
+                    "work-relation-list": [
+                        {
+                            "type": "parts",
+                            "direction": "backward",
+                            "ordering-key": ordering_key,
+                            "work": {"id": act_id, "title": act_title},
+                        }
+                    ],
+                    "attribute-list": [],
+                    "tag-list": [],
+                }
+            )
+
+        # Two arias in Act I (ordering-keys 1 and 2 within the act) and one aria in Act II.
+        aria1 = _make_aria("w-aria1", act1_id, "Akt I", ordering_key="1")
+        aria2 = _make_aria("w-aria2", act1_id, "Akt I", ordering_key="2")
+        aria3 = _make_aria("w-aria3", act2_id, "Akt II", ordering_key="1")
+
+        # 3-track single-disc release.
+        release = _make_release(n_tracks=3)
+
+        # Map recording IDs to aria works.
+        rec_to_aria: dict[str, MBWork] = {
+            "rec-1": aria1,
+            "rec-2": aria2,
+            "rec-3": aria3,
+        }
+        # Map work IDs to full work objects (for fetch_work_detail).
+        work_registry: dict[str, MBWork] = {
+            "w-aria1": aria1,
+            "w-aria2": aria2,
+            "w-aria3": aria3,
+            act1_id: act1_work,
+            act2_id: act2_work,
+            opera_id: opera_work,
+        }
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            """Return a recording with a performance relation to the appropriate aria work.
+
+            :param rec_id: Recording MBID.
+            :returns: An :class:`~music_annotator.models.MBRecording` instance.
+            """
+            aria = rec_to_aria[rec_id]
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": aria.title,
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [{"type": "performance", "work": {"id": aria.id, "title": aria.title}}],
+                }
+            )
+
+        def _fetch_work(work_id: str) -> MBWork:
+            """Return the work model for the given MBID.
+
+            :param work_id: Work MBID.
+            :returns: An :class:`~music_annotator.models.MBWork` instance.
+            """
+            return work_registry[work_id]
+
+        self._patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        assert mock_tag.call_count == 3
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+        tags3: TrackTags = mock_tag.call_args_list[2][0][1]
+
+        # Tracks 1 and 2 belong to Act I (ordering-key=2 → sibling index=1 gap-free).
+        # Track 3 belongs to Act II (ordering-key=5 → sibling index=2 gap-free).
+        extras1 = tags1.model_extra or {}
+        extras2 = tags2.model_extra or {}
+        extras3 = tags3.model_extra or {}
+        assert extras1.get("cwp_inter_index_1") == "1", (
+            f"Track 1 (Act I) expected cwp_inter_index_1='1', got {extras1.get('cwp_inter_index_1')!r}. "
+            "Non-contiguous ordering-key=2 must not propagate to the gap-free sibling index."
+        )
+        assert extras2.get("cwp_inter_index_1") == "1", (
+            f"Track 2 (Act I) expected cwp_inter_index_1='1', got {extras2.get('cwp_inter_index_1')!r}"
+        )
+        assert extras3.get("cwp_inter_index_1") == "2", (
+            f"Track 3 (Act II) expected cwp_inter_index_1='2', got {extras3.get('cwp_inter_index_1')!r}. "
+            "Non-contiguous ordering-key=5 must map to gap-free index=2 (not 5)."
+        )
+
+    def test_inter_index_skips_tracks_without_intermediate_level(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Tracks lacking cwp_workid_{i} in their extras are skipped during enumeration.
+
+        Exercises the empty-node-id guards in the intermediate sibling index pass:
+        - collection loop: ``if not node_id: continue`` (no cwp_workid_i present on this track)
+        - write-back loop: ``if node_id:`` False branch (track has no intermediate at level i)
+
+        Scenario: a 2-track group in the same top-work (opera) where track 1 is a 3-level
+        (aria→act→opera, cwp_workid_0/1/2 all set) and track 2 is a 2-level (movement→opera,
+        cwp_workid_0/1 set, no cwp_workid_2).  When the enumeration pass processes level 2
+        (because max_inter_level=2 from track 1), track 2 produces an empty node_id at level 2
+        → it is correctly skipped in both loops.  Track 2 gets cwp_inter_index_1 (level 1, both
+        tracks have cwp_workid_1) but must NOT get cwp_inter_index_2 (only track 1 has
+        cwp_workid_2).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        opera_id = "w-opera-mixed"
+        act1_id = "w-act1-mixed"
+
+        opera_work = _w(
+            {
+                "id": opera_id,
+                "title": "Mixed Opera",
+                "type": "Opera",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        act1_work = _w(
+            {
+                "id": act1_id,
+                "title": "Akt I",
+                "type": "",
+                "artist-relation-list": [],
+                "work-relation-list": [
+                    {
+                        "type": "parts",
+                        "direction": "backward",
+                        "ordering-key": "1",
+                        "work": {"id": opera_id, "title": "Mixed Opera"},
+                    }
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        # Track 1: 3-level — aria → Akt I → opera
+        aria1 = _w(
+            {
+                "id": "w-aria1-mixed",
+                "title": "Aria 1",
+                "type": "",
+                "artist-relation-list": [],
+                "work-relation-list": [
+                    {
+                        "type": "parts",
+                        "direction": "backward",
+                        "ordering-key": "1",
+                        "work": {"id": act1_id, "title": "Akt I"},
+                    }
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        # Track 2: 2-level — directly under the opera (no intermediate act).
+        # A direct backward-parts link to the opera gives part_levels=1.
+        direct_mvt = _w(
+            {
+                "id": "w-direct-mixed",
+                "title": "Direct Movement",
+                "type": "",
+                "artist-relation-list": [],
+                "work-relation-list": [
+                    {
+                        "type": "parts",
+                        "direction": "backward",
+                        "ordering-key": "2",
+                        "work": {"id": opera_id, "title": "Mixed Opera"},
+                    }
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        release = _make_release(n_tracks=2)
+
+        rec_to_aria: dict[str, MBWork] = {
+            "rec-1": aria1,
+            "rec-2": direct_mvt,
+        }
+        work_registry: dict[str, MBWork] = {
+            "w-aria1-mixed": aria1,
+            "w-direct-mixed": direct_mvt,
+            act1_id: act1_work,
+            opera_id: opera_work,
+        }
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            """Return a recording with a performance relation to the appropriate work.
+
+            :param rec_id: Recording MBID.
+            :returns: An :class:`~music_annotator.models.MBRecording` instance.
+            """
+            work = rec_to_aria[rec_id]
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": work.title,
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [{"type": "performance", "work": {"id": work.id, "title": work.title}}],
+                }
+            )
+
+        def _fetch_work(work_id: str) -> MBWork:
+            """Return the work model for the given MBID.
+
+            :param work_id: Work MBID.
+            :returns: An :class:`~music_annotator.models.MBWork` instance.
+            """
+            return work_registry[work_id]
+
+        self._patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        assert mock_tag.call_count == 2
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+
+        extras1 = tags1.model_extra or {}
+        extras2 = tags2.model_extra or {}
+
+        # Track 1 (3-level: aria→Akt I→opera) has cwp_workid_0/1/2 set.
+        # max_inter_level=2; the enumeration processes i=1 and i=2.
+        # At i=1: track 1's node_id = act1_id (Akt I); gets cwp_inter_index_1="1".
+        assert extras1.get("cwp_inter_index_1") == "1", (
+            f"Track 1 (3-level via Akt I) expected cwp_inter_index_1='1', got {extras1.get('cwp_inter_index_1')!r}"
+        )
+        # At i=2: track 1's node_id = opera_id; gets cwp_inter_index_2="1".
+        assert extras1.get("cwp_inter_index_2") == "1", (
+            f"Track 1 (3-level) expected cwp_inter_index_2='1', got {extras1.get('cwp_inter_index_2')!r}"
+        )
+
+        # Track 2 (2-level: movement→opera) has cwp_workid_0/1 set but NO cwp_workid_2.
+        # At i=1: track 2's cwp_workid_1 = opera_id → non-empty node_id → gets cwp_inter_index_1.
+        assert "cwp_inter_index_1" in extras2, "Track 2 (2-level) must receive cwp_inter_index_1 (its cwp_workid_1 is opera_id)"
+        # At i=2: track 2 has NO cwp_workid_2 → empty node_id → the 'if not node_id: continue'
+        # guard fires in the collection loop; the 'if node_id:' False branch fires in the
+        # write-back loop.  Track 2 must NOT receive cwp_inter_index_2.
+        assert "cwp_inter_index_2" not in extras2, (
+            f"Track 2 (2-level, no cwp_workid_2) must not receive cwp_inter_index_2, "
+            f"but got {extras2.get('cwp_inter_index_2')!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # build_cea_performers — first_attr is empty dict (falsy non-string)
 # ---------------------------------------------------------------------------
 

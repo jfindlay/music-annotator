@@ -1059,7 +1059,10 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
         for i in range(part_levels - 1, 0, -1):
             # Levels are stored innermost-first (index 0 = leaf), so level i is the i-th ancestor.
             part_title = file_dict.get(f"CWP_PART_{i}", "") or file_dict.get(f"CWP_WORK_{i}", "")
-            ok_str = file_dict.get(f"CWP_ORDERING_KEY_{i}", "0")
+            # Intermediate nn = per-group sibling index (C-L1), gap-free, mirroring the leaf's
+            # cwp_movt_num authority; raw ordering-key is the fallback only (no-group/no-hierarchy).
+            inter_idx = file_dict.get(f"CWP_INTER_INDEX_{i}", "")
+            ok_str = inter_idx if inter_idx else file_dict.get(f"CWP_ORDERING_KEY_{i}", "0")
             nn = _nn(ok_str, i)
             intermediate.append(safe_name(f"{nn} - {part_title}") if part_title else nn)
 

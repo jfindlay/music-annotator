@@ -1002,6 +1002,72 @@ def run(
                 tags_obj.cwp_movt_tot = str(total)
                 tags_obj.cwp_single_work_album = "1" if single else "0"
 
+            # Enumerate intermediate sibling nodes at each hierarchy level i >= 1
+            # (C-L1 contract).  This mirrors the leaf cwp_movt_num pass above but ranks
+            # distinct sibling NODES (identified by cwp_workid_{i}) rather than tracks.
+            # Siblings are nodes that share the same parent (cwp_workid_{i+1}).
+            # Within each parent, nodes are ranked by ascending integer cwp_ordering_key_{i}
+            # (non-digit values map to 0; ties broken by first-appearance order across
+            # group_idxs).  The resulting gap-free, 1-based index is written to every track
+            # belonging to that node as model_extra cwp_inter_index_{i}.
+            # build_dest_path consumes CWP_INTER_INDEX_{i} for the intermediate directory
+            # nn prefix, falling back to the raw ordering-key only when the index is absent
+            # (no-group / no-hierarchy escape hatch).
+            #
+            # Collect the maximum intermediate level present in this group.
+            max_inter_level = 0
+            for grp_idx in group_idxs:
+                extras = tags_map[grp_idx].model_extra or {}
+                i = 1
+                while f"cwp_workid_{i}" in extras:
+                    max_inter_level = max(max_inter_level, i)
+                    i += 1
+
+            for i in range(1, max_inter_level + 1):
+                # Collect distinct node ids at level i with their ordering-key and first
+                # appearance order (for stable tie-breaking when ordering-keys collide).
+                # node_id → (ordering_key_int, first_appearance_order)
+                node_order: dict[str, tuple[int, int]] = {}
+                # node_id → parent_id (cwp_workid_{i+1}, or "" when no parent level exists)
+                node_parent: dict[str, str] = {}
+                for appear_idx, grp_idx in enumerate(group_idxs):
+                    extras = tags_map[grp_idx].model_extra or {}
+                    node_id = extras.get(f"cwp_workid_{i}", "")
+                    if not node_id:
+                        continue
+                    if node_id not in node_order:
+                        ok_str = extras.get(f"cwp_ordering_key_{i}", "0")
+                        ok_int = int(ok_str) if ok_str.isdigit() else 0
+                        node_order[node_id] = (ok_int, appear_idx)
+                        parent_id = extras.get(f"cwp_workid_{i + 1}", "")
+                        node_parent[node_id] = parent_id
+
+                if not node_order:  # pragma: no cover — guard for empty-workid data anomaly
+                    continue
+
+                # Group sibling node ids by parent; rank within each parent.
+                # parents_nodes: parent_id → list of (ordering_key_int, appear_idx, node_id)
+                parents_nodes: dict[str, list[tuple[int, int, str]]] = {}
+                for node_id, (ok_int, appear_idx) in node_order.items():
+                    parent_id = node_parent[node_id]
+                    parents_nodes.setdefault(parent_id, []).append((ok_int, appear_idx, node_id))
+
+                # Assign gap-free 1-based sibling index within each parent.
+                node_sibling_index: dict[str, str] = {}
+                for siblings in parents_nodes.values():
+                    siblings.sort()  # ascending (ok_int, appear_idx) — stable tie-break
+                    for rank, (_, _, node_id) in enumerate(siblings, start=1):
+                        node_sibling_index[node_id] = str(rank)
+
+                # Write the index back to every track belonging to each node.
+                # Any non-empty node_id here was necessarily collected in node_order above, so
+                # node_id in node_sibling_index is always true — just check node_id is non-empty.
+                for grp_idx in group_idxs:
+                    extras = tags_map[grp_idx].model_extra or {}
+                    node_id = extras.get(f"cwp_workid_{i}", "")
+                    if node_id:
+                        extras[f"cwp_inter_index_{i}"] = node_sibling_index[node_id]
+
             # Unify cwp_composer_lastnames / cwp_composers across all movements of this
             # work.  When MB credits a completion or arranger as "composer" with the
             # "additional" attribute on only some movements, those movements have an empty
