@@ -34,6 +34,12 @@ is designed.
 - Playlist generation for collection/cycle groupings (Ring cycle, symphony cycles, etc.).
 - Audit CE-derived tags: every field populated or explicitly `""`.
 - Add cover art type: sleeve front/back.
+- When an MBID does not have DiscIDs and comprises multiple media, music-annotator usually selects
+  the wrong medium.  Can this be improved?
+- This should have already been fixed?
+  ```
+  acoustid_lookup_failed [music_annotator._mb_api] attempt=0 error='The read operation timed out' recording_mbid=93200fdb-9f20-4eb0-8cc1-0aed9d97508c wait_s=1
+  ```
 
 ---
 
