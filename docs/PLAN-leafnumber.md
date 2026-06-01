@@ -69,18 +69,20 @@ sub-track.  `Dep` lists prerequisite sessions.  Table intentionally wider than 1
 |----|----------------------------------------------------------------|-----|---|----------|----------------------------------------------------------------------|-----|
 | L0 | Leaf `nn` from per-group track index, not ordering-key         | A   | O | —        | `_tags.py`, `tests/unit/test_annotator.py`                          | `test_split_movement_leaf_sequential` |
 | L1 | Uniform intermediate-dir numbering from per-group sub-index ◆  | B   | S | L0       | `_pipeline.py`, `_tags.py`, `tests/unit/test_annotator.py`, `tests/unit/test_pipeline.py` | `test_opera_scene_intermediate_dir_numbered` |
-| L2 | Normalise hierarchy depth within a work-group                  | B   | O | L0       | `_tags.py`, `tests/unit/test_annotator.py`                          | `test_mixed_depth_suite_renders_uniform` |
-| L3 | Retire dead `_dedup_plan_entries` + `.dd` machinery ◆         | B   | S | L0,L1,L2 | `_pipeline.py`, `tests/unit/test_pipeline.py`                       | `test_no_dd_suffix_on_distinct_titles` |
-| L4 | `repath` maintenance mode: re-path annotated works             | C   | O | L0,L1,L2 | `__main__.py`, `_pipeline_io.py`, `models.py`, `tests/unit/test_main.py` | `test_repath_moves_and_journals_legacy_layout` |
+| L2 | Normalise hierarchy depth within a work-group **(DEFERRED)**   | B   | O | L0       | `_tags.py`, `tests/unit/test_annotator.py`                          | `test_mixed_depth_suite_renders_uniform` |
+| L3 | Retire dead `_dedup_plan_entries` + `.dd` machinery ◆         | B   | S | L0,L1    | `_pipeline.py`, `tests/unit/test_pipeline.py`                       | `test_no_dd_suffix_on_distinct_titles` |
+| L4 | `repath` maintenance mode: re-path annotated works             | C   | O | L0,L1    | `__main__.py`, `_pipeline_io.py`, `models.py`, `tests/unit/test_main.py` | `test_repath_moves_and_journals_legacy_layout` |
 | L5 | Integrative writeup + invariants ◆                             | X   | S | L1,L3,L4 | `docs/NOTES.md`, `README.md`                                         | — (prose) |
 
 ### Sub-track boundaries
 
 - **◆ Sub-track A — leaf & intermediate numbering** ends at L1.  Ships: every leaf and intermediate
   directory numbered by its position within the unified work-group, gap-free and playback-ordered.
-- **◆ Sub-track B — depth uniformity + dead-code removal** ends at L3.  Ships: one work renders at one
-  depth for all siblings; the now-unreachable dedup pass is removed (or repurposed) so the path code
-  has a single numbering authority.
+- **◆ Sub-track B — dead-code removal** ends at L3.  Ships: the now-unreachable dedup pass is removed
+  (or repurposed) so the path code has a single numbering authority.  **L2 (depth uniformity) is
+  DEFERRED** (see the L2 note and the "L2 deferred" Discovery) — sub-track B no longer carries it.
+  L3 depends only on L0/L1 (leaf numbering no longer routes through dedup once L0/L1 land; depth
+  normalisation is not a precondition for retiring dedup).
 - **◆ Sub-track C — retroactive maintenance** is L4 (single session, but Opus-designed because the
   move/journal/verify provenance is delicate).  Ships: a mode that re-paths already-annotated works
   to the new policy.  **L4 is the user-flagged hard requirement** — the fix is incomplete until the
@@ -116,8 +118,16 @@ sub-track.  `Dep` lists prerequisite sessions.  Table intentionally wider than 1
   intermediate level: the `nn` for an intermediate dir must be that node's position among its
   siblings within the parent, gap-free.  KAT: Wagner-shaped 3-level opera — assert `02 - Akt I`,
   `03 - Akt II`, … and within an act the scene dirs number `01, 02, …`.
-- **L2 (Opus inflection — design inline, then HALT).**  Decide and implement the depth-rendering
-  policy for work-groups whose tracks carry non-uniform `CWP_PART_LEVELS`.  **A library census now
+- **L2 — DEFERRED (decision at the 2026-06-01 HALT; do not implement yet).**  At the L2 Opus-inflection
+  HALT the policy was *designed* (see the "L2 deferred — converged design" Discovery for the resolved
+  rule) but the user elected **not to ship any depth-normalisation now**.  Rationale: the design choice
+  between uniform-ceiling and any alternative is better made from a *maintenance position* once the
+  library is complete and the full distribution of depth shapes is known, rather than from the current
+  36-group census.  L2 is therefore parked; L3 and L4 proceed on `L0,L1` alone (depth normalisation is
+  not their precondition).  The analysis below is retained verbatim as the inheritance for whoever
+  resumes L2 — **read it together with the converged design in the Discovery before reopening.**
+- **L2 (original brief — Opus inflection — design inline, then HALT).**  Decide and implement the
+  depth-rendering policy for work-groups whose tracks carry non-uniform `CWP_PART_LEVELS`.  **A library census now
   exists (see "Non-uniform-depth census" appendix) — it changes the framing materially: "non-uniform
   depth" is SIX distinct shapes, and the dominant one is NOT a bug.**  The policy must discriminate by
   shape, not blanket-normalise:
@@ -146,7 +156,7 @@ sub-track.  `Dep` lists prerequisite sessions.  Table intentionally wider than 1
   KAT: Handel-shaped suite (Shape C) renders uniform-depth with contiguous numbering and no gap where
   the nested movement was; **plus a Shape-A regression KAT** asserting the Wagner/Mozart overture
   stays at the top level and arias stay nested (the policy did not over-normalise).
-- **L3.**  With L0-L2 in place, `_dedup_plan_entries` (`_pipeline.py:655-697`, called at `:1147`) can
+- **L3.**  With L0-L1 in place (L2 deferred), `_dedup_plan_entries` (`_pipeline.py:655-697`, called at `:1147`) can
   no longer fire on legitimate split-works (distinct titles → distinct paths) and the `.dd` machinery
   is dead.  Remove it, or repurpose it strictly as a last-resort guard for *genuinely* byte-identical
   destinations (true duplicate recordings).  Keep the numbering authority single — do not leave two
@@ -235,9 +245,9 @@ Source of truth for resuming cold.  `/run-plan` updates this on each successful 
 |----|---------|--------|---------------------|-------|
 | L0 | done    | 011490a | C-L0 **FROZEN** | Leaf = `CWP_MOVT_NUM` (existing field reused, no model change); `CWP_ORDERING_KEY_0` dropped from leaf; permanent authority. KAT `test_split_movement_leaf_sequential` (collision + Bach-Mass regression) asserts it. Site-comment obligation met at both leaf sites. Files: `_tags.py`, `test_annotator.py`. tox -m analyze green. |
 | L1 | done    | c8ee525 | C-L1 **FROZEN** (◆ sub-track A) | RE-SHARDED (additive): widened to touch `_pipeline.py`; added `cwp_inter_index_{i}` substrate (mirror of `cwp_movt_num`), gap-free per-group sibling index; `build_dest_path` consumes it, raw ordering-key = fallback. KAT `test_opera_scene_intermediate_dir_numbered` + pipeline substrate test assert it. One legitimate `# pragma: no cover` arm (unreachable empty-node-order guard) verified by orchestrator. consumes C-L0. tox -m analyze green. |
-| L2 | pending | —      | — (Opus inflection) | shape-discriminating depth policy (census done: Shape A is correct & untouched; C/D are the target); decided at HALT |
-| L3 | pending | —      | — (◆ sub-track B)   | remove/repurpose dead dedup; single numbering authority |
-| L4 | pending | —      | C-L4 (◆ sub-track C) | Opus inflection; `repath` mode; user-flagged hard requirement |
+| L2 | DEFERRED | —     | — (Opus inflection) | Design *converged* at HALT (uniform-ceiling rule — see Discovery), but user deferred shipping until the library is complete and the full depth-shape distribution is known (maintenance position). Deps for L3/L4 softened to L0,L1. No code. |
+| L3 | pending | —      | — (◆ sub-track B; dep L0,L1) | remove/repurpose dead dedup; single numbering authority. Depth normalisation (L2) is NOT a precondition. |
+| L4 | pending | —      | C-L4 (◆ sub-track C; dep L0,L1) | Opus inflection; `repath` mode; user-flagged hard requirement. Re-paths for the L0/L1 leaf+intermediate numbering change (L2 depth change deferred). |
 | L5 | pending | —      | — (◆ capstone)      | writeup + invariants |
 
 ---
@@ -253,6 +263,43 @@ Append during execution; evaluate at sub-track boundaries.
   (Mahler 9), opera (Wagner Meistersinger, Mozart Così), suite-with-nested-movement (Handel Water
   Music), and the clean multi-disc Bach Mass.  Tags read directly from disk; see NOTES.  No further
   ingest phenomenology is needed to design L0/L1/L3.
+- **L2 DEFERRED — converged design (record for the future maintenance-position session).**  At the L2
+  Opus-inflection HALT the depth-normalisation policy was designed to completion, then the user elected
+  to **defer shipping** until the library is complete and the full depth-shape distribution is known
+  (designing from a maintenance position, not from the 36-group census).  The converged design, kept
+  here so a future session inherits it rather than re-deriving:
+  - **Data-quality vs work-structure (the framing question).**  Ragged depth has two distinct sources
+    demanding *opposite* treatments.  (i) A *data-quality gap* — Shape E's PL=0 orphan, where an MB
+    work is *missing* a `part of` link — should be fixed *upstream* (`_works.py` / submit-mode) and
+    kept *visible* in the path until then.  (ii) *Faithful non-uniform granularity* — Shapes C/D, where
+    MB correctly models some movements more finely (IIIa/IIIb; lettered recits) — is NOT a defect; the
+    *renderer* is the right layer to *down-project* it.  Conflating the two sends the fix to the wrong
+    layer.  (CAPTURE-CANDIDATE.)
+  - **The universal rule (uniform-ceiling, ragged-floor).**  Strict uniform depth is unachievable
+    without inventing phantom directories or destroying real act structure.  The achievable *universal,
+    simple* rule — covering 1-level lieder through the Ring Cycle and arbitrarily-deep contemporary
+    works — is: **a track renders at `min(its own MB depth, the work-group's modal MB depth)`.**  Every
+    track is a leaf at its render depth; structure *below* the render depth collapses into the leaf
+    (disambiguated by TITLE + the gap-free per-group `cwp_movt_num` from C-L0); structure *at or above*
+    renders as nested dirs numbered so depth-first traversal sorts to play order.  This clamps
+    over-resolved tracks *down* (removing structure = faithful) but never pads shallow tracks *up*
+    (inventing structure = unfaithful) — hence it preserves Shape A's genuinely-top-level overture
+    (ragged *floor*, accepted) while removing Shapes C/D's over-resolution (ragged *ceiling*, fixed).
+    (CAPTURE-CANDIDATE: *clamp-down and pad-up are not symmetric; removing over-resolution is faithful,
+    padding under-resolution invents structure.*)
+  - **Pinned corner cases (no real-data precedent — by fiat):** modal ties → shallower depth (favours
+    handle-simplicity); PL=0 orphans (Shape E) are EXCLUDED from the modal computation and never
+    clamped, so a real `_works.py` orphan bug stays visible and does not drag the modal to 0.
+  - **Materialization:** an additive pipeline pass (mirroring C-L0/C-L1) writes `cwp_render_levels =
+    min(own_part_levels, group_modal)` as model_extra; `build_dest_path` reads it for the depth branch
+    (`_tags.py:1032`), falling back to raw `cwp_part_levels` when absent (no-group escape hatch).  No
+    frozen contract altered; the L1 `cwp_inter_index_{i}` numbering is UNAFFECTED — the depth-first
+    lexical-sort invariant holds under sibling-index numbering, so C-L1 stays frozen.  Leaf labels are
+    NOT folded (the IIIa/IIIb MB sub-part label stays in `CWP_PART_0`, not the path).
+  - **Reopen criteria:** revisit when the library is complete (more depth shapes likely), or sooner if
+    a new shape appears that the uniform-ceiling rule mishandles.  Shape F (excerpt discs, 2 groups,
+    depth spread {1,3}) was deferred at the same HALT — modal is near-arbitrary on a 2-track group;
+    decide its handling when L2 reopens.
 - **RESOLVED scope, OPEN policy — L2 depth (census complete; see appendix).**  A full library scan
   (3663 files, 1006 work-groups) found **36 non-uniform-depth groups in 6 shapes**.  The census
   reframed L2: the dominant Shape A (20 groups, overture-at-PL=1) is **correct and out of scope**;

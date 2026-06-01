@@ -115,6 +115,35 @@ Before designing a fix from output, verify the *current* code reproduces the art
 the three originally-diagnosed symptoms were already fixed by a prior commit, and re-diagnosing them
 would have wasted a fix session on dead code.
 
+## Tree-to-path rendering: two durable rules (from the deferred L2 depth design)
+
+The L2 hierarchy-depth-normalisation design (converged at the 2026 Opus-inflection HALT, then deferred
+to a maintenance position — see `docs/PLAN-leafnumber.md`) produced two findings that outlive this
+codebase.  Both concern projecting a work's MB *work-tree* onto a filesystem *path*.
+
+**Rule 1 — ragged depth has two sources demanding opposite fixes.**  When sibling movements of one
+work render at different directory depths, the cause is one of two things, and they route to different
+layers:
+- A **data-quality gap** — an MB work is *missing* structure it should have (e.g. a movement whose
+  work record has no `part of` link, so it resolves as a standalone top work).  Fix this *upstream*
+  (`_works.py` resolution / MB submit-mode) and keep the defect *visible* in the path until then.
+- **Faithful non-uniform granularity** — MB *correctly* models some movements more finely than others
+  (Handel's IIIa/IIIb; Bach's lettered recits).  This is not a defect; the *renderer* is the right
+  layer to *down-project* it onto a uniform path.
+Conflating the two sends the fix to the wrong layer — you either bury a real data bug inside a
+rendering heuristic, or you "fix" correct data in the renderer when it should have been left visible.
+
+**Rule 2 — clamp-down and pad-up are not symmetric.**  Strict uniform path-depth is unachievable
+without inventing phantom directories or destroying real structure.  The achievable universal rule is
+*uniform-ceiling, ragged-floor*: render each leaf at ``min(its own tree depth, the group's modal tree
+depth)``.  This **clamps over-resolved branches down** (removing structure the path doesn't need —
+faithful) but **never pads shallow branches up** (which would invent structure that isn't there —
+unfaithful).  The asymmetry is the whole point: a genuinely-top-level node (an opera overture that is
+not "part of" any act) *should* sit shallower than its siblings — that raggedness is real and must be
+preserved; only the over-resolution (sub-parts deeper than the typical movement) is collapsed.  The
+naive goal "make every sibling the same depth" is wrong because it treats the two directions as
+interchangeable when one is faithful and the other fabricates.
+
 ## Classical Extras as editorial anchor
 
 Every editorial decision on attribution, annotation, and path construction must refract
