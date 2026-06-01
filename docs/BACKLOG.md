@@ -97,6 +97,28 @@ an MB submit-mode correction (add the missing `part of` link upstream), or an ed
 Per the "ragged depth has two sources" rule in `docs/NOTES.md`, the defect should be kept *visible*
 in the path until fixed at the data/resolution layer, never papered over in the renderer.
 
+## Destructive maintenance commands — confirmation-prompt consistency
+
+The library-mutating maintenance commands are **inconsistent about interactive confirmation**, and
+the most destructive one is the least guarded:
+
+- `prune` (deletes source directories) and `apply --delete` both confirm via
+  `TerminalDiscoverUI.confirm_delete` (a `y/n` prompt), with `-y/--yes` to skip.
+- `regroup` (added in `PLAN-multimedium.md` S8) follows the same careful posture: it prompts before
+  moving files, with `-y/--yes` to skip and `--dry-run` to preview.
+- **`repath` is the outlier:** a bare `repath <dest>` **mass-relocates the entire library** with no
+  interactive prompt — its only safety is `--dry-run`.  The journal (`action="repathed"`) is the
+  recovery record, but there is no pre-flight confirmation.
+
+The asymmetry is a latent foot-gun: the command with the largest blast radius (whole-library
+relocation) asks for the least confirmation.  The fix is small — give `repath` a confirmation prompt
+(listing the planned move count / a preview) and a `-y/--yes` skip flag, for parity with
+`prune`/`regroup`.  Open design question for the codebase audit: should all destructive maintenance
+commands share a single confirmation helper rather than each re-implementing the `confirm + --yes`
+pattern?  Surfaced from the `PLAN-multimedium.md` S8 interface decision and routed here so it survives
+that plan's deletion; the S9 capstone hands the broader cross-command-coherence review into the
+Codebase audit track.
+
 ## Other unsharded backlog
 
 - Playlist generation for collection/cycle groupings (Ring cycle, symphony cycles, etc.).
