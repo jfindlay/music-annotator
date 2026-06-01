@@ -154,6 +154,7 @@ from music_annotator._pipeline_io import (
     AudioCompareResult,
     _assess_collisions,
     _check_collisions,
+    _journal_fragmentation_groups,
     _parse_disc_id_list,
     _preferred_disc_record,
     _read_acoustid_tag,
@@ -163,6 +164,7 @@ from music_annotator._pipeline_io import (
     _run_fpcalc,
     _sha256_file,
     _verify_copy,
+    audit,
     compare_audio_collision,
     find_source_files,
     parse_disc_title,
@@ -251,6 +253,7 @@ __all__ = [
     "prune_sources",
     "read_journal",
     "write_transaction_log",
+    "audit",
     "JOURNAL_FILENAME",
 ]
 
@@ -280,6 +283,7 @@ _reexports = (
     _apply_collision_suffix,
     _assess_collisions,
     _check_collisions,
+    _journal_fragmentation_groups,
     _collision_suffix,
     _console,
     _cover_art_cache_dir,

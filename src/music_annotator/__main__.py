@@ -1,6 +1,6 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes four subcommands:
+Configures structlog for human-friendly console output and exposes five subcommands:
 
 * ``apply``  — copy and tag a directory of tracks for a known MusicBrainz release MBID.
 * ``search`` — search MusicBrainz for a release matching a source directory, prompt for
@@ -9,6 +9,8 @@ Configures structlog for human-friendly console output and exposes four subcomma
   delete the source directory.
 * ``repath`` — re-path all verified library files to their corrected destinations under
   the current path-construction policy, using only embedded tags (no network calls).
+* ``audit``  — read the journal and report release-fragmentation anomalies (no network calls,
+  no filesystem writes).
 
 Usage::
 
@@ -32,6 +34,9 @@ Usage::
     music-annotator repath \\
         <dest_dir> \\
         [--dry-run]
+
+    music-annotator audit \\
+        <dest_dir>
 """
 
 from __future__ import annotations
@@ -162,7 +167,8 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Build and return the top-level CLI argument parser with ``apply``, ``search``, ``prune``, and ``repath`` subcommands.
+    """Build and return the top-level CLI argument parser with ``apply``, ``search``, ``prune``, ``repath``, and ``audit``
+    subcommands.
 
     ``-v``/``--verbose`` is registered on the top-level parser and must appear before the subcommand token.
     ``apply`` takes a single ``src_dir`` positional (one release per invocation, paired with ``--release-id``).
@@ -170,7 +176,8 @@ def _build_parser() -> argparse.ArgumentParser:
     processed in a single invocation.  ``dest_dir`` is always singular — all sources share the same library
     root.  ``apply`` and ``search`` share ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``,
     ``--no-fetch-rels``, and ``--delete`` via :func:`_add_common_args`.  ``prune`` only adds ``-y``/``--yes``.
-    ``repath`` takes only ``dest_dir`` and an optional ``--dry-run`` flag.
+    ``repath`` takes only ``dest_dir`` and an optional ``--dry-run`` flag.  ``audit`` takes only ``dest_dir``
+    and requires no network credentials (read-only journal analysis).
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -376,11 +383,39 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Log planned moves without performing any filesystem operations or writing journal entries.",
     )
 
+    # ------------------------------------------------------------------
+    # audit subcommand
+    # ------------------------------------------------------------------
+    audit_parser = subparsers.add_parser(
+        "audit",
+        help="Report release-fragmentation anomalies in the journal (no network calls, no writes).",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Reads the journal at <dest_dir>/music_annotator_journal.json and reports:
+
+              (a) work directories populated from more than one MusicBrainz release MBID
+                  (regrouping candidates).
+              (b) release MBIDs whose tracks landed in more than one work directory
+                  (split releases).
+
+            No network calls are made.  No files are moved.  No journal entries are written.
+
+            Examples:
+              music-annotator audit /tmp/music_library
+            """),
+    )
+    audit_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+
     return parser
 
 
 def main() -> None:
-    """Parse CLI arguments, configure logging, and dispatch to ``apply``, ``search``, or ``prune``.
+    """Parse CLI arguments, configure logging, and dispatch to ``apply``, ``search``, ``prune``, ``repath``, or ``audit``.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating and converts any unhandled exception or keyboard interrupt into a logged error with exit code 1.
@@ -466,6 +501,16 @@ def main() -> None:
                 sys.exit(1)
             except Exception as exc:  # noqa: BLE001
                 log.error("repath_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
+                sys.exit(1)
+
+        case "audit":
+            try:
+                music_annotator.audit(dest_root=args.dest_dir)
+            except KeyboardInterrupt:
+                log.warning("interrupted")
+                sys.exit(1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("audit_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
                 sys.exit(1)
 
         case _:  # pragma: no cover

@@ -2623,3 +2623,316 @@ class TestRepath:
         assert not old_path.exists()
         # The old empty parent directories should have been removed
         assert not (dest_root / "TempComp - TempPerf").exists()
+
+
+# ---------------------------------------------------------------------------
+# audit()
+# ---------------------------------------------------------------------------
+
+
+class TestAudit:
+    """Tests for :func:`music_annotator.audit` — the read-only journal fragmentation detector.
+
+    All tests use pyfakefs to provide a fake filesystem and patch the structlog ``log`` object in
+    ``music_annotator._pipeline_io`` to assert on logged events without relying on log capture
+    infrastructure.  No audio files, no network, no journal writes are involved.
+    """
+
+    def test_audit_reports_mixed_mbid_and_split_release(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """audit() reports both case (a) and case (b) fragmentation when both are present.
+
+        Case (a): work_dir ``"Work-A [2020]"`` has entries with two distinct release_ids
+        (``"rel-1"`` and ``"rel-2"``) — a regrouping candidate.
+
+        Case (b): release_id ``"rel-3"`` has entries in two distinct work_dirs
+        (``"Work-B [2020]"`` and ``"Work-C [2020]"``) — a split release.
+
+        Asserts that ``log.warning`` is called with ``audit_multiple_release_ids`` for case (a)
+        and ``audit_split_release`` for case (b).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # case (a): same work_dir, two different release_ids
+        # case (b): same release_id, two different work_dirs
+        _write_library_journal(
+            dest_root,
+            [
+                # case (a) entry 1: Work-A, release rel-1
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-A [2020]/01 - Mvt1.flac",
+                    "action": "tagged",
+                },
+                # case (a) entry 2: Work-A, release rel-2 — triggers case (a)
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-2",
+                    "source": "/src/02.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-A [2020]/02 - Mvt2.flac",
+                    "action": "tagged",
+                },
+                # case (b) entry 1: rel-3 in Work-B
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-3",
+                    "source": "/src/03.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-B [2020]/01 - Mvt1.flac",
+                    "action": "tagged",
+                },
+                # case (b) entry 2: rel-3 in Work-C — triggers case (b)
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-3",
+                    "source": "/src/04.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-C [2020]/01 - Mvt1.flac",
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        warning_events = [call.args[0] for call in mock_log.warning.call_args_list]
+        assert "audit_multiple_release_ids" in warning_events
+        assert "audit_split_release" in warning_events
+
+        # Verify case (a) kwargs: work_dir and release_ids present
+        case_a_calls = [c for c in mock_log.warning.call_args_list if c.args[0] == "audit_multiple_release_ids"]
+        assert len(case_a_calls) == 1
+        assert case_a_calls[0].kwargs["work_dir"] == "Work-A [2020]"
+        assert case_a_calls[0].kwargs["release_ids"] == ["rel-1", "rel-2"]
+
+        # Verify case (b) kwargs: release_id and work_dirs present
+        case_b_calls = [c for c in mock_log.warning.call_args_list if c.args[0] == "audit_split_release"]
+        assert len(case_b_calls) == 1
+        assert case_b_calls[0].kwargs["release_id"] == "rel-3"
+        assert case_b_calls[0].kwargs["work_dirs"] == ["Work-B [2020]", "Work-C [2020]"]
+
+        # audit() must not have called log.info (fragmentation was present)
+        mock_log.info.assert_not_called()
+
+    def test_audit_clean_no_fragmentation(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """audit() logs a clean message and does not warn when no fragmentation is detected.
+
+        All entries share the same release_id and map to the same work_dir, so neither
+        case (a) nor case (b) fires.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": "/lib/Beethoven - Karajan/Symphony No 5 [2020]/01 - Mvt1.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-1",
+                    "source": "/src/02.flac",
+                    "destination": "/lib/Beethoven - Karajan/Symphony No 5 [2020]/02 - Mvt2.flac",
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        info_events = [call.args[0] for call in mock_log.info.call_args_list]
+        assert "audit_clean" in info_events
+        mock_log.warning.assert_not_called()
+
+    def test_audit_skips_malformed_destination_not_under_dest_root(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """audit() skips entries whose destination is not under dest_root without crashing.
+
+        A destination outside ``dest_root`` (e.g. ``/other/Work-X/01.flac`` when dest_root is
+        ``/lib``) raises ``ValueError`` in ``Path.relative_to``.  The entry must be skipped and
+        the audit must complete as though the entry were absent.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        _write_library_journal(
+            dest_root,
+            [
+                # Malformed: destination is not under /lib
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-foreign",
+                    "source": "/src/01.flac",
+                    "destination": "/other/Work-X/01.flac",
+                    "action": "tagged",
+                },
+                # Valid entry: should still be processed
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-1",
+                    "source": "/src/02.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-A [2020]/01 - Mvt1.flac",
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        # Only the valid entry was processed; no fragmentation → clean log
+        info_events = [call.args[0] for call in mock_log.info.call_args_list]
+        assert "audit_clean" in info_events
+        mock_log.warning.assert_not_called()
+
+    def test_audit_skips_entry_with_too_few_path_parts(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """audit() skips entries whose relative destination has fewer than two path parts.
+
+        An entry whose destination is directly inside ``dest_root`` (e.g. ``/lib/track.flac``)
+        has only one relative part and cannot yield a ``work_dir`` component.  The entry must
+        be skipped silently.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        _write_library_journal(
+            dest_root,
+            [
+                # Only one relative part: /lib/track.flac → relative = track.flac (parts[0] only)
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-shallow",
+                    "source": "/src/01.flac",
+                    "destination": "/lib/track.flac",
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        # The shallow entry was skipped; no tagged entries qualify → clean log
+        info_events = [call.args[0] for call in mock_log.info.call_args_list]
+        assert "audit_clean" in info_events
+        mock_log.warning.assert_not_called()
+
+    def test_audit_ignores_non_tagged_actions(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """audit() only considers ``action == "tagged"`` entries; other actions are ignored.
+
+        Entries with actions ``"skipped"``, ``"dry_run"``, ``"repathed"`` etc. must not
+        contribute to the fragmentation groupings.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        _write_library_journal(
+            dest_root,
+            [
+                # Non-tagged entries with different release_ids and work_dirs: must be ignored
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-A",
+                    "source": "/src/01.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-A [2020]/01 - Mvt1.flac",
+                    "action": "skipped",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-B",
+                    "source": "/src/02.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-B [2020]/01 - Mvt1.flac",
+                    "action": "dry_run",
+                },
+                # One tagged entry: no fragmentation
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-1",
+                    "source": "/src/03.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-C [2020]/01 - Mvt1.flac",
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        info_events = [call.args[0] for call in mock_log.info.call_args_list]
+        assert "audit_clean" in info_events
+        mock_log.warning.assert_not_called()
+
+    def test_audit_dispatches_from_main(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit subcommand dispatches to music_annotator.audit with dest_root.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mocker.patch("music_annotator.__main__.structlog.get_logger")
+        mock_audit = mocker.patch("music_annotator.audit")
+        with patch.object(sys, "argv", ["music-annotator", "audit", "/d"]):
+            main()
+        mock_audit.assert_called_once_with(dest_root=Path("/d"))
+
+    def test_audit_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit exits with code 1 when audit() raises an unexpected exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mocker.patch("music_annotator.__main__.structlog.get_logger")
+        mocker.patch("music_annotator.audit", side_effect=RuntimeError("boom"))
+        with patch.object(sys, "argv", ["music-annotator", "audit", "/d"]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_audit_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit exits with code 1 on KeyboardInterrupt.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mocker.patch("music_annotator.__main__.structlog.get_logger")
+        mocker.patch("music_annotator.audit", side_effect=KeyboardInterrupt)
+        with patch.object(sys, "argv", ["music-annotator", "audit", "/d"]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_audit_parser_parses_dest_dir(self) -> None:
+        """audit parser accepts dest_dir as a positional argument.
+
+        :param mocker: Not used — pure parser test.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["audit", "/dest"])
+        assert ns.subcommand == "audit"
+        assert ns.dest_dir == Path("/dest")

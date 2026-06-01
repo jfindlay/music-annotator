@@ -550,6 +550,97 @@ def read_journal(journal_path: Path) -> TransactionLog:
         return TransactionLog()
 
 
+def _journal_fragmentation_groups(
+    dest_root: Path,
+    journal: TransactionLog,
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Derive work-dir → release-id and release-id → work-dir groupings from ``action == "tagged"`` journal entries.
+
+    Iterates only ``action == "tagged"`` entries.  For each entry, the ``work_dir`` component is extracted as
+    ``Path(e.destination).relative_to(dest_root).parts[1]`` (parts[0] is the top-level performers/composer directory;
+    parts[1] is the work directory in the ``<Composer> - <Performers>/<Work [YYYY]>/…`` layout).
+
+    Entries whose ``destination`` is not under ``dest_root`` or whose relative path has fewer than two parts are
+    silently skipped: they represent malformed or foreign journal entries that cannot be safely attributed to a
+    work directory.
+
+    Groupings are returned sorted for deterministic output.
+
+    :param dest_root: Root of the annotated music library.
+    :param journal: :class:`~music_annotator.models.TransactionLog` to analyse.
+    :returns: A pair ``(work_dir_to_release_ids, release_id_to_work_dirs)`` where each value is a sorted
+        list of unique identifiers.
+    """
+    work_dir_to_release_ids: dict[str, set[str]] = {}
+    release_id_to_work_dirs: dict[str, set[str]] = {}
+
+    for entry in journal.entries:
+        if entry.action != "tagged":
+            continue
+        try:
+            rel = Path(entry.destination).relative_to(dest_root)
+        except ValueError:
+            continue
+        if len(rel.parts) < 2:  # noqa: PLR2004 — 2 is a structural constant (parts[0], parts[1])
+            continue
+        work_dir = rel.parts[1]
+        release_id = entry.release_id
+        work_dir_to_release_ids.setdefault(work_dir, set()).add(release_id)
+        release_id_to_work_dirs.setdefault(release_id, set()).add(work_dir)
+
+    return (
+        {k: sorted(v) for k, v in sorted(work_dir_to_release_ids.items())},
+        {k: sorted(v) for k, v in sorted(release_id_to_work_dirs.items())},
+    )
+
+
+def audit(dest_root: Path) -> None:
+    """Read the journal at ``dest_root`` and report release-fragmentation anomalies.
+
+    Reads :data:`JOURNAL_FILENAME` from ``dest_root`` and analyses ``action == "tagged"`` entries to
+    surface two fragmentation shapes:
+
+    * **Case (a) — regrouping candidate:** one ``work_dir`` (the second path component under ``dest_root``)
+      is populated from more than one MusicBrainz release MBID.  This indicates that the same work
+      directory was tagged from multiple distinct releases and may need regrouping.
+    * **Case (b) — split release:** one release MBID has tracks landing in more than one ``work_dir``.
+      This indicates that a single release's tracks are spread across multiple work directories.
+
+    When neither shape is detected a clean "no fragmentation detected" message is logged.
+
+    This function is **read-only**: it does not read audio tags, move files, or write any journal entries.
+    Tag confirmation and regroup moves are handled by the S7 and S8 sessions that consume the grouping
+    helper :func:`_journal_fragmentation_groups`.
+
+    :param dest_root: Root of the annotated music library (contains ``music_annotator_journal.json``).
+    """
+    journal = read_journal(dest_root / JOURNAL_FILENAME)
+    work_dir_to_ids, release_id_to_dirs = _journal_fragmentation_groups(dest_root, journal)
+
+    case_a = {wd: ids for wd, ids in work_dir_to_ids.items() if len(ids) > 1}
+    case_b = {rid: dirs for rid, dirs in release_id_to_dirs.items() if len(dirs) > 1}
+
+    if not case_a and not case_b:
+        log.info("audit_clean", dest_root=str(dest_root), message="no fragmentation detected")
+        return
+
+    for work_dir, release_ids in sorted(case_a.items()):
+        log.warning(
+            "audit_multiple_release_ids",
+            work_dir=work_dir,
+            release_ids=release_ids,
+            message="one work_dir has multiple release_ids (regrouping candidate)",
+        )
+
+    for release_id, work_dirs in sorted(case_b.items()):
+        log.warning(
+            "audit_split_release",
+            release_id=release_id,
+            work_dirs=work_dirs,
+            message="one release_id maps to multiple work_dirs (split release)",
+        )
+
+
 def _check_collisions(dest_files: list[Path]) -> list[Path]:
     """Return the subset of ``dest_files`` that already exist on disk.
 
