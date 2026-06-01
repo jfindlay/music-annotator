@@ -25,7 +25,7 @@ from music_annotator.__main__ import (
     _resolve_path,
     main,
 )
-from music_annotator._pipeline_io import _read_tags_flac
+from music_annotator._pipeline_io import _read_albumid_tag, _read_tags_flac
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path
 from music_annotator.models import MBRelease, MBTrack, TrackTags
@@ -2936,3 +2936,342 @@ class TestAudit:
         ns = parser.parse_args(["audit", "/dest"])
         assert ns.subcommand == "audit"
         assert ns.dest_dir == Path("/dest")
+
+
+# ---------------------------------------------------------------------------
+# _read_albumid_tag and audit() tag-confirmation (S7)
+# ---------------------------------------------------------------------------
+
+
+class TestReadAlbumidTag:
+    """Unit tests for :func:`music_annotator._pipeline_io._read_albumid_tag`.
+
+    Exercises the FLAC read path, the tag-absent path, and the read-error (exception) path.
+    The unsupported-suffix ``case _:`` arm is genuinely unreachable for journal-backed calls and
+    is marked ``# pragma: no cover`` in the implementation.
+    """
+
+    def test_flac_with_albumid_tag_returns_id(self, fs: FakeFilesystem) -> None:
+        """_read_albumid_tag returns the embedded MUSICBRAINZ_ALBUMID for a tagged FLAC.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(musicbrainz_albumid="test-release-uuid")
+        apply_tags_flac(path, tags)
+
+        assert _read_albumid_tag(path) == "test-release-uuid"
+
+    def test_flac_without_albumid_tag_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_albumid_tag returns "" when the file has no MUSICBRAINZ_ALBUMID tag.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        # Write a minimal FLAC with no MUSICBRAINZ_ALBUMID tag
+        tags = TrackTags(title="A Track")
+        apply_tags_flac(path, tags)
+
+        assert _read_albumid_tag(path) == ""
+
+    def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """_read_albumid_tag returns "" and logs a warning when the tag read raises.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/broken.flac")
+        mocker.patch("music_annotator._pipeline_io._read_tags_flac", side_effect=OSError("corrupt"))
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+
+        result = _read_albumid_tag(path)
+
+        assert result == ""
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "albumid_tag_read_error" in warning_events
+
+    def test_mp3_with_albumid_tag_returns_id(self, fs: FakeFilesystem) -> None:
+        """_read_albumid_tag returns the embedded MUSICBRAINZ_ALBUMID for a tagged MP3.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.mp3"
+        path.write_bytes(_MINIMAL_MP3)
+        tags = TrackTags(musicbrainz_albumid="mp3-release-uuid")
+        apply_tags_mp3(path, tags)
+
+        assert _read_albumid_tag(path) == "mp3-release-uuid"
+
+
+class TestAuditConfirmsViaTag:
+    """Tests for audit()'s S7 tag-confirmation layer.
+
+    Verifies that fragmentation candidates are annotated with ``confirmed=True`` when the
+    embedded ``MUSICBRAINZ_ALBUMID`` tag in a backing file matches the journal's ``release_id``,
+    and ``confirmed=False`` (stale) when all backing files have absent, differing, or unreadable tags.
+
+    Uses real FLAC bytes and :func:`apply_tags_flac` so that :func:`_read_tags_flac` executes
+    the real mutagen round-trip rather than a mock.  The structlog ``log`` object is patched so
+    logged events can be inspected without a logging infrastructure.
+    """
+
+    def test_audit_confirms_candidate_via_tag(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """audit() distinguishes confirmed fragmentation from stale journal entries.
+
+        Scenario: two case-(a) fragmentation candidates.
+
+        * ``Work-A [2020]``: two entries with ``rel-1`` and ``rel-2``.  The ``rel-1`` entry's
+          destination FLAC embeds ``MUSICBRAINZ_ALBUMID=rel-1`` — tag matches the journal's
+          ``release_id`` → this candidate is reported as **confirmed**.
+
+        * ``Work-B [2020]``: two entries with ``rel-3`` and ``rel-4``.  Both destination FLACs
+          embed a mismatched ``MUSICBRAINZ_ALBUMID`` (or have no tag) — no tag matches → this
+          candidate is reported as **stale** (``confirmed=False``).
+
+        Asserts that:
+
+        * Both candidates produce an ``audit_multiple_release_ids`` warning.
+        * The ``Work-A [2020]`` warning carries ``confirmed=True``.
+        * The ``Work-B [2020]`` warning carries ``confirmed=False``.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # --- Work-A [2020]: confirmed candidate ---
+        # Entry for rel-1: FLAC with MUSICBRAINZ_ALBUMID=rel-1 (tag matches → confirms rel-1 entry)
+        dest_a_rel1 = dest_root / "Beethoven - Karajan" / "Work-A [2020]" / "01 - Mvt1.flac"
+        dest_a_rel1.parent.mkdir(parents=True, exist_ok=True)
+        dest_a_rel1.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_a_rel1, TrackTags(musicbrainz_albumid="rel-1"))
+
+        # Entry for rel-2: FLAC with wrong tag (MUSICBRAINZ_ALBUMID=other-id, not rel-2)
+        dest_a_rel2 = dest_root / "Beethoven - Karajan" / "Work-A [2020]" / "02 - Mvt2.flac"
+        dest_a_rel2.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_a_rel2, TrackTags(musicbrainz_albumid="other-id"))
+
+        # --- Work-B [2020]: stale candidate ---
+        # Entry for rel-3: FLAC with MUSICBRAINZ_ALBUMID absent (title tag only)
+        dest_b_rel3 = dest_root / "Beethoven - Karajan" / "Work-B [2020]" / "01 - Mvt1.flac"
+        dest_b_rel3.parent.mkdir(parents=True, exist_ok=True)
+        dest_b_rel3.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_b_rel3, TrackTags(title="A Movement"))
+
+        # Entry for rel-4: FLAC with mismatching MUSICBRAINZ_ALBUMID
+        dest_b_rel4 = dest_root / "Beethoven - Karajan" / "Work-B [2020]" / "02 - Mvt2.flac"
+        dest_b_rel4.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_b_rel4, TrackTags(musicbrainz_albumid="totally-wrong"))
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(dest_a_rel1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-2",
+                    "source": "/src/02.flac",
+                    "destination": str(dest_a_rel2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-3",
+                    "source": "/src/03.flac",
+                    "destination": str(dest_b_rel3),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-4",
+                    "source": "/src/04.flac",
+                    "destination": str(dest_b_rel4),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        warning_calls = mock_log.warning.call_args_list
+        work_a_calls = [c for c in warning_calls if c.kwargs.get("work_dir") == "Work-A [2020]"]
+        work_b_calls = [c for c in warning_calls if c.kwargs.get("work_dir") == "Work-B [2020]"]
+
+        assert len(work_a_calls) == 1, "expected one warning for Work-A [2020]"
+        assert work_a_calls[0].kwargs["confirmed"] is True, "Work-A [2020] must be confirmed (tag matches)"
+
+        assert len(work_b_calls) == 1, "expected one warning for Work-B [2020]"
+        assert work_b_calls[0].kwargs["confirmed"] is False, "Work-B [2020] must be stale (no matching tag)"
+
+    def test_audit_confirmed_requires_tag_match(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """confirmed=True requires the embedded tag value to equal the journal's release_id.
+
+        A FLAC with a tag value that does not match its journal ``release_id`` is not sufficient
+        to confirm — the whole candidate remains stale.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Both Work-A entries have mismatching tags (tag present but wrong value)
+        dest1 = dest_root / "C - P" / "Work-A [2020]" / "01.flac"
+        dest1.parent.mkdir(parents=True, exist_ok=True)
+        dest1.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest1, TrackTags(musicbrainz_albumid="wrong-id"))
+
+        dest2 = dest_root / "C - P" / "Work-A [2020]" / "02.flac"
+        dest2.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest2, TrackTags(musicbrainz_albumid="also-wrong"))
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(dest1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-2",
+                    "source": "/src/02.flac",
+                    "destination": str(dest2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        work_a_calls = [c for c in mock_log.warning.call_args_list if c.kwargs.get("work_dir") == "Work-A [2020]"]
+        assert len(work_a_calls) == 1
+        assert work_a_calls[0].kwargs["confirmed"] is False
+
+    def test_audit_stale_when_file_missing(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """confirmed=False when the backing destination file does not exist on disk.
+
+        A journal entry whose destination file is absent is treated as stale: _read_albumid_tag
+        logs a warning and returns "", which does not match the journal's release_id.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Destination files for both entries are NOT created on disk
+        dest1 = dest_root / "C - P" / "Work-A [2020]" / "01.flac"
+        dest2 = dest_root / "C - P" / "Work-A [2020]" / "02.flac"
+        dest1.parent.mkdir(parents=True, exist_ok=True)
+        # Neither dest1 nor dest2 is written
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(dest1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-2",
+                    "source": "/src/02.flac",
+                    "destination": str(dest2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Patch log so we can check the stale result without noise from the read-error warning
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        work_a_calls = [c for c in mock_log.warning.call_args_list if c.kwargs.get("work_dir") == "Work-A [2020]"]
+        assert len(work_a_calls) == 1
+        assert work_a_calls[0].kwargs["confirmed"] is False
+
+    def test_confirmed_existing_s6_test_still_reports_warning_events(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Backward-compat: prior S6 warning events still appear; confirmed kwarg is now present too.
+
+        The S6 KAT (test_audit_reports_mixed_mbid_and_split_release) asserts on
+        ``audit_multiple_release_ids`` and ``audit_split_release`` event names.  This test verifies
+        that those events still fire after S7's changes, and that each carries the new
+        ``confirmed`` kwarg (which S6 was unaware of).  No audio files are created so all
+        candidates are stale, but the event names remain unchanged.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Same scenario as test_audit_reports_mixed_mbid_and_split_release — no audio files
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-A [2020]/01 - Mvt1.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-2",
+                    "source": "/src/02.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-A [2020]/02 - Mvt2.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-3",
+                    "source": "/src/03.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-B [2020]/01 - Mvt1.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-3",
+                    "source": "/src/04.flac",
+                    "destination": "/lib/Beethoven - Karajan/Work-C [2020]/01 - Mvt1.flac",
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "audit_multiple_release_ids" in warning_events
+        assert "audit_split_release" in warning_events
+
+        # All candidates are stale (no audio files to confirm); confirmed kwarg must be present
+        for call in mock_log.warning.call_args_list:
+            if call.args[0] in {"audit_multiple_release_ids", "audit_split_release"}:
+                assert "confirmed" in call.kwargs

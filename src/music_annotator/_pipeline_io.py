@@ -550,6 +550,37 @@ def read_journal(journal_path: Path) -> TransactionLog:
         return TransactionLog()
 
 
+def _read_albumid_tag(path: Path) -> str:
+    """Read the ``MUSICBRAINZ_ALBUMID`` tag from a FLAC or MP3 file, returning ``""`` on any failure.
+
+    Uses suffix-dispatch to invoke :func:`_read_tags_flac` or :func:`_read_tags_mp3`, then
+    extracts the ``MUSICBRAINZ_ALBUMID`` key (uppercased by both readers).  On a missing file, an
+    unsupported extension, or any read error the function returns ``""`` and logs a warning so the
+    caller can treat the entry as unconfirmed/stale without crashing.
+
+    Factored into a dedicated helper so S8 (regroup move) can reuse it and the suffix-dispatch is
+    testable in isolation.
+
+    :param path: Path to the audio file to inspect.
+    :returns: The MusicBrainz release MBID string from the embedded tag, or ``""`` if absent,
+        unreadable, or for an unsupported file format.
+    """
+    try:
+        ext = path.suffix.lower()
+        match ext:
+            case ".flac":
+                file_dict = _read_tags_flac(path)
+            case ".mp3":
+                file_dict = _read_tags_mp3(path)
+            case _:  # pragma: no cover — only FLAC/MP3 reach this helper via journal entries
+                log.warning("albumid_tag_unsupported_format", path=str(path), suffix=ext)
+                return ""
+        return file_dict.get("MUSICBRAINZ_ALBUMID", "")
+    except Exception:  # noqa: BLE001 — best-effort read; any failure means unconfirmed/stale
+        log.warning("albumid_tag_read_error", path=str(path))
+        return ""
+
+
 def _journal_fragmentation_groups(
     dest_root: Path,
     journal: TransactionLog,
@@ -594,6 +625,78 @@ def _journal_fragmentation_groups(
     )
 
 
+def _confirm_fragmentation(
+    dest_root: Path,
+    journal: TransactionLog,
+) -> tuple[dict[str, tuple[list[str], bool]], dict[str, tuple[list[str], bool]]]:
+    """Adjudicate each fragmentation candidate by reading ``MUSICBRAINZ_ALBUMID`` from destination files.
+
+    Extends the groupings from :func:`_journal_fragmentation_groups` with present-state tag evidence:
+    for every journal entry backing a candidate, :func:`_read_albumid_tag` is called on
+    ``entry.destination`` and the result is compared to ``entry.release_id``.  A candidate is
+    **CONFIRMED** (real present-state fragmentation) when at least one backing entry's embedded tag
+    matches the journal's ``release_id``.  A candidate is **STALE** when every backing entry's tag is
+    absent, differs, or the file is missing/unreadable — meaning the present state no longer backs
+    the journal's claim.
+
+    Only candidates that exhibit fragmentation (case-a: more than one release_id for a work_dir;
+    case-b: more than one work_dir for a release_id) are returned.  Clean work_dirs and release_ids
+    are omitted.
+
+    :param dest_root: Root of the annotated music library.
+    :param journal: :class:`~music_annotator.models.TransactionLog` to analyse.
+    :returns: A pair ``(case_a, case_b)`` where:
+
+        * ``case_a`` maps ``work_dir → (release_ids, confirmed)`` for work_dirs with >1 release_id.
+        * ``case_b`` maps ``release_id → (work_dirs, confirmed)`` for release_ids with >1 work_dir.
+
+        The ``confirmed`` bool is ``True`` when at least one backing entry's embedded
+        ``MUSICBRAINZ_ALBUMID`` tag matches the journal's ``release_id``.
+    """
+    work_dir_to_ids, release_id_to_dirs = _journal_fragmentation_groups(dest_root, journal)
+
+    # Build a per-(work_dir, release_id) and per-(release_id, work_dir) lookup of entries so we
+    # can retrieve the destination files backing each candidate without a second full scan.
+    wd_rid_to_dests: dict[tuple[str, str], list[str]] = {}
+    rid_wd_to_dests: dict[tuple[str, str], list[str]] = {}
+    for entry in journal.entries:
+        if entry.action != "tagged":
+            continue
+        try:
+            rel = Path(entry.destination).relative_to(dest_root)
+        except ValueError:
+            continue
+        if len(rel.parts) < 2:  # noqa: PLR2004 — structural constant (parts[0], parts[1])
+            continue
+        work_dir = rel.parts[1]
+        release_id = entry.release_id
+        wd_rid_to_dests.setdefault((work_dir, release_id), []).append(entry.destination)
+        rid_wd_to_dests.setdefault((release_id, work_dir), []).append(entry.destination)
+
+    def _is_confirmed(dests: list[str], expected_release_id: str) -> bool:
+        """Return True if any destination file's MUSICBRAINZ_ALBUMID matches expected_release_id."""
+        for dest in dests:
+            if _read_albumid_tag(Path(dest)) == expected_release_id:
+                return True
+        return False
+
+    case_a: dict[str, tuple[list[str], bool]] = {}
+    for work_dir, release_ids in work_dir_to_ids.items():
+        if len(release_ids) <= 1:
+            continue
+        confirmed = any(_is_confirmed(wd_rid_to_dests.get((work_dir, rid), []), rid) for rid in release_ids)
+        case_a[work_dir] = (release_ids, confirmed)
+
+    case_b: dict[str, tuple[list[str], bool]] = {}
+    for release_id, work_dirs in release_id_to_dirs.items():
+        if len(work_dirs) <= 1:
+            continue
+        confirmed = any(_is_confirmed(rid_wd_to_dests.get((release_id, wd), []), release_id) for wd in work_dirs)
+        case_b[release_id] = (work_dirs, confirmed)
+
+    return case_a, case_b
+
+
 def audit(dest_root: Path) -> None:
     """Read the journal at ``dest_root`` and report release-fragmentation anomalies.
 
@@ -606,38 +709,49 @@ def audit(dest_root: Path) -> None:
     * **Case (b) — split release:** one release MBID has tracks landing in more than one ``work_dir``.
       This indicates that a single release's tracks are spread across multiple work directories.
 
+    Each candidate is further adjudicated by reading ``MUSICBRAINZ_ALBUMID`` from the destination
+    files (via :func:`_confirm_fragmentation`): a candidate is **confirmed** when the embedded tag
+    on at least one backing file agrees with the journal's ``release_id``, indicating real
+    present-state fragmentation.  A candidate is **stale** when every backing file's tag is absent,
+    differs, or the file cannot be read — indicating the journal no longer reflects present state.
+
     When neither shape is detected a clean "no fragmentation detected" message is logged.
 
-    This function is **read-only**: it does not read audio tags, move files, or write any journal entries.
-    Tag confirmation and regroup moves are handled by the S7 and S8 sessions that consume the grouping
-    helper :func:`_journal_fragmentation_groups`.
+    This function is **read-only**: it does not move files or write any journal entries.
 
     :param dest_root: Root of the annotated music library (contains ``music_annotator_journal.json``).
     """
     journal = read_journal(dest_root / JOURNAL_FILENAME)
-    work_dir_to_ids, release_id_to_dirs = _journal_fragmentation_groups(dest_root, journal)
-
-    case_a = {wd: ids for wd, ids in work_dir_to_ids.items() if len(ids) > 1}
-    case_b = {rid: dirs for rid, dirs in release_id_to_dirs.items() if len(dirs) > 1}
+    case_a, case_b = _confirm_fragmentation(dest_root, journal)
 
     if not case_a and not case_b:
         log.info("audit_clean", dest_root=str(dest_root), message="no fragmentation detected")
         return
 
-    for work_dir, release_ids in sorted(case_a.items()):
+    for work_dir, (release_ids, confirmed) in sorted(case_a.items()):
         log.warning(
             "audit_multiple_release_ids",
             work_dir=work_dir,
             release_ids=release_ids,
-            message="one work_dir has multiple release_ids (regrouping candidate)",
+            confirmed=confirmed,
+            message=(
+                "one work_dir has multiple release_ids (regrouping candidate — tag-confirmed)"
+                if confirmed
+                else "one work_dir has multiple release_ids (regrouping candidate — journal stale)"
+            ),
         )
 
-    for release_id, work_dirs in sorted(case_b.items()):
+    for release_id, (work_dirs, confirmed) in sorted(case_b.items()):
         log.warning(
             "audit_split_release",
             release_id=release_id,
             work_dirs=work_dirs,
-            message="one release_id maps to multiple work_dirs (split release)",
+            confirmed=confirmed,
+            message=(
+                "one release_id maps to multiple work_dirs (split release — tag-confirmed)"
+                if confirmed
+                else "one release_id maps to multiple work_dirs (split release — journal stale)"
+            ),
         )
 
 
