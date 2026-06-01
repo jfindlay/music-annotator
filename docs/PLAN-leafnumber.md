@@ -246,7 +246,7 @@ Source of truth for resuming cold.  `/run-plan` updates this on each successful 
 | L0 | done    | 011490a | C-L0 **FROZEN** | Leaf = `CWP_MOVT_NUM` (existing field reused, no model change); `CWP_ORDERING_KEY_0` dropped from leaf; permanent authority. KAT `test_split_movement_leaf_sequential` (collision + Bach-Mass regression) asserts it. Site-comment obligation met at both leaf sites. Files: `_tags.py`, `test_annotator.py`. tox -m analyze green. |
 | L1 | done    | c8ee525 | C-L1 **FROZEN** (◆ sub-track A) | RE-SHARDED (additive): widened to touch `_pipeline.py`; added `cwp_inter_index_{i}` substrate (mirror of `cwp_movt_num`), gap-free per-group sibling index; `build_dest_path` consumes it, raw ordering-key = fallback. KAT `test_opera_scene_intermediate_dir_numbered` + pipeline substrate test assert it. One legitimate `# pragma: no cover` arm (unreachable empty-node-order guard) verified by orchestrator. consumes C-L0. tox -m analyze green. |
 | L2 | DEFERRED | —     | — (Opus inflection) | Design *converged* at HALT (uniform-ceiling rule — see Discovery), but user deferred shipping until the library is complete and the full depth-shape distribution is known (maintenance position). Deps for L3/L4 softened to L0,L1. No code. |
-| L3 | pending | —      | — (◆ sub-track B; dep L0,L1) | remove/repurpose dead dedup; single numbering authority. Depth normalisation (L2) is NOT a precondition. |
+| L3 | done    | b5ef8e8 | — (◆ sub-track B closed) | `_dedup_plan_entries` + call site + comment + docstring ref FULLY REMOVED (not repurposed — repurposing would re-create a second renumbering authority). `defaultdict` import retained (still used by `top_work_groups`). Per-group indices (C-L0/C-L1) are now the SOLE numbering authority; genuine byte-identical dupes still covered by the acoustid-aware `_assess_collisions`/`_apply_collision_suffix` path. KAT `test_no_dd_suffix_on_distinct_titles` added to test_pipeline.py; old `TestDedupPlanEntries` class deleted. Files: `_pipeline.py`, `test_pipeline.py`. tox -m analyze green (1024 passed, 100% cov, pylint 10.00). |
 | L4 | pending | —      | C-L4 (◆ sub-track C; dep L0,L1) | Opus inflection; `repath` mode; user-flagged hard requirement. Re-paths for the L0/L1 leaf+intermediate numbering change (L2 depth change deferred). |
 | L5 | pending | —      | — (◆ capstone)      | writeup + invariants |
 
@@ -335,9 +335,13 @@ Append during execution; evaluate at sub-track boundaries.
   user approval despite the run lacking `may-reshard`.  Lesson: *a fix that is clean at the leaf
   because a substrate index already exists is not automatically clean one level up — verify the
   analogous substrate before scoping the sibling session to the same file set.*
-- **RISK — double numbering authority.**  Until L3 removes the dedup pass, both `cwp_movt_num` and
-  `_dedup_plan_entries` can assign leaf numbers.  L0-L2 must not rely on dedup; L3 closes the risk by
-  making the per-group index the sole authority.
+- **RISK (CLOSED at L3) — double numbering authority.**  Until L3 removed the dedup pass, both
+  `cwp_movt_num` and `_dedup_plan_entries` could assign leaf numbers.  L3 fully removed
+  `_dedup_plan_entries` (commit b5ef8e8), making the per-group index the sole authority.  Verified at
+  removal: the function had exactly one call site and no other callers, and genuine byte-identical
+  destinations are still guarded by the separate acoustid+length-aware collision machinery
+  (`_assess_collisions` → `_apply_collision_suffix`, `_pipeline.py:1216+`), which runs after the
+  old dedup call — so removal dropped no safety net.  Sub-track B is closed (◆).
 
 ---
 
