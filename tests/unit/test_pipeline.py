@@ -2919,6 +2919,368 @@ class TestRunFullPipeline:
             f"got {mock_fetch_rec.call_count}"
         )
 
+    def test_composer_unified_across_media(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT S1: composer cross-disc fallback propagation spans all media via C-S0 substrate.
+
+        A 2-medium release where movements of one top work straddle the disc boundary.
+        Disc 1 (the SELECTED/copied medium) has one movement whose work carries ONLY an
+        "additional" composer (Süßmayr — a completion credit).  Disc 2 has one movement whose
+        work carries a plain primary composer (Mozart).  Both movements share the same top-work
+        MBID.
+
+        Because build_track_tags marks the disc-1 movement ``cwp_composers_is_fallback="1"``
+        (it fell back to additional_composers in isolation), the cross-medium composer
+        unification pass MUST propagate Mozart's values from disc 2's movement to disc 1's
+        movement.  The final ``cwp_composers`` / ``cwp_composer_lastnames`` on the disc-1 track
+        must equal Mozart's — a value that is only reachable if disc 2's recording detail was
+        fetched and grouped alongside disc 1's during the C-S0 all-media aggregation pass.
+
+        Assertions:
+        (a) Disc-1 track receives ``cwp_composers = "Mozart"`` and
+            ``cwp_composer_lastnames = "Mozart"`` — propagated from disc 2.
+        (b) ``apply_tags_flac`` is called exactly once (disc 1 only; disc 2 is never copied).
+        (c) ``fetch_recording_detail`` is called for both recordings (all media).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        # Source dir contains ONLY disc 1's file — disc 2 is never copied.
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        top_work_id = "w-concerto"
+
+        # Disc-1 movement work: ONLY an additional composer (Süßmayr).  In isolation this would
+        # set cwp_composers_is_fallback and produce a CWP_COMPOSER_LASTNAMES of "Süßmayr" —
+        # a different top_dir than Mozart.  The cross-medium pass must override this.
+        work_mvt_d1 = _w(
+            {
+                "id": "w-mvt-d1",
+                "title": "I. Allegro (disc 1)",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-sussmayr", "name": "Süßmayr", "sort-name": "Süßmayr, Franz Xaver"},
+                        "attribute-list": ["additional"],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Concerto"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        # Disc-2 movement work: a plain primary composer (Mozart).  This is the cross-medium
+        # source for the propagation.  Its movement is never copied — disc 2 is not in src_dir.
+        work_mvt_d2 = _w(
+            {
+                "id": "w-mvt-d2",
+                "title": "II. Rondo (disc 2)",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {
+                            "id": "a-mozart",
+                            "name": "Mozart",
+                            "sort-name": "Mozart, Wolfgang Amadeus",
+                        },
+                        "attribute-list": [],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Concerto"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        work_root = _w(
+            {
+                "id": top_work_id,
+                "title": "Concerto",
+                "type": "Concerto",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        # 2-medium release: disc 1 has 1 track, disc 2 has 1 track.
+        release = _make_multi_disc_release([1, 1])
+
+        rec_to_work: dict[str, MBWork] = {
+            "rec-d1-1": work_mvt_d1,
+            "rec-d2-1": work_mvt_d2,
+        }
+        work_registry: dict[str, MBWork] = {
+            "w-mvt-d1": work_mvt_d1,
+            "w-mvt-d2": work_mvt_d2,
+            top_work_id: work_root,
+        }
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            """Return a recording with a performance relation to the appropriate movement work.
+
+            :param rec_id: Recording MBID.
+            :returns: An :class:`~music_annotator.models.MBRecording` instance.
+            """
+            work = rec_to_work[rec_id]
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": work.title,
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [{"type": "performance", "work": {"id": work.id, "title": work.title}}],
+                }
+            )
+
+        def _fetch_work(work_id: str) -> MBWork:
+            """Return the work model for the given MBID.
+
+            :param work_id: Work MBID.
+            :returns: An :class:`~music_annotator.models.MBWork` instance.
+            """
+            return work_registry[work_id]
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mock_fetch_rec = mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        # (a) Disc-1 track must carry Mozart's primary-composer values, propagated cross-medium.
+        # Without cross-medium aggregation, disc-1 would have Süßmayr (its own fallback).
+        tags_d1: TrackTags = mock_tag.call_args_list[0][0][1]
+        assert tags_d1.cwp_composers == "Mozart", (
+            f"Expected 'Mozart' (cross-medium propagation from disc 2), got '{tags_d1.cwp_composers}'. "
+            "This indicates the composer unification pass did not span disc 2."
+        )
+        assert tags_d1.cwp_composer_lastnames == "Mozart", (
+            f"Expected 'Mozart' for cwp_composer_lastnames, got '{tags_d1.cwp_composer_lastnames}'."
+        )
+
+        # (b) apply_tags_flac called exactly once — only disc 1's file is copied and tagged.
+        assert mock_tag.call_count == 1, f"Expected 1 tagging call (disc 1 only), got {mock_tag.call_count}"
+
+        # (c) fetch_recording_detail called for both recordings (all-media eagerness).
+        assert mock_fetch_rec.call_count == 2, (
+            f"Expected 2 fetch_recording_detail calls (disc 1 + disc 2), got {mock_fetch_rec.call_count}"
+        )
+
+    def test_recording_first_release_date_unified_across_media(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT S1: first-release-date [rel YYYY] cross-disc normalisation spans all media.
+
+        A 2-medium release where no movement anywhere has a session date, so the
+        ``recording_first_release_date`` normalisation pass (the [rel YYYY] fallback) is the
+        active path.  Disc 1 (the SELECTED/copied medium) has one movement with FRD "1963";
+        disc 2 has one movement with FRD "1966".  Both movements share the same top-work MBID.
+        The release date is "1965".
+
+        The normalisation pass sets every movement's ``recording_first_release_date`` to the
+        release year when ``_begins`` is empty (no session dates in the group).  For this to
+        run correctly, disc 2 must have been fetched and included in the C-S0 ``tags_map`` /
+        ``top_work_groups`` — otherwise the group contains only disc 1 and the disc-2 FRD
+        would never be seen.
+
+        The cross-medium proof is structural: we assert that ``fetch_recording_detail`` was
+        called for both discs (confirming the substrate ran all-media), and we assert that
+        disc 1's ``recording_first_release_date`` is normalised to "1965" (the release year).
+
+        Assertions:
+        (a) Disc-1 track's ``recording_first_release_date == "1965"`` (normalised to release year).
+        (b) ``apply_tags_flac`` is called exactly once (disc 1 only; disc 2 is never copied).
+        (c) ``fetch_recording_detail`` is called for both recordings (all media).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        # Source dir contains ONLY disc 1's file — disc 2 is never copied.
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        top_work_id = "w-symphony"
+
+        def _make_mvt_work(work_id: str, title: str) -> MBWork:
+            """Build a movement work with a backward 'parts' relation to the top work.
+
+            :param work_id: MBID for this movement work.
+            :param title: Title of the movement.
+            :returns: An :class:`~music_annotator.models.MBWork` instance.
+            """
+            return _w(
+                {
+                    "id": work_id,
+                    "title": title,
+                    "type": "",
+                    "artist-relation-list": [],
+                    "work-relation-list": [
+                        {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Symphony"}},
+                    ],
+                    "attribute-list": [],
+                    "tag-list": [],
+                }
+            )
+
+        work_mvt_d1 = _make_mvt_work("w-mvt-d1", "I. Allegro (disc 1)")
+        work_mvt_d2 = _make_mvt_work("w-mvt-d2", "II. Andante (disc 2)")
+        work_root = _w(
+            {
+                "id": top_work_id,
+                "title": "Symphony",
+                "type": "Symphony",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        # 2-medium release dated "1965": disc 1 has 1 track, disc 2 has 1 track.
+        release = _make_multi_disc_release([1, 1])
+        # Override release date so the normalisation has a concrete year to apply.
+        release = MBRelease.model_validate(
+            {
+                "id": "rel-multi-frd",
+                "title": "Multi-Disc Symphony",
+                "date": "1965",
+                "status": "Official",
+                "barcode": "",
+                "artist-credit": [],
+                "release-group": {"id": "rg-sym", "primary-type": "Album", "first-release-date": "1965"},
+                "label-info-list": [],
+                "text-representation": {"script": "Latn", "language": "eng"},
+                "medium-list": [
+                    {
+                        "position": 1,
+                        "format": "CD",
+                        "track-list": [
+                            {
+                                "id": "trk-d1-1",
+                                "position": 1,
+                                "recording": {"id": "rec-d1-1", "title": "I. Allegro", "artist-credit": []},
+                            }
+                        ],
+                    },
+                    {
+                        "position": 2,
+                        "format": "CD",
+                        "track-list": [
+                            {
+                                "id": "trk-d2-1",
+                                "position": 1,
+                                "recording": {"id": "rec-d2-1", "title": "II. Andante", "artist-credit": []},
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+
+        rec_to_work: dict[str, MBWork] = {
+            "rec-d1-1": work_mvt_d1,
+            "rec-d2-1": work_mvt_d2,
+        }
+        # No session dates on any movement — ensures _begins stays empty, triggering [rel YYYY].
+        rec_to_frd: dict[str, str] = {
+            "rec-d1-1": "1963",  # differing FRD on disc 1
+            "rec-d2-1": "1966",  # differing FRD on disc 2
+        }
+        work_registry: dict[str, MBWork] = {
+            "w-mvt-d1": work_mvt_d1,
+            "w-mvt-d2": work_mvt_d2,
+            top_work_id: work_root,
+        }
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            """Return a recording with no session date and a per-recording first-release-date.
+
+            :param rec_id: Recording MBID.
+            :returns: An :class:`~music_annotator.models.MBRecording` instance.
+            """
+            work = rec_to_work[rec_id]
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": work.title,
+                    "first-release-date": rec_to_frd[rec_id],
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [{"type": "performance", "work": {"id": work.id, "title": work.title}}],
+                }
+            )
+
+        def _fetch_work(work_id: str) -> MBWork:
+            """Return the work model for the given MBID.
+
+            :param work_id: Work MBID.
+            :returns: An :class:`~music_annotator.models.MBWork` instance.
+            """
+            return work_registry[work_id]
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mock_fetch_rec = mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-multi-frd",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        # (a) Disc-1 track must have its recording_first_release_date normalised to the release year.
+        # The [rel YYYY] normalisation runs because no session dates exist anywhere in the group
+        # (_begins is empty).  The normalising source is release.date = "1965".
+        tags_d1: TrackTags = mock_tag.call_args_list[0][0][1]
+        assert tags_d1.recording_first_release_date == "1965", (
+            f"Expected recording_first_release_date normalised to '1965' (release year), "
+            f"got '{tags_d1.recording_first_release_date}'. "
+            "This indicates the [rel YYYY] normalisation pass did not run correctly."
+        )
+
+        # (b) apply_tags_flac called exactly once — only disc 1's file is copied and tagged.
+        assert mock_tag.call_count == 1, f"Expected 1 tagging call (disc 1 only), got {mock_tag.call_count}"
+
+        # (c) fetch_recording_detail called for both recordings (all-media eagerness confirms
+        # disc 2 was fetched and included in tags_map / top_work_groups for the normalisation pass).
+        assert mock_fetch_rec.call_count == 2, (
+            f"Expected 2 fetch_recording_detail calls (disc 1 + disc 2), got {mock_fetch_rec.call_count}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # KAT C-L1 — intermediate sibling index substrate (run() enumeration pass)
