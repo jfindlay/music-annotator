@@ -62,7 +62,7 @@ point.
 | S5 | Promote soloist into path for concerto works ◆         | B   | S | S0,S4      | `models.py`, `_pipeline.py`, `_tags.py`, `tests/unit/test_pipeline.py`, `tests/unit/test_annotator.py` | `test_concerto_soloist_in_top_dir`, `test_album_soloists_unioned_across_media` |
 | S6 | Read-only `audit`: group journal by `release_id`       | B   | S | —          | `__main__.py`, `_pipeline_io.py`, `tests/unit/test_main.py`         | `test_audit_reports_mixed_mbid_and_split_release` |
 | S7 | Confirm candidates via `MUSICBRAINZ_ALBUMID` tag       | B   | S | S6         | `_pipeline_io.py`, `tests/unit/test_main.py`                        | `test_audit_confirms_candidate_via_tag` |
-| S8 | Add `regrouped` journal action and regroup move ◆      | B   | S | S6,S7      | `models.py`, `_pipeline_io.py`, `__main__.py`, `tests/unit/test_main.py` | `test_regroup_appends_journal_entry` |
+| S8 | Add `regrouped` journal action and regroup move ◆      | B   | S | S6,S7      | `models.py`, `_pipeline.py`, `_pipeline_io.py`, `__main__.py`, `tests/unit/test_main.py` | `test_regroup_appends_journal_entry` |
 | S9 | Integrative writeup + codebase-audit handoff ◆         | X   | O | S1,S5,S8   | `docs/NOTES.md`, `README.md`                                         | — (prose) |
 
 ### Sub-track boundaries
@@ -182,11 +182,34 @@ point.
   `_read_tags_flac`/`_read_tags_mp3` (`_pipeline_io.py:581/595`; key uppercases to
   `MUSICBRAINZ_ALBUMID` for both formats) to confirm the journal's `release_id` matches present
   state, distinguishing real fragmentation from journal staleness.
-- **S8.**  Add `"regrouped"` to the documented `action` values on `TransactionEntry`
-  (`models.py:1487`, inline comment lists the valid strings — keep it `str`, not an enum, per the
-  existing model style) and implement a move that records old→new `destination`.  Any move MUST
-  append its own journal entry or the detector decays with use (NOTES "journal detects, tag
-  adjudicates", closing corollary).
+- **S8 (interface decided — user sign-off, see Discoveries "S8 regroup interface").**  Add
+  `"regrouped"` to the documented `action` values on `TransactionEntry` (`models.py`, the
+  `action` inline comment now at `:1515` — keep it `str`, not an enum, per the existing model
+  style).  Implement a new **`regroup <dest_dir>` subcommand** (mirrors the `repath` subparser +
+  `case "repath":` dispatch) that:
+  - Runs the S7 audit and acts on **CONFIRMED case-(b) split-release candidates only** (one
+    `release_id` scattered across multiple `work_dir`s; `confirmed=True` per S7's any-backing-entry
+    threshold) — tag adjudicates, journal detects (P2).
+  - Recomputes each affected file's canonical destination from its **embedded tags alone** via
+    `build_dest_path` (the same offline engine `repath` uses — `_pipeline.py:1574–1583`), giving the
+    target work_dir.  Moves files whose current path differs.
+  - Preserves the journal-provenance chain VERBATIM (AGENTS.md "Transaction journal and user
+    confirmation provenance"), mirroring `repath`'s loop (`_pipeline.py:1633–1707`): SHA-before →
+    atomic `os.replace` (+EXDEV `copy2`+verify+unlink fallback) → dest-SHA-verify (`RuntimeError`,
+    no journal entry on mismatch) → `_verify_copy` (`RuntimeError`, no entry on mismatch) → **only
+    then** append `TransactionEntry(action="regrouped", source=<old>, destination=<new>)` and flush
+    per file → best-effort empty-dir cleanup.  The move MUST re-journal or the detector decays
+    (P2 closing corollary).
+  - **User confirmation (user-directed):** prompt before executing the moves, listing the planned
+    relocations, accepting `y/yes` to proceed (mirror `TerminalDiscoverUI.confirm_delete` —
+    `_console.print` + `input()`).  Add a `-y/--yes` flag to skip the prompt (mirror `prune`'s
+    `--yes`).  `--dry-run` previews all planned moves and performs NO moves and NO journal writes
+    (mirror `repath --dry-run`); dry-run does not prompt.
+  - **Rationale for adding a prompt:** `prune` and `apply --delete` already confirm via
+    `confirm_delete`/`--yes`; `repath` is the outlier that mass-relocates with no prompt (only
+    `--dry-run`).  `regroup` mutates the library, so it joins the careful (prune-like) posture, not
+    `repath`'s fire-immediately one.  (See the `repath`-confirmation-gap capture candidate flagged
+    for the S9 codebase-audit handoff.)
 - **S9.**  Name the new prose invariants in `docs/NOTES.md` (the cross-medium aggregation contract;
   the concerto-soloist path rule; the `regrouped` journal-action obligation), update `README.md` if
   the `audit` subcommand is user-facing, and write the handoff brief for the **Codebase audit**
@@ -320,6 +343,24 @@ sub-track boundaries.
   helper computed by a cross-medium *union* pass in `_pipeline.py`; expected files grow to include
   `models.py`, `_pipeline.py`, `tests/unit/test_pipeline.py`.  This is the manual's "the plan was
   wrong about scope, additively corrected" case, not a destructive re-shard.
+- **DISCOVERY (interface decision, user sign-off) — S8 regroup interface & target policy.**  The
+  S8 note specified the journal obligation precisely but under-specified the *trigger* and *target
+  policy* for the library-mutating move.  Since S8 is the only sub-track-C session that performs
+  irreversible filesystem moves, the orchestrator surfaced the choice rather than letting `@build`
+  improvise.  Resolution: a new **`regroup <dest_dir>` subcommand** (option 1) that acts on
+  S7-confirmed split-release candidates only, recomputes targets via `build_dest_path` from embedded
+  tags (reusing `repath`'s offline engine and its full SHA/verify/journal provenance loop), writes
+  `action="regrouped"`, and — per user direction — **prompts for confirmation** (with `-y/--yes` to
+  skip and `--dry-run` to preview).  Target policy = "the canonical path the embedded tags already
+  imply", not a bespoke majority-vote heuristic.  Expected files grow to include `_pipeline.py`
+  (where the move + provenance loop lives, beside `repath`).  Additive; C-S8 still just widens the
+  `action` value set.
+- **CAPTURE-CANDIDATE (for S9 codebase-audit handoff) — `repath` confirmation gap.**  The destructive
+  maintenance commands are inconsistent about interactive confirmation: `prune` and `apply --delete`
+  prompt via `confirm_delete`/`--yes`, but `repath` mass-relocates the entire library with no prompt
+  — only `--dry-run` guards it.  The most destructive command is the least interactively guarded.
+  Worth revisiting in the codebase audit (S9 handoff): should `repath` gain a prompt for parity with
+  `prune`/`regroup`?
 - **PRECONDITION — no Makefile (blocks an unmodified `/run-plan` run).**  This project drives
   everything through `tox` (`~/.local/bin/tox -m analyze`), which should be used instead..  Harder
   bar applies: **100% branch coverage** and **pylint 10.00/10** — every new branch (including `case
