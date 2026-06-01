@@ -258,7 +258,7 @@ Run config: default (self-review-and-continue at ◆; halt only at the four halt
 | S0 | done     | 5b41781 | C-S0 (FROZEN)         | Opus sign-off done; Shape A + eager fetch + global-index filter; scoped to ingest |
 | S1 | done     | efa1128 | KATs (test-enforced)  | ◆ sub-track A closed; KAT-only (logic landed in S0); test_composer_unified_across_media + test_recording_first_release_date_unified_across_media lock the cross-disc composer + [rel YYYY] passes |
 | S4 | done     | 85ccb36 | C-S4 (FROZEN)         | small substrate; threaded via intermediate `CwpTags.worktype_genres_top` (standard CwpTags→TrackTags field pattern; `top_work` not in scope in `build_track_tags`) — external surface unchanged |
-| S5 | pending  | —      | — (◆ sub-track B)      | consumes C-S0, C-S4 |
+| S5 | done     | 11473c5 | cea_album_soloists_unified (path-only helper) | ◆ sub-track B closed; scope widened (re-shard `2252222`); cross-medium soloist-UNION pass in `_pipeline.py` (consumes C-S0) + concerto-gated path injection in `build_dest_path` (consumes C-S4, P1); soloist-first join; helper excluded from `to_file_dict` |
 | S6 | pending  | —      | —                      | journal-side; orthogonal to S0 |
 | S7 | pending  | —      | —                      | consumes S6 |
 | S8 | pending  | —      | C-S8 (◆ sub-track C)   | consumes S6, S7 |
@@ -273,6 +273,13 @@ numbering bug").
 passed: S0 delivered the all-media aggregation substrate; S1 locked the two regression KATs S0's own
 KAT did not cover (composer cross-disc fallback, first-release-date `[rel YYYY]` cross-disc).  C-S0
 consumed without widening or breaking; no contract drift.
+
+**Sub-track B (concerto-soloist override) — CLOSED at S5 (commit `11473c5`).**  Anti-defocus check
+passed: ships soloist-in-path for the canonical-identity concerto case, with the soloist set
+cross-medium-unified (consumes C-S0).  The pre-dispatch re-shard (`2252222`) strengthened alignment
+with the Purpose's "every path dimension needs a work-level unification story" — the union pass is
+that story.  C-S0 and C-S4 consumed without alteration; new consumable surface
+`cea_album_soloists_unified` (path-only helper) introduced; no contract drift.
 
 **Frozen contracts:**
 - **C-S0 (frozen by S0, commit `5b41781`).**  `run()` keys `tags_map` by a global index over
