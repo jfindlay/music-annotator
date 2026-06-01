@@ -56,21 +56,26 @@ point.
 
 | #  | Title (commit-shaped)                                  | Cat | T | Dep        | Expected files                                                       | KAT |
 |----|--------------------------------------------------------|-----|---|------------|----------------------------------------------------------------------|-----|
-| S0 | Aggregate work-groups across all media in `run()`      | A   | O | —          | `_pipeline.py`, `tests/unit/test_pipeline.py`                        | `test_top_work_groups_span_all_media` |
-| S1 | Unify composer last-names across media                 | B   | S | S0         | `_pipeline.py`, `tests/unit/test_pipeline.py`                        | `test_composer_unified_across_media` |
-| S2 | Unify recording / first-release dates across media     | B   | S | S0         | `_pipeline.py`, `tests/unit/test_pipeline.py`                        | `test_recording_date_work_unified_across_media` |
-| S3 | Fix `dd.dd` leaf prefix for multi-medium works ◆       | B   | S | S0         | `_pipeline.py`, `tests/unit/test_pipeline.py`                        | `test_dd_dd_prefix_stable_across_media` |
+| S0 | Aggregate work-groups across all media in `run()`      | A   | O | —          | `_pipeline.py`, `tests/unit/test_pipeline.py`                        | `test_top_work_groups_span_all_media` ✅ done |
+| S1 | Lock cross-medium unification with regression KATs ◆  | B   | S | S0         | `tests/unit/test_pipeline.py`                                        | `test_composer_unified_across_media`, `test_recording_first_release_date_unified_across_media` |
 | S4 | Carry top-work type into `TrackTags`                   | A   | S | —          | `models.py`, `_tags.py`, `tests/unit/test_pipeline.py`              | `test_cwp_worktype_genres_top_populated` |
 | S5 | Promote soloist into path for concerto works ◆         | B   | S | S0,S4      | `_tags.py`, `tests/unit/test_annotator.py`                          | `test_concerto_soloist_in_top_dir` |
 | S6 | Read-only `audit`: group journal by `release_id`       | B   | S | —          | `__main__.py`, `_pipeline_io.py`, `tests/unit/test_main.py`         | `test_audit_reports_mixed_mbid_and_split_release` |
 | S7 | Confirm candidates via `MUSICBRAINZ_ALBUMID` tag       | B   | S | S6         | `_pipeline_io.py`, `tests/unit/test_main.py`                        | `test_audit_confirms_candidate_via_tag` |
 | S8 | Add `regrouped` journal action and regroup move ◆      | B   | S | S6,S7      | `models.py`, `_pipeline_io.py`, `__main__.py`, `tests/unit/test_main.py` | `test_regroup_appends_journal_entry` |
-| S9 | Integrative writeup + codebase-audit handoff ◆         | X   | O | S1-3,S5,S8 | `docs/NOTES.md`, `README.md`                                         | — (prose) |
+| S9 | Integrative writeup + codebase-audit handoff ◆         | X   | O | S1,S5,S8   | `docs/NOTES.md`, `README.md`                                         | — (prose) |
 
 ### Sub-track boundaries
 
-- **◆ Sub-track A — cross-medium unification** ends at S3.  Ships: the three same-medium passes,
-  lifted to span all media of a release.
+- **◆ Sub-track A — cross-medium unification** ends at S1.  **Re-shard (action-frame discovery,
+  post-S0):** S0's clean implementation iterated the full global `tags_map`, so *all three*
+  unification passes (composer, recording-date, first-release-date) became cross-medium as a side
+  effect — the per-pass "lift the logic" work the original S1/S2 described no longer exists.  What
+  remains is the named `*_across_media` **regression KATs** (the test-enforced substrate guard).
+  S0's KAT already covers the cross-medium `recording_date_work` path; S1 adds the two it does *not*
+  cover: composer cross-disc fallback propagation, and the first-release-date `[rel YYYY]`
+  cross-disc fallback branch.  Original S2/S3 are retired from this plan: S2's logic is in S0 and its
+  date KAT is folded into S1; **S3 is lifted out entirely** — see the new deferred sub-track below.
 - **◆ Sub-track B — concerto-soloist override** ends at S5.  Ships: soloist in the directory path
   for canonical-identity works, with the soloist set unified across media (consumes S0).
 - **◆ Sub-track C — release-fragmentation detector** ends at S8.  Ships: read-only `audit`, then the
@@ -186,9 +191,10 @@ it and must not break it.
 - **C-S0 — cross-medium work-groups (FROZEN BY S0).**  `run()` exposes, to the post-processing
   passes, a `top_work_groups: dict[str, list[int]]` whose values index into a `tags_map` covering
   **all media** of the release, not just the selected medium.  The grouping key remains
-  `cwp_workid_top or musicbrainz_workid`.  Over-specified by design: S1/S2/S3/S5 all consume this
-  shape.  Widening it (extra grouping metadata) before it is frozen is allowed; altering it after
-  freeze is a destructive re-shard → HALT.
+  `cwp_workid_top or musicbrainz_workid`.  Over-specified by design: S1 (regression KATs), S5
+  (soloist), and the lifted leaf-numbering bug-fix sub-track all consume this shape.  Widening it
+  (extra grouping metadata) before it is frozen is allowed; altering it after freeze is a destructive
+  re-shard → HALT.
 - **C-S4 — `TrackTags.cwp_worktype_genres_top` (FROZEN BY S4).**  New `str` field, written to the
   output file as tag `CWP_WORKTYPE_GENRES_TOP`, carrying `work_hierarchy[-1].type`.  Consumed by S5.
 - **C-S8 — `TransactionEntry.action` value set (WIDENED BY S8).**  `action` gains `"regrouped"`
@@ -228,18 +234,29 @@ Source of truth for resuming the chain cold.  `/run-plan` updates this on each s
 
 | #  | Status   | Commit | Froze / widened        | Notes |
 |----|----------|--------|------------------------|-------|
-| S0 | pending  | —      | C-S0                   | Opus inflection — HALT for sign-off before dispatch |
-| S1 | pending  | —      | —                      | consumes C-S0 |
-| S2 | pending  | —      | —                      | consumes C-S0 |
-| S3 | pending  | —      | — (◆ sub-track A)      | consumes C-S0 |
+| S0 | done     | 5b41781 | C-S0 (FROZEN)         | Opus sign-off done; Shape A + eager fetch + global-index filter; scoped to ingest |
+| S1 | pending  | —      | — (◆ sub-track A)      | consumes C-S0; KAT-only (logic landed in S0); composer + first-release-date cross-disc regression KATs |
 | S4 | pending  | —      | C-S4                   | small substrate; no S0 dependency |
 | S5 | pending  | —      | — (◆ sub-track B)      | consumes C-S0, C-S4 |
 | S6 | pending  | —      | —                      | journal-side; orthogonal to S0 |
 | S7 | pending  | —      | —                      | consumes S6 |
 | S8 | pending  | —      | C-S8 (◆ sub-track C)   | consumes S6, S7 |
-| S9 | pending  | —      | — (◆ capstone)         | consumes S1,S2,S3,S5,S8; Opus writeup + audit handoff |
+| S9 | pending  | —      | — (◆ capstone)         | consumes S1,S5,S8; Opus writeup + audit handoff |
 
-**Frozen contracts:** _(none yet — populated as sessions complete)_
+_Retired from active scope:_ original **S2** (recording/first-release-date lift) — its logic landed
+in S0; its date KAT is folded into S1.  Original **S3** (`dd.dd` fix) — re-scoped from a one-session
+KAT into a separate **leaf-numbering bug-fix sub-track** (see Roadmap appendix; NOTES.md "Leaf-
+numbering bug").
+
+**Frozen contracts:**
+- **C-S0 (frozen by S0, commit `5b41781`).**  `run()` keys `tags_map` by a global index over
+  `all_media_pairs` (every track on every medium, medium-then-track order); `top_work_groups` and
+  the three unification passes iterate the full map → they span disc boundaries.  The copy plan and
+  the copy/tag/verify/journal loop iterate a `copy_subset` (selected medium only); `CopyPlanEntry.idx`
+  carries the global index so `tags_map[idx]` resolves, while `build_dest_path`'s `global_track_idx`
+  is copy-subset-local.  Single-medium releases are behaviourally identical to pre-S0.  S1, S5, and
+  the leaf-numbering bug-fix sub-track consume this; altering the index-keying or the copy-subset
+  boundary after freeze is a destructive re-shard → HALT.
 
 ---
 
@@ -258,15 +275,25 @@ sub-track boundaries.
   editorial allowlist or a "solo X" instrument-relation signal.  Deferred to the appendix item
   "Directory path — concerto-like soloist override".  S5 ships the `Concerto`-type case only; the
   allowlist is a follow-on session, not part of this featureset.
-- **RISK — `dd.dd` over-application (S3).**  The backlog notes `dd.dd` is added to *some* multitrack
-  works that are not partial-performance collisions.  Confirm the exact trigger in
-  `_dedup_plan_entries` before changing it; the fix must not regress the legitimate
-  partial-performance-collision case the prefix exists for.
-- **RISK — substrate copy-semantics regression (S0).**  Widening aggregation to all media must not
-  leak other media's files into the copy loop (P3).  The `len(src_files) != len(all_track_pairs)`
-  check (`_pipeline.py:908`) is currently sized to the selected medium; S0 must keep the *copy*
-  track-pair list medium-scoped while the *aggregation* track-pair list spans media.  This is the
-  single most likely place for the substrate to go wrong — the Opus sign-off should scrutinise it.
+- **DISCOVERY — sub-track A re-shard (post-S0).**  S0's clean implementation (iterate the full
+  global `tags_map`) lifted *all three* unification passes to span media as a side effect, so the
+  original per-pass S1/S2 logic sessions are vacuous.  Sub-track A collapsed to a single KAT session
+  (S1) that adds the `*_across_media` regression guards S0's KAT doesn't already cover.  This is the
+  "the plan was wrong about X is a successful outcome" case from the multi-session manual.
+- **DISCOVERY (resolves the old `dd.dd` RISK) — the leaf-numbering bug is upstream, not in
+  `_dedup_plan_entries`.**  Diagnosed against a real Mahler-9 output dir (see NOTES.md "Leaf-numbering
+  bug").  `_dedup_plan_entries` is mechanically correct — it fires only on byte-identical
+  destination paths.  The real root cause: the leaf `nn` is the bottom-work's ordering-key (= the
+  *movement* number), so every sub-section recording of one movement wants the same leaf number;
+  combined with title collapse, this manufactures the collisions that make `dd.dd` over-fire, and the
+  post-dot index is a non-restarting global running index so playback order breaks.  This is bigger
+  and more uncertain than a one-session fix and **further phenomenology is expected** (other
+  split-work shapes).  Lifted out of this plan into its own deferred sub-track (appendix); do not
+  freeze a fix design until more real examples are collected.
+- **RISK (RESOLVED by S0) — substrate copy-semantics regression.**  S0 kept the copy path scoped to
+  `copy_subset` (selected medium) while `tags_map`/`all_media_pairs` span media; the `len(src_files)
+  != len(copy_subset)` check guards it.  KAT `test_top_work_groups_span_all_media` asserts only the
+  selected medium is journalled.  No regression.
 
 ---
 
@@ -283,6 +310,31 @@ the module boundaries remain natural, whether the public API surface in `__init_
 coherent, and whether any accumulated conventions need revisiting.  **The S9 capstone hands off to
 this**; specifically, decide whether the deferred `ReleaseContext`/`WorkGroup` aggregation object
 (considered and deliberately not built in S0) is now warranted.
+
+### Leaf-numbering / split-work path bug (lifted from original S3 — needs its own multi-session)
+
+Diagnosed but **not yet designed**.  Full mechanism in NOTES.md "Leaf-numbering bug: ordering-key is
+per-work, not per-track (the Mahler-9 phenomenology)".  In brief: when one work is split across many
+sub-section tracks, the leaf `nn` (from `CWP_ORDERING_KEY_0`) is the *movement* number, identical for
+every sub-section; that plus title-collapse manufactures destination collisions, `dd.dd` over-fires,
+the post-dot index doesn't restart per movement, and dedup-escapee tracks break playback sort order.
+
+This is a substrate-level path-construction fix that the soloist work (S5) and the library-wide
+naming-unification plan (`PLAN-naming.md`) both sit on top of, so it likely wants its own substrate
+session + algorithm sessions, Opus-designed.  **Preconditions before sharding it:**
+
+1. **Collect more phenomenology.**  Gather real output examples across split-work shapes: a
+   multi-disc split work, a work with mixed split/unsplit movements, opera tracks, and a work where
+   `CWP_ORDERING_KEY_0` is present vs absent.  The fix must not regress the cases that work today.
+2. **Confirm the title-collapse locus** — whether it originates in `_dedup_plan_entries` (taking
+   `rest` from the colliding stem) or `_resolve_long_names` Strategy 2, and the dedup↔long-name
+   ordering interaction (`_pipeline.py:1119` then `:1126`).
+3. **Decide the leaf-numbering model** (candidates in NOTES.md): per-group movement index
+   (`cwp_movt_num`); two-level `movement.subsection`; or full-title-carries-uniqueness.  All refract
+   through "path is a handle, not a manifest" and must yield a stable, gap-free, playback-sorted
+   sequence.
+
+Do not dispatch a `@build` session for this until 1–3 are answered at an Opus inflection point.
 
 ### Concerto-like soloist override — editorial allowlist (follow-on to S5)
 
