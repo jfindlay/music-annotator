@@ -241,7 +241,7 @@ Run config: default (self-review-and-continue at ◆; halt only at the four halt
 | #  | Status   | Commit | Froze / widened        | Notes |
 |----|----------|--------|------------------------|-------|
 | S0 | done     | 5b41781 | C-S0 (FROZEN)         | Opus sign-off done; Shape A + eager fetch + global-index filter; scoped to ingest |
-| S1 | pending  | —      | — (◆ sub-track A)      | consumes C-S0; KAT-only (logic landed in S0); composer + first-release-date cross-disc regression KATs |
+| S1 | done     | efa1128 | KATs (test-enforced)  | ◆ sub-track A closed; KAT-only (logic landed in S0); test_composer_unified_across_media + test_recording_first_release_date_unified_across_media lock the cross-disc composer + [rel YYYY] passes |
 | S4 | pending  | —      | C-S4                   | small substrate; no S0 dependency |
 | S5 | pending  | —      | — (◆ sub-track B)      | consumes C-S0, C-S4 |
 | S6 | pending  | —      | —                      | journal-side; orthogonal to S0 |
@@ -253,6 +253,11 @@ _Retired from active scope:_ original **S2** (recording/first-release-date lift)
 in S0; its date KAT is folded into S1.  Original **S3** (`dd.dd` fix) — re-scoped from a one-session
 KAT into a separate **leaf-numbering bug-fix sub-track** (see Roadmap appendix; NOTES.md "Leaf-
 numbering bug").
+
+**Sub-track A (cross-medium unification) — CLOSED at S1 (commit `efa1128`).**  Anti-defocus check
+passed: S0 delivered the all-media aggregation substrate; S1 locked the two regression KATs S0's own
+KAT did not cover (composer cross-disc fallback, first-release-date `[rel YYYY]` cross-disc).  C-S0
+consumed without widening or breaking; no contract drift.
 
 **Frozen contracts:**
 - **C-S0 (frozen by S0, commit `5b41781`).**  `run()` keys `tags_map` by a global index over
