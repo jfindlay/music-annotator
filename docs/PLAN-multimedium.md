@@ -311,30 +311,14 @@ coherent, and whether any accumulated conventions need revisiting.  **The S9 cap
 this**; specifically, decide whether the deferred `ReleaseContext`/`WorkGroup` aggregation object
 (considered and deliberately not built in S0) is now warranted.
 
-### Leaf-numbering / split-work path bug (lifted from original S3 — needs its own multi-session)
+### Leaf-numbering / split-work path bug — MOVED to `docs/PLAN-leafnumber.md`
 
-Diagnosed but **not yet designed**.  Full mechanism in NOTES.md "Leaf-numbering bug: ordering-key is
-per-work, not per-track (the Mahler-9 phenomenology)".  In brief: when one work is split across many
-sub-section tracks, the leaf `nn` (from `CWP_ORDERING_KEY_0`) is the *movement* number, identical for
-every sub-section; that plus title-collapse manufactures destination collisions, `dd.dd` over-fires,
-the post-dot index doesn't restart per movement, and dedup-escapee tracks break playback sort order.
-
-This is a substrate-level path-construction fix that the soloist work (S5) and the library-wide
-naming-unification plan (`PLAN-naming.md`) both sit on top of, so it likely wants its own substrate
-session + algorithm sessions, Opus-designed.  **Preconditions before sharding it:**
-
-1. **Collect more phenomenology.**  Gather real output examples across split-work shapes: a
-   multi-disc split work, a work with mixed split/unsplit movements, opera tracks, and a work where
-   `CWP_ORDERING_KEY_0` is present vs absent.  The fix must not regress the cases that work today.
-2. **Confirm the title-collapse locus** — whether it originates in `_dedup_plan_entries` (taking
-   `rest` from the colliding stem) or `_resolve_long_names` Strategy 2, and the dedup↔long-name
-   ordering interaction (`_pipeline.py:1119` then `:1126`).
-3. **Decide the leaf-numbering model** (candidates in NOTES.md): per-group movement index
-   (`cwp_movt_num`); two-level `movement.subsection`; or full-title-carries-uniqueness.  All refract
-   through "path is a handle, not a manifest" and must yield a stable, gap-free, playback-sorted
-   sequence.
-
-Do not dispatch a `@build` session for this until 1–3 are answered at an Opus inflection point.
+Lifted out, re-diagnosed against four real work-shapes, and **sharded into its own self-contained
+plan** (`docs/PLAN-leafnumber.md`, L0–L5).  The re-diagnosis corrected the original framing: the
+title-collapse symptom was a stale artifact of superseded code, `_dedup_plan_entries` is now dead
+(distinct titles never collide), and a fourth bug (non-uniform hierarchy depth) surfaced.  The
+enabling substrate (`top_work_groups`' per-group `cwp_movt_num`) was delivered by S0, so the fix is
+smaller than feared.  Nothing further is owed from this plan; the leaf-number plan stands alone.
 
 ### Concerto-like soloist override — editorial allowlist (follow-on to S5)
 

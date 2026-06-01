@@ -46,51 +46,74 @@ join key that goes stale the moment you act on it is the wrong *authority* for a
 purpose is to act — but it is fine as the *trigger*.  Corollary: any maintenance action that moves a
 directory must append its own journal entry, or the detector decays with use.
 
-## Leaf-numbering bug: ordering-key is per-work, not per-track (the Mahler-9 phenomenology)
+## Leaf-numbering & non-uniform-depth bugs (corrected diagnosis across four work shapes)
 
-Confirmed against a real output dir (Karajan/BPO Mahler Symphony no. 9, single-work album where each
-movement is split into many sub-section tracks).  Three symptoms, one root cause plus two
-consequences:
+Re-diagnosed against the **current** code (commit `86c47bf`) by reading the real on-disk tags from
+four output dirs — Mahler 9 (Karajan/BPO), Wagner Meistersinger, Handel Water Music, Mozart Così fan
+tutte — plus the clean counter-example Bach h-Moll-Messe.  This **supersedes** the earlier Mahler-only
+entry: two of its three "symptoms" turned out to be stale artifacts of superseded code, and a fourth,
+independent bug (non-uniform hierarchy depth) surfaced that the single-example diagnosis missed.
 
-**Root cause — the leaf ``nn`` is the bottom-work's ordering-key, which is the MOVEMENT number, not
-the track's position within the movement.**  ``build_dest_path`` sets ``leaf_nn`` from
-``CWP_ORDERING_KEY_0`` when it is > 0 (`_tags.py:1064/1078`).  For a symphony whose movements are
-each split into N recordings, every recording of movement I carries the *same* bottom work and
-therefore the *same* ``ordering_key_0`` (= 1).  So all 8 sub-sections of movement I want leaf ``01``,
-all of movement II want ``02``, etc.  The ordering-key answers "which movement" not "which track".
+**The crisp invariant the whole featureset turns on.**  The leaf ``nn`` is the bottom-work's
+``CWP_ORDERING_KEY_0`` (`_tags.py:1064/1078`).  This is correct **iff each MB bottom work maps to
+exactly one recording**.  It breaks **iff one MB bottom work contains multiple recordings** — then
+they all share one ordering-key and collide.  The clean Bach Mass (``ORDERING_KEY_0`` runs 1..27
+gap-free across two discs, one recording per movement-work) proves the mechanism is right when the
+precondition holds; the Mahler/Wagner cases break it because MB groups every sub-section of a movement
+or scene under a *single* bottom work.
 
-**Symptom 1 — title collapse.**  The colliding leaves are distinguished only by ``TITLE``
-(``"…: I. Andante comodo"`` vs ``"…: I. Etwas frischer"``).  But the realised filenames show the
-title collapsed to ``"Symphonie no. 9_ I"`` for the deduped tracks — the distinguishing subtitle is
-gone.  (Exact collapse path still to confirm: ``safe_name`` does not truncate, so the collapse comes
-either from ``_dedup_plan_entries`` taking ``rest`` from the *already-colliding* stem, or from
-``_resolve_long_names`` Strategy 2 dropping everything after ``" _ "``.  The interaction of dedup
-(runs first, `_pipeline.py:1119`) and long-name resolution (`_pipeline.py:1126`) is the suspect.)
+**Finding 1 (CONFIRMED, root cause) — the ordering-key numbers the work-node, not the track.**  For
+Mahler 9 every one of the 8 sub-sections of movement I carries ``CWP_WORK_0 = "…: I. Andante comodo"``
+and ``CWP_ORDERING_KEY_0 = 1``; so all 8 want leaf ``01``, all of movement II want ``02``, etc.  Same
+shape one level deeper in Wagner: every recording of Akt I Scene I shares ``ORDERING_KEY_0 = 1``,
+Scene II shares ``= 2``.  The ordering-key answers "which movement/scene", never "which track".
 
-**Symptom 2 — ``dd.dd`` over-application.**  ``_dedup_plan_entries`` is itself mechanically correct:
-it fires *only* on byte-identical destination paths.  But the per-work ordering-key (root cause) +
-title collapse (symptom 1) manufacture those collisions, so ``dd.dd`` fires on what is really a
-legitimate run of distinct sub-sections.  The earlier backlog framing ("dd.dd added to works that
-are NOT partial-performance collisions, fix _dedup_plan_entries") was **wrong about the locus** — the
-dedup function is downstream of the real bug.
+**Finding 2 (CORRECTS old Symptom 1) — title collapse is a STALE ARTIFACT, not a current bug.**  The
+on-disk ``"Symphonie no. 9_ I"`` (distinguishing subtitle gone) was produced by an *old* ``safe_name``
+that truncated; commit `9db47ab` ("Remove safe_name length cap") removed it.  Running current
+``safe_name``/``_proposed_short`` on the real titles preserves them in full (they are ~40 bytes, far
+under the 255-byte ``_NAME_MAX``).  No fix is needed for title collapse — and any future diagnosis off
+on-disk output must first confirm the current code reproduces the artifact (see the meta-lesson below).
 
-**Symptom 3 — broken playback order.**  The ``dd`` after the dot is ``CopyPlanEntry.idx + 1`` (the
-global running index across the actioned medium), which does *not* restart per movement, so movement
-II's deduped tracks read ``02.10 … 02.14``.  Worse, any track that *escapes* dedup (because its title
-happened not to collapse, e.g. ``trk=4 "I. Mit Wut"``) keeps a bare ``01`` and sorts *before* the
-``01.0x`` files (space ``0x20`` < dot ``0x2e``), and its global index (``04``) never appears in the
-``01.dd`` sequence.  Net: files do not sort in playback order, and the numbering has gaps.
+**Finding 3 (CORRECTS old Symptom 2) — ``_dedup_plan_entries`` NO LONGER FIRES, which makes the bug
+WORSE.**  Because titles no longer collapse, the leaf destinations are no longer byte-identical, so
+the dedup pass (which only triggers on identical paths, `_pipeline.py:681-683`) never runs for this
+case.  Current output for Mahler movement I would be **eight files all numbered ``01``**, separated
+only by subtitle and therefore sorted alphabetically by subtitle, not by performance order.  The
+``dd.dd`` machinery is now effectively dead for split-work numbering.  The earlier "fix
+_dedup_plan_entries" framing was doubly wrong: dedup is both downstream of the real bug *and* no
+longer reachable.
 
-**Design implication (for the subsequent fix multi-session, not yet designed):** the leaf number must
-encode *track position within the work-group*, not the bottom-work ordering-key, when a single work
-is split across many tracks.  Candidate fixes (to be evaluated, not yet chosen): use the per-group
-movement index already computed in the unification pass (``cwp_movt_num``); or make the leaf a
-two-level ``movement.subsection`` derived from the ordering-key *plus* intra-movement sequence; or
-preserve the full distinguishing title and let it (not ``dd.dd``) carry uniqueness.  All three must
-refract through "path is a handle, not a manifest" and must produce a stable, playback-sorted,
-gap-free sequence.  **Further phenomenology expected** — other split-work shapes (multi-disc works,
-works with mixed split/unsplit movements, opera tracks) may surface additional cases; collect real
-examples before freezing the fix design.
+**Finding 4 (NEW — not visible from Mahler alone) — non-uniform hierarchy depth fragments one work.**
+Handel Water Music Suite no. 1: most movements are ``CWP_PART_LEVELS = 2`` and land as flat files in
+``01 - Water Music Suite no. 1``, but movement III has MB sub-parts (IIIa/IIIb) so its three
+recordings are ``CWP_PART_LEVELS = 3`` and get an **extra intermediate directory**
+(``03 - III. Allegro - Andante - Allegro da capo``) sitting *among* the flat sibling files.
+``build_dest_path`` honours each track's own depth independently, so one suite is split across mixed
+nesting levels with colliding/gapped leaf numbers.  **The user confirms this is a recurring MB+CE
+data pattern, not a one-off** — depth normalisation within a work-group is a first-class design
+dimension, not a footnote.
+
+**Design implication (for the fix plan — see `docs/PLAN-leafnumber.md`).**  The leaf number must
+encode *track position within the unified work-group*, not the bottom-work ordering-key, whenever a
+bottom work maps to more than one recording.  The depth at which a work-group renders must be
+*uniform* across its siblings, not per-recording.  Both must refract through "path is a handle, not a
+manifest" and yield a stable, playback-sorted, gap-free sequence.  The favoured candidate (per-group
+track index) is now strongly preferred over the ordering-key-plus-subsection and
+title-carries-uniqueness alternatives because it is the only one that simultaneously fixes Findings 1,
+3, and 4.
+
+**Retroactive-maintenance obligation.**  Any change to path construction here re-paths works that are
+*already annotated on disk* (the four examples above and every similar split-work / non-uniform-depth
+case in the library).  The fix is therefore inseparable from a maintenance-mode re-path pass — the
+new path policy must be applied retroactively, journalled, and tag-adjudicated.  This is the join
+point with the existing `audit`/regroup machinery; the fix plan must carry the retroactive pass as a
+named deliverable, not assume a one-way ingest-only fix.
+
+**Meta-lesson (CAPTURE-CANDIDATE).**  On-disk naming artifacts may be the fossil of superseded code.
+Before designing a fix from output, verify the *current* code reproduces the artifact — here, two of
+the three originally-diagnosed symptoms were already fixed by a prior commit, and re-diagnosing them
+would have wasted a fix session on dead code.
 
 ## Classical Extras as editorial anchor
 

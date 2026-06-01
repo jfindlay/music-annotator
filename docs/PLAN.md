@@ -19,6 +19,7 @@ Conventions (see `~/.config/opencode/multi-session-planning.md`):
 | Plan                         | Status     | Scope                                                                 |
 |------------------------------|------------|-----------------------------------------------------------------------|
 | `docs/PLAN-multimedium.md`   | sharded    | Multi-medium-correct path construction + library maintenance (S0–S9). The substrate other plans build on. |
+| `docs/PLAN-leafnumber.md`    | sharded    | Leaf-numbering & hierarchy-depth correctness (L0–L5): per-group track index as the leaf, depth uniformity, retroactive `repath`. Self-contained; consumes the post-S0 substrate. |
 | `docs/PLAN-fingerprint.md`   | sharded    | Acoustic fingerprinting & archival identity (F0–F8): the identity triple, ingest identification, `audit` integrity pass. |
 | `docs/PLAN-naming.md`        | pre-shard  | Library-wide dir/file-naming unification. Depends on `PLAN-multimedium.md` S0 and `PLAN-fingerprint.md`'s identity layer. |
 
