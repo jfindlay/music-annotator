@@ -259,7 +259,7 @@ Run config: default (self-review-and-continue at ◆; halt only at the four halt
 | S1 | done     | efa1128 | KATs (test-enforced)  | ◆ sub-track A closed; KAT-only (logic landed in S0); test_composer_unified_across_media + test_recording_first_release_date_unified_across_media lock the cross-disc composer + [rel YYYY] passes |
 | S4 | done     | 85ccb36 | C-S4 (FROZEN)         | small substrate; threaded via intermediate `CwpTags.worktype_genres_top` (standard CwpTags→TrackTags field pattern; `top_work` not in scope in `build_track_tags`) — external surface unchanged |
 | S5 | done     | 11473c5 | cea_album_soloists_unified (path-only helper) | ◆ sub-track B closed; scope widened (re-shard `2252222`); cross-medium soloist-UNION pass in `_pipeline.py` (consumes C-S0) + concerto-gated path injection in `build_dest_path` (consumes C-S4, P1); soloist-first join; helper excluded from `to_file_dict` |
-| S6 | pending  | —      | —                      | journal-side; orthogonal to S0 |
+| S6 | done     | 9750449 | audit() + _journal_fragmentation_groups (S7 reuse) | journal-side detector only (P2); read-only `audit <dest_dir>` subcommand; allowed extra: `__init__.py` API re-export (public `audit` in `__all__`, helper in `_reexports` per existing patch-binding convention); `work_dir = destination.relative_to(dest_root).parts[1]` confirmed |
 | S7 | pending  | —      | —                      | consumes S6 |
 | S8 | pending  | —      | C-S8 (◆ sub-track C)   | consumes S6, S7 |
 | S9 | pending  | —      | — (◆ capstone)         | consumes S1,S5,S8; Opus writeup + audit handoff |
