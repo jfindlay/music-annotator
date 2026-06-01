@@ -18,12 +18,17 @@ Conventions (see `~/.config/opencode/multi-session-planning.md`):
 
 | Plan                         | Status     | Scope                                                                 |
 |------------------------------|------------|-----------------------------------------------------------------------|
-| `docs/PLAN-multimedium.md`   | sharded    | Multi-medium-correct path construction + library maintenance (S0–S9). The substrate other plans build on. |
 | `docs/PLAN-fingerprint.md`   | sharded    | Acoustic fingerprinting & archival identity (F0–F8): the identity triple, ingest identification, `audit` integrity pass. |
-| `docs/PLAN-naming.md`        | pre-shard  | Library-wide dir/file-naming unification. Depends on `PLAN-multimedium.md` S0 and `PLAN-fingerprint.md`'s identity layer. |
+| `docs/PLAN-naming.md`        | pre-shard  | Library-wide dir/file-naming unification. The multi-medium S0 substrate it depended on has landed; still depends on `PLAN-fingerprint.md`'s identity layer. |
 
 ## Completed plans
 
+- **`PLAN-multimedium.md`** (S0–S9, complete) — multi-medium-correct path construction + library
+  maintenance: cross-medium work-group aggregation (C-S0 substrate the naming plan builds on),
+  concerto-soloist path promotion accumulated across media (C-S4), and the journal-fragmentation
+  `audit`/`regroup` cycle (C-S8).  Invariants in `docs/NOTES.md` (cross-medium aggregation,
+  concerto-soloist accumulation, the `regrouped` journal obligation) plus the codebase-audit handoff
+  brief; the concerto-like-soloist editorial allowlist follow-on is in `docs/BACKLOG.md`.
 - **`PLAN-leafnumber.md`** (L0–L5, complete) — leaf = per-group track index (`CWP_MOVT_NUM`),
   per-group intermediate sibling index (`CWP_INTER_INDEX_{i}`), dead `_dedup_plan_entries`/`.dd`
   machinery retired, retroactive `repath` maintenance mode.  Invariants in `docs/NOTES.md`; the two
@@ -41,18 +46,21 @@ Conventions (see `~/.config/opencode/multi-session-planning.md`):
 ## Cross-plan dependencies
 
 ```
-PLAN-multimedium.md  (S0 cross-medium substrate)
+PLAN-multimedium.md  (S0 cross-medium substrate) ── COMPLETE; C-S0 frozen
         │
-        ├──────────────► PLAN-naming.md      (library-wide unification consumes C-S0)
+        ├──────────────► PLAN-naming.md      (library-wide unification consumes C-S0 — now available)
         │
 PLAN-fingerprint.md  (F0 identity substrate, audit machinery)
         │
         └──────────────► PLAN-naming.md      (same-work/recording detection uses the identity tag + audit)
 ```
 
-- `PLAN-fingerprint.md` is **independent** of `PLAN-multimedium.md` except for one soft dependency:
-  F5 (medium-sequence corroboration) gains a cross-medium-span generalisation once S0 lands, but its
-  medium-scoped form does not require it.
-- `PLAN-naming.md` is the downstream consumer of both and stays pre-shard until both substrates land.
+- `PLAN-multimedium.md` is **complete**: its C-S0 cross-medium substrate is frozen and available to
+  the downstream naming plan.
+- `PLAN-fingerprint.md` was **independent** of `PLAN-multimedium.md` except for one soft dependency:
+  F5 (medium-sequence corroboration) gains a cross-medium-span generalisation now that S0 has landed,
+  but its medium-scoped form does not require it.
+- `PLAN-naming.md` is the downstream consumer of both; one of its two substrates (multimedium C-S0)
+  has landed, so it stays pre-shard only until `PLAN-fingerprint.md`'s identity layer lands.
 
 Each sharded plan runs its own `/run-plan` chain against its own ledger; they do not share a ledger.

@@ -4,8 +4,8 @@ This is a **pre-shard plan**, not yet session-sharded for `/run-plan`.  Its sess
 known only after its two substrates land, so it is described at sub-track granularity per the
 multi-session-planning manual (`~/.config/opencode/multi-session-planning.md`); full original design
 prose is preserved so no context is lost.  When the substrates land, this file is re-written into
-the standard sharded format (session list, contracts, ledger) and executed by `@plan-deep` via
-`/run-plan`.
+the standard sharded format (session list, contracts, ledger, action-frame digest) and executed by
+`@plan-admin` via `/run-plan`.
 
 This is one of several independent plans — see `docs/PLAN.md` (the index) for the full set.
 

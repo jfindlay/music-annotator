@@ -3,8 +3,9 @@
 This plan is **session-sharded** for autonomous execution by `/run-plan` (see
 `~/.config/opencode/multi-session-planning.md` and `~/.config/opencode/command/run-plan.md`).
 The currency is the *commit-shaped session*: one `@build`/`@general`/`@explore` dispatch producing
-one commit, ending with green checks.  `@plan-deep` orchestrates; it verifies each session contract
-and dispatches `@committer`.  State lives in the Progress ledger, not in context.
+one commit, ending with green checks.  `@plan-admin` (T1) drives the mechanical loop and dispatches
+`@committer`; `@plan-deep` (T0) is paged only at inflection points, discovery adjudication, and
+sub-track boundaries.  State lives in the Progress ledger and Action-frame digest, not in context.
 
 This is an **independent** sharded plan with its own ledger, parallel to `docs/PLAN.md` (multi-medium
 paths) and the dir/file-naming plan.  It consumes nothing from those plans except one soft
@@ -357,6 +358,16 @@ sub-track boundaries.
   loop must not break the AGENTS.md journal-provenance invariant: the `action="tagged"` entry is
   appended only after `_verify_copy` succeeds.  Capture the values pre-tag but journal them at the
   existing append site (`_pipeline.py:1292`), never earlier.
+
+---
+
+## Action-frame digest
+
+Appended by `@plan-admin` on non-trivial iterations (discovery flagged, contract flexed, or
+meaningful texture).  Trivial iterations (clean green run, no surprises) produce no entry.  Fed
+verbatim into every `@plan-deep` juncture fork.
+
+_(empty — chain not yet started)_
 
 ---
 
