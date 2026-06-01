@@ -3281,6 +3281,104 @@ class TestRunFullPipeline:
             f"Expected 2 fetch_recording_detail calls (disc 1 + disc 2), got {mock_fetch_rec.call_count}"
         )
 
+    def test_cwp_worktype_genres_top_populated(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT C-S4: cwp_worktype_genres_top carries the top work's type; cwp_worktype_genres carries the bottom.
+
+        A concerto-movement hierarchy: the bottom (movement) work has type "" while only the root
+        work carries type "Concerto".  build_cwp_tags must set cwp_worktype_genres_top to "Concerto"
+        (work_hierarchy[-1].type) and leave cwp_worktype_genres as "" (work_hierarchy[0].type).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        top_work_id = "w-concerto"
+        # Movement work: type is empty — only the root carries "Concerto".
+        work_movement = _w(
+            {
+                "id": "w-mvt1",
+                "title": "I. Allegro",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-brahms", "name": "Brahms", "sort-name": "Brahms, Johannes"},
+                        "attribute-list": [],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Concerto"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        work_root = _w(
+            {
+                "id": top_work_id,
+                "title": "Concerto for Violin",
+                "type": "Concerto",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        def _fetch_work(work_id: str) -> MBWork:
+            """Return the work model for the given MBID.
+
+            :param work_id: Work MBID.
+            :returns: An :class:`~music_annotator.models.MBWork` instance.
+            """
+            return {top_work_id: work_root, "w-mvt1": work_movement}[work_id]
+
+        mocker.patch(
+            "music_annotator._pipeline.fetch_recording_detail",
+            return_value=_rec(
+                {
+                    "id": "rec-1",
+                    "title": "I. Allegro",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [{"type": "performance", "work": {"id": "w-mvt1", "title": "I. Allegro"}}],
+                }
+            ),
+        )
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        tags: TrackTags = mock_tag.call_args_list[0][0][1]
+        # Top work carries "Concerto"; bottom (movement) work's type is "".
+        assert tags.cwp_worktype_genres_top == "Concerto", (
+            f"Expected cwp_worktype_genres_top='Concerto' (top work type), got '{tags.cwp_worktype_genres_top}'"
+        )
+        assert tags.cwp_worktype_genres == "", (
+            f"Expected cwp_worktype_genres='' (movement work type), got '{tags.cwp_worktype_genres}'"
+        )
+
 
 # ---------------------------------------------------------------------------
 # KAT C-L1 — intermediate sibling index substrate (run() enumeration pass)

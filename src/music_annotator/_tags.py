@@ -357,6 +357,7 @@ def build_cwp_tags(
     _, key = collect_work_tags_and_key(work_hierarchy[0])
     cwp.keys = key
     cwp.worktype_genres = work_hierarchy[0].type
+    cwp.worktype_genres_top = top_work.type
 
     # Strip part names
     part_names: dict[int, str] = {}
@@ -830,6 +831,7 @@ def build_track_tags(
         cwp_published_dates=cwp.published_dates,
         cwp_premiered_dates=cwp.premiered_dates,
         cwp_worktype_genres=cwp.worktype_genres,
+        cwp_worktype_genres_top=cwp.worktype_genres_top,
     )
 
     # Mark when cwp_composers was populated from the additional_composers fallback rather than

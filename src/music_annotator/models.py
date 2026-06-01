@@ -976,6 +976,7 @@ class CwpTags(BaseModel):
     published_dates: str = ""
     premiered_dates: str = ""
     worktype_genres: str = ""
+    worktype_genres_top: str = ""
     period: str = ""
 
 
@@ -1221,6 +1222,7 @@ class TrackTags(BaseModel):
     cwp_published_dates: str = ""
     cwp_premiered_dates: str = ""
     cwp_worktype_genres: str = ""
+    cwp_worktype_genres_top: str = ""
     acoustid_id: str = ""
     # Internal flag: set to "1" when cwp_composers / cwp_composer_lastnames were populated from
     # the additional_composers fallback (i.e. no plain primary composer relation was found).  Used
