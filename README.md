@@ -29,6 +29,7 @@ pip install music-annotator
 music-annotator apply  <src_dir> <dest_dir> --release-id <MBID> --user-agent-email <EMAIL> [options]
 music-annotator search <src_dir> [<src_dir> ...] <dest_dir> --user-agent-email <EMAIL> [options]
 music-annotator prune  <src_dir> [<src_dir> ...] <dest_dir> [-y]
+music-annotator repath <dest_dir> [--dry-run]
 ```
 
 ### `apply` — copy and tag for a known release MBID
@@ -61,6 +62,27 @@ Same options as `apply`, minus `--release-id`, plus `--limit N` (default 10). Ac
 Reads `<dest_dir>/music_annotator_journal.json`, performs exact presence checks on source and destination
 files, then offers to delete `src_dir`.
 
+### `repath` — re-path an annotated library to the current path policy
+
+| Argument | Description |
+|---|---|
+| `dest_dir` | Root of the annotated library (the same `dest_dir` used during ingest) |
+| `--dry-run` | Preview planned moves without writing anything |
+
+> **WARNING — `repath` acts by default.**  A bare invocation without `--dry-run` mass-relocates every
+> file in the library whose current path differs from the path the current policy would assign.  The
+> `action="repathed"` journal entries written during the run are the recovery record.  Always preview
+> with `--dry-run` first.
+
+Walks `dest_dir`, reads the embedded tags from each audio file (offline — no MusicBrainz network
+calls), recomputes the destination path using the current `build_dest_path` policy, and moves any
+file whose path has changed.  Each move follows the same SHA-256 + tag-round-trip verification
+discipline as ingest: the source SHA is captured before the move, the destination SHA is verified
+equal after the move, and `_verify_copy` confirms the tag round-trip — only then is a
+`action="repathed"` journal entry appended.  A crash mid-run leaves a complete audit trail of what
+already moved.  Collisions (two legacy paths mapping to one new path) are resolved by the same
+acoustid+length-aware machinery used during ingest.
+
 ### Examples
 
 ```sh
@@ -90,6 +112,12 @@ music-annotator prune \
   ~/Music/source/beethoven-9 \
   ~/Music/source/brahms-1 \
   ~/Music/tagged --yes
+
+# Preview which files would be moved to the current path policy (no changes written)
+music-annotator repath ~/Music/tagged --dry-run
+
+# Apply the current path policy to the whole library (moves files; journal is the recovery record)
+music-annotator repath ~/Music/tagged
 ```
 
 # Destination directory layout
@@ -106,8 +134,9 @@ music-annotator prune \
           nn - <Movement title>.<ext>                    ← 500px front cover embedded in file
 ```
 
-- `nn`: zero-padded 2 digits (3 if >99 siblings), directory-scoped, derived from MB `ordering-key`
-  → `MOVEMENTNUMBER` → `track.position`.
+- `nn`: zero-padded 2 digits (3 if >99 siblings), gap-free per work-group.  Leaf `nn` is the
+  per-group track index (`CWP_MOVT_NUM`), falling back to `track.position`.  Intermediate-dir `nn`
+  is the per-group sibling index (`CWP_INTER_INDEX_{i}`), falling back to MB `ordering-key`.
 - `MOVEMENTNUMBER` in tag and title string: composer's global numbering across the whole work
   (e.g. No. 39 in the Handel Messiah).  Distinct from the directory-local `nn` prefix.
 - Performer component: conductor + ensemble names only (soloists excluded for now).
