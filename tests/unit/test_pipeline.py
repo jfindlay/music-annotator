@@ -7,6 +7,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -40,7 +41,6 @@ from music_annotator._pipeline import (
     SelectionMethod,
     _apply_collision_suffix,
     _collision_suffix,
-    _dedup_plan_entries,
     _match_medium_by_title,
     _match_medium_by_toc,
     _prompt_collision_policy,
@@ -4257,97 +4257,78 @@ class TestPromptCollisionPolicy:
         assert not any(line.strip().endswith("03 - Scene III.flac") and "Akt" not in line for line in printed)
 
 
-class TestDedupPlanEntries:
-    """Tests for _dedup_plan_entries — post-plan deduplication of shared ordering-key paths."""
+def test_no_dd_suffix_on_distinct_titles() -> None:
+    """KAT L3: split-work recordings with distinct CWP_MOVT_NUM produce no .dd filenames.
 
-    def _make_src(self, idx: int) -> Path:
-        """Return a minimal source path for plan entry at the given global index.
+    Exercises the absence of the retired _dedup_plan_entries pass.  Before L0/L3, several
+    recordings sharing the same MB bottom-work ordering-key (e.g. all cwp_ordering_key_0="1")
+    would produce identical destination paths, which _dedup_plan_entries would then rename using
+    the ``{ok}.{idx:02d}`` compound prefix (e.g. "01.01 - …", "01.02 - …").  With C-L0 in place,
+    build_dest_path reads CWP_MOVT_NUM — the per-group, gap-free index — so each recording
+    already gets a unique leaf, and the dedup pass is not needed.
 
-        :param idx: 0-based global index.
-        :returns: A Path under ``/src/``.
+    This test constructs a Mahler-9-first-movement-shaped scenario: three recordings that all
+    share cwp_ordering_key_0="1" (the same MB bottom work) but carry distinct CWP_MOVT_NUM
+    values (1, 2, 3) from the pipeline's top-work-group enumeration.  It asserts:
+
+    - All three destination paths are unique (no collision).
+    - No path component contains ".dd" (the sentinel the old dedup suffix would have produced
+      under the legacy naming scheme, which prefixed deduped stems with "01.dd" etc.).
+    - No path component matches the old compound-prefix pattern ``\\d+\\.\\d{2}`` (e.g. "01.01").
+    """
+    dest_root = Path("/lib")
+    release = _rel({"id": "r1", "title": "Symphony No. 9", "artist-credit": [], "medium-list": []})
+    track = _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "Movement I — Andante"}})
+
+    def _make_split_tags(movt_num: str) -> TrackTags:
+        """Build TrackTags for a 2-level split-work movement sharing one MB bottom work.
+
+        All three recordings share cwp_ordering_key_0="1" (the Mahler-9-mvt-I bug case).
+        The per-group index CWP_MOVT_NUM differs per recording — this is the C-L0 authority.
+
+        :param movt_num: Per-group track index assigned by the top-work-group enumeration pass.
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
         """
-        return Path(f"/src/{idx:02d}.flac")
+        tags = TrackTags(
+            title="Andante comodo",
+            movementnumber=movt_num,
+            movementtotal="3",
+            cwp_work_top="Symphony No. 9",
+            cwp_composer_lastnames="Mahler",
+            originaldate="1998",
+            cwp_part_levels="1",
+            cwp_movt_num=movt_num,
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        # Simulate the old bug source: all recordings share the same bottom-work ordering-key.
+        # With _dedup_plan_entries removed, this must NOT cause any .dd renaming.
+        tags.model_extra["cwp_ordering_key_0"] = "1"  # type: ignore[index]
+        return tags
 
-    def test_unique_destinations_unchanged(self) -> None:
-        """When all dest_file values are already unique the plan is returned unchanged.
+    leaves = [
+        music_annotator._tags.build_dest_path(dest_root, release, track, _make_split_tags(n)).name  # pylint: disable=protected-access
+        for n in ("1", "2", "3")
+    ]
 
-        :raises AssertionError: If any entry is modified when no dedup is needed.
-        """
-        parent = Path("/dest/Wagner/Work")
-        plan = [
-            CopyPlanEntry(idx=0, src_file=self._make_src(0), dest_file=parent / "10 - Scene I.flac"),
-            CopyPlanEntry(idx=1, src_file=self._make_src(1), dest_file=parent / "11 - Scene II.flac"),
-            CopyPlanEntry(idx=2, src_file=self._make_src(2), dest_file=parent / "12 - Scene III.flac"),
-        ]
-        result = _dedup_plan_entries(plan)  # pylint: disable=protected-access
-        assert [e.dest_file for e in result] == [e.dest_file for e in plan]
+    # All three paths must be distinct — CWP_MOVT_NUM gives a unique leaf for each recording.
+    assert len(set(leaves)) == 3, f"Expected 3 distinct leaves, got duplicates: {leaves}"
 
-    def test_duplicate_destinations_renamed_with_global_idx(self) -> None:
-        """Tracks sharing the same dest path are renamed to {ok}.{idx+1:02d} - {title}.
+    # No .dd substring anywhere (the sentinel the old dedup pass would have introduced).
+    assert not any(".dd" in leaf for leaf in leaves), (
+        f"Found .dd suffix in leaves — dead dedup pass must have been reinstated: {leaves}"
+    )
 
-        Three entries at global indices 9, 10, 11 (1-based: 10, 11, 12) all mapping to
-        "03 - Scene III.flac" must become "03.10 - Scene III.flac", "03.11 - …", "03.12 - …".
-        The suffix uses entry.idx+1 (global 1-based running index) not track.position, so
-        multi-disc works with overlapping per-disc positions are never incorrectly numbered.
+    # No compound-prefix pattern like "01.01" (the {ok}.{idx:02d} shape from _dedup_plan_entries).
+    _compound_prefix = re.compile(r"^\d+\.\d{2}\b")
+    assert not any(_compound_prefix.match(leaf) for leaf in leaves), (
+        f"Found compound dedup prefix in leaves — dead dedup pass must have been reinstated: {leaves}"
+    )
 
-        :raises AssertionError: If renamed destinations are not unique or wrongly formatted.
-        """
-        parent = Path("/dest/Wagner/Work/02 - Akt I")
-        shared_name = "03 - Die Meistersinger von Nürnberg_ Akt I, Szene III.flac"
-        plan = [
-            CopyPlanEntry(idx=9, src_file=self._make_src(9), dest_file=parent / shared_name),
-            CopyPlanEntry(idx=10, src_file=self._make_src(10), dest_file=parent / shared_name),
-            CopyPlanEntry(idx=11, src_file=self._make_src(11), dest_file=parent / shared_name),
-        ]
-        result = _dedup_plan_entries(plan)  # pylint: disable=protected-access
-
-        names = [e.dest_file.name for e in result]
-        assert names[0] == "03.10 - Die Meistersinger von Nürnberg_ Akt I, Szene III.flac"
-        assert names[1] == "03.11 - Die Meistersinger von Nürnberg_ Akt I, Szene III.flac"
-        assert names[2] == "03.12 - Die Meistersinger von Nürnberg_ Akt I, Szene III.flac"
-        # All must land in the same parent directory
-        assert all(e.dest_file.parent == parent for e in result)
-        # All must be unique
-        assert len({e.dest_file for e in result}) == 3
-
-    def test_dedup_only_affects_colliding_group(self) -> None:
-        """Non-colliding entries in the same plan are untouched when some entries collide.
-
-        :raises AssertionError: If a non-duplicate entry is modified.
-        """
-        parent = Path("/dest/Wagner/Work/02 - Akt I")
-        shared_name = "03 - Scene III.flac"
-        unique_name = "01 - Vorspiel.flac"
-        plan = [
-            CopyPlanEntry(idx=0, src_file=self._make_src(0), dest_file=parent / unique_name),
-            CopyPlanEntry(idx=1, src_file=self._make_src(1), dest_file=parent / shared_name),
-            CopyPlanEntry(idx=2, src_file=self._make_src(2), dest_file=parent / shared_name),
-        ]
-        result = _dedup_plan_entries(plan)  # pylint: disable=protected-access
-
-        # The unique entry is unchanged
-        assert result[0].dest_file == parent / unique_name
-        # The two duplicates are renamed using their global idx+1
-        assert result[1].dest_file.name == "03.02 - Scene III.flac"
-        assert result[2].dest_file.name == "03.03 - Scene III.flac"
-
-    def test_dedup_preserves_source_and_idx(self) -> None:
-        """After dedup the src_file and idx on renamed entries remain correct.
-
-        :raises AssertionError: If src_file or idx is inadvertently altered.
-        """
-        parent = Path("/dest/Work")
-        shared_name = "05 - Movement.flac"
-        plan = [
-            CopyPlanEntry(idx=0, src_file=self._make_src(0), dest_file=parent / shared_name),
-            CopyPlanEntry(idx=1, src_file=self._make_src(1), dest_file=parent / shared_name),
-        ]
-        result = _dedup_plan_entries(plan)  # pylint: disable=protected-access
-
-        assert result[0].idx == 0
-        assert result[0].src_file == self._make_src(0)
-        assert result[1].idx == 1
-        assert result[1].src_file == self._make_src(1)
+    # Positive assertion: leaves are the 01/02/03 sequential form driven by CWP_MOVT_NUM.
+    assert leaves[0].startswith("01 - "), f"Expected leaf 1 to start with '01 - ', got: {leaves[0]!r}"
+    assert leaves[1].startswith("02 - "), f"Expected leaf 2 to start with '02 - ', got: {leaves[1]!r}"
+    assert leaves[2].startswith("03 - "), f"Expected leaf 3 to start with '03 - ', got: {leaves[2]!r}"
 
 
 class TestRunCollisionAndJournal:

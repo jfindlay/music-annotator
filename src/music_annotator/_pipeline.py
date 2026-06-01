@@ -2,8 +2,7 @@
 
 Provides :func:`run`, the main entry point that copies and tags a classical music album using
 MusicBrainz metadata.  Also provides :class:`CollisionPolicy`, :func:`_select_medium`,
-:func:`_prompt_collision_policy`, :func:`_prompt_duration_warnings`, and
-:func:`_dedup_plan_entries` as extracted helpers.
+:func:`_prompt_collision_policy`, and :func:`_prompt_duration_warnings` as extracted helpers.
 """
 
 from __future__ import annotations
@@ -652,51 +651,6 @@ def _write_freedb_yaml(
     )
 
 
-def _dedup_plan_entries(
-    plan: list[CopyPlanEntry],
-) -> list[CopyPlanEntry]:
-    """Resolve duplicate destination paths caused by multiple tracks sharing the same MB ordering-key.
-
-    When several recordings are all partial performances of the same bottom-level MB work they carry
-    identical ``CWP_ORDERING_KEY_0`` values (e.g. ``3``), which causes ``build_dest_path`` to produce
-    the same leaf filename for every one of them.  This function detects such duplicates *after* the
-    initial plan is built and re-numbers the conflicting entries using a compound prefix of the form
-    ``{ordering_key}.{global_idx:02d}`` (e.g. ``03.10``, ``03.11``, …, ``03.16``), where
-    ``global_idx`` is ``CopyPlanEntry.idx + 1`` — the 1-based global running index of the source
-    file across all media in the session.  Using the global index (rather than the per-disc
-    ``MBTrack.position``) guarantees uniqueness even when the work spans multiple discs.
-
-    Plan entries whose destination file is already unique are not modified.
-
-    :param plan: The list of :class:`~music_annotator.models.CopyPlanEntry` items produced by ``run()``.
-    :returns: A new :class:`~music_annotator.models.CopyPlanEntry` list with duplicate destinations
-        renamed.  Non-duplicate entries are returned unchanged (same objects).
-    """
-    # Group plan indices by destination path
-    by_dest: dict[Path, list[int]] = defaultdict(list)
-    for plan_i, entry in enumerate(plan):
-        by_dest[entry.dest_file].append(plan_i)
-
-    result = list(plan)
-    for dest, plan_indices in by_dest.items():
-        if len(plan_indices) <= 1:
-            continue
-        # Extract the nn prefix from the stem (e.g. "03" from "03 - Title")
-        stem = dest.stem
-        nn, _, rest = stem.partition(" - ")
-        suffix = dest.suffix
-        parent = dest.parent
-        # Re-number each duplicate in global index order so file ordering is preserved
-        for plan_i in sorted(plan_indices, key=lambda i: plan[i].idx):
-            global_idx = plan[plan_i].idx + 1  # 1-based global running index
-            new_stem = f"{nn}.{global_idx:02d} - {rest}"
-            new_dest = parent / f"{new_stem}{suffix}"
-            result[plan_i] = CopyPlanEntry(idx=plan[plan_i].idx, src_file=plan[plan_i].src_file, dest_file=new_dest)
-            log.info("dedup_rename", original=dest.name, renamed=new_dest.name, global_idx=global_idx)
-
-    return result
-
-
 def _warn_long_names(plan: list[CopyPlanEntry], dest_root: Path) -> None:
     """Log a warning for every path component in ``plan`` that exceeds :data:`~music_annotator._tags._NAME_MAX` bytes.
 
@@ -1205,12 +1159,6 @@ def run(
         dest_file = dest_base.with_suffix(src_file.suffix.lower())
         log.info("copy_track", src=src_file.name, dest=str(dest_file.relative_to(dest_root)))
         plan.append(CopyPlanEntry(idx=global_idx, src_file=src_file, dest_file=dest_file))
-
-    # Resolve duplicate destination paths that arise when multiple tracks share the same
-    # non-zero CWP_ORDERING_KEY_0.  The dedup pass appends ".{global_idx:02d}" to the
-    # ordering-key prefix so each file gets a unique name using the global 1-based running
-    # index across all source files (e.g. "03.10 - Title.flac", "03.11 - Title.flac", …).
-    plan = _dedup_plan_entries(plan)
 
     # --- Name-length check and resolution ---
     # In dry-run mode: log warnings only.  Otherwise: prompt via UI or auto-shorten when no UI.
