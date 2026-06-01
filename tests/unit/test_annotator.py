@@ -2154,11 +2154,11 @@ class TestBuildDestPathYear:
         """
         assert "[" not in self._dest(self._make_tags(), fs)
 
-    def test_ordering_key_used_in_2level_hierarchy(self, fs: FakeFilesystem) -> None:
-        """CWP_ORDERING_KEY_0 sets the track prefix for 2-level hierarchies (no intermediate dirs).
+    def test_cwp_movt_num_used_in_2level_hierarchy(self, fs: FakeFilesystem) -> None:
+        """CWP_MOVT_NUM sets the track prefix for 2-level hierarchies (no intermediate dirs).
 
-        Disc 2 of a multi-disc work has ordering-key=13; the file should be prefixed '13 -',
-        not '01 -' from the disc-local MOVEMENTNUMBER.
+        Disc 2 of a multi-disc work has cwp_movt_num=13 (the per-group index, disc-spanning);
+        the file should be prefixed '13 -', not '01 -' from the disc-local MOVEMENTNUMBER.
 
         :param fs: pyfakefs fixture.
         """
@@ -2172,10 +2172,10 @@ class TestBuildDestPathYear:
             cwp_composer_lastnames="Bach",
             cwp_part_levels="1",
             originaldate="1974",
+            cwp_movt_num="13",
             cea_conductors_list=[],
             cea_ensembles_list=[],
         )
-        tags.model_extra["cwp_ordering_key_0"] = "13"  # type: ignore[index]
         result = build_dest_path(
             dest_root,
             self._make_rel(),
@@ -2184,15 +2184,18 @@ class TestBuildDestPathYear:
         )
         assert result.name.startswith("13 -")
 
-    def test_2level_falls_back_to_movementnumber_when_ordering_key_zero(self, fs: FakeFilesystem) -> None:
-        """Without ordering-key, MOVEMENTNUMBER is used for the 2-level file prefix.
+    def test_2level_cwp_movt_num_is_primary_leaf_authority(self, fs: FakeFilesystem) -> None:
+        """CWP_MOVT_NUM is the primary leaf authority for 2-level hierarchies.
+
+        When cwp_movt_num is set it drives the file prefix regardless of MOVEMENTNUMBER or
+        any ordering-key value.
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
         tags = self._make_tags(originaldate="1974")
-        tags.movementnumber = "3"
+        tags.cwp_movt_num = "3"
         result = build_dest_path(
             dest_root,
             self._make_rel(),
@@ -2201,10 +2204,8 @@ class TestBuildDestPathYear:
         )
         assert result.name.startswith("03 -")
 
-    def test_2level_falls_back_to_global_track_idx_when_ordering_key_and_movementnumber_absent(
-        self, fs: FakeFilesystem
-    ) -> None:
-        """Without ordering-key or MOVEMENTNUMBER, global_track_idx drives the 2-level file prefix.
+    def test_2level_falls_back_to_global_track_idx_when_cwp_movt_num_absent(self, fs: FakeFilesystem) -> None:
+        """Without CWP_MOVT_NUM, global_track_idx drives the 2-level file prefix.
 
         This is the multi-disc fallback: track.position resets to 1 for each disc, so using it
         as the leaf nn would produce collisions across discs.  global_track_idx is the 1-based
@@ -2214,9 +2215,10 @@ class TestBuildDestPathYear:
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        # No cwp_ordering_key_0 and no movementnumber → global_track_idx must win.
+        # No cwp_movt_num → global_track_idx must win.
         tags = self._make_tags(originaldate="1974")
-        tags.movementnumber = ""  # absent
+        tags.cwp_movt_num = ""  # absent
+        tags.movementnumber = ""  # also absent — confirms MOVEMENTNUMBER is not a leaf source
         result = build_dest_path(
             dest_root,
             self._make_rel(),
@@ -2404,7 +2406,7 @@ class TestBuildDestPathIntermediateDirs:
         self,
         act_part: str = "Atto I",
         act_ordering_key: str = "2",
-        leaf_ordering_key: str = "4",
+        cwp_movt_num: str = "4",
         movementnumber: str = "17",
     ) -> TrackTags:
         """Build TrackTags simulating a 3-level opera hierarchy.
@@ -2412,9 +2414,9 @@ class TestBuildDestPathIntermediateDirs:
         Level 0 = aria (leaf), level 1 = act (intermediate), level 2 = opera (root/top).
 
         :param act_part: Stripped part title for the act (level 1).
-        :param act_ordering_key: MB ordering-key for the act within the opera.
-        :param leaf_ordering_key: MB ordering-key for the aria within the act.
-        :param movementnumber: Global MOVEMENTNUMBER tag (composer's numbering).
+        :param act_ordering_key: MB ordering-key for the act within the opera (intermediate level).
+        :param cwp_movt_num: Per-group track index driving the leaf nn (C-L0 authority).
+        :param movementnumber: Global MOVEMENTNUMBER tag (composer's numbering, in title only).
         :returns: A TrackTags instance with cwp_part_levels=2 and all per-level extras set.
         """
         tags = TrackTags(
@@ -2425,11 +2427,11 @@ class TestBuildDestPathIntermediateDirs:
             cwp_composer_lastnames="Verdi",
             originaldate="1978",
             cwp_part_levels="2",
+            cwp_movt_num=cwp_movt_num,
             cea_conductors_list=[],
             cea_ensembles_list=[],
         )
         tags.model_extra["cwp_part_0"] = "Esultate!"  # type: ignore[index]
-        tags.model_extra["cwp_ordering_key_0"] = leaf_ordering_key  # type: ignore[index]
         tags.model_extra["cwp_part_1"] = act_part  # type: ignore[index]
         tags.model_extra["cwp_ordering_key_1"] = act_ordering_key  # type: ignore[index]
         tags.model_extra["cwp_work_1"] = f"Otello: {act_part}"  # type: ignore[index]
@@ -2461,14 +2463,14 @@ class TestBuildDestPathIntermediateDirs:
         assert any("Atto I" in p for p in parts)
         assert any(p.startswith("02") for p in parts)  # act ordering-key=2
 
-    def test_leaf_nn_from_ordering_key(self, fs: FakeFilesystem) -> None:
-        """Leaf filename nn uses ordering-key of the aria within its act.
+    def test_leaf_nn_from_cwp_movt_num(self, fs: FakeFilesystem) -> None:
+        """Leaf filename nn uses CWP_MOVT_NUM (the per-group track index).
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        tags = self._make_tags_3level(leaf_ordering_key="4")
+        tags = self._make_tags_3level(cwp_movt_num="4")
         result = build_dest_path(
             dest_root,
             self._make_rel(),
@@ -2477,14 +2479,17 @@ class TestBuildDestPathIntermediateDirs:
         )
         assert result.name.startswith("04")
 
-    def test_leaf_nn_falls_back_to_movementnumber_when_ordering_key_zero(self, fs: FakeFilesystem) -> None:
-        """Leaf nn falls back to MOVEMENTNUMBER when ordering-key is 0.
+    def test_leaf_nn_cwp_movt_num_is_primary_authority_in_3level(self, fs: FakeFilesystem) -> None:
+        """CWP_MOVT_NUM is the primary leaf authority in 3-level hierarchies.
+
+        When cwp_movt_num is set it drives the file prefix; MOVEMENTNUMBER (the composer's global
+        numbering) is not used as a leaf source — it appears only in the title portion.
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        tags = self._make_tags_3level(leaf_ordering_key="0", movementnumber="17")
+        tags = self._make_tags_3level(cwp_movt_num="17", movementnumber="17")
         result = build_dest_path(
             dest_root,
             self._make_rel(),
@@ -2493,21 +2498,18 @@ class TestBuildDestPathIntermediateDirs:
         )
         assert result.name.startswith("17")
 
-    def test_leaf_nn_falls_back_to_global_track_idx_when_ordering_key_and_movementnumber_absent(
-        self, fs: FakeFilesystem
-    ) -> None:
-        """Leaf nn in 3-level hierarchy falls back to global_track_idx when both ordering-key and MOVEMENTNUMBER are absent.
+    def test_leaf_nn_falls_back_to_global_track_idx_when_cwp_movt_num_absent(self, fs: FakeFilesystem) -> None:
+        """Leaf nn in 3-level hierarchy falls back to global_track_idx when CWP_MOVT_NUM is absent.
 
-        For multi-disc works where MB ordering-key data is missing, track.position resets per disc
+        For multi-disc works where CWP_MOVT_NUM is not set, track.position resets per disc
         and is an unreliable fallback.  global_track_idx provides a globally unique running index.
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        tags = self._make_tags_3level(leaf_ordering_key="0", movementnumber="0")
-        # Override movementnumber to empty string — "0" would be treated as a valid int by old code
-        tags.movementnumber = ""
+        # cwp_movt_num="" (absent) and movementnumber="" — confirms neither drives the leaf
+        tags = self._make_tags_3level(cwp_movt_num="", movementnumber="")
         result = build_dest_path(
             dest_root,
             self._make_rel(),
@@ -2536,23 +2538,23 @@ class TestBuildDestPathIntermediateDirs:
         assert any(p.startswith("01") and "Atto I" in p for p in parts)
 
     def test_global_movementnumber_in_title_not_directory_prefix(self, fs: FakeFilesystem) -> None:
-        """MOVEMENTNUMBER appears in the title portion of the filename, not as the only prefix.
+        """MOVEMENTNUMBER appears in the title portion of the filename, not as the leaf prefix.
 
-        The leaf nn prefix comes from ordering-key; the composer's global number
-        appears in the TITLE tag and therefore in the track title portion.
+        The leaf nn prefix comes from CWP_MOVT_NUM (the per-group track index); the composer's
+        global movement number appears in the TITLE tag and therefore in the track title portion.
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        tags = self._make_tags_3level(leaf_ordering_key="4", movementnumber="17")
+        tags = self._make_tags_3level(cwp_movt_num="4", movementnumber="17")
         result = build_dest_path(
             dest_root,
             self._make_rel(),
             _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "T"}}),
             tags,
         )
-        # File starts with "04 - " (ordering-key), title contains "No. 17"
+        # File starts with "04 - " (cwp_movt_num=4), title contains "No. 17"
         assert result.name.startswith("04")
         assert "No. 17" in result.name
 
@@ -2571,11 +2573,11 @@ class TestBuildDestPathIntermediateDirs:
             cwp_composer_lastnames="Composer",
             originaldate="1985",
             cwp_part_levels="3",
+            cwp_movt_num="3",
             cea_conductors_list=[],
             cea_ensembles_list=[],
         )
         tags.model_extra["cwp_part_0"] = "Aria"  # type: ignore[index]
-        tags.model_extra["cwp_ordering_key_0"] = "3"  # type: ignore[index]
         tags.model_extra["cwp_part_1"] = "Scene I"  # type: ignore[index]
         tags.model_extra["cwp_ordering_key_1"] = "1"  # type: ignore[index]
         tags.model_extra["cwp_part_2"] = "Act I"  # type: ignore[index]
@@ -2590,6 +2592,94 @@ class TestBuildDestPathIntermediateDirs:
         assert any("Act I" in p for p in parts)
         assert any("Scene I" in p for p in parts)
         assert result.name.startswith("03")
+
+
+# ---------------------------------------------------------------------------
+# build_dest_path — leaf sequential numbering (KAT for C-L0)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDestPathLeafSequential:
+    """KAT: leaf nn is sequential, gap-free, collision-free — driven by CWP_MOVT_NUM (C-L0)."""
+
+    def _make_rel(self) -> MBRelease:
+        """Build a minimal release.
+
+        :returns: An MBRelease instance.
+        """
+        return _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []})
+
+    def _make_tags(self, cwp_movt_num: str, cwp_movt_tot: str = "3") -> TrackTags:
+        """Build TrackTags for a 2-level work (symphony-with-movements shape).
+
+        :param cwp_movt_num: Per-group track index (the C-L0 leaf authority).
+        :param cwp_movt_tot: Total tracks in the group (for MOVEMENTTOTAL/width).
+        :returns: A TrackTags instance with cwp_part_levels=1 (2-level hierarchy).
+        """
+        return TrackTags(
+            title="Movement",
+            movementnumber=cwp_movt_num,
+            movementtotal=cwp_movt_tot,
+            cwp_work_top="Symphony No. 9",
+            cwp_composer_lastnames="Mahler",
+            originaldate="1998",
+            cwp_part_levels="1",
+            cwp_movt_num=cwp_movt_num,
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+
+    def test_split_movement_leaf_sequential(self, fs: FakeFilesystem) -> None:
+        """Leaf nn is sequential and collision-free even when recordings share one MB bottom work.
+
+        Scenario A (the bug case): movement I of a symphony has >=3 sub-section recordings that
+        share one MB bottom work — i.e. all would have the same CWP_ORDERING_KEY_0.  The leaf nn
+        must come from CWP_MOVT_NUM (the per-group index), giving 01, 02, 03 with no repeats and
+        no .dd suffix.
+
+        Scenario B (Bach-Mass regression): distinct bottom works (one recording each) with
+        cwp_movt_num = 1..N → leaves are still 01..N, gap-free.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        release = self._make_rel()
+        track = _trk({"id": "t1", "position": 1, "recording": {"id": "r1", "title": "Movement"}})
+
+        # --- Scenario A: three sub-section recordings sharing one MB bottom work.
+        # All would have cwp_ordering_key_0=1 (constant across the bottom work).
+        # CWP_MOVT_NUM = "1", "2", "3" from the per-group enumeration.
+        leaves_a: list[str] = []
+        for movt_num in ("1", "2", "3"):
+            tags = self._make_tags(cwp_movt_num=movt_num)
+            # Simulate the same bottom-work ordering key (the old bug source — all = "1").
+            tags.model_extra["cwp_ordering_key_0"] = "1"  # type: ignore[index]
+            result = build_dest_path(dest_root, release, track, tags)
+            leaves_a.append(result.name)
+
+        assert leaves_a == ["01 - Movement", "02 - Movement", "03 - Movement"], (
+            f"Leaves collided or are out of order: {leaves_a}"
+        )
+        # No .dd suffix (dedup machinery must not fire for distinct cwp_movt_num values).
+        assert not any(".dd" in leaf for leaf in leaves_a)
+
+        # --- Scenario B: Bach-Mass-shaped regression — distinct bottom works, one recording each.
+        # cwp_movt_num = 1..5; ordering keys happen to match (the clean case).
+        leaves_b: list[str] = []
+        for movt_num in ("1", "2", "3", "4", "5"):
+            tags = self._make_tags(cwp_movt_num=movt_num, cwp_movt_tot="5")
+            tags.model_extra["cwp_ordering_key_0"] = movt_num  # type: ignore[index]
+            result = build_dest_path(dest_root, release, track, tags)
+            leaves_b.append(result.name)
+
+        assert leaves_b == [
+            "01 - Movement",
+            "02 - Movement",
+            "03 - Movement",
+            "04 - Movement",
+            "05 - Movement",
+        ], f"Bach-Mass regression: leaves not gap-free: {leaves_b}"
 
 
 # ---------------------------------------------------------------------------
