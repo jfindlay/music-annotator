@@ -24,6 +24,28 @@ touches metadata:
   ``recording_date_work`` pass at lines 947-980.  Release-scoped sources (album-artist
   filter, release date) don't need a unification pass because they're already uniform.
 
+## Join key: journal detects, tag adjudicates
+
+For any library-grouping or regrouping work, choose the join key by whether the feature *mutates*
+library state:
+
+- The **transaction journal** is the cheapest detector — it already pairs each file's full release
+  MBID with its destination, readable in one parse with no per-file tag scan.  But it records *past
+  actions*, not present state: it goes stale the moment a directory is moved out-of-band (and a
+  regrouping feature's whole job is to move things).  It is also blind to files that arrived by any
+  path other than a logged ``run()``.
+- The embedded **``MUSICBRAINZ_ALBUMID`` tag** is the only *present-state* authority — it travels
+  with the file through every move and arrives with the file regardless of how the file got there.
+  But scanning it library-wide is expensive (mutagen-parse every file).
+- The **directory name** is a *handle, not a manifest* (see above) — a lossy index at best; a
+  length-shortened or manually-renamed dir loses any embedded key.
+
+The resulting rule: **journal detects, tag adjudicates.**  Use the journal to flag candidate
+fragment-groups cheaply, then read the tag on just those candidates to confirm before acting.  A
+join key that goes stale the moment you act on it is the wrong *authority* for a feature whose
+purpose is to act — but it is fine as the *trigger*.  Corollary: any maintenance action that moves a
+directory must append its own journal entry, or the detector decays with use.
+
 ## Classical Extras as editorial anchor
 
 Every editorial decision on attribution, annotation, and path construction must refract

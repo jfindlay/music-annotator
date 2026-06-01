@@ -1,0 +1,311 @@
+# music-annotator — Plan: Multi-medium Paths & Library Maintenance
+
+This plan is **session-sharded** for autonomous execution by `/run-plan` (see
+`~/.config/opencode/multi-session-planning.md` and `~/.config/opencode/command/run-plan.md`).
+The currency is the *commit-shaped session*: one `@build`/`@general`/`@explore` dispatch producing
+one commit, ending with green checks.  `@plan-deep` orchestrates; it verifies each session contract
+and dispatches `@committer`.  State lives in the Progress ledger, not in context.
+
+This is one of several independent sharded plans, each with its own ledger — see `docs/PLAN.md`
+(the index) for the full set.  Siblings: `docs/PLAN-fingerprint.md` (acoustic fingerprinting &
+archival identity) and `docs/PLAN-naming.md` (library-wide dir/file-naming unification, which
+depends on this plan's S0 substrate).  Cross-cutting backlog and external-dependency tracks live in
+`docs/BACKLOG.md`.
+
+The active scope is a single coherent featureset — **multi-medium-correct path construction and
+library maintenance** — decomposed into one substrate session plus three sub-tracks.  Items deferred
+until their substrate lands stay in the Roadmap appendix below (sub-track granularity), to be
+re-sharded only when their substrate lands; everything outside this featureset has moved to its
+sibling plan or to `docs/BACKLOG.md`.
+
+---
+
+## Purpose (design intent)
+
+Make path construction and library maintenance **correct for works that span multiple media**, and
+add the **soloist** as a path dimension when the work's canonical identity demands it — all refracted
+through the two editorial invariants already recorded in `docs/NOTES.md`:
+
+- **Path is a handle, not a manifest.**  Primary attribution goes in the path; full credits go in
+  tags.  Every dimension added to path construction needs a *work-level unification story* so that
+  movements of one work never disagree on the path.
+- **Journal detects, tag adjudicates.**  For library-grouping/regrouping work the journal is the
+  cheap detector and the embedded `MUSICBRAINZ_ALBUMID` tag is the present-state authority.
+
+The structural fact underneath the whole featureset: `run()` processes **one medium at a time**
+(`_pipeline.py:905`, `all_track_pairs` is built from `selected_medium` only), so the three existing
+work-level unification passes (`_pipeline.py:984–1082`) each carry the caveat *"spans movements on
+the same medium only."*  A concerto split across two discs, a symphony whose movements straddle a
+disc boundary, and a finisher credited on only the last disc are all silently mis-pathed today.  S0
+removes that constraint; the sub-tracks build on it.
+
+**Re-read this section at every ◆ sub-track boundary** to verify the work still tracks the intent
+(anti-defocus check).
+
+---
+
+## Session list
+
+One row = one dispatch = one commit.  `Cat` = category (A substrate / B algorithm / C optimization /
+X context-substance).  `T` = tier: O = Opus inflection (orchestrator designs inline, then HALT for
+sign-off); S = Sonnet `@build`.  ◆ marks the last session of a sub-track.  `Dep` lists the
+session-numbers / frozen contracts a row depends on.  `Expected files` and `KAT` are the
+`/run-plan` scope-drift and KAT-present gates; the per-session notes carry the exact line anchors.
+This table is intentionally wider than the 128-char rule — tables don't wrap, and the data is the
+point.
+
+| #  | Title (commit-shaped)                                  | Cat | T | Dep        | Expected files                                                       | KAT |
+|----|--------------------------------------------------------|-----|---|------------|----------------------------------------------------------------------|-----|
+| S0 | Aggregate work-groups across all media in `run()`      | A   | O | —          | `_pipeline.py`, `tests/unit/test_pipeline.py`                        | `test_top_work_groups_span_all_media` |
+| S1 | Unify composer last-names across media                 | B   | S | S0         | `_pipeline.py`, `tests/unit/test_pipeline.py`                        | `test_composer_unified_across_media` |
+| S2 | Unify recording / first-release dates across media     | B   | S | S0         | `_pipeline.py`, `tests/unit/test_pipeline.py`                        | `test_recording_date_work_unified_across_media` |
+| S3 | Fix `dd.dd` leaf prefix for multi-medium works ◆       | B   | S | S0         | `_pipeline.py`, `tests/unit/test_pipeline.py`                        | `test_dd_dd_prefix_stable_across_media` |
+| S4 | Carry top-work type into `TrackTags`                   | A   | S | —          | `models.py`, `_tags.py`, `tests/unit/test_pipeline.py`              | `test_cwp_worktype_genres_top_populated` |
+| S5 | Promote soloist into path for concerto works ◆         | B   | S | S0,S4      | `_tags.py`, `tests/unit/test_annotator.py`                          | `test_concerto_soloist_in_top_dir` |
+| S6 | Read-only `audit`: group journal by `release_id`       | B   | S | —          | `__main__.py`, `_pipeline_io.py`, `tests/unit/test_main.py`         | `test_audit_reports_mixed_mbid_and_split_release` |
+| S7 | Confirm candidates via `MUSICBRAINZ_ALBUMID` tag       | B   | S | S6         | `_pipeline_io.py`, `tests/unit/test_main.py`                        | `test_audit_confirms_candidate_via_tag` |
+| S8 | Add `regrouped` journal action and regroup move ◆      | B   | S | S6,S7      | `models.py`, `_pipeline_io.py`, `__main__.py`, `tests/unit/test_main.py` | `test_regroup_appends_journal_entry` |
+| S9 | Integrative writeup + codebase-audit handoff ◆         | X   | O | S1-3,S5,S8 | `docs/NOTES.md`, `README.md`                                         | — (prose) |
+
+### Sub-track boundaries
+
+- **◆ Sub-track A — cross-medium unification** ends at S3.  Ships: the three same-medium passes,
+  lifted to span all media of a release.
+- **◆ Sub-track B — concerto-soloist override** ends at S5.  Ships: soloist in the directory path
+  for canonical-identity works, with the soloist set unified across media (consumes S0).
+- **◆ Sub-track C — release-fragmentation detector** ends at S8.  Ships: read-only `audit`, then the
+  regrouping move.  This sub-track is **journal-side and orthogonal** — it consumes nothing from S0
+  and may be executed in any order relative to A/B.
+- **S9** is the integrative capstone for the whole featureset and the explicit handoff into the
+  long-deferred **Codebase audit** (see Roadmap appendix), which the user has flagged as imperative
+  *after* this featureset lands.
+
+### Notes per session
+
+- **S0 (Opus inflection point — SIGNED OFF; design frozen below).**  The substrate.  Smallest
+  correct change: have `run()` build `all_track_pairs` from *all* media of the release (not just
+  `selected_medium`) for the purpose of the post-processing passes, and merge `top_work_groups`
+  (`_pipeline.py:966`) so a top-work MBID groups movements across disc boundaries.  Do **not**
+  introduce a `ReleaseContext`/`WorkGroup` object yet — defer that to the codebase audit (S9
+  handoff) unless a later session proves it necessary (log as a Discovery).  Preserve the
+  single-medium *copy* semantics: only one medium's files are actioned per `run()`; the
+  cross-medium aggregation feeds the *path/tag* passes, not the copy loop.  **This is the contract
+  every sub-track-A/B session consumes — over-specify the grouping surface here.**
+
+  **FROZEN DESIGN (Opus sign-off, Shape A + eager fetch + global-index filter):**
+  - **Scope: ingest only.**  `run()` is the first-time-annotation path (reached from `apply` and
+    `search`→`discover()`); it fetches MB because the source files have no tags yet.  The eager
+    all-media fetch cost lives *entirely* here.  The maintenance/regroup path (S6–S8) is journal-
+    + tag-driven, never fetches, and consumes nothing from S0.  Do not let the maintenance framing
+    leak into S0.
+  - **`tags_map` spans all media (Shape A).**  Build `tags_map` for *every* track on *every* medium,
+    keyed by a single global index `0..N_total-1` over a new `all_media_pairs: list[tuple[MBTrack,
+    int]]` (track, medium_pos) flattened across `release.medium_list` in medium-then-track order.
+    `build_track_tags` + `fetch_recording_detail` + `fetch_acoustid_id` run for every such index.
+    The work-grouping (`top_work_groups`) and all three unification passes (`:967–1082`) iterate
+    this full map → they now span media for free.
+  - **Copy plan filters to the selected medium (global-index filter).**  Replace the old
+    `file_track_pairs = zip(src_files, all_track_pairs)` with a *copy subset*: the list of global
+    indices `idx` whose `medium_pos == selected_medium.position`, zipped with `src_files` in
+    order.  The track-count-mismatch check (`:908`), duration pre-flight (`:919`), copy-plan build
+    (`:1104`), dedup/collision (`:1119–1170`), and the copy/tag/verify/journal loop (`:1178`) all
+    operate on this copy subset **only** — preserving P3 and the journal-provenance chain verbatim.
+  - **`global_track_idx` for filenames stays copy-subset-local.**  `build_dest_path`'s
+    `global_track_idx` (`:1110`) is the 1-based enumeration over the *copy subset*, not the
+    all-media index — preserving today's per-run unique-filename behaviour for the actioned medium.
+  - **Single-medium releases: behaviourally identical to today.**  When `len(release.medium_list)
+    == 1`, the all-media set equals the selected-medium set, so no extra fetches and no behaviour
+    change.  (Falls out of Shape A naturally; no special-casing needed, but assert it in a test.)
+  - **RISK focus (per Discoveries "substrate copy-semantics regression"):** the single most likely
+    failure is leaking non-selected-media indices into the copy loop.  The `@build` session must
+    keep `tags_map` global-indexed while every copy-side structure (`plan`, `plan_pairs`,
+    `skip_dest`, `journal_entries`) is built from the copy subset.  The existing
+    `len(src_files) != <copy-subset count>` check is the guard.
+  - **KAT `test_top_work_groups_span_all_media`:** a 2-medium release whose movements of one top
+    work straddle the disc boundary; assert (a) the unification passes treat them as one group
+    (e.g. unified `recording_date_work` across both discs) and (b) only the selected medium's files
+    are journalled `tagged`.  Plus a single-medium regression assert that fetch counts are
+    unchanged.  The existing same-medium tests (`test_recording_date_work_unified_across_movements`,
+    `test_composer_unified_*`) must stay green unmodified.
+- **S1.**  Lift the composer unification pass (`_pipeline.py:984–1019`) to operate over the
+  cross-medium `top_work_groups` from S0.  No new fields; the `cwp_composers_is_fallback` flag
+  (`_tags.py:839`) and `effective_composers` fallback (`_tags.py:423`) are unchanged.
+- **S2.**  Lift the `recording_date_work` pass (`_pipeline.py:1021–1054`) and the
+  `recording_first_release_date` normalisation (`_pipeline.py:1056–1082`) to the cross-medium
+  groups.  These two share the same `_begins`-empty condition and ship together (one conceptual
+  unit: "session-date label correct across media").
+- **S3.**  `_dedup_plan_entries` (`_pipeline.py:655–697`) already uses the 1-based global index so
+  `dd.dd` leaf prefixes are unique across discs; verify and lock that behaviour with a multi-medium
+  KAT, and fix the *prefixing-where-it-should-not-appear* case noted in the backlog (`dd.dd` added
+  to multitrack works that are not partial-performance collisions).
+- **S4 (small substrate).**  Add `cwp_worktype_genres_top: str = ""` to `TrackTags` (`models.py`,
+  near line 1223) and populate it in `build_cwp_tags` from `top_work = work_hierarchy[-1]`
+  (`_tags.py:348`), alongside the existing bottom-work `cwp.worktype_genres = work_hierarchy[0].type`
+  (`_tags.py:359`).  Written to the file as a tag (do **not** add to the `to_file_dict` exclusion
+  set).  This is the field `build_dest_path` needs because the *bottom* work's type is empty for a
+  concerto movement — only the *root* work carries `"Concerto"`.
+- **S5.**  In `build_dest_path`, after the album-conductor/ensemble block (`_tags.py:952–964`), when
+  `file_dict.get("CWP_WORKTYPE_GENRES_TOP") == "Concerto"` (and the editorially-decided extension
+  set — see Discoveries S5-open), inject the album-level soloists (`tags.cea_album_soloists`, with
+  `tags.cea_soloists` as fallback) into the `performers` string.  The soloist set must be the
+  **cross-medium-unified** set from S0 so a two-disc concerto agrees on its path.  Concerto-type
+  detection via `top_work.type == "Concerto"` is the only mechanical case in scope; symphony-with-
+  soloist and other canonical-feature works are an editorial allowlist deferred to the appendix.
+- **S6.**  New `audit <dest_dir>` argparse subparser after the `prune` block (`__main__.py:~334`)
+  and a `case "audit":` arm before `case _:` (`__main__.py:417`); read-only, no
+  `--user-agent-email` required.  Group `read_journal` (`_pipeline_io.py:526`) entries with
+  `action == "tagged"` by `release_id`, derive the `work_dir` component as
+  `Path(e.destination).relative_to(dest_root).parts[1]`, and report **case (a)** (one `work_dir`,
+  multiple `release_id`) and **case (b)** (one `release_id`, multiple `work_dir`).  No tag read,
+  no moves.
+- **S7.**  For each S6 candidate dir only, read `MUSICBRAINZ_ALBUMID` back via the existing
+  `_read_tags_flac`/`_read_tags_mp3` (`_pipeline_io.py:581/595`; key uppercases to
+  `MUSICBRAINZ_ALBUMID` for both formats) to confirm the journal's `release_id` matches present
+  state, distinguishing real fragmentation from journal staleness.
+- **S8.**  Add `"regrouped"` to the documented `action` values on `TransactionEntry`
+  (`models.py:1487`, inline comment lists the valid strings — keep it `str`, not an enum, per the
+  existing model style) and implement a move that records old→new `destination`.  Any move MUST
+  append its own journal entry or the detector decays with use (NOTES "journal detects, tag
+  adjudicates", closing corollary).
+- **S9.**  Name the new prose invariants in `docs/NOTES.md` (the cross-medium aggregation contract;
+  the concerto-soloist path rule; the `regrouped` journal-action obligation), update `README.md` if
+  the `audit` subcommand is user-facing, and write the handoff brief for the **Codebase audit**
+  (module-boundary review, `__init__.py` API coherence, whether the deferred `ReleaseContext` object
+  is now warranted).
+
+---
+
+## Cross-session contracts
+
+The scaffolding that makes the sessions compose.  Three flavours, per the manual.  A contract is
+**frozen** once the session that establishes it is `done` (see the ledger) — later sessions consume
+it and must not break it.
+
+### Compiler-enforced (interfaces / signatures / model fields)
+
+- **C-S0 — cross-medium work-groups (FROZEN BY S0).**  `run()` exposes, to the post-processing
+  passes, a `top_work_groups: dict[str, list[int]]` whose values index into a `tags_map` covering
+  **all media** of the release, not just the selected medium.  The grouping key remains
+  `cwp_workid_top or musicbrainz_workid`.  Over-specified by design: S1/S2/S3/S5 all consume this
+  shape.  Widening it (extra grouping metadata) before it is frozen is allowed; altering it after
+  freeze is a destructive re-shard → HALT.
+- **C-S4 — `TrackTags.cwp_worktype_genres_top` (FROZEN BY S4).**  New `str` field, written to the
+  output file as tag `CWP_WORKTYPE_GENRES_TOP`, carrying `work_hierarchy[-1].type`.  Consumed by S5.
+- **C-S8 — `TransactionEntry.action` value set (WIDENED BY S8).**  `action` gains `"regrouped"`
+  alongside `"tagged" | "skipped" | "dry_run" | "downloaded" | "sidecar"`.  Additive only; existing
+  values and the `str` typing are unchanged.
+
+### Test-enforced (KATs — grow monotonically)
+
+Each row's KAT (session-list table) must be present and green at every subsequent session.  The
+multi-medium KATs (`*_across_media`) are the regression guard for the substrate: any later session
+that reintroduces single-medium-only aggregation breaks them.
+
+- The existing same-medium tests
+  (`test_recording_date_work_unified_across_movements`,
+  `test_composer_unified_across_movements_when_additional_only_on_some`,
+  `test_composer_unified_produces_same_top_dir`, and the `TestBuildDestPathEdgeCases` album-filter
+  tests) **must continue to pass** — S0–S3 generalise these passes, they do not replace them.
+
+### Prose-enforced (invariants — named, nothing auto-enforces)
+
+- **P1 — Path is a handle, not a manifest** (`NOTES.md`).  Consumed by S5 (soloist promotion is the
+  *exception* CE sanctions, not a licence to widen the path) and by S9.
+- **P2 — Journal detects, tag adjudicates** (`NOTES.md`).  Consumed by S6 (journal = detector), S7
+  (tag = authority), S8 (moves must re-journal or the detector decays).
+- **P3 — Single-medium copy semantics preserved.**  S0 widens *aggregation* scope only; the copy/
+  tag/verify loop and its journal-provenance chain (AGENTS.md "Transaction journal and user
+  confirmation provenance") still action exactly one medium per `run()`.  Consumed by every
+  sub-track-A/B session.
+- **P4 — Defensive download posture** (AGENTS.md).  No session in this featureset adds a network
+  call; if S7/S8 ever fetch, the two-layer retry pattern applies.
+
+---
+
+## Progress ledger
+
+Source of truth for resuming the chain cold.  `/run-plan` updates this on each successful commit.
+
+| #  | Status   | Commit | Froze / widened        | Notes |
+|----|----------|--------|------------------------|-------|
+| S0 | pending  | —      | C-S0                   | Opus inflection — HALT for sign-off before dispatch |
+| S1 | pending  | —      | —                      | consumes C-S0 |
+| S2 | pending  | —      | —                      | consumes C-S0 |
+| S3 | pending  | —      | — (◆ sub-track A)      | consumes C-S0 |
+| S4 | pending  | —      | C-S4                   | small substrate; no S0 dependency |
+| S5 | pending  | —      | — (◆ sub-track B)      | consumes C-S0, C-S4 |
+| S6 | pending  | —      | —                      | journal-side; orthogonal to S0 |
+| S7 | pending  | —      | —                      | consumes S6 |
+| S8 | pending  | —      | C-S8 (◆ sub-track C)   | consumes S6, S7 |
+| S9 | pending  | —      | — (◆ capstone)         | consumes S1,S2,S3,S5,S8; Opus writeup + audit handoff |
+
+**Frozen contracts:** _(none yet — populated as sessions complete)_
+
+---
+
+## Discoveries & risks
+
+Action-frame discoveries that update the static-frame roadmap.  Append during execution; evaluate at
+sub-track boundaries.
+
+- **PRECONDITION — no Makefile (blocks an unmodified `/run-plan` run).**  This project drives
+  everything through `tox` (`~/.local/bin/tox -m analyze`), which should be used instead..  Harder
+  bar applies: **100% branch coverage** and **pylint 10.00/10** — every new branch (including `case
+  _: # pragma: no cover` arms) needs a test.
+- **S5-open — editorial scope of "concerto-identity".**  `top_work.type == "Concerto"` is the only
+  mechanical signal in scope.  Organ symphonies (Saint-Saëns 3), violin-feature works ("Cinema
+  Serenade"), and symphony-with-soloist are canonical-identity but not type-`Concerto`; they need an
+  editorial allowlist or a "solo X" instrument-relation signal.  Deferred to the appendix item
+  "Directory path — concerto-like soloist override".  S5 ships the `Concerto`-type case only; the
+  allowlist is a follow-on session, not part of this featureset.
+- **RISK — `dd.dd` over-application (S3).**  The backlog notes `dd.dd` is added to *some* multitrack
+  works that are not partial-performance collisions.  Confirm the exact trigger in
+  `_dedup_plan_entries` before changing it; the fix must not regress the legitimate
+  partial-performance-collision case the prefix exists for.
+- **RISK — substrate copy-semantics regression (S0).**  Widening aggregation to all media must not
+  leak other media's files into the copy loop (P3).  The `len(src_files) != len(all_track_pairs)`
+  check (`_pipeline.py:908`) is currently sized to the selected medium; S0 must keep the *copy*
+  track-pair list medium-scoped while the *aggregation* track-pair list spans media.  This is the
+  single most likely place for the substrate to go wrong — the Opus sign-off should scrutinise it.
+
+---
+
+## Roadmap appendix (sub-track granularity — not yet sharded)
+
+Items deferred until their substrate lands or an external dependency clears.  Per the manual, these
+are described at sub-track granularity; their sessions are crisply known only after the relevant
+substrate session completes.  Full original prose is preserved so no design context is lost.
+
+### Codebase audit (next after S9 — user-flagged imperative)
+
+As the project grows, do a thorough review of principles, structure, and goals.  Evaluate whether
+the module boundaries remain natural, whether the public API surface in `__init__.py` is still
+coherent, and whether any accumulated conventions need revisiting.  **The S9 capstone hands off to
+this**; specifically, decide whether the deferred `ReleaseContext`/`WorkGroup` aggregation object
+(considered and deliberately not built in S0) is now warranted.
+
+### Concerto-like soloist override — editorial allowlist (follow-on to S5)
+
+The mechanical `top_work.type == "Concerto"` case ships in S5.  The remaining open item is the
+non-mechanical canonical-soloist works: Saint-Saëns Symphony no. 3 (organ), "Cinema Serenade"
+(violin), and symphony-with-soloist generally.  Candidate signals: "solo X" instrument relation
+types, dedicated work-title patterns, or an editorial allowlist.  The rule answers "is the soloist
+part of the work's canonical identity?" not "is the soloist on the release?".  All decisions refract
+through the Classical Extras path-vs-tag distinction (primary attribution in path, full credits in
+tags).  See NOTES.md "Path is a handle, not a manifest."
+
+### Moved out of this plan
+
+The following formerly lived in this appendix and have moved to their own homes during the
+plan-split (see `docs/PLAN.md` index):
+
+- **Library-wide dir/file-naming unification** (the "broader passes" — language/misspelling
+  variations, work-level arranger/finisher path credit, library-wide `dd.dd` retroactive pass,
+  re-annotation/update-diff mode, user-cover-art metadata extraction) → **`docs/PLAN-naming.md`**.
+  It depends on this plan's S0 multi-medium substrate and on `PLAN-fingerprint.md`'s identity layer.
+- **Source verification — Chromaprint `--verify-fingerprints`** → subsumed by
+  **`docs/PLAN-fingerprint.md`** (rung 5 / F6, `fetch_acoustid_lookup`); retired there at F8.
+- **Submit disc IDs to MusicBrainz**, **PrestoMusic / whipper / MakeMKV source support**, **playlist
+  generation**, **CE-tag audit**, **cover-art sleeve type**, the **Deferred** editorial items
+  (`[rec YYYY]` label, work-title authenticity, native-script names), and the **musicbrainzngs2
+  contributions** track → **`docs/BACKLOG.md`**.
