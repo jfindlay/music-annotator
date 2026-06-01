@@ -1164,6 +1164,11 @@ class TrackTags(BaseModel):
     cea_ensembles_sort: str = ""
     cea_album_soloists: str = ""
     cea_album_soloists_sort: str = ""
+    # Path-only helper: cross-medium UNION of soloists across all movements of a top work.
+    # Populated by run()'s soloist-union pass in _pipeline.py; never written to audio files
+    # (excluded in to_file_dict — mirrors recording_date_work).  Used by build_dest_path
+    # to inject soloists into the performers component for Concerto works.
+    cea_album_soloists_unified: str = ""
     cea_album_conductors: str = ""
     cea_album_conductors_sort: str = ""
     cea_album_ensembles: str = ""
@@ -1239,7 +1244,7 @@ class TrackTags(BaseModel):
 
         Internal fields (``cea_conductors_list``, ``cea_ensembles_list``,
         ``cea_album_conductors_list``, ``cea_album_ensembles_list``, ``recording_date_work``,
-        ``cwp_composers_is_fallback``) are excluded.
+        ``cwp_composers_is_fallback``, ``cea_album_soloists_unified``) are excluded.
         Empty values are excluded.  All
         keys are uppercased to match Vorbis Comment / ID3 conventions.  Dynamically-added per-level
         ``cwp_work_N`` / ``cwp_workid_N`` / ``cwp_part_N`` extra fields are included.
@@ -1254,6 +1259,7 @@ class TrackTags(BaseModel):
             "cea_album_ensembles_list",
             "recording_date_work",
             "cwp_composers_is_fallback",
+            "cea_album_soloists_unified",
         }
         out: dict[str, str] = {}
         for field_name, value in self.model_dump(exclude=excluded).items():

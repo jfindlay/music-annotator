@@ -1770,6 +1770,115 @@ class TestBuildDestPathEdgeCases:
 
 
 # ---------------------------------------------------------------------------
+# build_dest_path — concerto-soloist path injection (KAT S5)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDestPathConcertoSoloist:
+    """KAT S5: build_dest_path injects cea_album_soloists_unified into performers for Concerto works.
+
+    P1 gate: injection is strictly conditioned on ``CWP_WORKTYPE_GENRES_TOP == "Concerto"``
+    (C-S4 field).  Non-Concerto works must NOT have the soloist injected.
+    """
+
+    def _make_concerto_tags(
+        self,
+        *,
+        worktype_genres_top: str = "Concerto",
+        unified_soloists: str = "",
+        conductor_name: str = "Karajan",
+    ) -> TrackTags:
+        """Build a TrackTags instance for a concerto movement.
+
+        :param worktype_genres_top: Value for ``cwp_worktype_genres_top`` (controls gate).
+        :param unified_soloists: Value for ``cea_album_soloists_unified`` (path-only helper).
+        :param conductor_name: Name to use for the album-level conductor list entry.
+        :returns: A populated :class:`~music_annotator.models.TrackTags` instance.
+        """
+        conductor = ArtistEntry(name=conductor_name, sort=f"{conductor_name}, X", mbid="k1")
+        return TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="3",
+            cwp_work_top="Violin Concerto in D major",
+            cwp_workid_top="w-conc-1",
+            cwp_composer_lastnames="Brahms",
+            cwp_worktype_genres_top=worktype_genres_top,
+            cea_album_soloists_unified=unified_soloists,
+            cea_conductors_list=[conductor],
+            cea_ensembles_list=[],
+            cea_album_conductors_list=[conductor],
+            cea_album_ensembles_list=[],
+        )
+
+    def test_concerto_soloist_in_top_dir(self, fs: FakeFilesystem) -> None:
+        """For a Concerto work, cea_album_soloists_unified appears in the top-level directory.
+
+        The top-level performers component is: "<soloists>; <conductor/ensemble>".
+        Soloist-first is the CE convention for a concerto (soloist is the headline performer).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_concerto_tags(worktype_genres_top="Concerto", unified_soloists="Mutter")
+        result = build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
+            tags,
+        )
+        top_dir = result.parts[2]  # dest_root / top_dir / work_dir / filename
+        assert "Mutter" in top_dir, f"Expected soloist 'Mutter' in top-level directory component, got '{top_dir}'"
+        # Soloist must appear BEFORE the conductor (soloist-first join order).
+        assert top_dir.index("Mutter") < top_dir.index("Karajan"), f"Expected soloist before conductor in '{top_dir}'"
+
+    def test_non_concerto_soloist_not_injected(self, fs: FakeFilesystem) -> None:
+        """For a non-Concerto work, cea_album_soloists_unified is NOT injected into the path.
+
+        P1 gate is strict: only ``CWP_WORKTYPE_GENRES_TOP == "Concerto"`` triggers injection.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        # Same tags as the concerto test but worktype_genres_top = "Symphony" → no injection.
+        tags = self._make_concerto_tags(worktype_genres_top="Symphony", unified_soloists="Mutter")
+        result = build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
+            tags,
+        )
+        top_dir = result.parts[2]
+        assert "Mutter" not in top_dir, (
+            f"Expected soloist NOT injected for non-Concerto work, but found 'Mutter' in '{top_dir}'"
+        )
+
+    def test_concerto_empty_unified_no_injection(self, fs: FakeFilesystem) -> None:
+        """For a Concerto work with no unified soloists, the performers component is unchanged.
+
+        When ``cea_album_soloists_unified`` is empty, the gate condition is false and no
+        soloist prefix is added to performers.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = self._make_concerto_tags(worktype_genres_top="Concerto", unified_soloists="")
+        result = build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
+            tags,
+        )
+        top_dir = result.parts[2]
+        # The conductor is present (path still works), but no spurious empty-prefix injection.
+        assert "Karajan" in top_dir
+        assert top_dir.startswith("Brahms"), f"Expected top_dir to start with 'Brahms' (composer), got '{top_dir}'"
+
+
+# ---------------------------------------------------------------------------
 # build_work_hierarchy — non-backward/parts relation (598->597 branch)
 # ---------------------------------------------------------------------------
 

@@ -1125,6 +1125,40 @@ def run(
                         if tags_map[grp_idx].recording_first_release_date:
                             tags_map[grp_idx].recording_first_release_date = _rel_year
 
+            # Compute cea_album_soloists_unified: the cross-medium UNION of soloists for this
+            # top work, written to every track in the group as a PATH-ONLY helper field (never
+            # written to audio files — excluded in TrackTags.to_file_dict).
+            #
+            # Editorial rule: unified path components ACCUMULATE per work across media.  A
+            # concerto whose movements feature different soloists on different discs should
+            # collect ALL of them into the path so every movement lands in the same directory.
+            # The per-track tag worldview is NOT changed — only this path helper accumulates.
+            #
+            # Source priority per track:
+            #   1. cea_album_soloists (release-level soloist credit, most stable)
+            #   2. cea_soloists       (per-track fallback when album-level is empty)
+            #
+            # Dedup is order-preserving (first-appearance order); "; " join, preserving any
+            # instrument-in-parens suffix already present in the individual strings.
+            #
+            # group_idxs are global indices over all_media_pairs so this pass spans all
+            # media of the release (C-S0 contract).
+            _seen_soloists: set[str] = set()
+            _union_soloists: list[str] = []
+            for grp_idx in group_idxs:
+                t = tags_map[grp_idx]
+                source = t.cea_album_soloists or t.cea_soloists
+                if source:
+                    for _soloist_entry in source.split("; "):
+                        _soloist_entry = _soloist_entry.strip()
+                        if _soloist_entry and _soloist_entry not in _seen_soloists:
+                            _seen_soloists.add(_soloist_entry)
+                            _union_soloists.append(_soloist_entry)
+            if _union_soloists:
+                _unified_soloists = "; ".join(_union_soloists)
+                for grp_idx in group_idxs:
+                    tags_map[grp_idx].cea_album_soloists_unified = _unified_soloists
+
     else:
         # Minimal tags for every track on every medium (uniform map shape regardless of branch).
         # This ensures tags_map is always keyed 0..N_total-1 over all_media_pairs.

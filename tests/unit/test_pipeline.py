@@ -3379,6 +3379,285 @@ class TestRunFullPipeline:
             f"Expected cwp_worktype_genres='' (movement work type), got '{tags.cwp_worktype_genres}'"
         )
 
+    def test_album_soloists_unioned_across_media(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT S5: cea_album_soloists_unified accumulates soloists across all media (C-S0 substrate).
+
+        A 2-medium concerto release where disc 1 (the selected/copied medium) credits Soloist A
+        and disc 2 credits Soloist B.  The soloist-union pass must accumulate both into
+        ``cea_album_soloists_unified`` on the disc-1 track, proving the pass saw disc 2.
+
+        Design of the soloist setup:
+        - Soloist A is in ``release.artist_credit`` (album-level) AND in disc-1 recording's
+          artist-relation-list as a performer → disc-1 ``cea_album_soloists = "Soloist A"``
+          (branch 1: source is ``t.cea_album_soloists``).
+        - Soloist B is NOT in ``release.artist_credit`` but IS in disc-2 recording's
+          artist-relation-list as a performer → disc-2 ``cea_album_soloists = ""``
+          (branch 2: fallback to ``t.cea_soloists = "Soloist B"``).
+
+        Assertions:
+        (a) Disc-1 track's ``cea_album_soloists_unified`` contains both "Soloist A" and "Soloist B" —
+            the cross-medium union.  If the pass were single-medium only, only "Soloist A" would appear.
+        (b) ``apply_tags_flac`` is called exactly once (disc 1 only — P3 preserved; disc 2 is never copied).
+        (c) ``fetch_recording_detail`` is called for both recordings (all-media eagerness).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        # Source dir contains ONLY disc 1's 2 files — disc 2 is never copied.
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        top_work_id = "w-concerto"
+
+        # Movement works — all three reference the same top work so they form one group.
+        work_mvt_d1 = _w(
+            {
+                "id": "w-mvt-sol-d1",
+                "title": "I. Allegro",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-brahms", "name": "Brahms", "sort-name": "Brahms, Johannes"},
+                        "attribute-list": [],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Violin Concerto"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        work_mvt_d2 = _w(
+            {
+                "id": "w-mvt-sol-d2",
+                "title": "II. Adagio",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-brahms", "name": "Brahms", "sort-name": "Brahms, Johannes"},
+                        "attribute-list": [],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Violin Concerto"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        work_root = _w(
+            {
+                "id": top_work_id,
+                "title": "Violin Concerto",
+                "type": "Concerto",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        # Build the release with Soloist A in artist-credit (album-level) but NOT Soloist B.
+        # This ensures disc-1 tracks get cea_album_soloists="Soloist A" (album-artist branch)
+        # and disc-2 gets cea_album_soloists="" with cea_soloists="Soloist B" (fallback branch).
+        # Disc 1 has TWO tracks (both crediting Soloist A) so the second disc-1 track triggers
+        # the dedup path in the union pass (entry already in _seen_soloists → False branch).
+        release = MBRelease.model_validate(
+            {
+                "id": "rel-sol-union",
+                "title": "Brahms: Violin Concerto",
+                "date": "1990",
+                "status": "Official",
+                "barcode": "",
+                "artist-credit": [
+                    {
+                        "name": "Soloist A",
+                        "artist": {"id": "a-sol-a", "name": "Soloist A", "sort-name": "A, Soloist", "type": "Person"},
+                        "joinphrase": "",
+                    }
+                ],
+                "release-group": {"id": "rg-conc", "primary-type": "Album", "first-release-date": "1990"},
+                "label-info-list": [],
+                "text-representation": {"script": "Latn", "language": "eng"},
+                "medium-list": [
+                    {
+                        "position": 1,
+                        "format": "CD",
+                        "track-list": [
+                            {
+                                "id": "trk-sol-d1-1",
+                                "position": 1,
+                                "recording": {"id": "rec-sol-d1-1", "title": "I. Allegro", "artist-credit": []},
+                            },
+                            {
+                                "id": "trk-sol-d1-2",
+                                "position": 2,
+                                "recording": {"id": "rec-sol-d1-2", "title": "I. Allegro (cadenza)", "artist-credit": []},
+                            },
+                        ],
+                    },
+                    {
+                        "position": 2,
+                        "format": "CD",
+                        "track-list": [
+                            {
+                                "id": "trk-sol-d2-1",
+                                "position": 1,
+                                "recording": {"id": "rec-sol-d2-1", "title": "II. Adagio", "artist-credit": []},
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+
+        # Disc 1 has 2 movements (both under the same top work); disc 2 has 1 movement.
+        # Add a second movement work for disc 1's track 2.
+        work_mvt_d1_2 = _w(
+            {
+                "id": "w-mvt-sol-d1-2",
+                "title": "I. Allegro (cadenza)",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-brahms", "name": "Brahms", "sort-name": "Brahms, Johannes"},
+                        "attribute-list": [],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Violin Concerto"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        rec_to_work: dict[str, MBWork] = {
+            "rec-sol-d1-1": work_mvt_d1,
+            "rec-sol-d1-2": work_mvt_d1_2,
+            "rec-sol-d2-1": work_mvt_d2,
+        }
+        work_registry: dict[str, MBWork] = {
+            "w-mvt-sol-d1": work_mvt_d1,
+            "w-mvt-sol-d1-2": work_mvt_d1_2,
+            "w-mvt-sol-d2": work_mvt_d2,
+            top_work_id: work_root,
+        }
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            """Return a recording with soloist relation based on disc/track.
+
+            Disc-1 tracks both credit Soloist A (album artist) → cea_album_soloists populated.
+            The second disc-1 track contributes Soloist A again → exercises the dedup branch
+            (entry already in _seen_soloists → False path at the duplicate-check).
+            Disc-2 credits Soloist B (NOT an album artist) → cea_album_soloists empty;
+            fallback to cea_soloists = "Soloist B".
+
+            :param rec_id: Recording MBID.
+            :returns: An :class:`~music_annotator.models.MBRecording` instance.
+            """
+            work = rec_to_work[rec_id]
+            if rec_id in ("rec-sol-d1-1", "rec-sol-d1-2"):
+                # Soloist A on both disc-1 movements → dedup path on second movement.
+                soloist_rel: list[JSON] = [
+                    {
+                        "type": "performer",
+                        "artist": {"id": "a-sol-a", "name": "Soloist A", "sort-name": "A, Soloist"},
+                        "attribute-list": ["violin"],
+                        "direction": "backward",
+                    }
+                ]
+            else:
+                # Soloist B on disc 2 — not an album artist → fallback branch.
+                soloist_rel = [
+                    {
+                        "type": "performer",
+                        "artist": {"id": "a-sol-b", "name": "Soloist B", "sort-name": "B, Soloist"},
+                        "attribute-list": ["violin"],
+                        "direction": "backward",
+                    },
+                ]
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": work.title,
+                    "artist-credit": [],
+                    "artist-relation-list": soloist_rel,
+                    "work-relation-list": [{"type": "performance", "work": {"id": work.id, "title": work.title}}],
+                }
+            )
+
+        def _fetch_work(work_id: str) -> MBWork:
+            """Return the work model for the given MBID.
+
+            :param work_id: Work MBID.
+            :returns: An :class:`~music_annotator.models.MBWork` instance.
+            """
+            return work_registry[work_id]
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mock_fetch_rec = mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+
+        music_annotator.run(
+            release_id="rel-sol-union",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        # (a) Both disc-1 tracks must carry the cross-medium union (A + B).
+        # Without cross-medium aggregation, only "Soloist A" (disc-1 album soloist) would appear.
+        tags_d1_1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags_d1_2: TrackTags = mock_tag.call_args_list[1][0][1]
+        for tags_d1, label in ((tags_d1_1, "track 1"), (tags_d1_2, "track 2")):
+            unified = tags_d1.cea_album_soloists_unified
+            assert "Soloist A" in unified, (
+                f"Expected 'Soloist A' in cea_album_soloists_unified ({label}), got '{unified}'. "
+                "Disc-1 album soloist (cea_album_soloists branch) must be included."
+            )
+            assert "Soloist B" in unified, (
+                f"Expected 'Soloist B' in cea_album_soloists_unified ({label}), got '{unified}'. "
+                "This indicates the union pass did not see disc-2 (cea_soloists fallback branch)."
+            )
+        # Dedup: "Soloist A" must appear only ONCE in the unified string (not twice, even though
+        # both disc-1 tracks credit Soloist A — exercises the duplicate-skip branch at the union pass).
+        assert tags_d1_1.cea_album_soloists_unified.count("Soloist A") == 1, (
+            f"Expected 'Soloist A' to appear exactly once in '{tags_d1_1.cea_album_soloists_unified}' "
+            "(dedup must eliminate the second disc-1 occurrence of the same soloist)."
+        )
+
+        # (b) Only disc-1 is copied and tagged — P3 preserved (disc 1 has 2 tracks).
+        assert mock_tag.call_count == 2, f"Expected 2 tagging calls (disc 1 only, 2 tracks), got {mock_tag.call_count}"
+
+        # Journal must record exactly 2 "tagged" entries (disc 1 only).
+        journal_path = dest / JOURNAL_FILENAME
+        assert journal_path.exists(), "Journal file must exist after a successful run"
+        journal_data = json.loads(journal_path.read_text(encoding="utf-8"))
+        tagged_entries = [e for e in journal_data if e["action"] == "tagged"]
+        assert len(tagged_entries) == 2, f"Expected 2 'tagged' journal entries (disc 1 only), got {len(tagged_entries)}"
+
+        # (c) fetch_recording_detail called for all 3 recordings (all-media eagerness).
+        assert mock_fetch_rec.call_count == 3, (
+            f"Expected 3 fetch_recording_detail calls (disc 1 × 2 + disc 2 × 1), got {mock_fetch_rec.call_count}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # KAT C-L1 — intermediate sibling index substrate (run() enumeration pass)
