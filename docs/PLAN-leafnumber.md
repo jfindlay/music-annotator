@@ -68,7 +68,7 @@ sub-track.  `Dep` lists prerequisite sessions.  Table intentionally wider than 1
 | #  | Title (commit-shaped)                                          | Cat | T | Dep      | Expected files                                                       | KAT |
 |----|----------------------------------------------------------------|-----|---|----------|----------------------------------------------------------------------|-----|
 | L0 | Leaf `nn` from per-group track index, not ordering-key         | A   | O | —        | `_tags.py`, `tests/unit/test_annotator.py`                          | `test_split_movement_leaf_sequential` |
-| L1 | Uniform intermediate-dir numbering from per-group sub-index ◆  | B   | S | L0       | `_tags.py`, `tests/unit/test_annotator.py`                          | `test_opera_scene_intermediate_dir_numbered` |
+| L1 | Uniform intermediate-dir numbering from per-group sub-index ◆  | B   | S | L0       | `_pipeline.py`, `_tags.py`, `tests/unit/test_annotator.py`, `tests/unit/test_pipeline.py` | `test_opera_scene_intermediate_dir_numbered` |
 | L2 | Normalise hierarchy depth within a work-group                  | B   | O | L0       | `_tags.py`, `tests/unit/test_annotator.py`                          | `test_mixed_depth_suite_renders_uniform` |
 | L3 | Retire dead `_dedup_plan_entries` + `.dd` machinery ◆         | B   | S | L0,L1,L2 | `_pipeline.py`, `tests/unit/test_pipeline.py`                       | `test_no_dd_suffix_on_distinct_titles` |
 | L4 | `repath` maintenance mode: re-path annotated works             | C   | O | L0,L1,L2 | `__main__.py`, `_pipeline_io.py`, `models.py`, `tests/unit/test_main.py` | `test_repath_moves_and_journals_legacy_layout` |
@@ -193,6 +193,20 @@ sub-track.  `Dep` lists prerequisite sessions.  Table intentionally wider than 1
   - **Site comment obligation.**  Both leaf sites must carry a one-line comment stating *why* the leaf
     reads `CWP_MOVT_NUM` and not `MOVEMENTNUMBER` (they hold identical values today but are distinct
     vocabularies — standard tag vs CWP path index — and may diverge).
+- **C-L1 — per-group intermediate sibling-index (FROZEN BY L1 — added via re-shard).**  The
+  substrate that made C-L0 a clean `_tags.py`-only change does **not** exist for intermediate levels:
+  they carry only the raw MB `cwp_ordering_key_{i}` (`_tags.py:848`), which is non-gap-free and can
+  collapse when one intermediate node groups several children.  `build_dest_path` is per-track and
+  cannot see the sibling set.  L1 therefore adds a **pipeline-side enumeration** mirroring the leaf
+  pass: within each top-work group (the existing `top_work_groups` loop, `_pipeline.py:994`), for
+  each intermediate level `i >= 1`, rank the **distinct `cwp_workid_{i}` values that share a parent
+  `cwp_workid_{i+1}`** by ascending `cwp_ordering_key_{i}`, assigning a **gap-free, 1-based**
+  sibling index.  Store it as model_extra `cwp_inter_index_{i}` on every track of that node.
+  `build_dest_path`'s intermediate-dir loop (`_tags.py:1059-1064`) consumes `CWP_INTER_INDEX_{i}`
+  for the `nn`, falling back to the old `_nn(cwp_ordering_key_{i}, i)` only when the index is absent
+  (no-group / no-hierarchy escape hatch).  Additive: no field is removed; `cwp_ordering_key_{i}`
+  stays (still used for ranking and as fallback).  Consumed by L2 (depth normalisation reads the
+  same per-group structure) and L3.
 - **C-L4 — `TransactionEntry.action` gains `"repathed"` (WIDENED BY L4).**  Additive `str` value
   alongside the existing set; existing values and `str` typing unchanged.
 
@@ -219,8 +233,8 @@ Source of truth for resuming cold.  `/run-plan` updates this on each successful 
 
 | #  | Status  | Commit | Froze / widened     | Notes |
 |----|---------|--------|---------------------|-------|
-| L0 | designed | —      | C-L0                | Opus inflection; design resolved at sign-off: leaf = `CWP_MOVT_NUM` (existing field reused, no model change), `CWP_ORDERING_KEY_0` dropped from leaf, permanent authority. HALTED for sign-off before implementation dispatch. |
-| L1 | pending | —      | — (◆ sub-track A)   | consumes C-L0; intermediate-dir numbering |
+| L0 | done    | 011490a | C-L0 **FROZEN** | Leaf = `CWP_MOVT_NUM` (existing field reused, no model change); `CWP_ORDERING_KEY_0` dropped from leaf; permanent authority. KAT `test_split_movement_leaf_sequential` (collision + Bach-Mass regression) asserts it. Site-comment obligation met at both leaf sites. Files: `_tags.py`, `test_annotator.py`. tox -m analyze green. |
+| L1 | done    | c8ee525 | C-L1 **FROZEN** (◆ sub-track A) | RE-SHARDED (additive): widened to touch `_pipeline.py`; added `cwp_inter_index_{i}` substrate (mirror of `cwp_movt_num`), gap-free per-group sibling index; `build_dest_path` consumes it, raw ordering-key = fallback. KAT `test_opera_scene_intermediate_dir_numbered` + pipeline substrate test assert it. One legitimate `# pragma: no cover` arm (unreachable empty-node-order guard) verified by orchestrator. consumes C-L0. tox -m analyze green. |
 | L2 | pending | —      | — (Opus inflection) | shape-discriminating depth policy (census done: Shape A is correct & untouched; C/D are the target); decided at HALT |
 | L3 | pending | —      | — (◆ sub-track B)   | remove/repurpose dead dedup; single numbering authority |
 | L4 | pending | —      | C-L4 (◆ sub-track C) | Opus inflection; `repath` mode; user-flagged hard requirement |
@@ -263,6 +277,17 @@ Append during execution; evaluate at sub-track boundaries.
   that clean-up ever happens; this divergence is the signal for a future MB-submit-mode plan, not a
   reason to weaken C-L0.  (Capture candidate: "where a derived index and a source key that *should*
   agree diverge, the divergence set is the upstream-data-repair worklist.")
+- **RE-SHARD (additive, approved at L1 pre-dispatch) — L1 widened to touch `_pipeline.py`.**  L0's
+  fix was a clean two-file change only because the leaf's per-group index (`cwp_movt_num`) already
+  existed in the substrate.  The orchestrator caught, before dispatching L1, that **no analogous
+  per-group sibling-index exists for intermediate levels** — they carry only the raw MB ordering-key,
+  and `build_dest_path` (per-track) cannot derive a sibling rank locally.  L1's expected files were
+  widened from {`_tags.py`, `test_annotator.py`} to {`_pipeline.py`, `_tags.py`, `test_annotator.py`,
+  `test_pipeline.py`} and contract **C-L1** added (new `cwp_inter_index_{i}` substrate field).  This
+  is additive — no frozen contract altered, no committed session reordered — so it was permitted with
+  user approval despite the run lacking `may-reshard`.  Lesson: *a fix that is clean at the leaf
+  because a substrate index already exists is not automatically clean one level up — verify the
+  analogous substrate before scoping the sibling session to the same file set.*
 - **RISK — double numbering authority.**  Until L3 removes the dedup pass, both `cwp_movt_num` and
   `_dedup_plan_entries` can assign leaf numbers.  L0-L2 must not rely on dedup; L3 closes the risk by
   making the per-group index the sole authority.
