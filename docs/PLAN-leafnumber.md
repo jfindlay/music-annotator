@@ -217,8 +217,35 @@ sub-track.  `Dep` lists prerequisite sessions.  Table intentionally wider than 1
   (no-group / no-hierarchy escape hatch).  Additive: no field is removed; `cwp_ordering_key_{i}`
   stays (still used for ranking and as fallback).  Consumed by L2 (depth normalisation reads the
   same per-group structure) and L3.
-- **C-L4 — `TransactionEntry.action` gains `"repathed"` (WIDENED BY L4).**  Additive `str` value
-  alongside the existing set; existing values and `str` typing unchanged.
+- **C-L4 — `TransactionEntry.action` gains `"repathed"`; `repath` subcommand (DESIGNED at the
+  2026-06-01 Opus-inflection HALT; FROZEN once L4 lands).**  Additive `str` value alongside the
+  existing set (`"tagged"`, `"skipped"`, `"dry_run"`, `"downloaded"`, `"sidecar"`); existing values
+  and `str` typing unchanged.  The resolved `repath` interface (decided at sign-off):
+  - **Subcommand.**  `music-annotator repath <dest_dir> [--dry-run]` mirroring the `prune` argparse
+    block.  Operates on the library root; takes no `src_dir`.  New dispatch arm in `main()`'s
+    `match args.subcommand`.  **Acts by default; `--dry-run` previews** (chosen for CLI consistency
+    with `apply`/`search`).  Help text MUST carry a prominent warning that a bare invocation
+    mass-relocates the library, and the `repathed` journal is the recovery record.
+  - **Recompute source = embedded tags, offline.**  No MB network calls.  Reuse `read_journal`,
+    `_read_tags_flac`/`_read_tags_mp3`, `_sha256_file`, `build_dest_path`, `_assess_collisions`/
+    `_apply_collision_suffix`, `_verify_copy`, `write_transaction_log`.  Stands alone on these
+    `_pipeline`/`_pipeline_io` primitives — it does NOT depend on the multimedium plan's `audit`/
+    `regroup` machinery, which does not yet exist in the codebase (confirmed at design time).
+  - **Move semantics (per file).**  Atomic `os.replace`/rename within the library (no byte copy on
+    same filesystem); on `OSError`/`EXDEV` (cross-filesystem) fall back to `shutil.copy2` + verify +
+    `unlink` of the old file.  After the move: re-read dest SHA-256 == pre-move SHA, then run
+    `_verify_copy` tag round-trip — **only then** append the journal entry.
+  - **No-op skip.**  Recomputed path == current path → no move, no journal entry.
+  - **Collision (2 legacy → 1 new path).**  Resolve via the SAME `_assess_collisions` /
+    `_apply_collision_suffix` path `run()` uses (acoustid+length-aware) — single collision authority
+    across ingest and repath.  The Handel ragged-depth merge is the known colliding case.
+  - **Provenance chain (preserves the AGENTS.md transaction-journal invariant verbatim).**  For each
+    move: capture src SHA → move → dest SHA equal (`RuntimeError` on mismatch, NO journal entry) →
+    `_verify_copy` (`RuntimeError` on mismatch, NO journal entry) → ONLY THEN append
+    `TransactionEntry(action="repathed", source=<old path>, destination=<new path>)`.  Each entry is
+    journalled (flushed) before the next file is moved, so a crash leaves a complete audit trail of
+    what already moved.  The `repathed` action carries the SAME strength of evidence as `tagged`.
+  Widened by L4.  Consumed by L5 (documents the `repathed` journal obligation as invariant P-L3).
 
 ### Test-enforced (KATs grow monotonically)
 
