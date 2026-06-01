@@ -26,10 +26,12 @@ pip install music-annotator
 ## Usage
 
 ```
-music-annotator apply  <src_dir> <dest_dir> --release-id <MBID> --user-agent-email <EMAIL> [options]
-music-annotator search <src_dir> [<src_dir> ...] <dest_dir> --user-agent-email <EMAIL> [options]
-music-annotator prune  <src_dir> [<src_dir> ...] <dest_dir> [-y]
-music-annotator repath <dest_dir> [--dry-run]
+music-annotator apply   <src_dir> <dest_dir> --release-id <MBID> --user-agent-email <EMAIL> [options]
+music-annotator search  <src_dir> [<src_dir> ...] <dest_dir> --user-agent-email <EMAIL> [options]
+music-annotator prune   <src_dir> [<src_dir> ...] <dest_dir> [-y]
+music-annotator repath  <dest_dir> [--dry-run]
+music-annotator audit   <dest_dir>
+music-annotator regroup <dest_dir> [--dry-run] [-y]
 ```
 
 ### `apply` — copy and tag for a known release MBID
@@ -83,6 +85,36 @@ equal after the move, and `_verify_copy` confirms the tag round-trip — only th
 already moved.  Collisions (two legacy paths mapping to one new path) are resolved by the same
 acoustid+length-aware machinery used during ingest.
 
+### `audit` — detect release fragmentation in an annotated library
+
+| Argument | Description |
+|---|---|
+| `dest_dir` | Root of the annotated library (the journal is read from here) |
+
+Read-only; no `--user-agent-email` and no network calls.  Groups the journal's `action="tagged"`
+entries to surface two fragmentation shapes — one work directory populated from multiple release
+MBIDs (a regrouping candidate), and one release MBID whose tracks landed in multiple work directories
+(a split release).  Each candidate is then *adjudicated* by reading the embedded `MUSICBRAINZ_ALBUMID`
+tag back from its files and comparing it to the journal's recorded release: the journal detects, the
+tag confirms.  `audit` reports only; it never moves files or writes the journal.
+
+### `regroup` — consolidate confirmed split releases
+
+| Argument | Description |
+|---|---|
+| `dest_dir` | Root of the annotated library (the journal is read from here) |
+| `--dry-run` | Preview planned moves without writing anything |
+| `-y / --yes` | Skip the confirmation prompt and move immediately |
+
+Runs the `audit` confirmation and, for **tag-confirmed split releases only**, moves the scattered
+files to their canonical destinations (recomputed from embedded tags via the same offline
+`build_dest_path` engine `repath` uses).  Unlike `repath`, `regroup` **prompts for confirmation**
+before moving (use `-y/--yes` to skip, `--dry-run` to preview).  Each move follows the same
+SHA-256 + tag-round-trip provenance discipline as ingest and `repath`, and appends an
+`action="regrouped"` journal entry — with the release MBID recorded — only after the move is fully
+verified.  This keeps the fragmentation detector accurate: every move re-journals, so a later `audit`
+sees present state.
+
 ### Examples
 
 ```sh
@@ -118,6 +150,13 @@ music-annotator repath ~/Music/tagged --dry-run
 
 # Apply the current path policy to the whole library (moves files; journal is the recovery record)
 music-annotator repath ~/Music/tagged
+
+# Detect release fragmentation (read-only; no network)
+music-annotator audit ~/Music/tagged
+
+# Preview, then consolidate tag-confirmed split releases (prompts before moving)
+music-annotator regroup ~/Music/tagged --dry-run
+music-annotator regroup ~/Music/tagged
 ```
 
 # Destination directory layout
@@ -139,7 +178,10 @@ music-annotator repath ~/Music/tagged
   is the per-group sibling index (`CWP_INTER_INDEX_{i}`), falling back to MB `ordering-key`.
 - `MOVEMENTNUMBER` in tag and title string: composer's global numbering across the whole work
   (e.g. No. 39 in the Handel Messiah).  Distinct from the directory-local `nn` prefix.
-- Performer component: conductor + ensemble names only (soloists excluded for now).
+- Performer component: album-level conductor + ensemble names.  Soloists are excluded *except* for
+  concerto works (`top_work.type == "Concerto"`), where the soloist is part of the work's canonical
+  identity and is promoted into the path — accumulated across all media of the release so a multi-disc
+  concerto agrees on one directory.
 - Collection/cycle wrappers (Ring cycle, symphony cycles): excluded from filesystem, deferred to
   playlist generation.
 - `[rel YYYY]`: most-granular publication year from MB — `recording.first-release-date` →

@@ -119,6 +119,22 @@ pattern?  Surfaced from the `PLAN-multimedium.md` S8 interface decision and rout
 that plan's deletion; the S9 capstone hands the broader cross-command-coherence review into the
 Codebase audit track.
 
+## Concerto-like soloist override — editorial allowlist (follow-on to multimedium S5)
+
+The mechanical `top_work.type == "Concerto"` case shipped in `PLAN-multimedium.md` S5 (soloist
+promoted into the path, accumulated across media — see `docs/NOTES.md` "Concerto-soloist path
+promotion accumulates across media").  The remaining open item is the **non-mechanical
+canonical-soloist works**: Saint-Saëns Symphony no. 3 (organ), "Cinema Serenade" (violin), and
+symphony-with-soloist generally — canonical-identity but *not* MB type-`Concerto`.
+
+Candidate signals: a "solo X" instrument-relation type on the recording/work, dedicated work-title
+patterns, or an editorial allowlist.  The rule answers *"is the soloist part of the work's canonical
+identity?"* — not *"is the soloist on the release?"*.  All decisions refract through the Classical
+Extras path-vs-tag distinction (primary attribution in path, full credits in tags; see `docs/NOTES.md`
+"Path is a handle, not a manifest").  Substrate is already in place (C-S4 `CWP_WORKTYPE_GENRES_TOP`,
+the C-S0 cross-medium soloist union, and the `build_dest_path` concerto-injection site), so this is a
+small additive session once the editorial signal is decided.
+
 ## Other unsharded backlog
 
 - Playlist generation for collection/cycle groupings (Ring cycle, symphony cycles, etc.).

@@ -46,6 +46,77 @@ join key that goes stale the moment you act on it is the wrong *authority* for a
 purpose is to act — but it is fine as the *trigger*.  Corollary: any maintenance action that moves a
 directory must append its own journal entry, or the detector decays with use.
 
+## Cross-medium work-group aggregation (the multimedium substrate)
+
+`run()` processes one medium's *copy* at a time, but aggregates *path/tag* metadata across **all**
+media of the release.  The structural fact underneath: a concerto split across two discs, a symphony
+whose movements straddle a disc boundary, and a finisher credited on only the last disc were all
+silently mis-pathed when aggregation was single-medium.
+
+The substrate that fixes it: `tags_map` is keyed by a single global index over `all_media_pairs`
+(every track on every medium, in medium-then-track order).  `top_work_groups` and the three
+work-level unification passes (composer, `recording_date_work`, `recording_first_release_date`)
+iterate the full map, so a work whose movements straddle a disc boundary is treated as one group for
+free.  The copy/tag/verify/journal loop still operates on a `copy_subset` (the selected medium only),
+so exactly one medium's files are actioned per `run()` and single-medium copy semantics are preserved
+verbatim.  `CopyPlanEntry.idx` carries the global index so `tags_map[idx]` resolves, while
+`build_dest_path`'s `global_track_idx` stays copy-subset-local (preserving per-run unique filenames
+for the actioned medium).
+
+The durable rule: **aggregation spans media; mutation does not.**  Any future path/tag dimension that
+can vary across the movements of one work belongs in the all-media aggregation; anything that copies,
+writes, or moves bytes stays scoped to the one medium being actioned.  (Contract C-S0; the eager
+all-media MB fetch cost lives entirely in the ingest path — the maintenance/regroup path never
+fetches.)
+
+## Concerto-soloist path promotion accumulates across media
+
+The soloist enters the directory path only when it is part of the work's *canonical identity* — the
+CE-sanctioned exception to "path is a handle, not a manifest" (above).  The only mechanical signal in
+scope is `top_work.type == "Concerto"` (carried into tags as `CWP_WORKTYPE_GENRES_TOP`, because a
+concerto *movement*'s bottom-work type is empty — only the root work carries `"Concerto"`).
+Symphony-with-soloist, organ symphonies, and other canonical-feature works are an editorial allowlist
+deferred to a follow-on.
+
+The promoted soloist set is the **cross-medium union** of the work-group's soloists, carried in a
+path-only helper (`cea_album_soloists_unified`, computed by a union pass over the C-S0 work-groups and
+*never* written as a file tag).  So a multi-disc concerto whose movements feature different soloists
+on different discs accumulates *all* of them into one agreed directory path.
+
+This is the concrete instance of a general editorial rule — **unified path components accumulate per
+work across media.**  When tracks and work-hierarchies from multiple media merge into one unified
+library path, the path components are cumulative: both a primary composer and a finisher credited on
+only one disc accumulate into the unified path; different soloists across discs accumulate.  (The
+per-track *tag* worldview need not yet carry the union — that is a separate later initiative; only the
+path-construction helpers accumulate.)  Contracts C-S4 and C-S0; refracts P1.
+
+## The `regrouped` journal obligation (closing the detect→adjudicate→act cycle)
+
+Release fragmentation — one release's tracks scattered across multiple work directories, or one work
+directory populated from multiple releases — is handled as a three-step cycle that operationalises
+"journal detects, tag adjudicates" (above):
+
+1. **Detect (journal).**  The read-only `audit` subcommand groups `action == "tagged"` journal
+   entries by `release_id` and by `work_dir` (the second path component) and surfaces the two
+   fragmentation shapes.  Cheap: one journal parse, no tag scan, no network.
+2. **Adjudicate (tag).**  For each candidate, `audit` reads the embedded `MUSICBRAINZ_ALBUMID` tag
+   back from the candidate's destination files and compares it to the journal's `release_id` — a
+   candidate is *confirmed* when at least one backing file's present-state tag matches the journal's
+   claim, distinguishing real fragmentation from journal staleness.
+3. **Act (move + re-journal).**  The `regroup` subcommand moves *confirmed* split-release files to
+   their canonical paths (recomputed from embedded tags via `build_dest_path`, offline) and appends
+   an `action="regrouped"` journal entry per move.
+
+The obligation: **every regroup move re-journals, or the detector decays with use** (the P2 closing
+corollary).  Unlike `repath` (which uses `release_id=""` because it is purely offline), a
+`"regrouped"` entry *populates* `release_id` with the MBID that drove candidate selection, keeping the
+entry self-describing so a later `audit` can re-confirm it without a MusicBrainz lookup.  The move
+preserves the journal-provenance chain verbatim — source SHA captured before the move, destination
+SHA verified equal, `_verify_copy` tag round-trip confirmed, and **only then** the journal entry
+appended (a crash leaves a complete audit trail).  `regroup` prompts for confirmation before moving
+(with `-y/--yes` to skip and `--dry-run` to preview), aligning it with `prune`'s careful posture
+rather than `repath`'s act-by-default one.  (Contract C-S8; refracts P2.)
+
 ## Leaf-numbering invariants (resolved by `docs/PLAN-leafnumber.md`)
 
 Four invariants govern leaf and intermediate numbering.  Sessions L0–L4 of the leaf-numbering plan
@@ -165,8 +236,9 @@ case in the library).  The fix is therefore inseparable from a maintenance-mode 
 new path policy must be applied retroactively, journalled, and tag-adjudicated.  The `repath`
 subcommand (L4, commit `f1ab378`) stands alone on the `_pipeline`/`_pipeline_io` primitives
 (`read_journal`, `_read_tags_*`, `_sha256_file`, `build_dest_path`, `_assess_collisions`,
-`_verify_copy`); the `audit`/regroup machinery referenced in earlier drafts of this note is a
-separate, not-yet-built sibling plan.
+`_verify_copy`); the `audit`/`regroup` machinery referenced in earlier drafts of this note **has now
+been built** by the multimedium plan's sub-track C (contract C-S8) — see "The `regrouped` journal
+obligation" above.  `regroup` reuses the same `repath` provenance primitives.
 
 **Meta-lesson (CAPTURE-CANDIDATE).**  On-disk naming artifacts may be the fossil of superseded code.
 Before designing a fix from output, verify the *current* code reproduces the artifact — here, two of
@@ -212,3 +284,42 @@ described.  When a new rule (path-vs-tag split, soloist promotion, subgroup demo
 proposed, the validation step is: does CE's framing of the same question agree, and if
 not, what's the principled reason for diverging?  The default is to follow CE; divergences
 need a documented rationale.
+
+## Codebase audit — handoff brief (post-multimedium)
+
+The multimedium featureset (cross-medium paths + concerto-soloist promotion + the release-fragmentation
+audit/regroup cycle) is the explicit hand-off point into the **user-flagged imperative Codebase
+audit**.  As the project has grown, do a thorough review of principles, structure, and goals before
+the next featureset lands.  Concrete items this featureset surfaced:
+
+- **Deferred `ReleaseContext` / `WorkGroup` aggregation object — decide now whether it is warranted.**
+  S0 deliberately did *not* introduce a first-class aggregation object; it threaded the cross-medium
+  grouping through `tags_map` (global-indexed) + `top_work_groups` + ad-hoc unification passes in
+  `run()`.  That was the smallest correct change, but `run()`'s top-work-group loop now carries five
+  passes (leaf index, intermediate sibling index, composer unification, recording-date unification,
+  first-release-date normalisation, soloist union) all iterating the same `group_idxs`.  The audit
+  should decide whether to lift these into a `WorkGroup`/`ReleaseContext` object — the repeated
+  `for grp_idx in group_idxs:` scaffolding is the signal that the abstraction may now pay for itself.
+
+- **`__init__.py` API-surface coherence.**  The thin re-export layer has grown a large `_reexports`
+  tuple of *private* helpers (`_assess_collisions`, `_journal_fragmentation_groups`,
+  `_confirm_fragmentation`, `_read_albumid_tag`, …) that exist only to bind names for test patching
+  (per the "patch where bound" rule).  Audit whether this is the right mechanism or whether the test
+  suite should patch the submodule directly, and whether the public `__all__` still reads as a
+  coherent API surface distinct from the test-patching re-exports.
+
+- **Maintenance-command confirmation consistency (`repath` gap).**  `prune`, `apply --delete`, and the
+  new `regroup` all confirm before destructive action (`confirm`/`--yes`); `repath` mass-relocates the
+  whole library with no prompt (only `--dry-run`).  The most destructive command is the least guarded.
+  Consider a single shared confirmation helper for all library-mutating maintenance commands.  (Also
+  recorded durably in `docs/BACKLOG.md` so it survives this note's eventual absorption.)
+
+- **Module-boundary review.**  `_pipeline.py` now hosts three top-level maintenance entry points
+  (`run`, `repath`, `regroup`) that share a move/verify/journal provenance loop near-verbatim three
+  times.  Evaluate factoring the shared "move one file with SHA + `_verify_copy` + journal" primitive,
+  and whether the maintenance commands belong in their own module distinct from the ingest pipeline.
+
+- **Concerto-soloist editorial allowlist (follow-on to the mechanical case).**  Only
+  `top_work.type == "Concerto"` ships; organ symphonies, violin-feature works, and symphony-with-soloist
+  are canonical-identity but not type-`Concerto`.  The audit should decide whether the allowlist /
+  "solo X" instrument-relation signal is in scope or stays deferred.
