@@ -384,6 +384,49 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # ------------------------------------------------------------------
+    # regroup subcommand
+    # ------------------------------------------------------------------
+    regroup_parser = subparsers.add_parser(
+        "regroup",
+        help="Consolidate confirmed split-release files into their canonical destinations.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Reads the journal at <dest_dir>/music_annotator_journal.json, identifies release MBIDs
+            whose tracks are confirmed (via embedded MUSICBRAINZ_ALBUMID tags) to be scattered
+            across more than one work directory, and moves those files to the canonical destination
+            implied by their embedded tags.
+
+            No MusicBrainz network calls are made.  Only confirmed split-release candidates
+            (case-b from 'audit') are acted on.
+
+            Use --dry-run first to preview all planned moves.  Use -y/--yes to skip the
+            confirmation prompt.
+
+            Examples:
+              music-annotator regroup /tmp/music_library --dry-run
+              music-annotator regroup /tmp/music_library
+              music-annotator regroup /tmp/music_library --yes
+            """),
+    )
+    regroup_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    regroup_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log planned moves without performing any filesystem operations or writing journal entries.",
+    )
+    regroup_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt and move files immediately.",
+    )
+
+    # ------------------------------------------------------------------
     # audit subcommand
     # ------------------------------------------------------------------
     audit_parser = subparsers.add_parser(
@@ -415,7 +458,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    """Parse CLI arguments, configure logging, and dispatch to ``apply``, ``search``, ``prune``, ``repath``, or ``audit``.
+    """Parse CLI arguments, configure logging, and dispatch to subcommands.
+
+    Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating and converts any unhandled exception or keyboard interrupt into a logged error with exit code 1.
@@ -501,6 +546,16 @@ def main() -> None:
                 sys.exit(1)
             except Exception as exc:  # noqa: BLE001
                 log.error("repath_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
+                sys.exit(1)
+
+        case "regroup":
+            try:
+                music_annotator.regroup(dest_root=args.dest_dir, yes=args.yes, dry_run=args.dry_run)
+            except KeyboardInterrupt:
+                log.warning("interrupted")
+                sys.exit(1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("regroup_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
                 sys.exit(1)
 
         case "audit":

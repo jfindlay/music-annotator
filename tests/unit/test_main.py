@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from mutagen.flac import FLAC as MutagenFLAC
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
@@ -25,7 +26,7 @@ from music_annotator.__main__ import (
     _resolve_path,
     main,
 )
-from music_annotator._pipeline_io import _read_albumid_tag, _read_tags_flac
+from music_annotator._pipeline_io import _read_albumid_tag, _read_tags_flac, _sha256_file
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path
 from music_annotator.models import MBRelease, MBTrack, TrackTags
@@ -478,6 +479,46 @@ class TestBuildParser:
         parser = _build_parser()
         with pytest.raises(SystemExit) as exc:
             parser.parse_args(["repath"])
+        assert exc.value.code == 2
+
+    # ------------------------------------------------------------------
+    # regroup parser tests
+    # ------------------------------------------------------------------
+
+    _REGROUP_BASE = ["regroup", "/dest"]
+
+    def test_regroup_parses_dest_dir(self) -> None:
+        """regroup accepts dest_dir as a positional argument and defaults to no flags."""
+        parser = _build_parser()
+        ns = parser.parse_args(self._REGROUP_BASE)
+        assert ns.subcommand == "regroup"
+        assert ns.dest_dir == Path("/dest")
+        assert not ns.dry_run
+        assert not ns.yes
+
+    def test_regroup_dry_run_flag(self) -> None:
+        """regroup --dry-run sets dry_run=True."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._REGROUP_BASE, "--dry-run"])
+        assert ns.dry_run
+
+    def test_regroup_yes_long_flag(self) -> None:
+        """regroup --yes sets yes=True."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._REGROUP_BASE, "--yes"])
+        assert ns.yes
+
+    def test_regroup_yes_short_flag(self) -> None:
+        """regroup -y sets yes=True."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._REGROUP_BASE, "-y"])
+        assert ns.yes
+
+    def test_regroup_requires_dest_dir(self) -> None:
+        """regroup exits with code 2 when dest_dir positional is missing."""
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["regroup"])
         assert exc.value.code == 2
 
 
@@ -1099,6 +1140,76 @@ class TestMain:
         self._patch_common(mocker)
         mocker.patch("music_annotator.repath", side_effect=KeyboardInterrupt)
         with patch.object(sys, "argv", self._REPATH_ARGV):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    # ------------------------------------------------------------------
+    # regroup dispatch tests
+    # ------------------------------------------------------------------
+
+    _REGROUP_ARGV = ["music-annotator", "regroup", "/d"]
+
+    def test_regroup_dispatches_to_regroup(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() regroup calls music_annotator.regroup with dest_root, yes=False, dry_run=False.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_regroup = mocker.patch("music_annotator.regroup")
+        with patch.object(sys, "argv", self._REGROUP_ARGV):
+            main()
+        mock_regroup.assert_called_once_with(dest_root=Path("/d"), yes=False, dry_run=False)
+
+    def test_regroup_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() regroup --dry-run passes dry_run=True to regroup().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_regroup = mocker.patch("music_annotator.regroup")
+        with patch.object(sys, "argv", [*self._REGROUP_ARGV, "--dry-run"]):
+            main()
+        _, kwargs = mock_regroup.call_args
+        assert kwargs["dry_run"] is True
+
+    def test_regroup_yes_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() regroup --yes passes yes=True to regroup().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_regroup = mocker.patch("music_annotator.regroup")
+        with patch.object(sys, "argv", [*self._REGROUP_ARGV, "--yes"]):
+            main()
+        _, kwargs = mock_regroup.call_args
+        assert kwargs["yes"] is True
+
+    def test_regroup_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() regroup exits with code 1 when regroup() raises an unexpected exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.regroup", side_effect=RuntimeError("boom"))
+        with patch.object(sys, "argv", self._REGROUP_ARGV):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_regroup_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() regroup exits with code 1 on KeyboardInterrupt.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.regroup", side_effect=KeyboardInterrupt)
+        with patch.object(sys, "argv", self._REGROUP_ARGV):
             with pytest.raises(SystemExit) as exc:
                 main()
         assert exc.value.code == 1
@@ -3275,3 +3386,1048 @@ class TestAuditConfirmsViaTag:
         for call in mock_log.warning.call_args_list:
             if call.args[0] in {"audit_multiple_release_ids", "audit_split_release"}:
                 assert "confirmed" in call.kwargs
+
+
+# ---------------------------------------------------------------------------
+# regroup() — S8 KAT and full branch coverage
+# ---------------------------------------------------------------------------
+
+
+class TestRegroup:
+    """Tests for :func:`music_annotator.regroup` — the library regroup maintenance move.
+
+    The KAT ``test_regroup_appends_journal_entry`` is the load-bearing assertion: it drives a
+    full confirmed split-release scenario (two work_dirs for one release_id) through ``regroup()``
+    and asserts that a ``TransactionEntry(action="regrouped")`` is appended to the journal,
+    with source=old path, destination=new path, release_id=the split release's MBID.
+
+    All other tests cover the required branches for 100% branch coverage:
+    dry_run, prompt-accepted, prompt-declined, yes=True, empty-plan, SHA-mismatch
+    (provenance invariant: NO journal entry on mismatch), EXDEV cross-fs fallback,
+    collision suffix, and the main() dispatch arms.
+
+    Uses real FLAC bytes and :func:`apply_tags_flac` so that :func:`_read_tags_flac` executes
+    the real mutagen round-trip rather than a mock.  Network and MusicBrainz lookups are not
+    involved (regroup is fully offline like repath).
+    """
+
+    # Tags for a two-movement work.  The MUSICBRAINZ_ALBUMID tag is set to "split-rel-1" so that
+    # _confirm_fragmentation reads it back and marks the candidate confirmed=True.
+    #
+    # build_dest_path (with these tags) produces:
+    #   <dest_root>/Brahms - Vienna PO/Piano Concerto No. 1 [rec 2021]/01 - First movement.flac
+    # (ARTIST fallback: CEA_ENSEMBLE_NAMES absent, ARTIST="Vienna PO" is used as performer)
+    #
+    # The split scenario: same release_id "split-rel-1" has entries under TWO different work_dirs:
+    #   "OldWork [2021]"  (where the file currently lives)
+    #   "Piano Concerto No. 1 [rec 2021]"  (the canonical path from tags, in the journal via a second file)
+    # After regroup(), the file from "OldWork [2021]" should move to "Piano Concerto No. 1 [rec 2021]".
+
+    @staticmethod
+    def _make_split_tags() -> TrackTags:
+        """Build TrackTags for the split-release test file.
+
+        Sets MUSICBRAINZ_ALBUMID so _confirm_fragmentation confirms the candidate via tag match.
+
+        :returns: A :class:`TrackTags` instance with CWP, performer, and MB album ID tags set.
+        """
+        return TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Vienna PO",
+            musicbrainz_albumid="split-rel-1",
+        )
+
+    @staticmethod
+    def _canonical_path(dest_root: Path, tags: TrackTags, ext: str = ".flac") -> Path:
+        """Compute the canonical destination path for given tags.
+
+        :param dest_root: Library root.
+        :param tags: Tags to drive build_dest_path.
+        :param ext: File extension.
+        :returns: Full absolute canonical path.
+        """
+        base = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0)
+        return base.with_suffix(ext)
+
+    def _build_split_scenario(self, dest_root: Path) -> tuple[Path, Path]:
+        """Create a confirmed case-(b) split-release scenario under dest_root.
+
+        Two "tagged" journal entries for release_id "split-rel-1" land under different work_dirs:
+        - File A lives at a legacy path "OldWork [2021]" with the MUSICBRAINZ_ALBUMID tag set to
+          "split-rel-1" (so _confirm_fragmentation marks it confirmed=True).
+        - A phantom entry (no file on disk) for the canonical work_dir "Piano Concerto No. 1 [rec 2021]"
+          ensures the release_id has two distinct work_dirs in the journal.
+
+        Returns (old_path, new_path) where old_path is File A's current location and new_path is
+        the recomputed canonical destination from the embedded tags.
+
+        :param dest_root: Library root (must already exist).
+        :returns: Tuple of (current file path, expected canonical path after regroup).
+        """
+        tags = self._make_split_tags()
+
+        # File A: lives at legacy path with correct MUSICBRAINZ_ALBUMID
+        old_path = _make_library_flac(dest_root, "Brahms - Vienna PO/OldWork [2021]/01 - First movement.flac", tags)
+
+        # Canonical path (recomputed from tags by build_dest_path)
+        new_path = self._canonical_path(dest_root, tags)
+
+        # The old and canonical paths must differ for the scenario to be non-trivial
+        assert old_path != new_path, "test setup error: old and canonical paths must differ"
+
+        # Write journal: two entries for "split-rel-1" under different work_dirs, plus an
+        # irrelevant "skipped" entry so the elif-False branch (action not "tagged"/"repathed"/
+        # "regrouped") is covered in the current_lib-building loop.
+        phantom = dest_root / "Brahms - Vienna PO" / "Piano Concerto No. 1 [rec 2021]" / "02 - phantom.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+                # An "action='skipped'" entry triggers neither the tagged-if nor the
+                # repathed/regrouped-elif in the current_lib loop, covering that False branch.
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/03.flac",
+                    "destination": "/lib/some/skipped/file.flac",
+                    "action": "skipped",
+                },
+            ],
+        )
+
+        return old_path, new_path
+
+    # ------------------------------------------------------------------
+    # KAT: test_regroup_appends_journal_entry
+    # ------------------------------------------------------------------
+
+    def test_regroup_appends_journal_entry(self, fs: FakeFilesystem) -> None:
+        """regroup() moves the file and appends a TransactionEntry(action="regrouped") to the journal.
+
+        This is the KAT for S8.  Constructs a confirmed case-(b) split-release scenario (one
+        release_id scattered across two work_dirs) and drives regroup(yes=True) through the full
+        move+verify+journal provenance chain.  Asserts:
+
+        (a) A TransactionEntry with action="regrouped", source=old path, destination=new path,
+            release_id="split-rel-1" is appended to the journal.
+        (b) The file exists at the new canonical path and no longer at the old path.
+        (c) The file bytes are intact (re-read MUSICBRAINZ_ALBUMID via _read_albumid_tag).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, new_path = self._build_split_scenario(dest_root)
+
+        # Act: regroup with yes=True to skip the interactive prompt
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # (a) Journal gained a "regrouped" entry with correct fields
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 1
+        entry = regrouped[0]
+        assert entry.source == str(old_path)
+        assert entry.destination == str(new_path)
+        assert entry.release_id == "split-rel-1"
+
+        # (b) File moved: new path exists, old path gone
+        assert new_path.exists()
+        assert not old_path.exists()
+
+        # (c) Bytes intact: MUSICBRAINZ_ALBUMID readable at new path
+        assert _read_albumid_tag(new_path) == "split-rel-1"
+
+    # ------------------------------------------------------------------
+    # dry_run: no move, no journal write
+    # ------------------------------------------------------------------
+
+    def test_regroup_dry_run_no_move_no_journal(self, fs: FakeFilesystem) -> None:
+        """regroup(dry_run=True) logs planned moves but writes nothing to disk or journal.
+
+        Asserts that (a) files remain at their old paths and (b) no "regrouped" journal entries
+        are added.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, new_path = self._build_split_scenario(dest_root)
+
+        music_annotator.regroup(dest_root=dest_root, dry_run=True)
+
+        # (a) File still at old path
+        assert old_path.exists()
+        assert not new_path.exists()
+
+        # (b) No "regrouped" entries
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 0
+
+    # ------------------------------------------------------------------
+    # Confirmation prompt: accepted (y) and declined (n)
+    # ------------------------------------------------------------------
+
+    def test_regroup_prompt_accepted_moves_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """regroup() with yes=False prompts; answering 'y' proceeds with the move.
+
+        Mocks input() to return "y" and asserts the file is moved and journalled.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, new_path = self._build_split_scenario(dest_root)
+
+        mocker.patch("music_annotator._pipeline.input", return_value="y")
+
+        music_annotator.regroup(dest_root=dest_root, yes=False)
+
+        assert new_path.exists()
+        assert not old_path.exists()
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 1
+        assert regrouped[0].release_id == "split-rel-1"
+
+    def test_regroup_prompt_declined_no_move(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """regroup() with yes=False prompts; answering 'n' aborts with no move and no journal entry.
+
+        Mocks input() to return "n" and asserts the file remains at its old path and no
+        "regrouped" journal entry is written.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, new_path = self._build_split_scenario(dest_root)
+
+        mocker.patch("music_annotator._pipeline.input", return_value="n")
+
+        music_annotator.regroup(dest_root=dest_root, yes=False)
+
+        # File stays at old path; new path does not exist
+        assert old_path.exists()
+        assert not new_path.exists()
+
+        # No "regrouped" entries
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 0
+
+    # ------------------------------------------------------------------
+    # yes=True: prompt skipped
+    # ------------------------------------------------------------------
+
+    def test_regroup_yes_skips_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """regroup(yes=True) does not call input() at all.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_split_scenario(dest_root)
+
+        mock_input = mocker.patch("music_annotator._pipeline.input")
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        mock_input.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Empty plan / nothing-to-regroup paths
+    # ------------------------------------------------------------------
+
+    def test_regroup_nothing_to_regroup_empty_journal(self, fs: FakeFilesystem) -> None:
+        """regroup() on an empty journal returns immediately (no plan, no prompt).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        # No journal file → empty journal → no confirmed candidates
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+        # No exception raised; no journal created
+
+    def test_regroup_nothing_to_regroup_no_confirmed_candidates(self, fs: FakeFilesystem) -> None:
+        """regroup() returns immediately when there are no confirmed case-(b) candidates.
+
+        A journal with only clean (one work_dir per release) entries produces no candidates.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Single entry: release_id "r1" under one work_dir → no fragmentation
+        dest_file = dest_root / "Brahms - Vienna PO" / "Piano Concerto No. 1 [rec 2021]" / "01.flac"
+        _make_library_flac(
+            dest_root,
+            "Brahms - Vienna PO/Piano Concerto No. 1 [rec 2021]/01.flac",
+            TrackTags(musicbrainz_albumid="r1"),
+        )
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(dest_file),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # No regrouped entries written
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 0
+
+    def test_regroup_nothing_to_regroup_when_all_paths_already_canonical(self, fs: FakeFilesystem) -> None:
+        """regroup() is a no-op when all files already live at their canonical paths.
+
+        The plan is empty even for a confirmed split-release if every file already lives at its
+        canonical destination (build_dest_path returns the same path as the current path).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_split_tags()
+        # Place File A at EXACTLY the canonical path (not old legacy path)
+        canonical_path = self._canonical_path(dest_root, tags)
+        canonical_rel = str(canonical_path.relative_to(dest_root))
+        _make_library_flac(dest_root, canonical_rel, tags)
+
+        # Phantom entry in another work_dir to force the two-work_dir case-b fragmentation
+        phantom = dest_root / "Brahms - Vienna PO" / "OtherWork [2021]" / "02.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(canonical_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # File stays at canonical path; no journal entries added
+        assert canonical_path.exists()
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 0
+
+    # ------------------------------------------------------------------
+    # SHA mismatch after move → RuntimeError, NO journal entry
+    # (Provenance invariant: the most critical test)
+    # ------------------------------------------------------------------
+
+    def test_regroup_sha_mismatch_raises_no_journal_entry(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """regroup() raises RuntimeError on SHA-256 mismatch and writes NO journal entry.
+
+        This is the provenance-invariant test.  Patches _sha256_file to return a mismatched hash
+        for the destination check (simulating silent corruption during the move), and asserts that:
+        (a) RuntimeError is raised, and
+        (b) no "regrouped" journal entry is written.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_split_scenario(dest_root)
+
+        # Patch _sha256_file: first call returns "aaa..." (src), second returns "bbb..." (dest ≠ src)
+        call_count = {"n": 0}
+
+        def _fake_sha256(path: Path) -> str:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return "a" * 64  # src hash
+            if call_count["n"] == 2:
+                return "b" * 64  # dest hash ≠ src → triggers RuntimeError
+            return _sha256_file(path)  # subsequent calls use real implementation
+
+        mocker.patch("music_annotator._pipeline._sha256_file", side_effect=_fake_sha256)
+
+        with pytest.raises(RuntimeError, match="regroup integrity failure"):
+            music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # No "regrouped" journal entry must have been written
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 0, "provenance invariant violated: journal entry written before verification passed"
+
+    # ------------------------------------------------------------------
+    # EXDEV cross-filesystem fallback
+    # ------------------------------------------------------------------
+
+    def test_regroup_exdev_fallback(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """regroup() falls back to copy2+unlink on EXDEV and still journals the move.
+
+        Patches os.replace to raise OSError(EXDEV) on the first call, forcing the copy2+unlink
+        path.  Asserts the file is moved and a "regrouped" journal entry is written.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, new_path = self._build_split_scenario(dest_root)
+
+        exdev_raised = {"done": False}
+        real_replace = os.replace
+
+        def _fake_replace(src: str, dst: str) -> None:
+            if not exdev_raised["done"]:
+                exdev_raised["done"] = True
+                raise OSError(errno.EXDEV, "cross-device link not permitted", str(src))
+            real_replace(src, dst)
+
+        mocker.patch("music_annotator._pipeline.os.replace", side_effect=_fake_replace)
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        assert new_path.exists()
+        assert not old_path.exists()
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 1
+        assert regrouped[0].action == "regrouped"
+        assert regrouped[0].release_id == "split-rel-1"
+
+    def test_regroup_exdev_copy_integrity_failure_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """regroup() raises RuntimeError when the EXDEV copy+verify produces a hash mismatch.
+
+        The unlink of the destination is attempted and then RuntimeError is raised.  No journal
+        entry is written.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_split_scenario(dest_root)
+
+        exdev_raised = {"done": False}
+
+        def _fake_replace(src: str, _dst: str) -> None:
+            if not exdev_raised["done"]:
+                exdev_raised["done"] = True
+                raise OSError(errno.EXDEV, "cross-device link", str(src))
+
+        mocker.patch("music_annotator._pipeline.os.replace", side_effect=_fake_replace)
+
+        # After the EXDEV copy, the cross-hash check will compare real hashes (which match).
+        # To force a failure we additionally patch _sha256_file to return mismatched values on the
+        # cross-fs verification call (the second sha256 call within the EXDEV branch).
+        sha_calls = {"n": 0}
+
+        def _fake_sha(_path: Path) -> str:
+            sha_calls["n"] += 1
+            if sha_calls["n"] <= 2:  # noqa: PLR2004
+                return "x" * 64 if sha_calls["n"] == 2 else "a" * 64  # mismatch on second call
+            return "a" * 64
+
+        mocker.patch("music_annotator._pipeline._sha256_file", side_effect=_fake_sha)
+
+        with pytest.raises(RuntimeError, match="cross-fs copy integrity failure"):
+            music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 0
+
+    # ------------------------------------------------------------------
+    # non-EXDEV OSError propagates
+    # ------------------------------------------------------------------
+
+    def test_regroup_non_exdev_oserror_propagates(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """regroup() re-raises OSError when the error is not EXDEV (e.g. permission denied).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_split_scenario(dest_root)
+
+        mocker.patch("music_annotator._pipeline.os.replace", side_effect=OSError(errno.EPERM, "permission denied"))
+
+        with pytest.raises(OSError):
+            music_annotator.regroup(dest_root=dest_root, yes=True)
+
+    # ------------------------------------------------------------------
+    # Collision handling
+    # ------------------------------------------------------------------
+
+    def test_regroup_collision_gets_suffix(self, fs: FakeFilesystem) -> None:
+        """regroup() applies a collision suffix when the recomputed path already exists with different audio.
+
+        Mirrors the repath collision test: a file at a legacy path recomputes to a canonical
+        destination that ALREADY EXISTS on disk with a different AcoustID (confirmed non-match) →
+        regroup() appends a release-identifying suffix to disambiguate.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # The incoming file (old_path) has AcoustID "aaa..." (distinct recording)
+        tags_incoming = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Vienna PO",
+            musicbrainz_albumid="split-rel-1",
+            acoustid_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+
+        # Pre-compute the canonical path so we can pre-create a competing file there
+        canonical = self._canonical_path(dest_root, tags_incoming)
+
+        # File at a legacy (non-canonical) path — the one regroup will try to move
+        old_path = _make_library_flac(dest_root, "Brahms - Vienna PO/OldWork [2021]/01 - First movement.flac", tags_incoming)
+        assert old_path != canonical
+
+        # Pre-create a DIFFERENT file at the canonical path with a different AcoustID so
+        # _assess_collisions gets a confirmed non-match → collision suffix applied.
+        tags_existing = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Vienna PO",
+            musicbrainz_albumid="split-rel-1",
+            acoustid_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        )
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        canonical.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(canonical, tags_existing)
+
+        # Journal: old_path under "OldWork [2021]" and canonical under its work_dir give
+        # "split-rel-1" two distinct work_dirs → case-(b) fragmentation.
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(canonical),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # old_path was moved (not still at legacy location)
+        assert not old_path.exists()
+
+        # Journal has a "regrouped" entry; destination has a disambiguating suffix (not raw canonical)
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 1
+        assert regrouped[0].release_id == "split-rel-1"
+        # The destination must be different from the pre-existing canonical path (collision was resolved)
+        assert regrouped[0].destination != str(canonical)
+
+    # ------------------------------------------------------------------
+    # Confirmed release, all files gone from disk → nothing to regroup (line 1799-1800)
+    # ------------------------------------------------------------------
+
+    def test_regroup_confirmed_but_all_files_missing_from_disk(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """regroup() returns 'nothing to regroup' when confirmed candidates have no on-disk files.
+
+        Patches _confirm_fragmentation to return a confirmed case-(b) candidate, while the
+        corresponding journal entries point to paths that do not exist on disk.  regroup() builds
+        an empty existing_files list (all p.exists() are False) and returns immediately.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Patch _confirm_fragmentation to report "split-rel-1" as confirmed case-(b)
+        mocker.patch(
+            "music_annotator._pipeline._confirm_fragmentation",
+            return_value=(
+                {},  # case_a: empty
+                {"split-rel-1": (["WorkA [2021]", "WorkB [2021]"], True)},  # case_b: confirmed
+            ),
+        )
+
+        # Journal with "tagged" entries pointing to non-existent paths
+        missing_path_1 = dest_root / "Brahms - Vienna PO" / "WorkA [2021]" / "01.flac"
+        missing_path_2 = dest_root / "Brahms - Vienna PO" / "WorkB [2021]" / "02.flac"
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(missing_path_1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(missing_path_2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # No regrouped entries: nothing existed on disk to move
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 0
+
+    # ------------------------------------------------------------------
+    # Repathed entry for unrelated file (old_path not in current_lib branch)
+    # ------------------------------------------------------------------
+
+    def test_regroup_ignores_repathed_entry_for_unconfirmed_release(self, fs: FakeFilesystem) -> None:
+        """regroup() silently skips 'repathed' entries whose source is not a tracked confirmed file.
+
+        When the journal contains a "repathed" entry whose source path does NOT appear in
+        current_lib (because the file belongs to a different release or was already moved before
+        the confirmed "tagged" entries were processed), regroup() correctly ignores it.
+
+        This covers the ``if old_path in current_lib:`` False branch (1791->1785).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_split_tags()
+        old_path = _make_library_flac(dest_root, "Brahms - Vienna PO/OldWork [2021]/01 - First movement.flac", tags)
+
+        # An unrelated "repathed" entry for a completely different release
+        unrelated_old = dest_root / "Mozart - Berlin PO" / "OldWork [2000]" / "01.flac"
+        unrelated_new = dest_root / "Mozart - Berlin PO" / "NewWork [2000]" / "01.flac"
+
+        phantom = dest_root / "Brahms - Vienna PO" / "Piano Concerto No. 1 [rec 2021]" / "02.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+                # This "repathed" entry's source is unrelated_old — NOT in current_lib
+                # (current_lib only tracks confirmed release "split-rel-1" files)
+                {
+                    "timestamp": "2024-06-01T00:01:00+00:00",
+                    "release_id": "",
+                    "source": str(unrelated_old),
+                    "destination": str(unrelated_new),
+                    "action": "repathed",
+                },
+            ],
+        )
+
+        new_path = self._canonical_path(dest_root, tags)
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # The confirmed split-release file was still moved correctly
+        assert new_path.exists()
+        assert not old_path.exists()
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 1
+
+    # ------------------------------------------------------------------
+    # Planning-pass tag read failure → skip file (lines 1816-1818)
+    # ------------------------------------------------------------------
+
+    def test_regroup_planning_tag_read_failure_skips_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """regroup() skips a file whose tags cannot be read during the planning pass.
+
+        Patches _read_tags_flac to raise on the FIRST call (the planning pass read) so the file
+        is skipped.  The plan is empty → regroup logs "nothing to regroup" and returns.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_split_scenario(dest_root)
+
+        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=OSError("unreadable"))
+
+        # The only file's tags can't be read → plan is empty → nothing to regroup
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 0
+
+    # ------------------------------------------------------------------
+    # Invalid LENGTH tag → length_ms falls back to 0 (lines 1836-1837)
+    # ------------------------------------------------------------------
+
+    def test_regroup_invalid_length_tag_uses_zero(self, fs: FakeFilesystem) -> None:
+        """regroup() uses length_ms=0 when the LENGTH tag cannot be parsed as an integer.
+
+        Constructs a scenario where FLAC bytes carry an invalid LENGTH tag value (non-numeric).
+        regroup() must not raise; it falls back to length_ms=0 and proceeds with the move.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # We need a non-numeric LENGTH tag.  TrackTags.length is a str field; apply_tags_flac
+        # writes it as "LENGTH".  We apply a tag with a non-numeric length value.
+        tags = self._make_split_tags()
+        # Manually patch a non-numeric length into the FLAC file after apply_tags_flac
+        old_path = _make_library_flac(dest_root, "Brahms - Vienna PO/OldWork [2021]/01 - First movement.flac", tags)
+
+        # Inject a non-numeric LENGTH tag directly via mutagen
+        audio = MutagenFLAC(str(old_path))
+        audio["LENGTH"] = ["not-a-number"]
+        audio.save()
+
+        phantom = dest_root / "Brahms - Vienna PO" / "Piano Concerto No. 1 [rec 2021]" / "02.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Should succeed despite invalid LENGTH — falls back to length_ms=0
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        new_path = self._canonical_path(dest_root, tags)
+        assert new_path.exists()
+        assert not old_path.exists()
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 1
+
+    # ------------------------------------------------------------------
+    # post-move tag re-read failure raises RuntimeError (no journal entry)
+    # ------------------------------------------------------------------
+
+    def test_regroup_post_move_tag_read_failure_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """regroup() raises RuntimeError and writes no journal entry when the post-move tag re-read fails.
+
+        Patches _read_tags_flac to succeed for the planning pass but raise on the post-move
+        re-read (the second call on the same path, now at new_dest).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_split_scenario(dest_root)
+
+        call_count = {"n": 0}
+
+        def _fake_read(path: Path) -> dict[str, str]:
+            call_count["n"] += 1
+            # First call is from the planning pass on old_path; second is the post-move re-read
+            if call_count["n"] >= 2:  # noqa: PLR2004
+                raise OSError("simulated post-move tag read failure")
+            return _read_tags_flac(path)
+
+        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=_fake_read)
+
+        with pytest.raises(RuntimeError, match="regroup tag re-read failure"):
+            music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 0
+
+    # ------------------------------------------------------------------
+    # MP3 file: regroup moves and journals correctly
+    # ------------------------------------------------------------------
+
+    def test_regroup_mp3_moves_and_journals(self, fs: FakeFilesystem) -> None:
+        """regroup() handles MP3 files the same as FLAC: moves and appends a journal entry.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_split_tags()
+
+        old_path = _make_library_mp3(dest_root, "Brahms - Vienna PO/OldWork [2021]/01 - First movement.mp3", tags)
+        new_path = self._canonical_path(dest_root, tags, ext=".mp3")
+
+        assert old_path != new_path
+
+        phantom = dest_root / "Brahms - Vienna PO" / "Piano Concerto No. 1 [rec 2021]" / "02.mp3"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/01.mp3",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/02.mp3",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        assert new_path.exists()
+        assert not old_path.exists()
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 1
+        assert regrouped[0].source == str(old_path)
+        assert regrouped[0].destination == str(new_path)
+        assert regrouped[0].release_id == "split-rel-1"
+
+    # ------------------------------------------------------------------
+    # Empty-dir cleanup after move
+    # ------------------------------------------------------------------
+
+    def test_regroup_cleans_up_empty_dirs(self, fs: FakeFilesystem) -> None:
+        """regroup() removes empty parent directories all the way to dest_root after moving.
+
+        The old path uses a completely different top-level composer directory than the canonical
+        path.  After the move, the entire old ancestor chain empties and gets removed, so the
+        while loop exits normally when src_dir reaches dest_root (covering the while-False branch).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_split_tags()
+        # Use a DIFFERENT top-level dir (TempComp) so the entire old ancestor chain empties
+        # after the move and regroup() removes dirs all the way to dest_root.
+        old_path = _make_library_flac(dest_root, "TempComp - TempPerf/OldWork [2021]/01 - First movement.flac", tags)
+        new_path = self._canonical_path(dest_root, tags)
+        assert old_path != new_path
+        # The new path must be under a different top-level dir than TempComp - TempPerf
+        assert not str(new_path).startswith(str(dest_root / "TempComp - TempPerf"))
+
+        phantom = dest_root / "Brahms - Vienna PO" / "Piano Concerto No. 1 [rec 2021]" / "02.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        assert new_path.exists()
+        # Entire old ancestor chain should have been removed (while loop walked to dest_root)
+        assert not (dest_root / "TempComp - TempPerf").exists()
+
+    # ------------------------------------------------------------------
+    # repathed / regrouped entries update file lineage for regroup
+    # ------------------------------------------------------------------
+
+    def test_regroup_follows_repathed_lineage(self, fs: FakeFilesystem) -> None:
+        """regroup() resolves the current location of a file that was previously repathed.
+
+        When a "tagged" entry's file was subsequently moved by repath (creating a "repathed"
+        journal entry), regroup() tracks the lineage and acts on the file at its current location.
+
+        Scenario:
+        - File A was originally "tagged" at ``orig_path`` then "repathed" to ``mid_path``.
+          The current on-disk location is ``mid_path``.
+        - File B is a real confirmed file at ``confirm_path`` (a different work_dir for the same
+          release_id "split-rel-1"), which makes ``_confirm_fragmentation`` mark the candidate
+          as confirmed=True (because its MUSICBRAINZ_ALBUMID tag matches the journal's release_id).
+
+        Asserts that regroup() correctly identifies ``mid_path`` (not ``orig_path``) as the
+        current file to move, and journals the move with source=mid_path.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_split_tags()
+
+        # File A: originally "tagged" at orig_path, then "repathed" to mid_path.
+        # The current on-disk location is mid_path (tags with MUSICBRAINZ_ALBUMID).
+        mid_path = _make_library_flac(dest_root, "Brahms - Vienna PO/MidWork [2021]/01 - First movement.flac", tags)
+        orig_path = dest_root / "Brahms - Vienna PO" / "OldWork [2021]" / "01 - First movement.flac"
+
+        # File B: a second real file in another work_dir for the same release, confirming the
+        # candidate via its MUSICBRAINZ_ALBUMID tag so _confirm_fragmentation returns confirmed=True.
+        confirm_path = _make_library_flac(
+            dest_root,
+            "Brahms - Vienna PO/AnotherWork [2021]/02 - Second movement.flac",
+            tags,
+        )
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(orig_path),  # original tagged destination (file gone)
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:01:00+00:00",
+                    "release_id": "",
+                    "source": str(orig_path),
+                    "destination": str(mid_path),
+                    "action": "repathed",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(confirm_path),  # real file; confirms the candidate
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # Both mid_path and confirm_path recompute to the same canonical path (same tags).
+        # After collision handling both get unique destinations, or if they hash-match they land
+        # at the same canonical path (one "wins" by being a noop for the already-moved file).
+        # For the lineage assertion: the move source for File A must be mid_path, not orig_path.
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        regrouped_sources = {e.source for e in regrouped}
+        # mid_path must appear as a source (lineage correctly resolved from the "repathed" entry)
+        assert str(mid_path) in regrouped_sources, (
+            f"expected mid_path {mid_path} in regrouped sources {regrouped_sources}; regroup did not follow repathed lineage"
+        )
+        # orig_path must NOT appear as a source (it's stale — the file actually lived at mid_path)
+        assert str(orig_path) not in regrouped_sources, (
+            "regroup incorrectly used the stale orig_path instead of tracking via the repathed entry"
+        )
+        for e in regrouped:
+            assert e.release_id == "split-rel-1"

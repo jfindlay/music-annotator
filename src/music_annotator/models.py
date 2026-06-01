@@ -1498,7 +1498,7 @@ class TransactionEntry(BaseModel):
     Important attributes: ``timestamp`` (ISO-8601 UTC string), ``release_id`` (MusicBrainz MBID),
     ``source`` (absolute path of the input audio file), ``destination`` (absolute path of the output
     file including extension), ``action`` (one of ``"tagged"``, ``"skipped"``, ``"dry_run"``,
-    ``"downloaded"``, ``"sidecar"``, ``"repathed"``).
+    ``"downloaded"``, ``"sidecar"``, ``"repathed"``, ``"regrouped"``).
 
     The ``"repathed"`` action is written by :func:`~music_annotator.repath` when a library file
     is moved to a corrected destination under the current path-construction policy.  For
@@ -1506,13 +1506,19 @@ class TransactionEntry(BaseModel):
     move) and ``destination`` is the *new* on-disk path (the corrected location after the move).
     The ``release_id`` field is empty for ``"repathed"`` entries because repath operates offline
     from embedded tags and does not perform a MusicBrainz lookup.
+
+    The ``"regrouped"`` action is written by :func:`~music_annotator.regroup` when confirmed
+    split-release files are consolidated into the canonical directory implied by their embedded
+    tags.  Unlike ``"repathed"``, ``release_id`` is populated for ``"regrouped"`` entries because
+    the move is release-driven: the release MBID that drove candidate selection is known and recorded
+    so that future audits can re-confirm the entry without a MusicBrainz lookup.
     """
 
     timestamp: str
     release_id: str
     source: str
     destination: str
-    action: str  # "tagged" | "skipped" | "dry_run" | "downloaded" | "sidecar" | "repathed"
+    action: str  # "tagged" | "skipped" | "dry_run" | "downloaded" | "sidecar" | "repathed" | "regrouped"
 
 
 class TransactionLog(BaseModel):
