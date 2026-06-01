@@ -59,7 +59,7 @@ point.
 | S0 | Aggregate work-groups across all media in `run()`      | A   | O | —          | `_pipeline.py`, `tests/unit/test_pipeline.py`                        | `test_top_work_groups_span_all_media` ✅ done |
 | S1 | Lock cross-medium unification with regression KATs ◆  | B   | S | S0         | `tests/unit/test_pipeline.py`                                        | `test_composer_unified_across_media`, `test_recording_first_release_date_unified_across_media` |
 | S4 | Carry top-work type into `TrackTags`                   | A   | S | —          | `models.py`, `_tags.py`, `tests/unit/test_pipeline.py`              | `test_cwp_worktype_genres_top_populated` |
-| S5 | Promote soloist into path for concerto works ◆         | B   | S | S0,S4      | `_tags.py`, `tests/unit/test_annotator.py`                          | `test_concerto_soloist_in_top_dir` |
+| S5 | Promote soloist into path for concerto works ◆         | B   | S | S0,S4      | `models.py`, `_pipeline.py`, `_tags.py`, `tests/unit/test_pipeline.py`, `tests/unit/test_annotator.py` | `test_concerto_soloist_in_top_dir`, `test_album_soloists_unioned_across_media` |
 | S6 | Read-only `audit`: group journal by `release_id`       | B   | S | —          | `__main__.py`, `_pipeline_io.py`, `tests/unit/test_main.py`         | `test_audit_reports_mixed_mbid_and_split_release` |
 | S7 | Confirm candidates via `MUSICBRAINZ_ALBUMID` tag       | B   | S | S6         | `_pipeline_io.py`, `tests/unit/test_main.py`                        | `test_audit_confirms_candidate_via_tag` |
 | S8 | Add `regrouped` journal action and regroup move ◆      | B   | S | S6,S7      | `models.py`, `_pipeline_io.py`, `__main__.py`, `tests/unit/test_main.py` | `test_regroup_appends_journal_entry` |
@@ -149,13 +149,28 @@ point.
   (`_tags.py:359`).  Written to the file as a tag (do **not** add to the `to_file_dict` exclusion
   set).  This is the field `build_dest_path` needs because the *bottom* work's type is empty for a
   concerto movement — only the *root* work carries `"Concerto"`.
-- **S5.**  In `build_dest_path`, after the album-conductor/ensemble block (`_tags.py:952–964`), when
-  `file_dict.get("CWP_WORKTYPE_GENRES_TOP") == "Concerto"` (and the editorially-decided extension
-  set — see Discoveries S5-open), inject the album-level soloists (`tags.cea_album_soloists`, with
-  `tags.cea_soloists` as fallback) into the `performers` string.  The soloist set must be the
-  **cross-medium-unified** set from S0 so a two-disc concerto agrees on its path.  Concerto-type
-  detection via `top_work.type == "Concerto"` is the only mechanical case in scope; symphony-with-
-  soloist and other canonical-feature works are an editorial allowlist deferred to the appendix.
+- **S5 (scope WIDENED — user sign-off, see Discoveries "S5 path-accumulation").**  Two parts:
+  - **(a) Cross-medium soloist-union pass (`_pipeline.py`, `models.py`).**  Add a *path-only helper*
+    field `cea_album_soloists_unified: str = ""` to `TrackTags` (`models.py`), added to the
+    `to_file_dict` `excluded` set (path-only, NOT a written tag — mirrors `recording_date_work`).
+    In `run()`'s top-work-group loop (`_pipeline.py:~1029`, alongside the composer / recording-date
+    passes that already iterate `group_idxs` over `all_media_pairs` per C-S0), compute the **union**
+    (dedup, order-preserving) of each group track's `cea_album_soloists` (with `cea_soloists` as the
+    per-track fallback when album-level is empty) across the whole group, and write that unioned
+    string to every group track's `cea_album_soloists_unified`.  This realises the editorial rule:
+    **unified path components accumulate per work across media** — if a concerto's movements feature
+    different soloists on different discs, all of them accumulate into the path.  (The per-track *tag*
+    worldview is NOT changed to carry the union — that is a later initiative; only the path-helper
+    accumulates.)
+  - **(b) Path injection (`_tags.py`).**  In `build_dest_path`, after the album-conductor/ensemble
+    block (`_tags.py:958–970`), when `top_work.type == "Concerto"` — read via
+    `file_dict.get("CWP_WORKTYPE_GENRES_TOP") == "Concerto"` (C-S4) — inject `tags.cea_album_soloists_unified`
+    (read directly off the `tags` object, as `tags.cea_album_conductors_list` is, since the field is
+    excluded from `file_dict`), into the `performers` string.  Concerto-type detection via
+    `top_work.type == "Concerto"` is the only mechanical case in scope; symphony-with-soloist and other
+    canonical-feature works are an editorial allowlist deferred to the appendix (S5-open).
+  - **P1 note:** soloist promotion is the CE-sanctioned *exception* to "path is a handle, not a
+    manifest", not a licence to widen the path generally — gate it strictly on the Concerto case.
 - **S6.**  New `audit <dest_dir>` argparse subparser after the `prune` block (`__main__.py:~334`)
   and a `case "audit":` arm before `case _:` (`__main__.py:417`); read-only, no
   `--user-agent-email` required.  Group `read_journal` (`_pipeline_io.py:526`) entries with
@@ -283,6 +298,21 @@ consumed without widening or breaking; no contract drift.
 Action-frame discoveries that update the static-frame roadmap.  Append during execution; evaluate at
 sub-track boundaries.
 
+- **DISCOVERY (additive re-shard, user sign-off) — S5 path-accumulation across media.**  Pre-dispatch
+  analysis of S5 found a scope tension: the plan required the injected soloist set to be the
+  "cross-medium-unified set from S0", but `cea_album_soloists` is built per-track (candidate pool =
+  that track's recording credits, filtered to release-level artists), so a release-level soloist
+  credited on only one disc makes the discs disagree on the path — and S5's stated expected files
+  (`_tags.py`, `tests/unit/test_annotator.py`) excluded `_pipeline.py`, where the unification passes
+  live.  User clarified the governing editorial rule: **when unioning tracks/work-hierarchies from
+  multiple media into one unified library path, path components accumulate per work** — both a primary
+  composer and a finisher credited on only one disc, and different soloists in different movements
+  across discs, all accumulate into the final unified directory/file path.  (The per-track *tag*
+  worldview need not carry the union yet — that is a separate later initiative.)  Resolution: S5
+  widened additively (C-S0 untouched, still frozen) to add a path-only `cea_album_soloists_unified`
+  helper computed by a cross-medium *union* pass in `_pipeline.py`; expected files grow to include
+  `models.py`, `_pipeline.py`, `tests/unit/test_pipeline.py`.  This is the manual's "the plan was
+  wrong about scope, additively corrected" case, not a destructive re-shard.
 - **PRECONDITION — no Makefile (blocks an unmodified `/run-plan` run).**  This project drives
   everything through `tox` (`~/.local/bin/tox -m analyze`), which should be used instead..  Harder
   bar applies: **100% branch coverage** and **pylint 10.00/10** — every new branch (including `case
