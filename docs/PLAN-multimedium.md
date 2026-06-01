@@ -242,7 +242,7 @@ Run config: default (self-review-and-continue at ◆; halt only at the four halt
 |----|----------|--------|------------------------|-------|
 | S0 | done     | 5b41781 | C-S0 (FROZEN)         | Opus sign-off done; Shape A + eager fetch + global-index filter; scoped to ingest |
 | S1 | done     | efa1128 | KATs (test-enforced)  | ◆ sub-track A closed; KAT-only (logic landed in S0); test_composer_unified_across_media + test_recording_first_release_date_unified_across_media lock the cross-disc composer + [rel YYYY] passes |
-| S4 | pending  | —      | C-S4                   | small substrate; no S0 dependency |
+| S4 | done     | 85ccb36 | C-S4 (FROZEN)         | small substrate; threaded via intermediate `CwpTags.worktype_genres_top` (standard CwpTags→TrackTags field pattern; `top_work` not in scope in `build_track_tags`) — external surface unchanged |
 | S5 | pending  | —      | — (◆ sub-track B)      | consumes C-S0, C-S4 |
 | S6 | pending  | —      | —                      | journal-side; orthogonal to S0 |
 | S7 | pending  | —      | —                      | consumes S6 |
@@ -268,6 +268,13 @@ consumed without widening or breaking; no contract drift.
   is copy-subset-local.  Single-medium releases are behaviourally identical to pre-S0.  S1, S5, and
   the leaf-numbering bug-fix sub-track consume this; altering the index-keying or the copy-subset
   boundary after freeze is a destructive re-shard → HALT.
+- **C-S4 (frozen by S4, commit `85ccb36`).**  `TrackTags.cwp_worktype_genres_top` is a `str` field
+  (default `""`), written to the output audio file as tag `CWP_WORKTYPE_GENRES_TOP`, carrying
+  `work_hierarchy[-1].type` (the top work's type).  Threaded internally through an intermediate
+  `CwpTags.worktype_genres_top` field (the codebase's standard CwpTags→TrackTags pattern; the
+  `top_work` local is not in scope in `build_track_tags`) — this is an implementation detail, not part
+  of the consumed surface.  S5 consumes it via `file_dict.get("CWP_WORKTYPE_GENRES_TOP")`.  Additive;
+  altering the field name or its source after freeze is a destructive re-shard → HALT.
 
 ---
 
