@@ -284,7 +284,7 @@ Run config: default (self-review-and-continue at ◆; halt only at the four halt
 | S5 | done     | 11473c5 | cea_album_soloists_unified (path-only helper) | ◆ sub-track B closed; scope widened (re-shard `2252222`); cross-medium soloist-UNION pass in `_pipeline.py` (consumes C-S0) + concerto-gated path injection in `build_dest_path` (consumes C-S4, P1); soloist-first join; helper excluded from `to_file_dict` |
 | S6 | done     | 9750449 | audit() + _journal_fragmentation_groups (S7 reuse) | journal-side detector only (P2); read-only `audit <dest_dir>` subcommand; allowed extra: `__init__.py` API re-export (public `audit` in `__all__`, helper in `_reexports` per existing patch-binding convention); `work_dir = destination.relative_to(dest_root).parts[1]` confirmed |
 | S7 | done     | c74ab23 | _confirm_fragmentation, _read_albumid_tag (S8 reuse) | consumes S6 (P2 adjudication via tag read; read-only); allowed extra `__init__.py` re-export (S6 precedent); **S8 contract:** a candidate is `confirmed=True` if ANY backing entry's file tag matches its journal release_id — S8 acts only on confirmed candidates |
-| S8 | pending  | —      | C-S8 (◆ sub-track C)   | consumes S6, S7 |
+| S8 | done     | 137a05f | C-S8 (FROZEN, ◆ sub-track C) | consumes S6, S7; `regroup <dest_dir>` subcommand (confirmed split-releases only; tag-recomputed target; prompt + -y/--yes + --dry-run); release_id-populated `regrouped` entries; provenance chain preserved verbatim (dest-SHA-verify + _verify_copy precede journal write; 2 tests assert no entry on SHA mismatch); `_pipeline_io.py` NOT modified (reused S7's `_confirm_fragmentation` — leaner than planned, not drift) |
 | S9 | pending  | —      | — (◆ capstone)         | consumes S1,S5,S8; Opus writeup + audit handoff |
 
 _Retired from active scope:_ original **S2** (recording/first-release-date lift) — its logic landed
@@ -304,6 +304,14 @@ with the Purpose's "every path dimension needs a work-level unification story" �
 that story.  C-S0 and C-S4 consumed without alteration; new consumable surface
 `cea_album_soloists_unified` (path-only helper) introduced; no contract drift.
 
+**Sub-track C (release-fragmentation detector) — CLOSED at S8 (commit `137a05f`).**  Anti-defocus
+check passed: ships the full detect→adjudicate→regroup cycle — S6 read-only `audit` (journal detects),
+S7 tag-confirmation (`MUSICBRAINZ_ALBUMID` adjudicates), S8 `regroup` move (re-journals as
+`regrouped`, honouring the P2 closing corollary "moves must re-journal or the detector decays").
+Journal-side and orthogonal as planned (consumed nothing from S0).  The S8 interface was decided
+inline with user sign-off (re-shard `1ad4edc`); the `regroup` move reuses `repath`'s provenance loop
+verbatim and adds a confirmation prompt.  No contract drift.
+
 **Frozen contracts:**
 - **C-S0 (frozen by S0, commit `5b41781`).**  `run()` keys `tags_map` by a global index over
   `all_media_pairs` (every track on every medium, medium-then-track order); `top_work_groups` and
@@ -320,6 +328,14 @@ that story.  C-S0 and C-S4 consumed without alteration; new consumable surface
   `top_work` local is not in scope in `build_track_tags`) — this is an implementation detail, not part
   of the consumed surface.  S5 consumes it via `file_dict.get("CWP_WORKTYPE_GENRES_TOP")`.  Additive;
   altering the field name or its source after freeze is a destructive re-shard → HALT.
+- **C-S8 (frozen by S8, commit `137a05f`).**  `TransactionEntry.action` gains `"regrouped"` (additive;
+  existing values `"tagged" | "skipped" | "dry_run" | "downloaded" | "sidecar" | "repathed"` and the
+  `str` typing unchanged).  A `"regrouped"` entry records `source=<old path>`, `destination=<new
+  path>`, and `release_id=<the regrouped file's release MBID>` (populated, unlike `"repathed"` which
+  uses `""`).  Public API: `regroup(dest_root, *, yes=False, dry_run=False) -> None` and the `regroup
+  <dest_dir> [--dry-run] [-y/--yes]` subcommand; the move preserves the journal-provenance chain
+  verbatim (dest-SHA-verify + `_verify_copy` precede the journal write).  Additive; removing the value
+  or changing the entry shape after freeze is a destructive re-shard → HALT.
 
 ---
 
