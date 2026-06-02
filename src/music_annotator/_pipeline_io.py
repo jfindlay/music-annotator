@@ -161,6 +161,124 @@ def _read_acoustid_tag(path: Path) -> str:
         return ""
 
 
+def _read_audio_hash_tag(path: Path) -> str:
+    """Read the ``audio_hash`` tag from a FLAC or MP3 file, returning ``""`` on any failure.
+
+    For FLAC files the Vorbis Comment key ``"audio_hash"`` is looked up (case-insensitive).
+    For MP3 files the TXXX frame with description ``"Audio Hash"`` is looked up (from
+    :data:`~music_annotator._tagger._MP3_TXXX_MAP`: ``"AUDIO_HASH": "Audio Hash"``).
+
+    :param path: Path to the audio file to inspect.
+    :returns: The algorithm-tagged audio hash string (e.g. ``"flac-md5:…"``), or ``""`` if absent
+        or unreadable.
+    """
+    try:
+        match path.suffix.lower():
+            case ".flac":
+                audio = FLAC(str(path))
+                values = audio.get("audio_hash") or audio.get("AUDIO_HASH") or []
+                return values[0] if values else ""
+            case ".mp3":
+                id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+                for frame in id3.getall("TXXX"):  # type: ignore[no-untyped-call]
+                    if frame.desc == "Audio Hash" and frame.text:
+                        return str(frame.text[0])
+                return ""
+            case _:
+                return ""
+    except Exception:  # noqa: BLE001 — best-effort tag read; any failure means no audio hash
+        return ""
+
+
+def _read_chromaprint_fp_tag(path: Path) -> str:
+    """Read the ``chromaprint_fp`` tag from a FLAC or MP3 file, returning ``""`` on any failure.
+
+    For FLAC files the Vorbis Comment key ``"chromaprint_fp"`` is looked up (case-insensitive).
+    For MP3 files the TXXX frame with description ``"Chromaprint Fingerprint"`` is looked up (from
+    :data:`~music_annotator._tagger._MP3_TXXX_MAP`: ``"CHROMAPRINT_FP": "Chromaprint Fingerprint"``).
+
+    :param path: Path to the audio file to inspect.
+    :returns: The Chromaprint fingerprint string, or ``""`` if absent or unreadable.
+    """
+    try:
+        match path.suffix.lower():
+            case ".flac":
+                audio = FLAC(str(path))
+                values = audio.get("chromaprint_fp") or audio.get("CHROMAPRINT_FP") or []
+                return values[0] if values else ""
+            case ".mp3":
+                id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+                for frame in id3.getall("TXXX"):  # type: ignore[no-untyped-call]
+                    if frame.desc == "Chromaprint Fingerprint" and frame.text:
+                        return str(frame.text[0])
+                return ""
+            case _:
+                return ""
+    except Exception:  # noqa: BLE001 — best-effort tag read; any failure means no fingerprint
+        return ""
+
+
+def _needs_enrich(path: Path, re_resolve: bool) -> dict[str, str]:
+    """Determine which fingerprint fields need to be written to ``path``.
+
+    Reads the current on-disk tag values and computes which of the three archival-identity fields
+    (``audio_hash``, ``chromaprint_fp``, ``acoustid_id``) require a write.  Returns a mapping of
+    field name → new value for every field that should be updated.
+
+    **Idempotency contract:** a second call on the same file (after the first call's writes have
+    been applied) returns an empty dict — no field is written twice unless ``re_resolve=True``
+    explicitly requests a re-derivation of ``chromaprint_fp``.
+
+    **Anchor rule (P-FP1):** ``audio_hash`` is the tagging-invariant anchor.  Once written it is
+    NEVER overwritten, even under ``re_resolve=True``.  This preserves the ability to detect
+    bit-for-bit audio identity across re-tags and format conversions.
+
+    Per-field logic:
+
+    * ``"audio_hash"``: if the tag is empty, compute :func:`_audio_hash` and include the result
+      when non-empty.  If the tag is already present, skip unconditionally (anchor rule).
+    * ``"chromaprint_fp"``: if the tag is empty, compute :func:`_run_fpcalc` and include when
+      non-empty.  If the tag is present and ``re_resolve=True``, recompute and include (overwrite).
+      If the tag is present and ``re_resolve=False``, skip.
+    * ``"acoustid_id"``: if the tag is present, copy the tag value into the result dict (so the
+      journal entry carries the current AcoustID).  If the tag is absent, skip (no network call
+      in F4 — logged once as inconclusive).
+
+    :param path: Path to the FLAC or MP3 file to inspect.
+    :param re_resolve: When ``True``, recompute ``chromaprint_fp`` even when already present.
+    :returns: A ``{field_name: new_value}`` dict of fields that need writing, or ``{}`` when the
+        file is already fully enriched.
+    """
+    result: dict[str, str] = {}
+
+    # --- audio_hash: anchor — never overwrite ---
+    existing_hash = _read_audio_hash_tag(path)
+    if not existing_hash:
+        computed_hash = _audio_hash(path)
+        if computed_hash:
+            result["audio_hash"] = computed_hash
+
+    # --- chromaprint_fp: compute when absent; re-compute when re_resolve=True ---
+    existing_fp = _read_chromaprint_fp_tag(path)
+    if not existing_fp:
+        computed_fp = _run_fpcalc(path)
+        if computed_fp:
+            result["chromaprint_fp"] = computed_fp
+    elif re_resolve:
+        computed_fp = _run_fpcalc(path)
+        if computed_fp:
+            result["chromaprint_fp"] = computed_fp
+
+    # --- acoustid_id: copy tag→result when present; skip when absent ---
+    existing_acoustid = _read_acoustid_tag(path)
+    if existing_acoustid:
+        result["acoustid_id"] = existing_acoustid
+    else:
+        log.info("enrich_acoustid_inconclusive", path=str(path))
+
+    return result
+
+
 def _read_isrc_tag(path: Path) -> str:
     """Read the ISRC tag from a FLAC or MP3 file and return it, or ``""`` on failure.
 

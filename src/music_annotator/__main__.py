@@ -443,8 +443,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
             No network calls are made.  No files are moved.  No journal entries are written.
 
+            With --enrich: retroactively backfill fingerprint fields (audio_hash, chromaprint_fp,
+            acoustid_id) into library files that are missing them.  Idempotent: re-running on an
+            already-enriched library is a no-op.
+
             Examples:
               music-annotator audit /tmp/music_library
+              music-annotator audit /tmp/music_library --enrich
+              music-annotator audit /tmp/music_library --enrich --dry-run
+              music-annotator audit /tmp/music_library --enrich --re-resolve
             """),
     )
     audit_parser.add_argument(
@@ -452,6 +459,28 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="dest_dir",
         type=_resolve_path,
         help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    audit_parser.add_argument(
+        "--enrich",
+        action="store_true",
+        help=(
+            "Retroactively backfill fingerprint fields (audio_hash, chromaprint_fp, acoustid_id) "
+            "into library files that are missing them.  Idempotent."
+        ),
+    )
+    audit_parser.add_argument(
+        "--re-resolve",
+        action="store_true",
+        dest="re_resolve",
+        help=(
+            "When used with --enrich, recompute chromaprint_fp even when already present.  "
+            "audio_hash is never recomputed (anchor rule)."
+        ),
+    )
+    audit_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="When used with --enrich, log planned backfills without writing any tags or journal entries.",
     )
 
     return parser
@@ -560,7 +589,14 @@ def main() -> None:
 
         case "audit":
             try:
-                music_annotator.audit(dest_root=args.dest_dir)
+                if args.enrich:
+                    music_annotator.enrich(
+                        dest_root=args.dest_dir,
+                        re_resolve=args.re_resolve,
+                        dry_run=args.dry_run,
+                    )
+                else:
+                    music_annotator.audit(dest_root=args.dest_dir)
             except KeyboardInterrupt:
                 log.warning("interrupted")
                 sys.exit(1)

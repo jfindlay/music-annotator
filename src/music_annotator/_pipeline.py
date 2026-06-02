@@ -39,6 +39,7 @@ from music_annotator._pipeline_io import (
     _assess_collisions,
     _audio_hash,
     _confirm_fragmentation,
+    _needs_enrich,
     _read_tags_flac,
     _read_tags_mp3,
     _run_fpcalc,
@@ -1806,6 +1807,11 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
             if old_path in current_lib:
                 release_id_for_path = current_lib.pop(old_path)
                 current_lib[dest_path] = release_id_for_path
+        elif entry.action == "enriched":
+            # In-place update: source == destination, path unchanged.
+            # Re-register to keep release_id current for confirmed release IDs.
+            if dest_path in current_lib:
+                current_lib[dest_path] = entry.release_id
 
     # Filter to files that actually exist on disk
     existing_files: list[tuple[Path, str]] = [(p, rid) for p, rid in current_lib.items() if p.exists()]
@@ -1987,10 +1993,166 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
     log.info("regroup_complete", dest_root=str(dest_root), moved=len(plan_pairs))
 
 
+def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False) -> None:
+    """Retroactively backfill fingerprint fields (``audio_hash``, ``chromaprint_fp``, ``acoustid_id``) into library files.
+
+    Reads the transaction journal at ``dest_root``, resolves the current on-disk path for each
+    library file (following the ``"tagged"`` → ``"repathed"`` → ``"regrouped"`` → ``"enriched"``
+    lineage), and for each FLAC or MP3 file calls
+    :func:`~music_annotator._pipeline_io._needs_enrich` to determine which fields are missing.
+
+    This is an idempotent, re-runnable maintenance mode (P-FP3): a second run on a fully-enriched
+    library is a no-op.  The provenance-chain invariant (P-FP4) is preserved: a journal entry with
+    ``action="enriched"`` is appended **only** after
+    :func:`~music_annotator._pipeline_io._verify_copy` confirms the tag round-trip.
+
+    **Anchor rule (P-FP1):** ``audio_hash`` is never overwritten, even under ``re_resolve=True``.
+
+    :param dest_root: Root of the annotated music library (contains
+        ``music_annotator_journal.json``).
+    :param re_resolve: When ``True``, recompute ``chromaprint_fp`` even when already present in
+        the file's tags.  ``audio_hash`` is never recomputed regardless of this flag.
+    :param dry_run: When ``True``, log planned backfills without writing any tags or journal
+        entries.
+    """
+    journal_path = dest_root / JOURNAL_FILENAME
+    journal = read_journal(journal_path)
+
+    # --- Resolve current on-disk path for each logical library file ---
+    # Walk entries in chronological order.  "tagged" seeds the map; "repathed", "regrouped",
+    # and "enriched" update it.  "enriched" has source == destination so it does not change
+    # the path, but we process it for completeness.
+    current_lib: dict[Path, str] = {}  # current_path -> release_id (from the latest tagged entry)
+
+    for entry in journal.entries:
+        dest_path = Path(entry.destination)
+        if entry.action == "tagged":
+            current_lib[dest_path] = entry.release_id
+        elif entry.action in {"repathed", "regrouped"}:
+            old_path = Path(entry.source)
+            current_lib.pop(old_path, None)
+            release_id_for_path = current_lib.get(old_path, entry.release_id)
+            current_lib[dest_path] = release_id_for_path
+        elif entry.action == "enriched":
+            # In-place update: source == destination, path unchanged.
+            # Re-register to keep release_id current.
+            current_lib[dest_path] = entry.release_id
+
+    # Filter to files that actually exist on disk and are FLAC or MP3
+    existing_files: list[tuple[Path, str]] = [
+        (p, rid) for p, rid in current_lib.items() if p.exists() and p.suffix.lower() in {".flac", ".mp3"}
+    ]
+
+    if not existing_files:
+        log.info("enrich_nothing_to_enrich", dest_root=str(dest_root))
+        return
+
+    # --- Per-file enrichment ---
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    count_enriched = 0
+    count_noop = 0
+    count_dry_run = 0
+    count_inconclusive_acoustid = 0
+
+    for current_path, release_id in existing_files:
+        fields = _needs_enrich(current_path, re_resolve)
+
+        # Determine which fields actually need a tag write (acoustid_id is copy-only, not a write)
+        write_fields = {k: v for k, v in fields.items() if k in {"audio_hash", "chromaprint_fp"}}
+
+        if not write_fields:
+            # No tag writes needed — file is already fully enriched (or fpcalc unavailable)
+            log.debug("enrich_noop", path=str(current_path.relative_to(dest_root)))
+            count_noop += 1
+            continue
+
+        # Count inconclusive acoustid for files that need enrichment but have no acoustid tag
+        if "acoustid_id" not in fields:
+            count_inconclusive_acoustid += 1
+
+        if dry_run:
+            log.info(
+                "enrich_dry_run",
+                path=str(current_path.relative_to(dest_root)),
+                fields=list(write_fields.keys()),
+            )
+            count_dry_run += 1
+            continue
+
+        # --- Read current tags, update enriched fields, write back ---
+        ext = current_path.suffix.lower()
+        try:
+            match ext:
+                case ".flac":
+                    file_dict = _read_tags_flac(current_path)
+                case ".mp3":
+                    file_dict = _read_tags_mp3(current_path)
+                case _:  # pragma: no cover — filtered to .flac/.mp3 above
+                    log.warning("enrich_unsupported_format", path=str(current_path), ext=ext)
+                    continue
+        except Exception as exc:  # noqa: BLE001 — tag read failure: log and skip
+            log.warning("enrich_tag_read_error", path=str(current_path), error=str(exc))
+            continue
+
+        # Merge enriched fields into the tag dict and reconstruct a TrackTags for _verify_copy
+        for field_key, field_value in write_fields.items():
+            file_dict[field_key.upper()] = field_value
+        tags = _tags_from_file_dict(file_dict)
+
+        try:
+            match ext:
+                case ".flac":
+                    apply_tags_flac(current_path, tags)
+                case ".mp3":
+                    apply_tags_mp3(current_path, tags)
+                case _:  # pragma: no cover
+                    pass
+        except MutagenError as exc:
+            raise RuntimeError(f"enrich tag write failure for '{current_path.name}': {exc}") from exc
+
+        # Capture mtime after write for _verify_copy (no os.utime restore for in-place enrichment)
+        post_mtime = current_path.stat().st_mtime
+        _verify_copy(current_path, current_path, tags, None, post_mtime)
+
+        # Build the full triple for the journal entry; prefer newly-computed values, fall back to
+        # what was already in the file dict before the write.
+        final_audio_hash = fields.get("audio_hash", "") or file_dict.get("AUDIO_HASH", "")
+        final_chromaprint_fp = fields.get("chromaprint_fp", "") or file_dict.get("CHROMAPRINT_FP", "")
+        final_acoustid_id = fields.get("acoustid_id", "") or file_dict.get("ACOUSTID_ID", "")
+
+        entry = TransactionEntry(
+            timestamp=now,
+            release_id=release_id,
+            source=str(current_path),
+            destination=str(current_path),
+            action="enriched",
+            audio_hash=final_audio_hash,
+            chromaprint_fp=final_chromaprint_fp,
+            acoustid_id=final_acoustid_id,
+        )
+        write_transaction_log(journal_path, [entry])
+        log.info(
+            "enrich_written",
+            path=str(current_path.relative_to(dest_root)),
+            fields=list(write_fields.keys()),
+        )
+        count_enriched += 1
+
+    log.info(
+        "enrich_complete",
+        dest_root=str(dest_root),
+        enriched=count_enriched,
+        noop=count_noop,
+        dry_run=count_dry_run,
+        inconclusive_acoustid=count_inconclusive_acoustid,
+    )
+
+
 # Re-export for __init__.py convenience
 __all__ = [
     "CollisionPolicy",
     "run",
     "repath",
     "regroup",
+    "enrich",
 ]

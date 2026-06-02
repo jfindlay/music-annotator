@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from mutagen._util import MutagenError
 from mutagen.flac import FLAC as MutagenFLAC
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
@@ -26,7 +27,14 @@ from music_annotator.__main__ import (
     _resolve_path,
     main,
 )
-from music_annotator._pipeline_io import _read_albumid_tag, _read_tags_flac, _sha256_file
+from music_annotator._pipeline_io import (
+    _needs_enrich,
+    _read_albumid_tag,
+    _read_audio_hash_tag,
+    _read_chromaprint_fp_tag,
+    _read_tags_flac,
+    _sha256_file,
+)
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path
 from music_annotator.models import MBRelease, MBTrack, TrackTags
@@ -4431,3 +4439,1297 @@ class TestRegroup:
         )
         for e in regrouped:
             assert e.release_id == "split-rel-1"
+
+
+# ---------------------------------------------------------------------------
+# _read_audio_hash_tag
+# ---------------------------------------------------------------------------
+
+
+class TestReadAudioHashTag:
+    """Unit tests for :func:`music_annotator._pipeline_io._read_audio_hash_tag`.
+
+    Exercises the FLAC present, FLAC absent, MP3 present, MP3 absent, unsupported-suffix, and
+    read-error arms.
+    """
+
+    def test_flac_with_audio_hash_returns_value(self, fs: FakeFilesystem) -> None:
+        """_read_audio_hash_tag returns the embedded audio_hash for a tagged FLAC.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(audio_hash="flac-md5:aabbccdd")
+        apply_tags_flac(path, tags)
+
+        assert _read_audio_hash_tag(path) == "flac-md5:aabbccdd"
+
+    def test_flac_without_audio_hash_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_audio_hash_tag returns "" when the FLAC has no audio_hash tag.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(title="No Hash")
+        apply_tags_flac(path, tags)
+
+        assert _read_audio_hash_tag(path) == ""
+
+    def test_mp3_with_audio_hash_returns_value(self, fs: FakeFilesystem) -> None:
+        """_read_audio_hash_tag returns the embedded audio_hash for a tagged MP3.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.mp3"
+        path.write_bytes(_MINIMAL_MP3)
+        tags = TrackTags(audio_hash="mp3-stream-sha256:deadbeef")
+        apply_tags_mp3(path, tags)
+
+        assert _read_audio_hash_tag(path) == "mp3-stream-sha256:deadbeef"
+
+    def test_mp3_without_audio_hash_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_audio_hash_tag returns "" when the MP3 has no audio_hash TXXX frame.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.mp3"
+        path.write_bytes(_MINIMAL_MP3)
+        tags = TrackTags(title="No Hash")
+        apply_tags_mp3(path, tags)
+
+        assert _read_audio_hash_tag(path) == ""
+
+    def test_unsupported_suffix_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_audio_hash_tag returns "" for a file with an unsupported extension.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/track.ogg")
+        fs.create_file(str(path), contents="dummy")
+
+        assert _read_audio_hash_tag(path) == ""
+
+    def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """_read_audio_hash_tag returns "" when the file read raises an exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/broken.flac")
+        mocker.patch("music_annotator._pipeline_io.FLAC", side_effect=OSError("corrupt"))
+
+        assert _read_audio_hash_tag(path) == ""
+
+
+# ---------------------------------------------------------------------------
+# _read_chromaprint_fp_tag
+# ---------------------------------------------------------------------------
+
+
+class TestReadChromaprintFpTag:
+    """Unit tests for :func:`music_annotator._pipeline_io._read_chromaprint_fp_tag`.
+
+    Exercises the FLAC present, FLAC absent, MP3 present, MP3 absent, unsupported-suffix, and
+    read-error arms.
+    """
+
+    def test_flac_with_chromaprint_fp_returns_value(self, fs: FakeFilesystem) -> None:
+        """_read_chromaprint_fp_tag returns the embedded chromaprint_fp for a tagged FLAC.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(chromaprint_fp="AQADtMmybckm")
+        apply_tags_flac(path, tags)
+
+        assert _read_chromaprint_fp_tag(path) == "AQADtMmybckm"
+
+    def test_flac_without_chromaprint_fp_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_chromaprint_fp_tag returns "" when the FLAC has no chromaprint_fp tag.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(title="No FP")
+        apply_tags_flac(path, tags)
+
+        assert _read_chromaprint_fp_tag(path) == ""
+
+    def test_mp3_with_chromaprint_fp_returns_value(self, fs: FakeFilesystem) -> None:
+        """_read_chromaprint_fp_tag returns the embedded chromaprint_fp for a tagged MP3.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.mp3"
+        path.write_bytes(_MINIMAL_MP3)
+        tags = TrackTags(chromaprint_fp="AQADtMmybckm")
+        apply_tags_mp3(path, tags)
+
+        assert _read_chromaprint_fp_tag(path) == "AQADtMmybckm"
+
+    def test_mp3_without_chromaprint_fp_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_chromaprint_fp_tag returns "" when the MP3 has no chromaprint_fp TXXX frame.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.mp3"
+        path.write_bytes(_MINIMAL_MP3)
+        tags = TrackTags(title="No FP")
+        apply_tags_mp3(path, tags)
+
+        assert _read_chromaprint_fp_tag(path) == ""
+
+    def test_unsupported_suffix_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_chromaprint_fp_tag returns "" for a file with an unsupported extension.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/track.ogg")
+        fs.create_file(str(path), contents="dummy")
+
+        assert _read_chromaprint_fp_tag(path) == ""
+
+    def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """_read_chromaprint_fp_tag returns "" when the file read raises an exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/broken.flac")
+        mocker.patch("music_annotator._pipeline_io.FLAC", side_effect=OSError("corrupt"))
+
+        assert _read_chromaprint_fp_tag(path) == ""
+
+
+# ---------------------------------------------------------------------------
+# _needs_enrich
+# ---------------------------------------------------------------------------
+
+
+class TestNeedsEnrich:
+    """Unit tests for :func:`music_annotator._pipeline_io._needs_enrich`.
+
+    Exercises all combinations of empty/present audio_hash, chromaprint_fp, and acoustid_id,
+    plus the re_resolve=True path.
+    """
+
+    def test_all_empty_returns_all_fields(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_needs_enrich returns audio_hash and chromaprint_fp when both are absent.
+
+        acoustid_id is absent so it is not included; the inconclusive log is emitted.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(title="No Fingerprints")
+        apply_tags_flac(path, tags)
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+
+        result = _needs_enrich(path, re_resolve=False)
+
+        assert "audio_hash" in result
+        assert result["audio_hash"].startswith("flac-md5:")
+        assert result["chromaprint_fp"] == "AQADtMmybckm"
+        assert "acoustid_id" not in result
+        mock_log.info.assert_called_once_with("enrich_acoustid_inconclusive", path=str(path))
+
+    def test_all_present_returns_empty_dict(self, fs: FakeFilesystem) -> None:
+        """_needs_enrich returns {} when all three fields are already present.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(audio_hash="flac-md5:aabb", chromaprint_fp="AQADtMmybckm", acoustid_id="test-uuid")
+        apply_tags_flac(path, tags)
+
+        result = _needs_enrich(path, re_resolve=False)
+
+        assert result == {"acoustid_id": "test-uuid"}
+
+    def test_re_resolve_true_recomputes_chromaprint_fp(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_needs_enrich recomputes chromaprint_fp when re_resolve=True even if already present.
+
+        audio_hash is NOT recomputed (anchor rule).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(
+            audio_hash="flac-md5:existing",
+            chromaprint_fp="OldFingerprint",
+            acoustid_id="test-uuid",
+        )
+        apply_tags_flac(path, tags)
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="NewFingerprint")
+
+        result = _needs_enrich(path, re_resolve=True)
+
+        # audio_hash is present → anchor rule: not recomputed
+        assert "audio_hash" not in result
+        # chromaprint_fp is recomputed under re_resolve=True
+        assert result["chromaprint_fp"] == "NewFingerprint"
+        # acoustid_id is copied from tag
+        assert result["acoustid_id"] == "test-uuid"
+
+    def test_audio_hash_present_not_overwritten(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_needs_enrich skips audio_hash when already present (anchor rule).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(audio_hash="flac-md5:existing", acoustid_id="test-uuid")
+        apply_tags_flac(path, tags)
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="FP")
+
+        result = _needs_enrich(path, re_resolve=False)
+
+        assert "audio_hash" not in result
+        assert result["chromaprint_fp"] == "FP"
+
+    def test_fpcalc_returns_empty_not_included(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_needs_enrich omits chromaprint_fp when fpcalc returns empty string.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(title="No FP")
+        apply_tags_flac(path, tags)
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline_io.log")
+
+        result = _needs_enrich(path, re_resolve=False)
+
+        assert "chromaprint_fp" not in result
+
+    def test_acoustid_present_copied_to_result(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_needs_enrich copies acoustid_id from tag into result when present.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(acoustid_id="my-acoustid-uuid")
+        apply_tags_flac(path, tags)
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="FP")
+
+        result = _needs_enrich(path, re_resolve=False)
+
+        assert result["acoustid_id"] == "my-acoustid-uuid"
+
+
+# ---------------------------------------------------------------------------
+# enrich() — full pipeline tests
+# ---------------------------------------------------------------------------
+
+
+def _make_enrichable_flac(dest_root: Path, rel_path: str, tags: TrackTags) -> Path:
+    """Create a FLAC file at ``dest_root / rel_path`` with the given tags applied.
+
+    Helper for enrich() tests: creates parent directories, writes minimal FLAC bytes, applies tags.
+
+    :param dest_root: Library root directory.
+    :param rel_path: Relative path within the library.
+    :param tags: Tags to embed via :func:`apply_tags_flac`.
+    :returns: The full absolute path of the created FLAC file.
+    """
+    full_path = dest_root / rel_path
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    full_path.write_bytes(_MINIMAL_FLAC)
+    apply_tags_flac(full_path, tags)
+    return full_path
+
+
+def _make_enrichable_mp3(dest_root: Path, rel_path: str, tags: TrackTags) -> Path:
+    """Create an MP3 file at ``dest_root / rel_path`` with the given tags applied.
+
+    Helper for enrich() tests: creates parent directories, writes minimal MP3 bytes, applies tags.
+
+    :param dest_root: Library root directory.
+    :param rel_path: Relative path within the library.
+    :param tags: Tags to embed via :func:`apply_tags_mp3`.
+    :returns: The full absolute path of the created MP3 file.
+    """
+    full_path = dest_root / rel_path
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    full_path.write_bytes(_MINIMAL_MP3)
+    apply_tags_mp3(full_path, tags)
+    return full_path
+
+
+class TestEnrich:
+    """Tests for :func:`music_annotator.enrich` — the F4 fingerprint backfill mode.
+
+    Exercises the full write + verify + journal provenance chain without mocking
+    ``apply_tags_flac``, ``_verify_copy``, or ``_read_tags_flac`` (real round-trip, only the
+    filesystem is fake via pyfakefs).  ``_run_fpcalc`` is mocked because fpcalc is not available
+    in the test environment.
+    """
+
+    # ------------------------------------------------------------------
+    # Core idempotency test (the most important test)
+    # ------------------------------------------------------------------
+
+    def test_enrich_backfills_triple_idempotently(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich() backfills audio_hash + chromaprint_fp and is idempotent on a second run.
+
+        Run 1: file has acoustid_id but no audio_hash or chromaprint_fp.  enrich() writes both
+        missing fields and appends an "enriched" journal entry.
+
+        Run 2: file is now fully enriched.  enrich() is a no-op: no new journal entry is written
+        and the tags are unchanged.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(acoustid_id="test-acoustid-id")
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
+
+        # --- Run 1: backfill ---
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        audio = MutagenFLAC(str(path))
+        hash_vals = audio.get("audio_hash") or []
+        fp_vals = audio.get("chromaprint_fp") or []
+        acoustid_vals = audio.get("acoustid_id") or []
+
+        assert hash_vals and hash_vals[0].startswith("flac-md5:")
+        assert fp_vals and fp_vals[0] == "AQADtMmybckm"
+        assert acoustid_vals and acoustid_vals[0] == "test-acoustid-id"
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 1
+        assert enriched[0].audio_hash.startswith("flac-md5:")
+        assert enriched[0].chromaprint_fp == "AQADtMmybckm"
+        assert enriched[0].acoustid_id == "test-acoustid-id"
+        assert enriched[0].source == str(path)
+        assert enriched[0].destination == str(path)
+
+        # --- Run 2: idempotency ---
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        journal2 = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched2 = [e for e in journal2.entries if e.action == "enriched"]
+        assert len(enriched2) == 1, "second run must not append a new enriched entry"
+
+        audio2 = MutagenFLAC(str(path))
+        assert (audio2.get("audio_hash") or []) == hash_vals
+        assert (audio2.get("chromaprint_fp") or []) == fp_vals
+
+    # ------------------------------------------------------------------
+    # dry_run: no tags written, no journal entry
+    # ------------------------------------------------------------------
+
+    def test_enrich_dry_run_no_writes(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich(dry_run=True) logs planned backfills but writes no tags and no journal entry.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(acoustid_id="test-acoustid-id")
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
+        mock_log = mocker.patch("music_annotator._pipeline.log")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=True)
+
+        # No tags written
+        audio = MutagenFLAC(str(path))
+        assert not (audio.get("audio_hash") or [])
+        assert not (audio.get("chromaprint_fp") or [])
+
+        # No journal entry
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 0
+
+        # dry_run log event emitted
+        dry_run_calls = [c for c in mock_log.info.call_args_list if c.args and c.args[0] == "enrich_dry_run"]
+        assert len(dry_run_calls) == 1
+
+    # ------------------------------------------------------------------
+    # re_resolve: recomputes chromaprint_fp; audio_hash NOT overwritten
+    # ------------------------------------------------------------------
+
+    def test_enrich_re_resolve_recomputes_fp_not_hash(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich(re_resolve=True) recomputes chromaprint_fp but never overwrites audio_hash.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            audio_hash="flac-md5:original",
+            chromaprint_fp="OldFingerprint",
+            acoustid_id="test-acoustid-id",
+        )
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="NewFingerprint")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=True, dry_run=False)
+
+        audio = MutagenFLAC(str(path))
+        hash_vals = audio.get("audio_hash") or []
+        fp_vals = audio.get("chromaprint_fp") or []
+
+        # audio_hash must not be overwritten
+        assert hash_vals and hash_vals[0] == "flac-md5:original"
+        # chromaprint_fp must be updated
+        assert fp_vals and fp_vals[0] == "NewFingerprint"
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 1
+        assert enriched[0].chromaprint_fp == "NewFingerprint"
+
+    # ------------------------------------------------------------------
+    # empty journal → nothing to enrich
+    # ------------------------------------------------------------------
+
+    def test_enrich_empty_journal_is_noop(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """enrich() is a no-op when the journal has no entries.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        _write_library_journal(dest_root, [])
+
+        mock_log = mocker.patch("music_annotator._pipeline.log")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        nothing_calls = [c for c in mock_log.info.call_args_list if c.args and c.args[0] == "enrich_nothing_to_enrich"]
+        assert len(nothing_calls) == 1
+
+    # ------------------------------------------------------------------
+    # file not on disk → skipped gracefully
+    # ------------------------------------------------------------------
+
+    def test_enrich_skips_file_not_on_disk(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """enrich() skips files that are in the journal but do not exist on disk.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": "/lib/Artist/Album/01 - Track.flac",
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline.log")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        nothing_calls = [c for c in mock_log.info.call_args_list if c.args and c.args[0] == "enrich_nothing_to_enrich"]
+        assert len(nothing_calls) == 1
+
+    # ------------------------------------------------------------------
+    # lineage resolution: repathed entry updates current path
+    # ------------------------------------------------------------------
+
+    def test_enrich_follows_repathed_lineage(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich() resolves the current path via repathed journal entries.
+
+        A file originally "tagged" at orig_path was subsequently "repathed" to new_path.
+        enrich() must act on new_path, not orig_path.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(acoustid_id="test-acoustid-id")
+        new_path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+        orig_path = dest_root / "Artist" / "OldAlbum" / "01 - Track.flac"
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(orig_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:01:00+00:00",
+                    "release_id": "",
+                    "source": str(orig_path),
+                    "destination": str(new_path),
+                    "action": "repathed",
+                },
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 1
+        assert enriched[0].destination == str(new_path)
+
+    # ------------------------------------------------------------------
+    # enriched entry in journal re-registers path (lineage completeness)
+    # ------------------------------------------------------------------
+
+    def test_enrich_enriched_entry_updates_current_lib(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich() processes an "enriched" journal entry to keep current_lib up to date.
+
+        When a prior "enriched" entry exists for a path, enrich() re-registers it in current_lib
+        (source == destination for enriched entries).  A second run is then a noop.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(audio_hash="flac-md5:aabb", chromaprint_fp="FP", acoustid_id="uuid")
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:01:00+00:00",
+                    "release_id": "rel-1",
+                    "source": str(path),
+                    "destination": str(path),
+                    "action": "enriched",
+                    "audio_hash": "flac-md5:aabb",
+                    "chromaprint_fp": "FP",
+                    "acoustid_id": "uuid",
+                },
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline.log")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        # File is already fully enriched → noop
+        noop_calls = [c for c in mock_log.debug.call_args_list if c.args and c.args[0] == "enrich_noop"]
+        assert len(noop_calls) == 1
+
+    # ------------------------------------------------------------------
+    # acoustid_id absent → logged as inconclusive, not written
+    # ------------------------------------------------------------------
+
+    def test_enrich_inconclusive_acoustid_logged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich() logs enrich_acoustid_inconclusive when acoustid_id is absent from the file.
+
+        The inconclusive count is incremented and the journal entry omits acoustid_id.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # No acoustid_id tag
+        tags = TrackTags(title="No AcoustID")
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 1
+        assert enriched[0].acoustid_id == ""
+
+    # ------------------------------------------------------------------
+    # MP3 file: enrich writes and journals correctly
+    # ------------------------------------------------------------------
+
+    def test_enrich_mp3_backfills_and_journals(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich() handles MP3 files the same as FLAC: writes tags and appends a journal entry.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(acoustid_id="mp3-acoustid-id")
+        path = _make_enrichable_mp3(dest_root, "Artist/Album/01 - Track.mp3", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.mp3",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 1
+        assert enriched[0].audio_hash.startswith("mp3-stream-sha256:")
+        assert enriched[0].chromaprint_fp == "AQADtMmybckm"
+        assert enriched[0].acoustid_id == "mp3-acoustid-id"
+
+    # ------------------------------------------------------------------
+    # tag read error → skip file gracefully
+    # ------------------------------------------------------------------
+
+    def test_enrich_tag_read_error_skips_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich() skips a file and writes no journal entry when the tag read raises.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(acoustid_id="test-acoustid-id")
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
+        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=OSError("corrupt"))
+        mock_log = mocker.patch("music_annotator._pipeline.log")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 0
+
+        warning_calls = [c for c in mock_log.warning.call_args_list if c.args and c.args[0] == "enrich_tag_read_error"]
+        assert len(warning_calls) == 1
+
+    # ------------------------------------------------------------------
+    # regrouped entry updates lineage
+    # ------------------------------------------------------------------
+
+    def test_enrich_follows_regrouped_lineage(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich() resolves the current path via regrouped journal entries.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(acoustid_id="test-acoustid-id")
+        new_path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+        orig_path = dest_root / "Artist" / "OldAlbum" / "01 - Track.flac"
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(orig_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:01:00+00:00",
+                    "release_id": "rel-1",
+                    "source": str(orig_path),
+                    "destination": str(new_path),
+                    "action": "regrouped",
+                },
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 1
+        assert enriched[0].destination == str(new_path)
+
+
+# ---------------------------------------------------------------------------
+# CLI wiring: audit --enrich dispatches to music_annotator.enrich
+# ---------------------------------------------------------------------------
+
+
+class TestAuditEnrichCLI:
+    """Tests for the ``audit --enrich`` CLI dispatch path.
+
+    Verifies that ``main()`` routes ``audit --enrich`` to :func:`music_annotator.enrich` with the
+    correct arguments, and that the standard error-handling paths (exception, KeyboardInterrupt)
+    still exit with code 1.
+    """
+
+    def _patch_common(self, mocker: MockerFixture) -> None:
+        """Patch logging and structlog so tests don't reconfigure the process logger.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mocker.patch("music_annotator.__main__.structlog.get_logger")
+
+    _AUDIT_ARGV = ["music-annotator", "audit", "/d"]
+
+    def test_audit_enrich_dispatches_to_enrich(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit --enrich calls music_annotator.enrich with dest_root, re_resolve, dry_run.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_enrich = mocker.patch("music_annotator.enrich")
+        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--enrich"]):
+            main()
+        mock_enrich.assert_called_once_with(dest_root=Path("/d"), re_resolve=False, dry_run=False)
+
+    def test_audit_enrich_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit --enrich --dry-run passes dry_run=True to enrich().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_enrich = mocker.patch("music_annotator.enrich")
+        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--enrich", "--dry-run"]):
+            main()
+        _, kwargs = mock_enrich.call_args
+        assert kwargs["dry_run"] is True
+
+    def test_audit_enrich_re_resolve_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit --enrich --re-resolve passes re_resolve=True to enrich().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_enrich = mocker.patch("music_annotator.enrich")
+        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--enrich", "--re-resolve"]):
+            main()
+        _, kwargs = mock_enrich.call_args
+        assert kwargs["re_resolve"] is True
+
+    def test_audit_enrich_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit --enrich exits with code 1 when enrich() raises an unexpected exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.enrich", side_effect=RuntimeError("boom"))
+        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--enrich"]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_audit_enrich_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit --enrich exits with code 1 on KeyboardInterrupt.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.enrich", side_effect=KeyboardInterrupt)
+        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--enrich"]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_audit_enrich_parser_flags(self) -> None:
+        """audit parser accepts --enrich, --re-resolve, and --dry-run flags.
+
+        :param mocker: Not used — pure parser test.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["audit", "/dest", "--enrich", "--re-resolve", "--dry-run"])
+        assert ns.enrich is True
+        assert ns.re_resolve is True
+        assert ns.dry_run is True
+
+
+# ---------------------------------------------------------------------------
+# _needs_enrich: missing branch coverage
+# ---------------------------------------------------------------------------
+
+
+class TestNeedsEnrichMissingBranches:
+    """Additional _needs_enrich tests to cover branches missed by TestNeedsEnrich.
+
+    Covers:
+    - audio_hash computed but returns empty (branch 258->262: ``if computed_hash:`` is False)
+    - re_resolve=True but fpcalc returns empty (branch 269->273: ``if computed_fp:`` is False)
+    """
+
+    def test_audio_hash_computed_empty_not_included(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_needs_enrich omits audio_hash when _audio_hash returns empty string.
+
+        Covers the ``if computed_hash:`` False branch (line 258->262).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(title="No Hash")
+        apply_tags_flac(path, tags)
+
+        mocker.patch("music_annotator._pipeline_io._audio_hash", return_value="")
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="FP")
+        mocker.patch("music_annotator._pipeline_io.log")
+
+        result = _needs_enrich(path, re_resolve=False)
+
+        assert "audio_hash" not in result
+
+    def test_re_resolve_fpcalc_empty_not_included(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_needs_enrich omits chromaprint_fp when re_resolve=True but fpcalc returns empty.
+
+        Covers the ``elif re_resolve: if computed_fp:`` False branch (line 269->273).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(audio_hash="flac-md5:existing", chromaprint_fp="OldFP", acoustid_id="uuid")
+        apply_tags_flac(path, tags)
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="")
+
+        result = _needs_enrich(path, re_resolve=True)
+
+        assert "chromaprint_fp" not in result
+
+
+# ---------------------------------------------------------------------------
+# enrich(): journal entry with unrecognised action is ignored
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichUnrecognisedAction:
+    """Test that enrich() ignores journal entries with actions other than tagged/repathed/regrouped/enriched."""
+
+    def test_enrich_ignores_skipped_action(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich() ignores journal entries with action="skipped" (covers the elif-enriched False branch).
+
+        A "skipped" entry does not seed current_lib, so the file is not enriched.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(acoustid_id="test-acoustid-id")
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:01:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "skipped",
+                },
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        # The "tagged" entry seeds current_lib; the "skipped" entry is ignored.
+        # The file should still be enriched (from the "tagged" entry).
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 1
+
+
+# ---------------------------------------------------------------------------
+# regroup(): enriched entry updates current_lib (lines 1813-1814)
+# ---------------------------------------------------------------------------
+
+
+class TestRegroupEnrichedLineage:
+    """Test that regroup() processes "enriched" journal entries to keep current_lib up to date.
+
+    Covers lines 1813-1814 in _pipeline.py: the ``if dest_path in current_lib:`` branch inside
+    the ``elif entry.action == "enriched":`` arm of regroup()'s journal-walk loop.
+    """
+
+    def test_regroup_enriched_entry_updates_current_lib(self, fs: FakeFilesystem) -> None:
+        """regroup() re-registers a path when an "enriched" entry exists for a confirmed release.
+
+        Scenario: a file was "tagged", then "enriched" (in-place, same path).  regroup() must
+        process the "enriched" entry and keep the path registered in current_lib so that the
+        file is still considered for regrouping.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Build a split-release scenario: two files in different work dirs for the same release.
+        # File A is at a legacy path and has been enriched in-place.
+        # File B is a phantom (confirms the release via its MUSICBRAINZ_ALBUMID tag).
+        tags = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="2",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Vienna PO",
+            musicbrainz_albumid="split-rel-enrich",
+        )
+
+        old_path = _make_library_flac(
+            dest_root,
+            "Brahms - Vienna PO/OldWork [2021]/01 - First movement.flac",
+            tags,
+        )
+        phantom = dest_root / "Brahms - Vienna PO" / "Piano Concerto No. 1 [rec 2021]" / "02.flac"
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-enrich",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:01:00+00:00",
+                    "release_id": "split-rel-enrich",
+                    "source": str(old_path),
+                    "destination": str(old_path),
+                    "action": "enriched",
+                    "audio_hash": "flac-md5:aabb",
+                    "chromaprint_fp": "FP",
+                    "acoustid_id": "uuid",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "split-rel-enrich",
+                    "source": "/src/02.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # old_path should have been moved (it was registered via the "enriched" entry)
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        regrouped_sources = {e.source for e in regrouped}
+        assert str(old_path) in regrouped_sources
+
+    def test_regroup_enriched_entry_for_unconfirmed_path_is_ignored(self, fs: FakeFilesystem) -> None:
+        """regroup() ignores an "enriched" entry when its path is not in current_lib.
+
+        Covers the ``if dest_path in current_lib:`` False branch (line 1813->1801): when an
+        "enriched" entry refers to a path that was tagged for a release NOT in
+        ``confirmed_release_ids``, the ``if`` body is skipped.
+
+        Scenario:
+        - Release "confirmed-rel" has two files in different work_dirs → confirmed case-b →
+          ``confirmed_release_ids = {"confirmed-rel"}``.  This prevents the early-return so the
+          journal-walk loop is reached.
+        - Release "other-rel" has a file that was "tagged" and then "enriched".  Because
+          "other-rel" is NOT in ``confirmed_release_ids``, the "tagged" entry does NOT seed
+          ``current_lib``.  The subsequent "enriched" entry therefore hits the
+          ``if dest_path in current_lib:`` False branch and is silently skipped.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # --- confirmed-rel: two files in different work_dirs (case-b split) ---
+        confirmed_tags = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="2",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Vienna PO",
+            musicbrainz_albumid="confirmed-rel",
+        )
+        confirmed_path_a = _make_library_flac(
+            dest_root,
+            "Brahms - Vienna PO/OldWork [2021]/01 - First movement.flac",
+            confirmed_tags,
+        )
+        phantom_b = dest_root / "Brahms - Vienna PO" / "Piano Concerto No. 1 [rec 2021]" / "02.flac"
+
+        # --- other-rel: a file that was tagged then enriched (NOT confirmed) ---
+        other_path = dest_root / "OtherArtist" / "OtherAlbum" / "01 - Track.flac"
+        other_path.parent.mkdir(parents=True, exist_ok=True)
+        other_path.write_bytes(_MINIMAL_FLAC)
+
+        _write_library_journal(
+            dest_root,
+            [
+                # confirmed-rel: two work_dirs → confirmed case-b
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "confirmed-rel",
+                    "source": "/src/01.flac",
+                    "destination": str(confirmed_path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "confirmed-rel",
+                    "source": "/src/02.flac",
+                    "destination": str(phantom_b),
+                    "action": "tagged",
+                },
+                # other-rel: tagged (not confirmed) then enriched
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "other-rel",
+                    "source": "/src/other.flac",
+                    "destination": str(other_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:01:00+00:00",
+                    "release_id": "other-rel",
+                    "source": str(other_path),
+                    "destination": str(other_path),
+                    "action": "enriched",
+                    "audio_hash": "flac-md5:aabb",
+                    "chromaprint_fp": "FP",
+                    "acoustid_id": "uuid",
+                },
+            ],
+        )
+
+        # regroup() must not crash; the "other-rel" enriched entry is silently ignored
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # Only confirmed-rel files should appear in regrouped sources
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        regrouped_sources = {e.source for e in regrouped}
+        assert str(other_path) not in regrouped_sources
+
+
+# ---------------------------------------------------------------------------
+# enrich(): MutagenError on tag write raises RuntimeError (lines 2110-2111)
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichTagWriteError:
+    """Test that enrich() raises RuntimeError when apply_tags_flac raises MutagenError."""
+
+    def test_enrich_mutagen_error_on_write_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich() raises RuntimeError when apply_tags_flac raises MutagenError.
+
+        Covers lines 2110-2111: the ``except MutagenError`` handler in the tag-write block.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(acoustid_id="test-acoustid-id")
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac", side_effect=MutagenError("write failed"))
+
+        with pytest.raises(RuntimeError, match="enrich tag write failure"):
+            music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)

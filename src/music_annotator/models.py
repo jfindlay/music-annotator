@@ -1501,7 +1501,7 @@ class TransactionEntry(BaseModel):
     Important attributes: ``timestamp`` (ISO-8601 UTC string), ``release_id`` (MusicBrainz MBID),
     ``source`` (absolute path of the input audio file), ``destination`` (absolute path of the output
     file including extension), ``action`` (one of ``"tagged"``, ``"skipped"``, ``"dry_run"``,
-    ``"downloaded"``, ``"sidecar"``, ``"repathed"``, ``"regrouped"``).
+    ``"downloaded"``, ``"sidecar"``, ``"repathed"``, ``"regrouped"``, ``"enriched"``).
 
     The ``"repathed"`` action is written by :func:`~music_annotator.repath` when a library file
     is moved to a corrected destination under the current path-construction policy.  For
@@ -1515,13 +1515,19 @@ class TransactionEntry(BaseModel):
     tags.  Unlike ``"repathed"``, ``release_id`` is populated for ``"regrouped"`` entries because
     the move is release-driven: the release MBID that drove candidate selection is known and recorded
     so that future audits can re-confirm the entry without a MusicBrainz lookup.
+
+    The ``"enriched"`` action is written by :func:`~music_annotator.enrich` when fingerprint fields
+    (``audio_hash``, ``chromaprint_fp``, ``acoustid_id``) are retroactively backfilled into an
+    already-tagged library file.  For ``"enriched"`` entries, ``source`` and ``destination`` are
+    the same path (in-place tag update).  The ``audio_hash``, ``chromaprint_fp``, and
+    ``acoustid_id`` fields carry the full triple as written.
     """
 
     timestamp: str
     release_id: str
     source: str
     destination: str
-    action: str  # "tagged" | "skipped" | "dry_run" | "downloaded" | "sidecar" | "repathed" | "regrouped"
+    action: str  # "tagged" | "skipped" | "dry_run" | "downloaded" | "sidecar" | "repathed" | "regrouped" | "enriched"
     # --- archival identity (extensible: 4th dim slots in here) ---
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
     chromaprint_fp: str = ""  # Chromaprint fingerprint string (populated in F3)
