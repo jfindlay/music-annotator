@@ -1545,3 +1545,21 @@ class TransactionLog(BaseModel):
     """
 
     entries: list[TransactionEntry] = Field(default_factory=list)
+
+
+class ProvenanceSidecar(BaseModel):
+    """Provenance fields written into ``freedb_disc_N.yaml`` or ``music_annotator_provenance.yaml`` by ``enrich --origin-time``.
+
+    These fields record the rip/download origin of a work directory so that the information
+    survives journal regeneration (W1b).  They are written once and never overwritten (idempotent).
+
+    ``origin_time`` is the ISO-8601 UTC timestamp of the earliest journal entry for the work_dir —
+    the annotation time that approximates when the rip was processed.  ``origin_source`` is the
+    parent directory of the ``source`` rip-path from the same earliest entry, recording where the
+    audio files came from.
+
+    Important attributes: ``origin_time``, ``origin_source``.
+    """
+
+    origin_time: str = ""
+    origin_source: str = ""

@@ -6594,3 +6594,97 @@ class TestEnrichAcoustidReResolve:
         audio = MutagenFLAC(str(path))
         acoustid_vals = audio.get("acoustid_id") or []
         assert acoustid_vals and acoustid_vals[0] == "old-acoustid-uuid"
+
+
+# ---------------------------------------------------------------------------
+# audit --origin-time CLI dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestAuditOriginTimeCLI:
+    """Tests for the ``audit --origin-time`` CLI dispatch path.
+
+    Verifies that ``main()`` routes ``audit --origin-time`` to
+    :func:`music_annotator.enrich_origin_time` with the correct arguments, and that the standard
+    error-handling paths (exception, KeyboardInterrupt) still exit with code 1.
+    """
+
+    def _patch_common(self, mocker: MockerFixture) -> None:
+        """Patch logging and structlog so tests don't reconfigure the process logger.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mocker.patch("music_annotator.__main__.structlog.get_logger")
+
+    _AUDIT_ARGV = ["music-annotator", "audit", "/d"]
+
+    def test_origin_time_dispatches_to_enrich_origin_time(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit --origin-time calls music_annotator.enrich_origin_time with dest_root and dry_run=False.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_fn = mocker.patch("music_annotator.enrich_origin_time")
+        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--origin-time"]):
+            main()
+        mock_fn.assert_called_once_with(dest_root=Path("/d"), dry_run=False)
+
+    def test_origin_time_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit --origin-time --dry-run passes dry_run=True to enrich_origin_time().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_fn = mocker.patch("music_annotator.enrich_origin_time")
+        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--origin-time", "--dry-run"]):
+            main()
+        _, kwargs = mock_fn.call_args
+        assert kwargs["dry_run"] is True
+
+    def test_origin_time_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit --origin-time exits with code 1 when enrich_origin_time() raises.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.enrich_origin_time", side_effect=RuntimeError("boom"))
+        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--origin-time"]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_origin_time_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit --origin-time exits with code 1 on KeyboardInterrupt.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.enrich_origin_time", side_effect=KeyboardInterrupt)
+        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--origin-time"]):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_origin_time_parser_flag(self) -> None:
+        """audit parser accepts --origin-time flag and sets origin_time=True.
+
+        :param mocker: Not used — pure parser test.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["audit", "/dest", "--origin-time"])
+        assert ns.origin_time is True
+
+    def test_origin_time_default_false(self) -> None:
+        """audit parser sets origin_time=False by default.
+
+        :param mocker: Not used — pure parser test.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["audit", "/dest"])
+        assert ns.origin_time is False

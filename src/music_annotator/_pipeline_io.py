@@ -24,7 +24,16 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 
 from music_annotator._tagger import _MP3_STD_KEYS, _MP3_TXXX_MAP
-from music_annotator.models import JSON, CoverArt, MBTrack, PictureEntry, TrackTags, TransactionEntry, TransactionLog
+from music_annotator.models import (
+    JSON,
+    CoverArt,
+    MBTrack,
+    PictureEntry,
+    ProvenanceSidecar,
+    TrackTags,
+    TransactionEntry,
+    TransactionLog,
+)
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -1614,3 +1623,192 @@ def _verify_copy(
     dest_mtime = dest_file.stat().st_mtime
     if dest_mtime != src_mtime:
         raise RuntimeError(f"mtime verification failure for '{dest_file.name}': expected {src_mtime}, got {dest_mtime}")
+
+
+#: Filename of the fallback provenance sidecar written when no ``freedb_disc_N.yaml`` exists.
+PROVENANCE_FILENAME: str = "music_annotator_provenance.yaml"
+
+
+def _collect_work_dir_provenance(
+    dest_root: Path,
+    journal: TransactionLog,
+) -> dict[Path, ProvenanceSidecar]:
+    """Derive per-work-dir provenance from ``action == "tagged"`` journal entries.
+
+    Groups entries by work_top_dir (``dest_root / parts[0] / parts[1]``).  For each group, takes
+    the entry with the lexicographically earliest ``timestamp`` as the canonical annotation time
+    (ISO-8601 strings sort correctly without parsing), and takes the parent of that entry's
+    ``source`` path as the origin provenance label.
+
+    Entries whose ``destination`` is not under ``dest_root`` or whose relative path has fewer than
+    two parts are silently skipped.
+
+    :param dest_root: Root of the annotated music library.
+    :param journal: :class:`~music_annotator.models.TransactionLog` to analyse.
+    :returns: A mapping from absolute work_top_dir :class:`~pathlib.Path` to a
+        :class:`~music_annotator.models.ProvenanceSidecar` holding the earliest timestamp and
+        corresponding source parent.
+    """
+    # work_top_dir -> list of (timestamp, source) from "tagged" entries
+    groups: dict[Path, list[tuple[str, str]]] = {}
+
+    for entry in journal.entries:
+        if entry.action != "tagged":
+            continue
+        try:
+            rel = Path(entry.destination).relative_to(dest_root)
+        except ValueError:
+            continue
+        if len(rel.parts) < 2:  # noqa: PLR2004 — structural constant (parts[0], parts[1])
+            continue
+        work_top_dir = dest_root / rel.parts[0] / rel.parts[1]
+        groups.setdefault(work_top_dir, []).append((entry.timestamp, entry.source))
+
+    result: dict[Path, ProvenanceSidecar] = {}
+    for work_top_dir, ts_src_pairs in groups.items():
+        earliest_ts, earliest_src = min(ts_src_pairs, key=lambda x: x[0])
+        result[work_top_dir] = ProvenanceSidecar(
+            origin_time=earliest_ts,
+            origin_source=str(Path(earliest_src).parent),
+        )
+    return result
+
+
+def _read_provenance_sidecar(sidecar_path: Path) -> ProvenanceSidecar:
+    """Read and parse a provenance sidecar YAML file, returning a :class:`~music_annotator.models.ProvenanceSidecar`.
+
+    Returns an empty :class:`~music_annotator.models.ProvenanceSidecar` when the file is absent,
+    unreadable, or does not contain a mapping.
+
+    :param sidecar_path: Absolute path to the YAML sidecar file.
+    :returns: A :class:`~music_annotator.models.ProvenanceSidecar` with the fields read from the
+        file, or an empty one if the file is absent or unreadable.
+    """
+    if not sidecar_path.is_file():
+        return ProvenanceSidecar()
+    try:
+        with sidecar_path.open(encoding="utf-8") as fh:
+            data: object = yaml.full_load(fh)
+        if not isinstance(data, dict):
+            return ProvenanceSidecar()
+        return ProvenanceSidecar.model_validate(data)
+    except Exception:  # noqa: BLE001 — best-effort read; any failure means empty provenance
+        return ProvenanceSidecar()
+
+
+def _write_provenance_fields(sidecar_path: Path, provenance: ProvenanceSidecar) -> None:
+    """Merge ``origin_time`` and ``origin_source`` into the YAML sidecar at ``sidecar_path``.
+
+    Reads the existing YAML content (if any), merges the provenance fields in, and writes the
+    result back.  Existing keys other than ``origin_time`` and ``origin_source`` are preserved.
+    The write is idempotent: if both fields are already present with the correct values, the file
+    is not modified.
+
+    :param sidecar_path: Absolute path to the YAML sidecar file to update or create.
+    :param provenance: The :class:`~music_annotator.models.ProvenanceSidecar` whose fields are
+        written.
+    :raises yaml.YAMLError: If the existing file cannot be parsed.
+    :raises OSError: If the file cannot be written.
+    """
+    existing: dict[str, object] = {}
+    if sidecar_path.is_file():
+        with sidecar_path.open(encoding="utf-8") as fh:
+            raw: object = yaml.full_load(fh)
+        if isinstance(raw, dict):
+            existing = dict(raw)
+
+    existing["origin_time"] = provenance.origin_time
+    existing["origin_source"] = provenance.origin_source
+
+    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+    with sidecar_path.open("w", encoding="utf-8") as fh:
+        yaml.dump(existing, fh, allow_unicode=True, default_flow_style=False)
+
+
+def _find_freedb_sidecar(work_top_dir: Path) -> Path | None:
+    """Return the path of the first ``freedb_disc_N.yaml`` file in ``work_top_dir``, or ``None``.
+
+    Scans ``work_top_dir`` for files matching the ``freedb_disc_*.yaml`` pattern and returns the
+    first match (sorted for determinism).  Returns ``None`` when no such file exists.
+
+    :param work_top_dir: The work top directory to scan.
+    :returns: The path of the first matching sidecar file, or ``None`` if none is found.
+    """
+    candidates = sorted(work_top_dir.glob("freedb_disc_*.yaml"))
+    return candidates[0] if candidates else None
+
+
+def enrich_origin_time(dest_root: Path, *, dry_run: bool = False) -> None:
+    """Migrate rip/download origin-time from the journal into authoritative sidecar YAML files.
+
+    Reads the transaction journal at ``dest_root``, groups ``action == "tagged"`` entries by
+    work_top_dir, and for each work_top_dir writes ``origin_time`` (earliest journal timestamp)
+    and ``origin_source`` (parent of the earliest entry's ``source`` rip-path) into the sidecar:
+
+    * If a ``freedb_disc_N.yaml`` file exists in the work_top_dir, the fields are merged into it.
+    * Otherwise a ``music_annotator_provenance.yaml`` sibling sidecar is created (or updated).
+
+    This is an idempotent, re-runnable maintenance mode: a second run on a library where all
+    sidecars already carry the provenance fields is a no-op.
+
+    The sidecar field convention established here is consumed by W1b's ``rebuild`` subcommand to
+    populate ``origin_time`` on reconstructed :class:`~music_annotator.models.TransactionEntry`
+    objects.
+
+    :param dest_root: Root of the annotated music library (contains
+        ``music_annotator_journal.json``).
+    :param dry_run: When ``True``, log planned writes without modifying any files.
+    """
+    journal_path = dest_root / JOURNAL_FILENAME
+    journal = read_journal(journal_path)
+
+    provenance_map = _collect_work_dir_provenance(dest_root, journal)
+
+    if not provenance_map:
+        log.info("enrich_origin_time_nothing_to_do", dest_root=str(dest_root))
+        return
+
+    count_written = 0
+    count_noop = 0
+    count_dry_run = 0
+
+    for work_top_dir, provenance in sorted(provenance_map.items()):
+        sidecar_path = _find_freedb_sidecar(work_top_dir)
+        if sidecar_path is None:
+            sidecar_path = work_top_dir / PROVENANCE_FILENAME
+
+        existing = _read_provenance_sidecar(sidecar_path)
+        if existing.origin_time == provenance.origin_time and existing.origin_source == provenance.origin_source:
+            log.debug(
+                "enrich_origin_time_noop",
+                sidecar=str(sidecar_path.relative_to(dest_root)),
+            )
+            count_noop += 1
+            continue
+
+        if dry_run:
+            log.info(
+                "enrich_origin_time_dry_run",
+                sidecar=str(sidecar_path.relative_to(dest_root)),
+                origin_time=provenance.origin_time,
+                origin_source=provenance.origin_source,
+            )
+            count_dry_run += 1
+            continue
+
+        _write_provenance_fields(sidecar_path, provenance)
+        log.info(
+            "enrich_origin_time_written",
+            sidecar=str(sidecar_path.relative_to(dest_root)),
+            origin_time=provenance.origin_time,
+            origin_source=provenance.origin_source,
+        )
+        count_written += 1
+
+    log.info(
+        "enrich_origin_time_complete",
+        dest_root=str(dest_root),
+        written=count_written,
+        noop=count_noop,
+        dry_run=count_dry_run,
+    )

@@ -155,10 +155,13 @@ from music_annotator._pipeline_io import (
     _DISC_INFO_FILENAME,
     AUDIO_EXTENSIONS,
     JOURNAL_FILENAME,
+    PROVENANCE_FILENAME,
     AudioCompareResult,
     _assess_collisions,
     _check_collisions,
+    _collect_work_dir_provenance,
     _confirm_fragmentation,
+    _find_freedb_sidecar,
     _journal_fragmentation_groups,
     _needs_enrich,
     _parse_disc_id_list,
@@ -168,13 +171,16 @@ from music_annotator._pipeline_io import (
     _read_audio_hash_tag,
     _read_chromaprint_fp_tag,
     _read_duration_ms,
+    _read_provenance_sidecar,
     _read_tags_flac,
     _read_tags_mp3,
     _run_fpcalc,
     _sha256_file,
     _verify_copy,
+    _write_provenance_fields,
     audit,
     compare_audio_collision,
+    enrich_origin_time,
     find_source_files,
     parse_disc_title,
     parse_disc_toc,
@@ -211,7 +217,7 @@ from music_annotator._works import (
     period_for_year,
     strip_common_prefix,
 )
-from music_annotator.models import CopyPlanEntry, DirHint, PeriodEntry, PictureEntry
+from music_annotator.models import CopyPlanEntry, DirHint, PeriodEntry, PictureEntry, ProvenanceSidecar
 
 __all__ = [
     "configure_color",
@@ -266,7 +272,9 @@ __all__ = [
     "read_journal",
     "write_transaction_log",
     "audit",
+    "enrich_origin_time",
     "JOURNAL_FILENAME",
+    "PROVENANCE_FILENAME",
 ]
 
 # Suppress "imported but unused" for items re-exported but not listed in __all__
@@ -307,8 +315,15 @@ _reexports = (
     _parse_disc_id_list,
     _preferred_disc_record,
     _read_acoustid_tag,
+    _read_audio_hash_tag,
+    _read_chromaprint_fp_tag,
     _read_duration_ms,
+    _read_provenance_sidecar,
     _run_fpcalc,
+    _write_provenance_fields,
+    _collect_work_dir_provenance,
+    _find_freedb_sidecar,
+    _needs_enrich,
     compare_audio_collision,
     _format_candidate,
     _get_bottom_work,
@@ -326,6 +341,7 @@ _reexports = (
     DirHint,
     PeriodEntry,
     PictureEntry,
+    ProvenanceSidecar,
     _rec_title,
     _score_medium_title,
     _score_toc_release,

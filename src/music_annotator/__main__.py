@@ -37,6 +37,7 @@ Usage::
 
     music-annotator audit \\
         <dest_dir>
+        [--enrich] [--origin-time] [--dry-run]
 """
 
 from __future__ import annotations
@@ -183,7 +184,8 @@ def _build_parser() -> argparse.ArgumentParser:
     root.  ``apply`` and ``search`` share ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``,
     ``--no-fetch-rels``, and ``--delete`` via :func:`_add_common_args`.  ``prune`` only adds ``-y``/``--yes``.
     ``repath`` takes only ``dest_dir`` and an optional ``--dry-run`` flag.  ``audit`` takes only ``dest_dir``
-    and requires no network credentials (read-only journal analysis).
+    and requires no network credentials (read-only journal analysis).  ``audit --origin-time`` migrates
+    rip/download origin-time from the journal into authoritative sidecar YAML files (idempotent).
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -453,11 +455,17 @@ def _build_parser() -> argparse.ArgumentParser:
             acoustid_id) into library files that are missing them.  Idempotent: re-running on an
             already-enriched library is a no-op.
 
+            With --origin-time: migrate rip/download origin-time from the journal into authoritative
+            sidecar YAML files (freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent:
+            re-running on a library where all sidecars already carry the provenance fields is a no-op.
+
             Examples:
               music-annotator audit /tmp/music_library
               music-annotator audit /tmp/music_library --enrich
               music-annotator audit /tmp/music_library --enrich --dry-run
               music-annotator audit /tmp/music_library --enrich --re-resolve
+              music-annotator audit /tmp/music_library --origin-time
+              music-annotator audit /tmp/music_library --origin-time --dry-run
             """),
     )
     audit_parser.add_argument(
@@ -494,6 +502,15 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="AcoustID API key; when set with --enrich --re-resolve, backfills acoustid_id via keyed lookup.",
     )
+    audit_parser.add_argument(
+        "--origin-time",
+        action="store_true",
+        dest="origin_time",
+        help=(
+            "Migrate rip/download origin-time from the journal into authoritative sidecar YAML files "
+            "(freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent."
+        ),
+    )
 
     return parser
 
@@ -502,6 +519,9 @@ def main() -> None:
     """Parse CLI arguments, configure logging, and dispatch to subcommands.
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``.
+    The ``audit`` subcommand dispatches to :func:`~music_annotator.audit`,
+    :func:`~music_annotator.enrich`, or :func:`~music_annotator.enrich_origin_time` depending on
+    the flags provided (``--enrich``, ``--origin-time``).
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating and converts any unhandled exception or keyboard interrupt into a logged error with exit code 1.
@@ -603,7 +623,12 @@ def main() -> None:
 
         case "audit":
             try:
-                if args.enrich:
+                if args.origin_time:
+                    music_annotator.enrich_origin_time(
+                        dest_root=args.dest_dir,
+                        dry_run=args.dry_run,
+                    )
+                elif args.enrich:
                     music_annotator.enrich(
                         dest_root=args.dest_dir,
                         re_resolve=args.re_resolve,

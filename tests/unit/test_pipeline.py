@@ -1,5 +1,5 @@
 """Unit tests for pipeline functions: build_cea_performers, build_track_tags, apply_tags_flac, apply_tags_mp3,
-find_source_files, check_duration_preflight, _prompt_duration_warnings, and run (non-dry-run).
+find_source_files, check_duration_preflight, _prompt_duration_warnings, run (non-dry-run), and enrich_origin_time.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 from mutagen._util import MutagenError
 from mutagen.flac import FLAC
 from mutagen.id3 import ID3, TXXX  # type: ignore[attr-defined]
@@ -58,17 +59,23 @@ from music_annotator._pipeline_io import (
     _CHROMAPRINT_SIMILARITY_THRESHOLD,
     _DISC_INFO_FILENAME,
     _DISC_TOC_FILENAME,
+    PROVENANCE_FILENAME,
     AudioCompareResult,
     _assess_collisions,
     _audio_hash,
     _chromaprint_similarity,
+    _collect_work_dir_provenance,
+    _find_freedb_sidecar,
     _isrc_matches,
     _read_acoustid_tag,
     _read_duration_ms,
     _read_isrc_tag,
+    _read_provenance_sidecar,
     _run_fpcalc,
+    _write_provenance_fields,
     check_duration_preflight,
     compare_audio_collision,
+    enrich_origin_time,
 )
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
@@ -81,8 +88,10 @@ from music_annotator.models import (
     MBRelease,
     MBTrack,
     MBWork,
+    ProvenanceSidecar,
     TrackTags,
     TransactionEntry,
+    TransactionLog,
 )
 
 
@@ -9295,3 +9304,524 @@ class TestRunAcoustidIdentityConfirm:
         )
         assert not any(e["event"] == "acoustid_confirm_ok" for e in log_info_events)
         assert not any(e["event"] == "acoustid_confirm_mismatch" for e in log_warn_events)
+
+
+# ---------------------------------------------------------------------------
+# enrich_origin_time helpers
+# ---------------------------------------------------------------------------
+
+
+class TestCollectWorkDirProvenance:
+    """Tests for :func:`music_annotator._pipeline_io._collect_work_dir_provenance`."""
+
+    def test_groups_by_work_top_dir(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Entries for the same work_top_dir are grouped and the earliest timestamp wins.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        entries = [
+            TransactionEntry(
+                timestamp="2024-06-02T10:00:00+00:00",
+                release_id="rel-1",
+                source="/rip/Beethoven/01.flac",
+                destination="/lib/Beethoven/Symphony No 5/01 - I.flac",
+                action="tagged",
+            ),
+            TransactionEntry(
+                timestamp="2024-06-01T08:00:00+00:00",
+                release_id="rel-1",
+                source="/rip/Beethoven/02.flac",
+                destination="/lib/Beethoven/Symphony No 5/02 - II.flac",
+                action="tagged",
+            ),
+        ]
+        journal = TransactionLog(entries=entries)
+        result = _collect_work_dir_provenance(dest_root, journal)
+
+        work_top_dir = Path("/lib/Beethoven/Symphony No 5")
+        assert work_top_dir in result
+        prov = result[work_top_dir]
+        # Earliest timestamp wins
+        assert prov.origin_time == "2024-06-01T08:00:00+00:00"
+        # origin_source is parent of the source with the earliest timestamp
+        assert prov.origin_source == "/rip/Beethoven"
+
+    def test_skips_non_tagged_entries(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Only ``action == "tagged"`` entries are included; others are skipped.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        entries = [
+            TransactionEntry(
+                timestamp="2024-06-01T00:00:00+00:00",
+                release_id="rel-1",
+                source="/rip/01.flac",
+                destination="/lib/Composer/Work/01.flac",
+                action="repathed",
+            ),
+            TransactionEntry(
+                timestamp="2024-06-01T00:00:00+00:00",
+                release_id="rel-1",
+                source="/rip/01.flac",
+                destination="/lib/Composer/Work/01.flac",
+                action="enriched",
+            ),
+        ]
+        journal = TransactionLog(entries=entries)
+        result = _collect_work_dir_provenance(dest_root, journal)
+        assert result == {}
+
+    def test_skips_entries_not_under_dest_root(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Entries whose destination is not under dest_root are silently skipped.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        entries = [
+            TransactionEntry(
+                timestamp="2024-06-01T00:00:00+00:00",
+                release_id="rel-1",
+                source="/rip/01.flac",
+                destination="/other/Composer/Work/01.flac",
+                action="tagged",
+            ),
+        ]
+        journal = TransactionLog(entries=entries)
+        result = _collect_work_dir_provenance(dest_root, journal)
+        assert result == {}
+
+    def test_skips_entries_with_too_few_path_parts(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Entries whose relative path has fewer than two parts are silently skipped.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        entries = [
+            TransactionEntry(
+                timestamp="2024-06-01T00:00:00+00:00",
+                release_id="rel-1",
+                source="/rip/01.flac",
+                destination="/lib/only-one-part.flac",
+                action="tagged",
+            ),
+        ]
+        journal = TransactionLog(entries=entries)
+        result = _collect_work_dir_provenance(dest_root, journal)
+        assert result == {}
+
+
+class TestReadProvenanceSidecar:
+    """Tests for :func:`music_annotator._pipeline_io._read_provenance_sidecar`."""
+
+    def test_reads_existing_sidecar(self, fs: FakeFilesystem) -> None:
+        """Reads origin_time and origin_source from an existing YAML sidecar.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/freedb_disc_1.yaml")
+        fs.create_dir(str(sidecar.parent))
+        sidecar.write_text(
+            "origin_time: '2024-06-01T00:00:00+00:00'\norigin_source: /rip/Beethoven\n",
+            encoding="utf-8",
+        )
+        result = _read_provenance_sidecar(sidecar)
+        assert result.origin_time == "2024-06-01T00:00:00+00:00"
+        assert result.origin_source == "/rip/Beethoven"
+
+    def test_absent_file_returns_empty(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Returns an empty ProvenanceSidecar when the file does not exist.
+
+        :param fs: pyfakefs fixture.
+        """
+        result = _read_provenance_sidecar(Path("/lib/Composer/Work/freedb_disc_1.yaml"))
+        assert result == ProvenanceSidecar()
+
+    def test_non_dict_yaml_returns_empty(self, fs: FakeFilesystem) -> None:
+        """Returns an empty ProvenanceSidecar when the YAML content is not a mapping.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/freedb_disc_1.yaml")
+        fs.create_dir(str(sidecar.parent))
+        sidecar.write_text("- item1\n- item2\n", encoding="utf-8")
+        result = _read_provenance_sidecar(sidecar)
+        assert result == ProvenanceSidecar()
+
+    def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Returns an empty ProvenanceSidecar when the file exists but raises on read.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/freedb_disc_1.yaml")
+        fs.create_dir(str(sidecar.parent))
+        sidecar.write_text("origin_time: '2024-06-01'\n", encoding="utf-8")
+        mocker.patch("music_annotator._pipeline_io.yaml.full_load", side_effect=OSError("read error"))
+        result = _read_provenance_sidecar(sidecar)
+        assert result == ProvenanceSidecar()
+
+
+class TestWriteProvenanceFields:
+    """Tests for :func:`music_annotator._pipeline_io._write_provenance_fields`."""
+
+    def test_creates_new_sidecar(self, fs: FakeFilesystem) -> None:
+        """Creates a new YAML sidecar with origin_time and origin_source when none exists.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+        provenance = ProvenanceSidecar(origin_time="2024-06-01T00:00:00+00:00", origin_source="/rip/Beethoven")
+        _write_provenance_fields(sidecar, provenance)
+        result = _read_provenance_sidecar(sidecar)
+        assert result.origin_time == "2024-06-01T00:00:00+00:00"
+        assert result.origin_source == "/rip/Beethoven"
+
+    def test_merges_into_existing_sidecar(self, fs: FakeFilesystem) -> None:
+        """Merges provenance fields into an existing YAML sidecar, preserving other keys.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/freedb_disc_1.yaml")
+        fs.create_dir(str(sidecar.parent))
+        sidecar.write_text("disc_id: [12345, 2, 150, 300, 600]\n", encoding="utf-8")
+        provenance = ProvenanceSidecar(origin_time="2024-06-01T00:00:00+00:00", origin_source="/rip/Beethoven")
+        _write_provenance_fields(sidecar, provenance)
+        with sidecar.open(encoding="utf-8") as fh:
+            data: object = yaml.full_load(fh)
+        assert isinstance(data, dict)
+        assert data["origin_time"] == "2024-06-01T00:00:00+00:00"
+        assert data["origin_source"] == "/rip/Beethoven"
+        # Original key preserved
+        assert "disc_id" in data
+
+    def test_overwrites_existing_provenance_fields(self, fs: FakeFilesystem) -> None:
+        """Overwrites existing origin_time and origin_source when called again.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/freedb_disc_1.yaml")
+        fs.create_dir(str(sidecar.parent))
+        sidecar.write_text(
+            "origin_time: '2024-01-01T00:00:00+00:00'\norigin_source: /old/path\n",
+            encoding="utf-8",
+        )
+        provenance = ProvenanceSidecar(origin_time="2024-06-01T00:00:00+00:00", origin_source="/new/path")
+        _write_provenance_fields(sidecar, provenance)
+        result = _read_provenance_sidecar(sidecar)
+        assert result.origin_time == "2024-06-01T00:00:00+00:00"
+        assert result.origin_source == "/new/path"
+
+    def test_non_dict_existing_yaml_treated_as_empty(self, fs: FakeFilesystem) -> None:
+        """When the existing YAML is not a dict, it is treated as empty and overwritten.
+
+        Covers the ``if isinstance(raw, dict):`` False branch in _write_provenance_fields.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/freedb_disc_1.yaml")
+        fs.create_dir(str(sidecar.parent))
+        # Write a YAML list (not a dict) as the existing content
+        sidecar.write_text("- item1\n- item2\n", encoding="utf-8")
+        provenance = ProvenanceSidecar(origin_time="2024-06-01T00:00:00+00:00", origin_source="/rip/Beethoven")
+        _write_provenance_fields(sidecar, provenance)
+        with sidecar.open(encoding="utf-8") as fh:
+            data: object = yaml.full_load(fh)
+        assert isinstance(data, dict)
+        assert data["origin_time"] == "2024-06-01T00:00:00+00:00"
+        assert data["origin_source"] == "/rip/Beethoven"
+
+
+class TestFindFreeddbSidecar:
+    """Tests for :func:`music_annotator._pipeline_io._find_freedb_sidecar`."""
+
+    def test_finds_first_freedb_yaml(self, fs: FakeFilesystem) -> None:
+        """Returns the first freedb_disc_N.yaml file found in the work_top_dir.
+
+        :param fs: pyfakefs fixture.
+        """
+        work_dir = Path("/lib/Composer/Work")
+        fs.create_dir(str(work_dir))
+        fs.create_file(str(work_dir / "freedb_disc_1.yaml"), contents=b"")
+        result = _find_freedb_sidecar(work_dir)
+        assert result == work_dir / "freedb_disc_1.yaml"
+
+    def test_returns_none_when_absent(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Returns None when no freedb_disc_N.yaml file exists.
+
+        :param fs: pyfakefs fixture.
+        """
+        work_dir = Path("/lib/Composer/Work")
+        fs.create_dir(str(work_dir))
+        assert _find_freedb_sidecar(work_dir) is None
+
+    def test_returns_first_sorted_when_multiple(self, fs: FakeFilesystem) -> None:
+        """Returns the first (sorted) freedb_disc_N.yaml when multiple exist.
+
+        :param fs: pyfakefs fixture.
+        """
+        work_dir = Path("/lib/Composer/Work")
+        fs.create_dir(str(work_dir))
+        fs.create_file(str(work_dir / "freedb_disc_2.yaml"), contents=b"")
+        fs.create_file(str(work_dir / "freedb_disc_1.yaml"), contents=b"")
+        result = _find_freedb_sidecar(work_dir)
+        assert result == work_dir / "freedb_disc_1.yaml"
+
+
+# ---------------------------------------------------------------------------
+# enrich_origin_time — full pipeline tests
+# ---------------------------------------------------------------------------
+
+
+def _write_journal(dest_root: Path, entries: list[dict[str, str]]) -> None:
+    """Write a journal JSON file to ``dest_root / music_annotator_journal.json``.
+
+    :param dest_root: Destination root directory (must already exist).
+    :param entries: List of raw entry dicts to serialise.
+    """
+    journal_path = dest_root / JOURNAL_FILENAME
+    journal_path.write_text(json.dumps(entries), encoding="utf-8")
+
+
+class TestEnrichOriginTime:
+    """Tests for :func:`music_annotator._pipeline_io.enrich_origin_time`.
+
+    Covers: freedb_disc_N.yaml write path; music_annotator_provenance.yaml fallback path;
+    idempotency (run twice, same result); empty journal no-op; dry_run mode.
+    """
+
+    def test_writes_to_freedb_sidecar(self, fs: FakeFilesystem) -> None:
+        """enrich_origin_time writes origin_time and origin_source into an existing freedb_disc_N.yaml.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_top_dir = dest_root / "Beethoven" / "Symphony No 5 [2024]"
+        fs.create_dir(str(work_top_dir))
+        freedb_sidecar = work_top_dir / "freedb_disc_1.yaml"
+        freedb_sidecar.write_text("disc_id: [12345, 2, 150, 300]\n", encoding="utf-8")
+
+        _write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T08:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/rip/Beethoven/01.flac",
+                    "destination": str(work_top_dir / "01 - I.flac"),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        enrich_origin_time(dest_root)
+
+        result = _read_provenance_sidecar(freedb_sidecar)
+        assert result.origin_time == "2024-06-01T08:00:00+00:00"
+        assert result.origin_source == "/rip/Beethoven"
+
+    def test_writes_provenance_yaml_when_no_freedb(self, fs: FakeFilesystem) -> None:
+        """enrich_origin_time creates music_annotator_provenance.yaml when no freedb_disc_N.yaml exists.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_top_dir = dest_root / "Presto" / "Album [2024]"
+        fs.create_dir(str(work_top_dir))
+
+        _write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-05-15T12:00:00+00:00",
+                    "release_id": "rel-2",
+                    "source": "/downloads/Presto/01.flac",
+                    "destination": str(work_top_dir / "01 - Track.flac"),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        enrich_origin_time(dest_root)
+
+        provenance_path = work_top_dir / PROVENANCE_FILENAME
+        assert provenance_path.is_file()
+        result = _read_provenance_sidecar(provenance_path)
+        assert result.origin_time == "2024-05-15T12:00:00+00:00"
+        assert result.origin_source == "/downloads/Presto"
+
+    def test_idempotent_run_twice_same_result(self, fs: FakeFilesystem) -> None:
+        """Running enrich_origin_time twice produces the same sidecar content (idempotency).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_top_dir = dest_root / "Beethoven" / "Symphony No 5 [2024]"
+        fs.create_dir(str(work_top_dir))
+        freedb_sidecar = work_top_dir / "freedb_disc_1.yaml"
+        freedb_sidecar.write_text("disc_id: [12345, 2, 150, 300]\n", encoding="utf-8")
+
+        _write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T08:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/rip/Beethoven/01.flac",
+                    "destination": str(work_top_dir / "01 - I.flac"),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        enrich_origin_time(dest_root)
+        first_content = freedb_sidecar.read_text(encoding="utf-8")
+
+        enrich_origin_time(dest_root)
+        second_content = freedb_sidecar.read_text(encoding="utf-8")
+
+        assert first_content == second_content
+
+    def test_empty_journal_is_noop(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich_origin_time is a no-op when the journal has no tagged entries.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        _write_journal(dest_root, [])
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        enrich_origin_time(dest_root)
+
+        nothing_calls = [c for c in mock_log.info.call_args_list if c.args and c.args[0] == "enrich_origin_time_nothing_to_do"]
+        assert len(nothing_calls) == 1
+
+    def test_dry_run_no_writes(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich_origin_time(dry_run=True) logs planned writes but does not modify any files.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_top_dir = dest_root / "Beethoven" / "Symphony No 5 [2024]"
+        fs.create_dir(str(work_top_dir))
+        freedb_sidecar = work_top_dir / "freedb_disc_1.yaml"
+        original_content = "disc_id: [12345, 2, 150, 300]\n"
+        freedb_sidecar.write_text(original_content, encoding="utf-8")
+
+        _write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T08:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/rip/Beethoven/01.flac",
+                    "destination": str(work_top_dir / "01 - I.flac"),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        enrich_origin_time(dest_root, dry_run=True)
+
+        # File must not be modified
+        assert freedb_sidecar.read_text(encoding="utf-8") == original_content
+
+        # dry_run log event emitted
+        dry_run_calls = [c for c in mock_log.info.call_args_list if c.args and c.args[0] == "enrich_origin_time_dry_run"]
+        assert len(dry_run_calls) == 1
+
+    def test_earliest_timestamp_selected(self, fs: FakeFilesystem) -> None:
+        """The earliest timestamp across all tagged entries for a work_dir is used as origin_time.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_top_dir = dest_root / "Beethoven" / "Symphony No 5 [2024]"
+        fs.create_dir(str(work_top_dir))
+        provenance_path = work_top_dir / PROVENANCE_FILENAME
+
+        _write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-03T10:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/rip/Beethoven/03.flac",
+                    "destination": str(work_top_dir / "03 - III.flac"),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T06:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/rip/Beethoven/01.flac",
+                    "destination": str(work_top_dir / "01 - I.flac"),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-02T08:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/rip/Beethoven/02.flac",
+                    "destination": str(work_top_dir / "02 - II.flac"),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        enrich_origin_time(dest_root)
+
+        result = _read_provenance_sidecar(provenance_path)
+        assert result.origin_time == "2024-06-01T06:00:00+00:00"
+        assert result.origin_source == "/rip/Beethoven"
+
+    def test_noop_when_fields_already_present(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich_origin_time is a no-op when the sidecar already has the correct provenance fields.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_top_dir = dest_root / "Beethoven" / "Symphony No 5 [2024]"
+        fs.create_dir(str(work_top_dir))
+        freedb_sidecar = work_top_dir / "freedb_disc_1.yaml"
+        freedb_sidecar.write_text(
+            "origin_time: '2024-06-01T08:00:00+00:00'\norigin_source: /rip/Beethoven\n",
+            encoding="utf-8",
+        )
+
+        _write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T08:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/rip/Beethoven/01.flac",
+                    "destination": str(work_top_dir / "01 - I.flac"),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        original_content = freedb_sidecar.read_text(encoding="utf-8")
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        enrich_origin_time(dest_root)
+
+        # File must not be modified
+        assert freedb_sidecar.read_text(encoding="utf-8") == original_content
+
+        # noop log event emitted at debug level
+        noop_calls = [c for c in mock_log.debug.call_args_list if c.args and c.args[0] == "enrich_origin_time_noop"]
+        assert len(noop_calls) == 1
