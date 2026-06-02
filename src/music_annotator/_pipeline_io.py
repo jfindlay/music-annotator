@@ -152,6 +152,77 @@ def _read_acoustid_tag(path: Path) -> str:
         return ""
 
 
+def _read_isrc_tag(path: Path) -> str:
+    """Read the ISRC tag from a FLAC or MP3 file and return it, or ``""`` on failure.
+
+    For FLAC files the Vorbis Comment key ``"isrc"`` is looked up (case-insensitive).
+    For MP3 files the standard ``TSRC`` frame is read.
+
+    This is a best-effort read: any exception (corrupt file, unsupported format, missing tag) returns
+    ``""`` rather than propagating.  The caller is responsible for treating an empty return as
+    "no ISRC available" rather than as an error.
+
+    :param path: Path to the audio file to inspect.
+    :returns: The ISRC string, or ``""`` if absent or unreadable.
+    """
+    try:
+        match path.suffix.lower():
+            case ".flac":
+                audio = FLAC(str(path))
+                values = audio.get("isrc") or audio.get("ISRC") or []
+                return values[0] if values else ""
+            case ".mp3":
+                id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+                frame = id3.get("TSRC")  # type: ignore[no-untyped-call]
+                if frame and frame.text:
+                    return str(frame.text[0])
+                return ""
+            case _:
+                return ""
+    except Exception:  # noqa: BLE001 — best-effort tag read; any failure means no ISRC
+        return ""
+
+
+def _isrc_matches(src: Path, isrc_list: list[str]) -> AudioCompareResult:
+    """Apply the ISRC identity rung: check whether the ISRC embedded in ``src`` appears in ``isrc_list``.
+
+    This is rung 1 of the archival identity ladder.  When a source file carries an ISRC tag that
+    matches any entry in the candidate recording's ``isrc_list``, that is a definitive offline
+    identity signal — no network call required.
+
+    A non-empty ``isrc_list`` with no match returns ``match=False``; an empty ``isrc_list`` or an
+    unreadable source ISRC tag returns ``match=None`` (inconclusive).
+
+    :param src: Path to the source audio file whose embedded ISRC tag is read.
+    :param isrc_list: List of ISRC strings from the candidate :class:`~music_annotator.models.MBRecording`.
+    :returns: An :class:`AudioCompareResult` with ``method="isrc"``.
+    """
+    src_isrc = _read_isrc_tag(src)
+    if not src_isrc or not isrc_list:
+        return AudioCompareResult(
+            src=src,
+            dest=src,
+            match=None,
+            method="isrc",
+            detail="no ISRC available for comparison",
+        )
+    if src_isrc in isrc_list:
+        return AudioCompareResult(
+            src=src,
+            dest=src,
+            match=True,
+            method="isrc",
+            detail=f"ISRC match ({src_isrc})",
+        )
+    return AudioCompareResult(
+        src=src,
+        dest=src,
+        match=False,
+        method="isrc",
+        detail=f"ISRC mismatch: source {src_isrc!r} not in candidate list",
+    )
+
+
 def _read_duration_ms(path: Path) -> int:
     """Read the audio duration of ``path`` in milliseconds via mutagen, or ``0`` on failure.
 

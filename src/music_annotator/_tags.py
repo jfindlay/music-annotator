@@ -691,7 +691,7 @@ def build_track_tags(
         date=release.date,
         originaldate=release.release_group.first_release_date,
         recording_first_release_date=recording_detail.first_release_date,
-        isrc="; ".join(recording_detail.isrc_list) if recording_detail.isrc_list else "",
+        isrc=recording_detail.isrc_list[0] if recording_detail.isrc_list else "",
         length=str(track_length_ms) if track_length_ms else "",
         discsubtitle=medium.title if medium else "",
         releasecountry=release.country,

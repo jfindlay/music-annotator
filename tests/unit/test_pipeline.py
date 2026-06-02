@@ -58,8 +58,10 @@ from music_annotator._pipeline_io import (
     AudioCompareResult,
     _assess_collisions,
     _audio_hash,
+    _isrc_matches,
     _read_acoustid_tag,
     _read_duration_ms,
+    _read_isrc_tag,
     _run_fpcalc,
     check_duration_preflight,
     compare_audio_collision,
@@ -8530,3 +8532,152 @@ class TestIngestAudioHash:
         assert journal_audio_hash == audio_hash_tag, (
             f"Journal audio_hash {journal_audio_hash!r} does not match tag {audio_hash_tag!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# ISRC identity rung — _read_isrc_tag and _isrc_matches
+# ---------------------------------------------------------------------------
+
+
+class TestIsrcIdentityRung:
+    """Tests for the ISRC identity rung: _read_isrc_tag and _isrc_matches."""
+
+    def test_read_isrc_tag_flac_returns_value(self, fs: FakeFilesystem) -> None:
+        """_read_isrc_tag reads the ISRC Vorbis Comment from a FLAC file.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        tags = TrackTags(
+            isrc="GBAYE0000001", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[]
+        )
+        apply_tags_flac(path, tags)
+        assert _read_isrc_tag(path) == "GBAYE0000001"
+
+    def test_read_isrc_tag_flac_no_tag_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_isrc_tag returns '' for a FLAC file with no ISRC tag.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(
+            path, TrackTags(title="X", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[])
+        )
+        assert _read_isrc_tag(path) == ""
+
+    def test_read_isrc_tag_mp3_returns_value(self, fs: FakeFilesystem) -> None:
+        """_read_isrc_tag reads the ISRC from the TSRC frame of an MP3 file.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        tags = TrackTags(
+            isrc="GBAYE0000001", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[]
+        )
+        apply_tags_mp3(path, tags)
+        assert _read_isrc_tag(path) == "GBAYE0000001"
+
+    def test_read_isrc_tag_mp3_no_tsrc_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_isrc_tag returns '' for an MP3 file with no TSRC frame.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        apply_tags_mp3(
+            path, TrackTags(title="X", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[])
+        )
+        assert _read_isrc_tag(path) == ""
+
+    def test_read_isrc_tag_unsupported_extension_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_isrc_tag returns '' for unsupported file extensions.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.wav")
+        fs.create_file(str(path), contents=b"RIFF")
+        assert _read_isrc_tag(path) == ""
+
+    def test_read_isrc_tag_exception_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_isrc_tag returns '' when mutagen raises an exception (corrupt file).
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_file(str(path), contents=b"not a real flac")
+        assert _read_isrc_tag(path) == ""
+
+    def test_isrc_match_resolves_identity(self, fs: FakeFilesystem) -> None:
+        """_isrc_matches returns match=True, method='isrc' when source ISRC matches candidate isrc_list.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/src/track.flac")
+        fs.create_dir("/src")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        tags = TrackTags(
+            isrc="GBAYE0000001", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[]
+        )
+        apply_tags_flac(path, tags)
+
+        result = _isrc_matches(path, ["GBAYE0000001", "USRC10000001"])
+        assert result.match is True
+        assert result.method == "isrc"
+        assert "GBAYE0000001" in result.detail
+
+    def test_isrc_no_match_returns_false(self, fs: FakeFilesystem) -> None:
+        """_isrc_matches returns match=False when source ISRC does not appear in candidate isrc_list.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/src/track.flac")
+        fs.create_dir("/src")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        tags = TrackTags(
+            isrc="GBAYE0000001", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[]
+        )
+        apply_tags_flac(path, tags)
+
+        result = _isrc_matches(path, ["USRC10000001", "USRC10000002"])
+        assert result.match is False
+        assert result.method == "isrc"
+
+    def test_isrc_empty_isrc_list_returns_inconclusive(self, fs: FakeFilesystem) -> None:
+        """_isrc_matches returns match=None when the candidate isrc_list is empty.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/src/track.flac")
+        fs.create_dir("/src")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        tags = TrackTags(
+            isrc="GBAYE0000001", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[]
+        )
+        apply_tags_flac(path, tags)
+
+        result = _isrc_matches(path, [])
+        assert result.match is None
+        assert result.method == "isrc"
+
+    def test_isrc_no_tag_in_source_returns_inconclusive(self, fs: FakeFilesystem) -> None:
+        """_isrc_matches returns match=None when the source file has no ISRC tag.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/src/track.flac")
+        fs.create_dir("/src")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(
+            path, TrackTags(title="X", movementnumber="1", movementtotal="1", cea_conductors_list=[], cea_ensembles_list=[])
+        )
+
+        result = _isrc_matches(path, ["GBAYE0000001"])
+        assert result.match is None
+        assert result.method == "isrc"
