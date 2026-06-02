@@ -370,7 +370,7 @@ Source of truth for resuming the chain cold.  `/run-plan` updates this on each s
 | F0 | done     | `166a316` | C-F0a,C-F0b,C-F0c,C-F0d  | audio_sha256→audio_hash rename approved at sign-off; KAT renamed to test_audio_hash_invariant_across_tagging |
 | F1 | done     | `a095b63` | —                        | consumes C-F0a/b/c |
 | F2 | done     | `75a7357` | — (◆ sub-track A)        | consumes C-F0a/d |
-| F3 | pending  | —         | — (◆ sub-track A)        | consumes C-F0a/c/d; replaces exact-Chromaprint |
+| F3 | done     | `ce5ffa9` | — (◆ sub-track A)        | consumes C-F0a/c/d; replaces exact-Chromaprint; integration tests mock _run_fpcalc="" ubiquitously |
 | F4 | pending  | —         | — (◆ sub-track B)        | Opus inflection — HALT; consumes F1,F2,F3; backward-compat spine |
 | F5 | pending  | —         | — (◆ sub-track C)        | consumes C-F0d; soft-dep on PLAN.md S0 for cross-medium span |
 | F6 | pending  | —         | C-F6 (◆ sub-track C)     | Opus inflection — HALT; consumes C-F0d, F3; only keyed rung |
@@ -436,6 +436,12 @@ sub-track boundaries.
 Appended by `@plan-admin` on non-trivial iterations (discovery flagged, contract flexed, or
 meaningful texture).  Trivial iterations (clean green run, no surprises) produce no entry.  Fed
 verbatim into every `@plan-deep` juncture fork.
+
+### Sub-track A boundary — 2026-06-02
+Discovery/flex: still-on-intent; three texture items for F4 inflection adjudicator.
+Affected: none (no contract break)
+Deferred: yes — F4 adjudicator must resolve: (a) journal omits acoustid_id at ingest (F1/F3 write sites); F4 must decide whether to treat journal acoustid_id="" as "consult tag" or backfill during enrichment; (b) _run_fpcalc mocked to "" everywhere in tests — F4 integration tests asserting non-empty chromaprint_fp must override locally; (c) all-zero FLAC MD5 (flac-md5:000…0) is stored as-is — F4/F7 must not treat two zero-MD5 files as an audio match.
+Texture: Boundary fork also caught stale F3 ledger row (bookkeeping lag, now fixed). F8 should normalise surviving audio_sha256 prose references to audio_hash (doc-hygiene, not drift).
 
 ### F0 — 2026-06-02
 Discovery/flex: audio_sha256 → audio_hash rename + algorithm-tagged format (approved at sign-off); uniform decoded-PCM SHA-256 would require a new binary dependency violating rung-3 "Binary: none".
