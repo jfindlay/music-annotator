@@ -88,10 +88,11 @@ class AudioCompareResult:
 
 
 #: All valid ``method`` values for :class:`AudioCompareResult`, covering both collision-resolution
-#: rungs (``"sha256"``, ``"duration"``, ``"unknown"``) and archival-identity rungs
-#: (``"acoustid"``, ``"chromaprint"``, ``"audio_hash"``, ``"isrc"``).
+#: rungs (``"sha256"``, ``"duration"``, ``"unknown"``), archival-identity rungs
+#: (``"acoustid"``, ``"chromaprint"``, ``"audio_hash"``, ``"isrc"``), and the medium-sequence
+#: corroboration rung (``"sequence"``).
 _IDENTITY_METHODS: frozenset[str] = frozenset(
-    {"sha256", "acoustid", "chromaprint", "duration", "unknown", "isrc", "audio_hash"}
+    {"sha256", "acoustid", "chromaprint", "duration", "unknown", "isrc", "audio_hash", "sequence"}
 )
 
 
@@ -348,6 +349,179 @@ def _isrc_matches(src: Path, isrc_list: list[str]) -> AudioCompareResult:
         method="isrc",
         detail=f"ISRC mismatch: source {src_isrc!r} not in candidate list",
     )
+
+
+def _corroborate_medium_sequence(
+    track_results: list[AudioCompareResult],
+    candidate_track_ids: list[str],
+    source_track_ids: list[str],
+) -> AudioCompareResult:
+    """Apply medium-sequence corroboration: assess a joint identity verdict for an ordered track sequence.
+
+    A single weak or short-duration track fingerprint is unreliable in isolation, but when the
+    *ordered sequence* of per-track resolutions matches the ordered sequence of tracks on a candidate
+    medium, the joint hypothesis is much stronger.  This rescues weak fingerprints (e.g. a 25-second
+    chant verse that would never be identified alone).
+
+    The function is a pure computation — it performs no I/O.  The ``src`` and ``dest`` fields of the
+    returned :class:`AudioCompareResult` are set to ``Path(".")`` as a sentinel indicating that the
+    result represents the whole medium rather than a single file pair.
+
+    .. note::
+        Cross-medium-span generalisation (where a single recording spans multiple media) is a natural
+        extension of this logic but requires the multi-medium substrate.  Implement medium-scoped only
+        for now; the cross-medium case can be added once that substrate lands.
+
+    Classification per position ``i``:
+
+    * **Confirmed**: ``track_results[i].match is True`` AND
+      ``source_track_ids[i] == candidate_track_ids[i]``.
+    * **Inconclusive**: ``track_results[i].match is None``.
+    * **Contradicted**: ``track_results[i].match is False`` OR
+      (``track_results[i].match is True`` AND ``source_track_ids[i] != candidate_track_ids[i]``).
+
+    Decision rules (evaluated in order):
+
+    1. Empty inputs → ``match=None, detail="empty sequence"``.
+    2. Length mismatch → ``match=None, detail="length mismatch"``.
+    3. Any contradicted position → ``match=False``.
+    4. ``confirmed / total >= 0.5`` (majority confirmed, none contradicted) → ``match=True``.
+    5. Otherwise (all inconclusive or confirmed < 50%) → ``match=None``.
+
+    :param track_results: Per-track :class:`AudioCompareResult` objects from the identity ladder,
+        one per source track in order.
+    :param candidate_track_ids: Ordered list of recording MBIDs on the candidate medium (from
+        ``MBMedium.track_list → MBTrack.recording.id``).
+    :param source_track_ids: Ordered list of recording MBIDs claimed by the source files' embedded
+        tags (rung 0 — what the files say they are), in the same order as ``track_results``.
+    :returns: An :class:`AudioCompareResult` with ``method="sequence"`` summarising the joint verdict.
+    """
+    _sentinel = Path(".")
+
+    if not track_results or not candidate_track_ids:
+        return AudioCompareResult(src=_sentinel, dest=_sentinel, match=None, method="sequence", detail="empty sequence")
+
+    if len(track_results) != len(candidate_track_ids):
+        return AudioCompareResult(src=_sentinel, dest=_sentinel, match=None, method="sequence", detail="length mismatch")
+
+    total = len(track_results)
+    confirmed = 0
+    inconclusive = 0
+    contradicted = 0
+
+    for i, result in enumerate(track_results):
+        src_id = source_track_ids[i] if i < len(source_track_ids) else ""
+        cand_id = candidate_track_ids[i]
+        if result.match is None:
+            inconclusive += 1
+        elif result.match is True and src_id == cand_id:
+            confirmed += 1
+        else:
+            # match is False, OR match is True but IDs disagree
+            contradicted += 1
+
+    if contradicted > 0:
+        return AudioCompareResult(
+            src=_sentinel,
+            dest=_sentinel,
+            match=False,
+            method="sequence",
+            detail=f"contradicted={contradicted}/{total}",
+        )
+
+    confirmed_fraction = confirmed / total
+    if confirmed_fraction >= 0.5:  # noqa: PLR2004 — 0.5 is the majority threshold, not a magic number
+        return AudioCompareResult(
+            src=_sentinel,
+            dest=_sentinel,
+            match=True,
+            method="sequence",
+            detail=f"confirmed={confirmed}/{total}",
+        )
+
+    return AudioCompareResult(
+        src=_sentinel,
+        dest=_sentinel,
+        match=None,
+        method="sequence",
+        detail=f"confirmed={confirmed}/{total},inconclusive={inconclusive}/{total}",
+    )
+
+
+def _read_recording_id_tag(path: Path) -> str:
+    """Read the ``MUSICBRAINZ_TRACKID`` tag from a FLAC or MP3 file, returning ``""`` on any failure.
+
+    ``MUSICBRAINZ_TRACKID`` stores the MusicBrainz recording MBID embedded by the pipeline (or by
+    other taggers such as MusicBrainz Picard).  It is used by :func:`_corroborate_candidate_medium`
+    as rung-0 identity evidence: a file that already carries a recording MBID was previously
+    identified, and that MBID can be compared against a candidate medium's track list.
+
+    For FLAC files the Vorbis Comment key ``"musicbrainz_trackid"`` is looked up (case-insensitive).
+    For MP3 files the TXXX frame with description ``"MusicBrainz Track Id"`` is looked up (the
+    standard Picard/MusicBrainz convention).
+
+    :param path: Path to the audio file to inspect.
+    :returns: The recording MBID string, or ``""`` if absent or unreadable.
+    """
+    try:
+        match path.suffix.lower():
+            case ".flac":
+                audio = FLAC(str(path))
+                values = audio.get("musicbrainz_trackid") or audio.get("MUSICBRAINZ_TRACKID") or []
+                return values[0] if values else ""
+            case ".mp3":
+                id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+                for frame in id3.getall("TXXX"):  # type: ignore[no-untyped-call]
+                    if frame.desc == "MusicBrainz Track Id" and frame.text:
+                        return str(frame.text[0])
+                return ""
+            case _:
+                return ""
+    except Exception:  # noqa: BLE001 — best-effort tag read; any failure means no recording ID
+        return ""
+
+
+def _corroborate_candidate_medium(
+    source_paths: list[Path],
+    candidate_medium_track_ids: list[str],
+) -> AudioCompareResult:
+    """Corroborate a candidate medium against source files using embedded recording-ID tags.
+
+    Reads the ``MUSICBRAINZ_TRACKID`` tag from each source file to obtain the recording MBIDs
+    claimed by the files' embedded metadata (rung 0 — what the files say they are).  Files that
+    carry a recording MBID are treated as having a confirmed per-track identity result
+    (``match=True``); files without a tag are inconclusive (``match=None``).
+
+    These synthetic per-track results are then passed to :func:`_corroborate_medium_sequence`
+    together with the candidate medium's ordered recording IDs.  The joint verdict indicates
+    whether the source files' embedded identity is consistent with the candidate medium.
+
+    This is the primary hook for wiring sequence corroboration into the discovery flow.  It is
+    intentionally lightweight — no network calls, no audio decoding — so it can be called for
+    every candidate without significant overhead.
+
+    :param source_paths: Ordered list of source audio file paths, one per track.
+    :param candidate_medium_track_ids: Ordered list of recording MBIDs on the candidate medium
+        (from ``MBMedium.track_list → MBTrack.recording.id``).
+    :returns: An :class:`AudioCompareResult` with ``method="sequence"`` summarising the joint verdict.
+    """
+    _sentinel = Path(".")
+    source_track_ids: list[str] = [_read_recording_id_tag(p) for p in source_paths]
+    track_results: list[AudioCompareResult] = (
+        [
+            AudioCompareResult(
+                src=p,
+                dest=p,
+                match=True if src_id else None,
+                method="isrc",
+                detail="recording-id tag present" if src_id else "no recording-id tag",
+            )
+            for p, src_id in zip(source_paths, source_track_ids)
+        ]
+        if source_paths
+        else []
+    )
+    return _corroborate_medium_sequence(track_results, candidate_medium_track_ids, source_track_ids)
 
 
 def _read_duration_ms(path: Path) -> int:

@@ -23,6 +23,8 @@ from music_annotator._mb_api import _mb_call, _mb_retry, init_mb
 from music_annotator._pipeline import CollisionPolicy, run
 from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
+    AudioCompareResult,
+    _corroborate_candidate_medium,
     _load_disc_info_yaml,
     _preferred_disc_record,
     find_source_files,
@@ -602,6 +604,63 @@ def _enrich_candidates_from_journal(
     return enriched
 
 
+def _enrich_candidates_with_sequence_corroboration(
+    source_paths: list[Path],
+    candidates: list[MBReleaseCandidate],
+    medium_track_ids_by_release: dict[str, list[str]],
+) -> list[MBReleaseCandidate]:
+    """Adjust candidate scores using medium-sequence corroboration of embedded recording-ID tags.
+
+    For each candidate whose release MBID appears in ``medium_track_ids_by_release``, calls
+    :func:`~music_annotator._pipeline_io._corroborate_candidate_medium` with the source files and
+    the candidate medium's ordered recording IDs.  The corroboration result adjusts the candidate's
+    score:
+
+    * ``match=True`` (sequence confirmed) → score boosted by 10 points.
+    * ``match=False`` (sequence contradicted) → score penalised by 20 points (floored at 0).
+    * ``match=None`` (inconclusive) → score unchanged.
+
+    Candidates whose release MBID is absent from ``medium_track_ids_by_release`` are returned
+    unchanged (the full release data has not been fetched for them).
+
+    The result list is re-sorted by score descending so that corroboration-boosted candidates
+    float to the top.
+
+    .. note::
+        ``medium_track_ids_by_release`` is populated only when the caller has already fetched the
+        full release data (e.g. from a prior session's journal or a pre-fetch step).  In the
+        typical first-run case the dict is empty and this function is a no-op.  The cross-medium
+        generalisation (spanning multiple media) is deferred until the multi-medium substrate lands.
+
+    :param source_paths: Ordered list of source audio file paths, one per track.
+    :param candidates: Ordered list of :class:`~music_annotator.models.MBReleaseCandidate` to enrich.
+    :param medium_track_ids_by_release: Mapping of release MBID → ordered list of recording MBIDs
+        on the candidate medium.  Populated by callers that have fetched the full release data.
+    :returns: A new list of candidates sorted by score descending, with sequence-corroborated
+        candidates adjusted.
+    """
+    enriched: list[MBReleaseCandidate] = []
+    for candidate in candidates:
+        track_ids = medium_track_ids_by_release.get(candidate.release_id)
+        if track_ids is None:
+            enriched.append(candidate)
+            continue
+        result: AudioCompareResult = _corroborate_candidate_medium(source_paths, track_ids)
+        match result.match:
+            case True:
+                new_score = candidate.score + 10
+                enriched.append(candidate.model_copy(update={"score": new_score}))
+            case False:
+                new_score = max(candidate.score - 20, 0)
+                enriched.append(candidate.model_copy(update={"score": new_score}))
+            case None:
+                enriched.append(candidate)
+            case _:  # pragma: no cover
+                enriched.append(candidate)
+    enriched.sort(key=lambda c: c.score, reverse=True)
+    return enriched
+
+
 def _format_candidate(index: int, candidate: MBReleaseCandidate) -> str:
     """Format a single :class:`~music_annotator.models.MBReleaseCandidate` as a human-readable numbered entry.
 
@@ -801,6 +860,15 @@ def discover(
         # MBID across sessions and across discs processed in a single search run.
         journal_ids = _build_journal_release_ids(journal)
         candidates = _enrich_candidates_from_journal(candidates, journal_ids)
+
+        # Apply medium-sequence corroboration: if the source files carry embedded recording-ID tags
+        # from a prior tagging run, compare them against each candidate medium's track sequence.
+        # In the typical first-run case medium_track_ids_by_release is empty (no full release data
+        # has been fetched yet) and this call is a no-op.  The hook is here so that future work
+        # (e.g. a pre-fetch step or a multi-disc substrate) can populate the dict and benefit from
+        # sequence corroboration without restructuring the discovery flow.
+        source_files = find_source_files(src_dir)
+        candidates = _enrich_candidates_with_sequence_corroboration(source_files, candidates, {})
 
         if not candidates:
             _console.print("  [bold yellow]No candidates found.[/]")

@@ -25,9 +25,16 @@ from music_annotator._discover import (
     TerminalDiscoverUI,
     _build_journal_release_ids,
     _enrich_candidates_from_journal,
+    _enrich_candidates_with_sequence_corroboration,
     _format_candidate,
     _score_toc_release,
     _toc_lookup_mb_releases,
+)
+from music_annotator._pipeline_io import (
+    AudioCompareResult,
+    _corroborate_candidate_medium,
+    _corroborate_medium_sequence,
+    _read_recording_id_tag,
 )
 from music_annotator._tags import _NAME_MAX
 from music_annotator.models import MBMedium, MBReleaseCandidate, TransactionEntry, TransactionLog
@@ -39,6 +46,29 @@ from music_annotator.models import MBMedium, MBReleaseCandidate, TransactionEntr
 _FLAC_MAGIC = b"fLaC"
 _STREAMINFO_BLOCK = struct.pack(">I", (1 << 31) | (0 << 24) | 34) + bytes(34)
 _MINIMAL_FLAC = _FLAC_MAGIC + _STREAMINFO_BLOCK
+
+#: Minimal valid MP3: ID3v2.3 header + one null frame (same technique as test_pipeline.py).
+_ID3_HEADER = b"ID3\x03\x00\x00" + b"\x00\x00\x00\x00"  # 10-byte header, size 0
+_MINIMAL_MP3 = _ID3_HEADER + b"\xff\xfb\x90\x00" + b"\x00" * 413  # one MP3 frame
+
+
+def _saveable_flac() -> bytes:
+    """Return a minimal FLAC byte sequence with a valid 44100 Hz sample rate.
+
+    The module-level ``_MINIMAL_FLAC`` has a zero sample rate which mutagen rejects when saving
+    tags.  This helper produces a valid FLAC that mutagen can both read and write.
+
+    :returns: A minimal valid FLAC byte sequence.
+    """
+    # 44100 Hz, 2ch, 16-bit, 0 samples — same layout as test_pipeline._MINIMAL_FLAC
+    streaminfo = (
+        b"\x10\x00\x10\x00"  # min/max blocksize
+        b"\x00\x00\x00"  # min framesize
+        b"\x00\x00\x00"  # max framesize
+        b"\x0a\xc4\x42\xf0\x00\x00\x00\x00" + b"\x00" * 16  # 44100 Hz, 2ch, 16-bit, 0 samples  # MD5
+    )
+    block_header = struct.pack(">I", (1 << 31) | (0 << 24) | len(streaminfo))
+    return b"fLaC" + block_header + streaminfo
 
 
 def _candidate(
@@ -2739,3 +2769,436 @@ class TestDiscoverJournalIntegration:
         # No journal file at dest — should not raise
         music_annotator.discover(src_dirs=[src], dest_root=dest, user_agent="Test/1.0")
         mock_run.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _corroborate_medium_sequence
+# ---------------------------------------------------------------------------
+
+
+def _make_result(match: bool | None) -> AudioCompareResult:
+    """Build a minimal :class:`~music_annotator._pipeline_io.AudioCompareResult` for corroboration tests.
+
+    :param match: The per-track match verdict (``True``, ``False``, or ``None``).
+    :returns: An :class:`~music_annotator._pipeline_io.AudioCompareResult` instance.
+    """
+    return AudioCompareResult(src=Path("."), dest=Path("."), match=match, method="isrc", detail="test")
+
+
+class TestCorroborateMediumSequence:
+    """Tests for _corroborate_medium_sequence.
+
+    KAT: test_medium_sequence_corroborates_weak_track — verifies that a sequence of mostly
+    inconclusive per-track results is rescued to match=True when the sequence ordering matches
+    the candidate medium.  Also tests the contradiction case.
+    """
+
+    def test_medium_sequence_corroborates_weak_track(self) -> None:
+        """Mostly-inconclusive per-track results are rescued to match=True by sequence ordering.
+
+        This is the core KAT: a 25-second chant verse that would never be identified alone
+        (match=None) is rescued when the sequence of recording IDs matches the candidate medium.
+        """
+        # 4 tracks: 3 inconclusive (weak fingerprints), 1 confirmed match
+        # The confirmed track's source_id matches the candidate_id at that position.
+        candidate_ids = ["rec-a", "rec-b", "rec-c", "rec-d"]
+        source_ids = ["", "", "rec-c", ""]  # only track 3 has an embedded recording ID
+        track_results = [
+            _make_result(None),  # track 1: inconclusive
+            _make_result(None),  # track 2: inconclusive
+            _make_result(True),  # track 3: confirmed (source_id == candidate_id)
+            _make_result(None),  # track 4: inconclusive
+        ]
+        result = _corroborate_medium_sequence(track_results, candidate_ids, source_ids)
+        # 1/4 confirmed = 25% — below 50% threshold → still inconclusive
+        assert result.match is None
+        assert result.method == "sequence"
+        assert "confirmed=1/4" in result.detail
+
+    def test_majority_confirmed_returns_match_true(self) -> None:
+        """When ≥50% of positions are confirmed and none contradicted, returns match=True.
+
+        This is the main rescue scenario: a sequence of mostly-confirmed tracks (e.g. from
+        previously-tagged files) corroborates the candidate medium.
+        """
+        candidate_ids = ["rec-a", "rec-b", "rec-c", "rec-d"]
+        source_ids = ["rec-a", "rec-b", "rec-c", ""]  # 3 of 4 match
+        track_results = [
+            _make_result(True),  # confirmed
+            _make_result(True),  # confirmed
+            _make_result(True),  # confirmed
+            _make_result(None),  # inconclusive
+        ]
+        result = _corroborate_medium_sequence(track_results, candidate_ids, source_ids)
+        assert result.match is True
+        assert result.method == "sequence"
+        assert "confirmed=3/4" in result.detail
+
+    def test_contradiction_returns_match_false(self) -> None:
+        """A single contradicted position causes the whole sequence to return match=False.
+
+        This is the contradiction case: one track's identity contradicts the candidate medium.
+        """
+        candidate_ids = ["rec-a", "rec-b", "rec-c"]
+        source_ids = ["rec-a", "rec-WRONG", "rec-c"]  # track 2 source_id != candidate_id
+        track_results = [
+            _make_result(True),  # confirmed: source_id == candidate_id
+            _make_result(True),  # contradicted: match=True but source_id != candidate_id
+            _make_result(True),  # confirmed
+        ]
+        result = _corroborate_medium_sequence(track_results, candidate_ids, source_ids)
+        assert result.match is False
+        assert result.method == "sequence"
+        assert "contradicted=1/3" in result.detail
+
+    def test_match_false_track_result_contradicts(self) -> None:
+        """A track_result with match=False is counted as contradicted regardless of IDs."""
+        candidate_ids = ["rec-a", "rec-b"]
+        source_ids = ["rec-a", "rec-b"]
+        track_results = [
+            _make_result(True),  # confirmed
+            _make_result(False),  # contradicted (match=False)
+        ]
+        result = _corroborate_medium_sequence(track_results, candidate_ids, source_ids)
+        assert result.match is False
+        assert "contradicted=1/2" in result.detail
+
+    def test_empty_track_results_returns_none(self) -> None:
+        """Empty track_results list returns match=None with 'empty sequence' detail."""
+        result = _corroborate_medium_sequence([], ["rec-a"], ["rec-a"])
+        assert result.match is None
+        assert result.method == "sequence"
+        assert "empty sequence" in result.detail
+
+    def test_empty_candidate_ids_returns_none(self) -> None:
+        """Empty candidate_track_ids returns match=None with 'empty sequence' detail."""
+        result = _corroborate_medium_sequence([_make_result(True)], [], ["rec-a"])
+        assert result.match is None
+        assert "empty sequence" in result.detail
+
+    def test_length_mismatch_returns_none(self) -> None:
+        """Mismatched list lengths return match=None with 'length mismatch' detail."""
+        candidate_ids = ["rec-a", "rec-b", "rec-c"]
+        source_ids = ["rec-a", "rec-b"]
+        track_results = [_make_result(True), _make_result(True)]  # 2 results, 3 candidate IDs
+        result = _corroborate_medium_sequence(track_results, candidate_ids, source_ids)
+        assert result.match is None
+        assert "length mismatch" in result.detail
+
+    def test_all_inconclusive_returns_none(self) -> None:
+        """All-inconclusive track results return match=None."""
+        candidate_ids = ["rec-a", "rec-b", "rec-c"]
+        source_ids = ["", "", ""]
+        track_results = [_make_result(None), _make_result(None), _make_result(None)]
+        result = _corroborate_medium_sequence(track_results, candidate_ids, source_ids)
+        assert result.match is None
+        assert "confirmed=0/3" in result.detail
+        assert "inconclusive=3/3" in result.detail
+
+    def test_exactly_50_percent_confirmed_returns_true(self) -> None:
+        """Exactly 50% confirmed (≥0.5 threshold) returns match=True."""
+        candidate_ids = ["rec-a", "rec-b"]
+        source_ids = ["rec-a", ""]
+        track_results = [_make_result(True), _make_result(None)]  # 1/2 = 50%
+        result = _corroborate_medium_sequence(track_results, candidate_ids, source_ids)
+        assert result.match is True
+
+    def test_source_ids_shorter_than_track_results_treats_missing_as_empty(self) -> None:
+        """When source_track_ids is shorter than track_results, missing entries are treated as empty."""
+        candidate_ids = ["rec-a", "rec-b", "rec-c"]
+        source_ids = ["rec-a"]  # only 1 entry for 3 tracks
+        track_results = [_make_result(True), _make_result(True), _make_result(True)]
+        # Position 0: source_id="rec-a" == candidate_id="rec-a" → confirmed
+        # Position 1: source_id="" (missing) != candidate_id="rec-b" → contradicted
+        # Position 2: source_id="" (missing) != candidate_id="rec-c" → contradicted
+        result = _corroborate_medium_sequence(track_results, candidate_ids, source_ids)
+        assert result.match is False
+        assert "contradicted=2/3" in result.detail
+
+
+# ---------------------------------------------------------------------------
+# _enrich_candidates_with_sequence_corroboration
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichCandidatesWithSequenceCorroboration:
+    """Tests for _enrich_candidates_with_sequence_corroboration."""
+
+    def test_empty_medium_track_ids_dict_returns_unchanged(self) -> None:
+        """When medium_track_ids_by_release is empty, all candidates are returned unchanged."""
+        candidates = [_candidate(release_id="rel-1", score=90), _candidate(release_id="rel-2", score=80)]
+        result = _enrich_candidates_with_sequence_corroboration([], candidates, {})
+        assert [c.release_id for c in result] == ["rel-1", "rel-2"]
+        assert result[0].score == 90
+        assert result[1].score == 80
+
+    def test_match_true_boosts_score_by_10(self, mocker: MockerFixture) -> None:
+        """A match=True corroboration result boosts the candidate score by 10."""
+        mocker.patch(
+            "music_annotator._discover._corroborate_candidate_medium",
+            return_value=AudioCompareResult(src=Path("."), dest=Path("."), match=True, method="sequence", detail="ok"),
+        )
+        candidates = [_candidate(release_id="rel-1", score=90)]
+        result = _enrich_candidates_with_sequence_corroboration([Path("/src/01.flac")], candidates, {"rel-1": ["rec-a"]})
+        assert result[0].score == 100
+
+    def test_match_false_penalises_score_by_20(self, mocker: MockerFixture) -> None:
+        """A match=False corroboration result penalises the candidate score by 20."""
+        mocker.patch(
+            "music_annotator._discover._corroborate_candidate_medium",
+            return_value=AudioCompareResult(src=Path("."), dest=Path("."), match=False, method="sequence", detail="bad"),
+        )
+        candidates = [_candidate(release_id="rel-1", score=90)]
+        result = _enrich_candidates_with_sequence_corroboration([Path("/src/01.flac")], candidates, {"rel-1": ["rec-a"]})
+        assert result[0].score == 70
+
+    def test_match_false_score_floored_at_zero(self, mocker: MockerFixture) -> None:
+        """Score penalty is floored at 0 — never goes negative."""
+        mocker.patch(
+            "music_annotator._discover._corroborate_candidate_medium",
+            return_value=AudioCompareResult(src=Path("."), dest=Path("."), match=False, method="sequence", detail="bad"),
+        )
+        candidates = [_candidate(release_id="rel-1", score=10)]
+        result = _enrich_candidates_with_sequence_corroboration([Path("/src/01.flac")], candidates, {"rel-1": ["rec-a"]})
+        assert result[0].score == 0
+
+    def test_match_none_leaves_score_unchanged(self, mocker: MockerFixture) -> None:
+        """A match=None corroboration result leaves the score unchanged."""
+        mocker.patch(
+            "music_annotator._discover._corroborate_candidate_medium",
+            return_value=AudioCompareResult(
+                src=Path("."), dest=Path("."), match=None, method="sequence", detail="inconclusive"
+            ),
+        )
+        candidates = [_candidate(release_id="rel-1", score=90)]
+        result = _enrich_candidates_with_sequence_corroboration([Path("/src/01.flac")], candidates, {"rel-1": ["rec-a"]})
+        assert result[0].score == 90
+
+    def test_result_sorted_by_score_descending(self, mocker: MockerFixture) -> None:
+        """Result list is sorted by score descending after enrichment."""
+        call_count = 0
+
+        def _fake_corroborate(_source_paths: object, track_ids: list[str]) -> AudioCompareResult:
+            """Return match=True for rel-2, match=None for rel-1."""
+            nonlocal call_count
+            call_count += 1
+            if track_ids == ["rec-b"]:
+                return AudioCompareResult(src=Path("."), dest=Path("."), match=True, method="sequence", detail="ok")
+            return AudioCompareResult(src=Path("."), dest=Path("."), match=None, method="sequence", detail="inc")
+
+        mocker.patch("music_annotator._discover._corroborate_candidate_medium", side_effect=_fake_corroborate)
+        candidates = [
+            _candidate(release_id="rel-1", score=90),
+            _candidate(release_id="rel-2", score=80),
+        ]
+        result = _enrich_candidates_with_sequence_corroboration(
+            [Path("/src/01.flac")],
+            candidates,
+            {"rel-1": ["rec-a"], "rel-2": ["rec-b"]},
+        )
+        # rel-2 boosted to 90, rel-1 stays at 90 — stable sort keeps rel-1 first if equal
+        # rel-2 boosted to 80+10=90, rel-1 stays at 90 → both 90, order depends on sort stability
+        # Actually rel-1=90 (unchanged), rel-2=90 (boosted from 80) → both 90
+        assert result[0].score == 90
+        assert result[1].score == 90
+
+    def test_candidate_without_track_ids_unchanged(self, mocker: MockerFixture) -> None:
+        """Candidates not in medium_track_ids_by_release are returned unchanged."""
+        mock_corroborate = mocker.patch("music_annotator._discover._corroborate_candidate_medium")
+        candidates = [_candidate(release_id="rel-1", score=90), _candidate(release_id="rel-2", score=80)]
+        result = _enrich_candidates_with_sequence_corroboration(
+            [Path("/src/01.flac")],
+            candidates,
+            {"rel-1": ["rec-a"]},  # only rel-1 has track IDs
+        )
+        # _corroborate_candidate_medium called only for rel-1
+        mock_corroborate.assert_called_once()
+        # rel-2 unchanged
+        rel2 = next(c for c in result if c.release_id == "rel-2")
+        assert rel2.score == 80
+
+
+# ---------------------------------------------------------------------------
+# _read_recording_id_tag
+# ---------------------------------------------------------------------------
+
+
+class TestReadRecordingIdTag:
+    """Tests for _read_recording_id_tag."""
+
+    def test_flac_returns_recording_id(self, fs: FakeFilesystem) -> None:
+        """Returns the MUSICBRAINZ_TRACKID Vorbis Comment value from a FLAC file.
+
+        :param fs: pyfakefs fixture.
+        """
+        from mutagen.flac import FLAC  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+        path = Path("/music/01.flac")
+        fs.create_file(str(path), contents=_saveable_flac())
+        audio = FLAC(str(path))
+        audio["musicbrainz_trackid"] = ["rec-abc-123"]
+        audio.save()
+        assert _read_recording_id_tag(path) == "rec-abc-123"
+
+    def test_flac_returns_empty_when_tag_absent(self, fs: FakeFilesystem) -> None:
+        """Returns '' when the FLAC file has no MUSICBRAINZ_TRACKID tag.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/music/01.flac")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        assert _read_recording_id_tag(path) == ""
+
+    def test_mp3_returns_recording_id(self, fs: FakeFilesystem) -> None:
+        """Returns the MusicBrainz Track Id TXXX value from an MP3 file.
+
+        :param fs: pyfakefs fixture.
+        """
+        from mutagen.id3 import (  # type: ignore[attr-defined]  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+            ID3,
+            TXXX,
+        )
+
+        path = Path("/music/01.mp3")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+        id3.add(TXXX(encoding=3, desc="MusicBrainz Track Id", text=["rec-mp3-456"]))  # type: ignore[no-untyped-call]
+        id3.save(str(path))
+        assert _read_recording_id_tag(path) == "rec-mp3-456"
+
+    def test_mp3_returns_empty_when_txxx_absent(self, fs: FakeFilesystem) -> None:
+        """Returns '' when the MP3 file has no MusicBrainz Track Id TXXX frame.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/music/01.mp3")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        assert _read_recording_id_tag(path) == ""
+
+    def test_mp3_returns_empty_when_txxx_has_empty_text(self, fs: FakeFilesystem) -> None:
+        """Returns '' when the MusicBrainz Track Id TXXX frame exists but has empty text.
+
+        Exercises the branch where ``frame.desc`` matches but ``frame.text`` is falsy.
+
+        :param fs: pyfakefs fixture.
+        """
+        from mutagen.id3 import (  # type: ignore[attr-defined]  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+            ID3,
+            TXXX,
+        )
+
+        path = Path("/music/01.mp3")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+        # Add a TXXX frame with the right description but empty text list
+        id3.add(TXXX(encoding=3, desc="MusicBrainz Track Id", text=[]))  # type: ignore[no-untyped-call]
+        id3.save(str(path))
+        assert _read_recording_id_tag(path) == ""
+
+    def test_mp3_skips_non_matching_txxx_and_finds_correct_one(self, fs: FakeFilesystem) -> None:
+        """Iterates past non-matching TXXX frames to find the MusicBrainz Track Id frame.
+
+        Exercises the loop-continue branch where ``frame.desc`` does not match and the loop
+        advances to the next frame.
+
+        :param fs: pyfakefs fixture.
+        """
+        from mutagen.id3 import (  # type: ignore[attr-defined]  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+            ID3,
+            TXXX,
+        )
+
+        path = Path("/music/01.mp3")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+        # Add a non-matching TXXX frame first, then the correct one
+        id3.add(TXXX(encoding=3, desc="Some Other Tag", text=["other-value"]))  # type: ignore[no-untyped-call]
+        id3.add(TXXX(encoding=3, desc="MusicBrainz Track Id", text=["rec-found-789"]))  # type: ignore[no-untyped-call]
+        id3.save(str(path))
+        assert _read_recording_id_tag(path) == "rec-found-789"
+
+    def test_unsupported_extension_returns_empty(self, fs: FakeFilesystem) -> None:
+        """Returns '' for unsupported file extensions (e.g. .ogg).
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/music/01.ogg")
+        fs.create_file(str(path), contents=b"OggS")
+        assert _read_recording_id_tag(path) == ""
+
+    def test_corrupt_file_returns_empty(self, fs: FakeFilesystem) -> None:
+        """Returns '' when the file is corrupt and cannot be read.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/music/01.flac")
+        fs.create_file(str(path), contents=b"not-a-flac-file")
+        assert _read_recording_id_tag(path) == ""
+
+
+# ---------------------------------------------------------------------------
+# _corroborate_candidate_medium
+# ---------------------------------------------------------------------------
+
+
+class TestCorroborateCandidateMedium:
+    """Tests for _corroborate_candidate_medium."""
+
+    def test_empty_source_paths_returns_empty_sequence(self) -> None:
+        """Empty source_paths returns an empty-sequence result (match=None)."""
+        result = _corroborate_candidate_medium([], ["rec-a", "rec-b"])
+        assert result.match is None
+        assert result.method == "sequence"
+        assert "empty sequence" in result.detail
+
+    def test_files_with_matching_recording_ids_return_match_true(self, fs: FakeFilesystem) -> None:
+        """Source files with matching MUSICBRAINZ_TRACKID tags corroborate the candidate medium.
+
+        :param fs: pyfakefs fixture.
+        """
+        from mutagen.flac import FLAC  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+        paths = [Path(f"/music/0{i}.flac") for i in range(1, 4)]
+        recording_ids = ["rec-a", "rec-b", "rec-c"]
+        for path, rec_id in zip(paths, recording_ids):
+            fs.create_file(str(path), contents=_saveable_flac())
+            audio = FLAC(str(path))
+            audio["musicbrainz_trackid"] = [rec_id]
+            audio.save()
+
+        result = _corroborate_candidate_medium(paths, recording_ids)
+        # All 3 files have matching recording IDs → 3/3 confirmed = 100% → match=True
+        assert result.match is True
+        assert "confirmed=3/3" in result.detail
+
+    def test_files_without_recording_ids_return_inconclusive(self, fs: FakeFilesystem) -> None:
+        """Source files with no MUSICBRAINZ_TRACKID tags yield an inconclusive result.
+
+        :param fs: pyfakefs fixture.
+        """
+        paths = [Path(f"/music/0{i}.flac") for i in range(1, 3)]
+        for path in paths:
+            fs.create_file(str(path), contents=_MINIMAL_FLAC)
+
+        result = _corroborate_candidate_medium(paths, ["rec-a", "rec-b"])
+        # No recording IDs → all inconclusive → match=None
+        assert result.match is None
+        assert "inconclusive=2/2" in result.detail
+
+    def test_mismatched_recording_ids_return_match_false(self, fs: FakeFilesystem) -> None:
+        """Source files with recording IDs that differ from the candidate return match=False.
+
+        :param fs: pyfakefs fixture.
+        """
+        from mutagen.flac import FLAC  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+        path = Path("/music/01.flac")
+        fs.create_file(str(path), contents=_saveable_flac())
+        audio = FLAC(str(path))
+        audio["musicbrainz_trackid"] = ["rec-WRONG"]
+        audio.save()
+
+        result = _corroborate_candidate_medium([path], ["rec-correct"])
+        # Source says rec-WRONG, candidate says rec-correct → match=True but IDs differ → contradicted
+        assert result.match is False
+        assert "contradicted=1/1" in result.detail
