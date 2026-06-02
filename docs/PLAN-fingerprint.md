@@ -369,7 +369,7 @@ Source of truth for resuming the chain cold.  `/run-plan` updates this on each s
 |----|----------|-----------|--------------------------|-------|
 | F0 | done     | `166a316` | C-F0a,C-F0b,C-F0c,C-F0d  | audio_sha256→audio_hash rename approved at sign-off; KAT renamed to test_audio_hash_invariant_across_tagging |
 | F1 | done     | `a095b63` | —                        | consumes C-F0a/b/c |
-| F2 | pending  | —         | — (◆ sub-track A)        | consumes C-F0a/d |
+| F2 | done     | `75a7357` | — (◆ sub-track A)        | consumes C-F0a/d |
 | F3 | pending  | —         | — (◆ sub-track A)        | consumes C-F0a/c/d; replaces exact-Chromaprint |
 | F4 | pending  | —         | — (◆ sub-track B)        | Opus inflection — HALT; consumes F1,F2,F3; backward-compat spine |
 | F5 | pending  | —         | — (◆ sub-track C)        | consumes C-F0d; soft-dep on PLAN.md S0 for cross-medium span |
