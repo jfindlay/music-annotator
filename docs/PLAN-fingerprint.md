@@ -422,9 +422,128 @@ establishes it is `done` (see the ledger); later sessions consume it and must no
   Consumed by F7 (reads `"enriched"` entries as authoritative-latest; relies on the journal triple
   being complete post-enrich) and F8 (NOTES: P-FP3 spine, `audit` subcommand writeup).  **Additive
   only — the `accuraterip` 4th dimension backfills through this same `enrich` path per P-FP3.**
-- **C-F6 — `fetch_acoustid_lookup` signature + `--acoustid-key` flag (FROZEN BY F6).**
-  `fetch_acoustid_lookup(fingerprint, duration_s, api_key) -> list[str]`; absent key →
-  inconclusive, never raises.  Consumed by F8 (§307 fold-in).
+- **C-F6 — `fetch_acoustid_lookup` signature + `--acoustid-key` flag + acoustid_id re-resolve
+  (FROZEN BY F6).**  The only keyed/online rung (rung 5).  Resolved at the F6 Opus inflection
+  (juncture 1).  **Three items require human sign-off before `@build` is dispatched** — flagged
+  below as SIGN-OFF #F6-1, #F6-2, #F6-3.
+  > **F6 sign-off resolution (Opus inflection, juncture 1).**  Four design questions resolved and
+  > baked into the spec below.  The load-bearing correction (SIGN-OFF #F6-1): the plan note says
+  > "two-layer retry posture (`@_mb_retry`-style)", but `@_mb_retry`/`_mb_call` are
+  > **musicbrainzngs-specific** — `_mb_retry` catches `mb.ResponseError` and string-matches the
+  > status in `str(exc)`; `_mb_call` is for `mb`/CAA calls.  AcoustID `/v2/lookup` is a **raw
+  > `urllib.request.urlopen`** call (exactly like the existing keyless `fetch_acoustid_id`, which
+  > deliberately does **not** use the decorator pair).  Therefore `fetch_acoustid_lookup` uses the
+  > **same in-function retry idiom as `fetch_acoustid_id`** (retry 5xx with `2**attempt` backoff,
+  > fast-fail 4xx, 1 s polite delay, return `[]` on exhaustion) — the *same defensive posture*, not
+  > the literal `@_mb_retry` decorator.  "`@_mb_retry`-style" in the plan note is honoured in
+  > substance; the literal decorator cannot wrap a urllib call.
+  - **C-F6a — `fetch_acoustid_lookup` signature + return semantics (`_mb_api.py`).**
+    `def fetch_acoustid_lookup(fingerprint: str, duration_s: int, api_key: str) -> list[str]`.
+    - **What it hits.**  `https://api.acoustid.org/v2/lookup` with query params
+      `client=<api_key>`, `fingerprint=<fingerprint>`, `duration=<duration_s>`,
+      `meta=recordingids`, `format=json`.  Distinct from the keyless `track/list_by_mbid` endpoint
+      `fetch_acoustid_id` uses (`_mb_api.py:833`): that is rung 2 (MBID→cluster); this is rung 5
+      (audio fingerprint→MBIDs).
+    - **Return value (refined from the bare `list[str]` stub — SIGN-OFF #F6-2).**  An **ordered
+      list of recording MBID strings**, ranked by descending AcoustID match score (best first),
+      de-duplicated.  Recording-MBID granularity (not release-MBID) is chosen because (a) it is the
+      native granularity of `/v2/lookup` (a fingerprint is per-track), and (b) the per-track rung
+      ladder and F5's `_corroborate_candidate_medium` (which consumes ordered recording-ID
+      sequences) both work off recording IDs; release resolution is a downstream MB lookup, not the
+      lookup endpoint's job.  Response shape consumed:
+      `{"status":"ok","results":[{"id":<acoustid-uuid>,"score":<float>,
+      "recordings":[{"id":<recording-mbid>},…]}, …]}` — flatten `results[*].recordings[*].id` in
+      score order.  (The AcoustID cluster UUID `results[*].id` is also extracted for the
+      acoustid_id re-resolve in C-F6d; see there.)
+    - **"Absent key → inconclusive, never raises" → returns `[]`.**  Concretely: `api_key == ""`
+      **or** `fingerprint == ""` **or** `duration_s <= 0` → return `[]` **without making any
+      network call** (mirrors `fetch_acoustid_id` returning `""` on every failure path and
+      `_run_fpcalc` returning `""` when fpcalc is absent).  Empty/`status != "ok"` response,
+      `JSONDecodeError`, or retries-exhausted → return `[]`.  The function **never raises** — `[]`
+      is the single inconclusive signal (never disconfirming, never blocking), satisfying P-FP5.
+    - **Retry posture (C-F6 resolution above).**  In-function, mirroring `fetch_acoustid_id`:
+      `for attempt in range(3)`; 10 s socket timeout; 4xx → log + return `[]` immediately (permanent
+      client error — note: a 4xx here includes a bad/invalid API key, which must fail-soft to `[]`,
+      not raise); 5xx and `OSError` → `time.sleep(2**attempt)` and retry; `JSONDecodeError` →
+      return `[]` (not retried); on success, `time.sleep(1)` polite delay before returning.
+    - **Export.**  Add `fetch_acoustid_lookup` to `__init__.py` re-exports and `__all__`
+      (beside the existing `fetch_acoustid_id` at `__init__.py:129`/`:221`).
+    - KAT: `test_acoustid_lookup_seeds_release_search` (`tests/unit/test_mb_helpers.py`, in a new
+      `TestFetchAcoustidLookup` class beside `TestFetchAcoustidId`): mock
+      `urllib.request.urlopen` to return a `/v2/lookup` JSON body; assert the returned list is the
+      score-ordered recording MBIDs.  Add coverage tests for: `api_key==""` → `[]` with
+      **`urlopen` not called**; empty `fingerprint` → `[]` no-call; 4xx → `[]` single attempt; 5xx
+      → `[]` after 3 attempts; malformed JSON → `[]`.  Patch `music_annotator._mb_api.time.sleep`
+      and `music_annotator._mb_api.urllib.request.urlopen` (the bound names), matching the existing
+      `TestFetchAcoustidId` pattern.
+  - **C-F6b — `--acoustid-key` CLI flag (`__main__.py`).**  Flag string `--acoustid-key`, argparse
+    `dest=acoustid_key` (argparse auto-derives this), `metavar="KEY"`, `default=""`, no persisted
+    config.  Added inside **`_add_common_args`** (`__main__.py:122`) so it lands on **both `apply`
+    and `search`** — the two ingest-axis subcommands (rung 5 is isolated to the ingest axis).  Also
+    added to the **`audit`** subcommand parser (for `audit --enrich --re-resolve --acoustid-key`;
+    see C-F6d).  Threaded in `main()`: `apply` → `run(..., acoustid_key=args.acoustid_key)`;
+    `search` → `discover(..., acoustid_key=args.acoustid_key)`; `audit --enrich` →
+    `enrich(..., acoustid_key=args.acoustid_key)`.  `prune`/`repath`/`regroup` do **not** get it
+    (offline maintenance).
+  - **C-F6c — wiring into `discover` (search seed) and `run` (identity-confirm).**
+    - **`discover` (`_discover.py`).**  Add `acoustid_key: str = ""` to the `discover()` signature
+      (after `no_cache`).  Add a new candidate-enrichment helper **parallel to** the existing
+      `_enrich_candidates_from_journal` / `_enrich_candidates_with_sequence_corroboration` —
+      `_enrich_candidates_with_acoustid_seed(source_files, candidates, acoustid_key) -> list[
+      MBReleaseCandidate]` — called in the `discover()` loop immediately after the
+      sequence-corroboration call (`_discover.py:871`).  **No-op when `acoustid_key == ""`**
+      (returns `candidates` unchanged — the first-run / no-key case, exactly like the empty-dict
+      no-op the sequence-corroboration hook already uses).  When the key is set: fingerprint each
+      source file via `_run_fpcalc` + duration via the existing `_read_duration_ms` helper, call
+      `fetch_acoustid_lookup` per track, collect the recording MBIDs, and **boost** any candidate
+      whose medium contains those recordings (re-using the F5 score-adjust convention: matched →
+      `+`, sorted descending).  This is the minimal, non-restructuring wiring: it rides the existing
+      parallel-enrichment-function pattern and does not touch the search/select/run control flow.
+      **Optional richer extension (NOT required for F6, note as a Discovery):** resolving wholly-new
+      release candidates from the acoustid recording MBIDs (recording→release MB fetch) when organic
+      search returned nothing — deferred; the boost-existing form is the F6 deliverable.
+    - **`run` (`_pipeline.py`).**  Add `acoustid_key: str = ""` to the `run()` signature.  After the
+      per-track `fetch_acoustid_id` loop (`_pipeline.py:945`), when `acoustid_key != ""`, fingerprint
+      the **source** file and call `fetch_acoustid_lookup` to **confirm** the selected recording
+      MBID appears in the results.  **Log-only, never blocks (SIGN-OFF #F6-3 — confirm warn-only
+      semantics):** recording MBID present in results → `log.info("acoustid_confirm_ok", …)`;
+      results non-empty but exclude it → `log.warning("acoustid_confirm_mismatch", …)` (possible
+      mis-selection) but **continue** — incomplete AcoustID coverage (common for classical) is
+      *inconclusive*, never disconfirming (P-FP5); results empty / key absent → no-op.  This is an
+      identity *confirmation* surfaced to the user, **not** a gate — it never raises, never skips,
+      never alters the copy/tag/verify path or the journal-provenance chain (AGENTS.md invariant
+      preserved).
+    - Thread `acoustid_key` from `discover` → `run` at the `discover()` internal `run(...)` call
+      (`_discover.py:884`).
+  - **C-F6d — acoustid_id `--re-resolve` correction (deferred from F4; resolves the F4 deferral).**
+    F4's `--re-resolve` reserved the flag and re-write mechanics but corrected only `chromaprint_fp`
+    (no keyed lookup existed).  F6 completes it.
+    - **Placement (cycle-safe).**  `_needs_enrich` (`_pipeline_io.py`) stays **offline / import-cycle
+      safe** — it must not import `_mb_api`.  The keyed acoustid_id re-resolution is done in
+      **`enrich()` in `_pipeline.py`** (which already imports `fetch_acoustid_id` from `_mb_api` and
+      can import `fetch_acoustid_lookup`).  Add `acoustid_key: str = ""` to the `enrich()` signature.
+    - **Behaviour.**  When `re_resolve=True` **and** `acoustid_key != ""`: after `_needs_enrich`
+      returns and `chromaprint_fp` has been (re)computed for the file, fingerprint the file
+      (`_run_fpcalc`) + duration (`_read_duration_ms`), call `fetch_acoustid_lookup`, and if it
+      returns a non-empty result, **also** re-resolve the AcoustID cluster id from the lookup's
+      top-scored `results[0].id` (the AcoustID UUID — same value-kind `fetch_acoustid_id` returns)
+      and overwrite `acoustid_id` in **both** the tag and the new `"enriched"` journal entry,
+      leaving `audio_hash` untouched (anchor rule, P-FP1).  When `re_resolve=True` but
+      `acoustid_key == ""`: behave **exactly as F4** (re-derive `chromaprint_fp` only; leave
+      `acoustid_id` as the copy-from-tag value) — no regression, no network call.  When the keyed
+      lookup returns `[]`: leave `acoustid_id` unchanged (inconclusive, P-FP5).  The acoustid_id
+      write joins the existing `write_fields` set in `enrich()` so it rides the existing
+      re-tag → `_verify_copy` → append-`"enriched"`-entry provenance chain (P-FP4).
+    - **Scope / expected-files widening (SIGN-OFF #F6-1, scope half).**  This correction adds
+      `_pipeline.py` and `tests/unit/test_main.py` to F6's stated expected-files set
+      (`_mb_api.py`, `__main__.py`, `_discover.py`, `tests/unit/test_mb_helpers.py`), plus the
+      `--acoustid-key` flag on the `audit` parser.  **Adjudicator recommendation: keep the
+      acoustid_id re-resolve in F6 scope** — it is the natural completion of the F4 deferral and F6
+      is the session that introduces the keyed lookup it depends on; splitting it into a separate
+      session would strand the F4 deferral.  Mirrors the F4 expected-files widening precedent.
+  Consumed by F8 (§307 fold-in: the source-vs-MB fingerprint check §307 wanted *is* C-F6a +
+  C-F6c-run identity-confirm; record the disposition).  **Additive only — never changes the
+  offline rungs (0–4) or the F4 enrich provenance chain.**
 
 ### Test-enforced (KATs — grow monotonically)
 
@@ -471,11 +590,11 @@ Source of truth for resuming the chain cold.  `/run-plan` updates this on each s
 | F3 | done     | `ce5ffa9` | — (◆ sub-track A)        | consumes C-F0a/c/d; replaces exact-Chromaprint; integration tests mock _run_fpcalc="" ubiquitously |
 | F4 | done     | `9f8fdbb` | — (◆ sub-track B)        | enrich() in _pipeline.py (not _pipeline_io.py — import-cycle); action="enriched"; --re-resolve corrects chromaprint_fp only (acoustid_id deferred to F6) |
 | F5 | done     | `e3bdb9d` | — (◆ sub-track C)        | consumes C-F0d; "sequence" added to _IDENTITY_METHODS; cross-medium span noted as comment for future |
-| F6 | pending  | —         | C-F6 (◆ sub-track C)     | Opus inflection — HALT; consumes C-F0d, F3; only keyed rung |
+| F6 | done     | `6e046a8` | C-F6a/b/c/d (◆ sub-track C) | file-set widened (approved); split impl+test dispatch; _fetch_acoustid_lookup_raw private helper for enrich() re-resolve; completes F4-deferred acoustid_id --re-resolve |
 | F7 | pending  | —         | — (◆ sub-track D)        | consumes F4,F1 |
 | F8 | pending  | —         | — (◆ capstone)           | Opus writeup; consumes F1-F7; folds in old §307 |
 
-**Frozen contracts:** C-F0a (TrackTags archival triple tag fields), C-F0b (TransactionEntry archival triple), C-F0c (_audio_hash primitive — algorithm-tagged, decode-free), C-F0d (AudioCompareResult + _IDENTITY_METHODS)
+**Frozen contracts:** C-F0a, C-F0b, C-F0c, C-F0d, C-F4, C-F6a/b/c/d
 
 ---
 
@@ -534,6 +653,18 @@ sub-track boundaries.
 Appended by `@plan-admin` on non-trivial iterations (discovery flagged, contract flexed, or
 meaningful texture).  Trivial iterations (clean green run, no surprises) produce no entry.  Fed
 verbatim into every `@plan-deep` juncture fork.
+
+### Sub-track C boundary — 2026-06-02
+Discovery/flex: still-on-intent (driver self-review). F5+F6 deliver medium-sequence corroboration and the keyed AcoustID rung as specified. One Discovery noted in C-F6c: resolving wholly-new release candidates from AcoustID recording MBIDs (when organic search returns nothing) is deferred — the boost-existing form is the F6 deliverable.
+Affected: none (no contract break)
+Deferred: no. F7 consumes C-F4 ("enriched" entries) and C-F0c (audio_hash anchor for drift detection) — both frozen and correct.
+Texture: _fetch_acoustid_lookup_raw is private (not exported); enrich() acoustid_id re-resolve rides the existing provenance chain; run() identity-confirm is warn-only and never alters copy/tag/verify path.
+
+### F6 — 2026-06-02
+Discovery/flex: file-set widened to include _pipeline.py + test_main.py (approved at sign-off); split impl+test dispatch pattern used successfully. Retry posture uses in-function urllib idiom (not @_mb_retry decorator — musicbrainzngs-specific). Return type refined to recording MBIDs (not release MBIDs).
+Affected: C-F6 (file placement, return type refinement — all within inflection mandate)
+Deferred: wholly-new-release-candidate resolution from AcoustID MBIDs noted as Discovery in C-F6c, deferred.
+Texture: _fetch_acoustid_lookup_raw private helper exposes (recording_mbids, top_acoustid_uuid) tuple for enrich() re-resolve; public fetch_acoustid_lookup returns only the list.
 
 ### Sub-track B boundary — 2026-06-02
 Discovery/flex: still-on-intent (driver self-review; @plan-deep fork blocked by OpenCode subagent-nesting limitation).
