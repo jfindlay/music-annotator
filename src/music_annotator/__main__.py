@@ -164,6 +164,12 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Bypass the cover art download cache; always fetch images from the network.",
     )
+    parser.add_argument(
+        "--acoustid-key",
+        metavar="KEY",
+        default="",
+        help="AcoustID API key for keyed fingerprint lookup (rung 5).",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -482,6 +488,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="When used with --enrich, log planned backfills without writing any tags or journal entries.",
     )
+    audit_parser.add_argument(
+        "--acoustid-key",
+        metavar="KEY",
+        default="",
+        help="AcoustID API key; when set with --enrich --re-resolve, backfills acoustid_id via keyed lookup.",
+    )
 
     return parser
 
@@ -519,6 +531,7 @@ def main() -> None:
                     fetch_rels=not args.no_fetch_rels,
                     no_cache=args.no_cache,
                     disc_override=args.disc,
+                    acoustid_key=args.acoustid_key,
                 )
             except KeyboardInterrupt:
                 log.warning("interrupted")
@@ -545,6 +558,7 @@ def main() -> None:
                     limit=args.limit,
                     delete=args.delete,
                     no_cache=args.no_cache,
+                    acoustid_key=args.acoustid_key,
                 )
             except KeyboardInterrupt:
                 log.warning("interrupted")
@@ -594,6 +608,7 @@ def main() -> None:
                         dest_root=args.dest_dir,
                         re_resolve=args.re_resolve,
                         dry_run=args.dry_run,
+                        acoustid_key=args.acoustid_key,
                     )
                 else:
                     music_annotator.audit(dest_root=args.dest_dir)

@@ -19,7 +19,7 @@ import structlog
 from rich.markup import escape as _markup_escape
 
 from music_annotator._console import _console
-from music_annotator._mb_api import _mb_call, _mb_retry, init_mb
+from music_annotator._mb_api import _mb_call, _mb_retry, fetch_acoustid_lookup, fetch_release, init_mb
 from music_annotator._pipeline import CollisionPolicy, run
 from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
@@ -27,6 +27,8 @@ from music_annotator._pipeline_io import (
     _corroborate_candidate_medium,
     _load_disc_info_yaml,
     _preferred_disc_record,
+    _read_duration_ms,
+    _run_fpcalc,
     find_source_files,
     parse_disc_toc,
     read_journal,
@@ -661,6 +663,69 @@ def _enrich_candidates_with_sequence_corroboration(
     return enriched
 
 
+def _enrich_candidates_with_acoustid_seed(
+    source_files: list[Path],
+    candidates: list[MBReleaseCandidate],
+    acoustid_key: str,
+) -> list[MBReleaseCandidate]:
+    """Boost candidate scores when AcoustID fingerprint lookup confirms a track recording MBID.
+
+    For each source file, computes a Chromaprint fingerprint via :func:`~music_annotator._pipeline_io._run_fpcalc`
+    and reads the audio duration via :func:`~music_annotator._pipeline_io._read_duration_ms`, then calls
+    :func:`~music_annotator._mb_api.fetch_acoustid_lookup` to retrieve the ordered list of recording MBIDs
+    that AcoustID associates with that fingerprint.  The union of all recording MBIDs across all source files
+    is collected.
+
+    For each candidate, the full release is fetched via :func:`~music_annotator._mb_api.fetch_release` to
+    obtain the medium's track recording IDs.  Any candidate whose medium contains at least one recording ID
+    that appears in the AcoustID results has its score boosted by 10 points (the same convention as
+    :func:`_enrich_candidates_with_sequence_corroboration`).  Candidates for which the release fetch fails
+    are returned unchanged.
+
+    Returns ``candidates`` unchanged (no network calls, no score changes) when ``acoustid_key == ""``.
+
+    The result list is re-sorted by score descending so that AcoustID-confirmed candidates float to the top.
+
+    :param source_files: List of source audio file paths to fingerprint.
+    :param candidates: Ordered list of :class:`~music_annotator.models.MBReleaseCandidate` to enrich.
+    :param acoustid_key: AcoustID application API key.  When empty, the function is a no-op.
+    :returns: A new list of candidates sorted by score descending, with AcoustID-confirmed candidates
+        boosted by 10 points.
+    """
+    if not acoustid_key:
+        return candidates
+
+    # Collect all recording MBIDs returned by AcoustID for any source file.
+    acoustid_recording_ids: set[str] = set()
+    for path in source_files:
+        fp = _run_fpcalc(path)
+        dur_ms = _read_duration_ms(path)
+        dur_s = dur_ms // 1000
+        mbids = fetch_acoustid_lookup(fp, dur_s, acoustid_key)
+        acoustid_recording_ids.update(mbids)
+
+    if not acoustid_recording_ids:
+        return candidates
+
+    enriched: list[MBReleaseCandidate] = []
+    for candidate in candidates:
+        # Fetch the full release to obtain track recording IDs for the candidate's medium.
+        try:
+            release = fetch_release(candidate.release_id)
+        except Exception:  # noqa: BLE001 — fetch failure: leave score unchanged
+            enriched.append(candidate)
+            continue
+        # Collect all recording IDs across all mediums of the release.
+        release_recording_ids: set[str] = {track.recording.id for medium in release.medium_list for track in medium.track_list}
+        if release_recording_ids & acoustid_recording_ids:
+            new_score = candidate.score + 10
+            enriched.append(candidate.model_copy(update={"score": new_score}))
+        else:
+            enriched.append(candidate)
+    enriched.sort(key=lambda c: c.score, reverse=True)
+    return enriched
+
+
 def _format_candidate(index: int, candidate: MBReleaseCandidate) -> str:
     """Format a single :class:`~music_annotator.models.MBReleaseCandidate` as a human-readable numbered entry.
 
@@ -809,6 +874,7 @@ def discover(
     delete: bool = False,
     ui: DiscoverUI | None = None,
     no_cache: bool = False,
+    acoustid_key: str = "",
 ) -> None:
     """Search MusicBrainz for releases matching each source directory, prompt for confirmation, then apply tags.
 
@@ -830,6 +896,8 @@ def discover(
     :param delete: When ``True`` and not ``dry_run``, prompt the user to delete each successfully copied source directory.
     :param ui: A :class:`DiscoverUI` instance for user interaction.  Defaults to :class:`TerminalDiscoverUI`.
     :param no_cache: When ``True``, bypass the cover art download cache; forwarded to :func:`run`.
+    :param acoustid_key: AcoustID application API key.  When set, fingerprints source files and boosts candidates
+        whose recordings are confirmed by AcoustID.  Forwarded to :func:`run`.
     """
     if ui is None:
         ui = TerminalDiscoverUI()
@@ -869,6 +937,7 @@ def discover(
         # sequence corroboration without restructuring the discovery flow.
         source_files = find_source_files(src_dir)
         candidates = _enrich_candidates_with_sequence_corroboration(source_files, candidates, {})
+        candidates = _enrich_candidates_with_acoustid_seed(source_files, candidates, acoustid_key)
 
         if not candidates:
             _console.print("  [bold yellow]No candidates found.[/]")
@@ -891,6 +960,7 @@ def discover(
                 collision_policy=collision_policy,
                 ui=ui,
                 no_cache=no_cache,
+                acoustid_key=acoustid_key,
             )
         except (ValueError, mb.WebServiceError, RuntimeError, OSError) as exc:
             log.error("discover_run_error", release_id=release_id, error=str(exc), exc_info=True)

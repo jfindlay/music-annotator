@@ -5338,7 +5338,7 @@ class TestAuditEnrichCLI:
         mock_enrich = mocker.patch("music_annotator.enrich")
         with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--enrich"]):
             main()
-        mock_enrich.assert_called_once_with(dest_root=Path("/d"), re_resolve=False, dry_run=False)
+        mock_enrich.assert_called_once_with(dest_root=Path("/d"), re_resolve=False, dry_run=False, acoustid_key="")
 
     def test_audit_enrich_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
         """main() audit --enrich --dry-run passes dry_run=True to enrich().
@@ -5733,3 +5733,149 @@ class TestEnrichTagWriteError:
 
         with pytest.raises(RuntimeError, match="enrich tag write failure"):
             music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+
+# ---------------------------------------------------------------------------
+# enrich() — acoustid_id re-resolve via _fetch_acoustid_lookup_raw
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichAcoustidReResolve:
+    """Tests for the C-F6d acoustid_id re-resolve in enrich().
+
+    When re_resolve=True and acoustid_key is non-empty, enrich() calls
+    _fetch_acoustid_lookup_raw after recomputing chromaprint_fp and backfills
+    acoustid_id with the top AcoustID cluster UUID.
+    """
+
+    def test_re_resolve_with_acoustid_key_updates_acoustid_id(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """--re-resolve + acoustid_key → acoustid_id updated in FLAC tag and journal entry.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File has an old acoustid_id and an existing chromaprint_fp (will be re-resolved)
+        tags = TrackTags(
+            audio_hash="flac-md5:existing",
+            chromaprint_fp="OldFingerprint",
+            acoustid_id="old-acoustid-uuid",
+        )
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="NewFingerprint")
+        mocker.patch(
+            "music_annotator._pipeline._fetch_acoustid_lookup_raw",
+            return_value=(["rec-mbid"], "new-acoustid-uuid"),
+        )
+        mocker.patch("music_annotator._pipeline._read_duration_ms", return_value=180000)
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=True, dry_run=False, acoustid_key="my-api-key")
+
+        # FLAC tag should have the new acoustid_id written by the re-resolve lookup
+        audio = MutagenFLAC(str(path))
+        acoustid_vals = audio.get("acoustid_id") or []
+        assert acoustid_vals and acoustid_vals[0] == "new-acoustid-uuid"
+
+        # Journal entry is written; an enriched entry exists
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 1
+        # The chromaprint_fp was re-resolved
+        assert enriched[0].chromaprint_fp == "NewFingerprint"
+
+    def test_re_resolve_without_acoustid_key_does_not_call_lookup(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """--re-resolve without acoustid_key does NOT call _fetch_acoustid_lookup_raw (F4 behaviour preserved).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            audio_hash="flac-md5:existing",
+            chromaprint_fp="OldFingerprint",
+            acoustid_id="old-acoustid-uuid",
+        )
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="NewFingerprint")
+        mock_lookup = mocker.patch("music_annotator._pipeline._fetch_acoustid_lookup_raw")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=True, dry_run=False, acoustid_key="")
+
+        mock_lookup.assert_not_called()
+
+    def test_re_resolve_with_acoustid_key_but_empty_lookup_leaves_acoustid_id_unchanged(
+        self, mocker: MockerFixture, fs: FakeFilesystem
+    ) -> None:
+        """--re-resolve + acoustid_key but lookup returns [] → acoustid_id unchanged (inconclusive).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            audio_hash="flac-md5:existing",
+            chromaprint_fp="OldFingerprint",
+            acoustid_id="old-acoustid-uuid",
+        )
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="NewFingerprint")
+        mocker.patch(
+            "music_annotator._pipeline._fetch_acoustid_lookup_raw",
+            return_value=([], ""),
+        )
+        mocker.patch("music_annotator._pipeline._read_duration_ms", return_value=180000)
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=True, dry_run=False, acoustid_key="my-api-key")
+
+        # acoustid_id should remain unchanged (lookup returned no results)
+        audio = MutagenFLAC(str(path))
+        acoustid_vals = audio.get("acoustid_id") or []
+        assert acoustid_vals and acoustid_vals[0] == "old-acoustid-uuid"

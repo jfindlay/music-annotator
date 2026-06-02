@@ -5,6 +5,7 @@ Covers :func:`~music_annotator.parse_disc_info_yaml`, :func:`~music_annotator.pa
 :func:`~music_annotator.search_releases_by_dir`, :func:`~music_annotator._format_candidate`,
 and :func:`~music_annotator.discover`.
 """
+# pylint: disable=duplicate-code  # _make_single_track_release helper intentionally mirrors test_pipeline.py scaffolding
 
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ from music_annotator._discover import (
     TerminalDiscoverUI,
     _build_journal_release_ids,
     _enrich_candidates_from_journal,
+    _enrich_candidates_with_acoustid_seed,
     _enrich_candidates_with_sequence_corroboration,
     _format_candidate,
     _score_toc_release,
@@ -37,7 +39,7 @@ from music_annotator._pipeline_io import (
     _read_recording_id_tag,
 )
 from music_annotator._tags import _NAME_MAX
-from music_annotator.models import MBMedium, MBReleaseCandidate, TransactionEntry, TransactionLog
+from music_annotator.models import MBMedium, MBRelease, MBReleaseCandidate, TransactionEntry, TransactionLog
 
 # ---------------------------------------------------------------------------
 # Minimal FLAC factory (same technique as test_example.py)
@@ -3016,6 +3018,141 @@ class TestEnrichCandidatesWithSequenceCorroboration:
         # rel-2 unchanged
         rel2 = next(c for c in result if c.release_id == "rel-2")
         assert rel2.score == 80
+
+
+# ---------------------------------------------------------------------------
+# _enrich_candidates_with_acoustid_seed
+# ---------------------------------------------------------------------------
+
+
+def _make_single_track_release(release_id: str, recording_id: str) -> MBRelease:
+    """Build a minimal single-track MBRelease for acoustid seed tests.
+
+    :param release_id: MusicBrainz release MBID.
+    :param recording_id: Recording MBID for the single track.
+    :returns: A minimal :class:`~music_annotator.models.MBRelease` instance.
+    """
+    return MBRelease.model_validate(
+        {
+            "id": release_id,
+            "title": "Test",
+            "medium-list": [
+                {
+                    "position": 1,
+                    "format": "CD",
+                    "track-list": [
+                        {
+                            "id": "trk-1",
+                            "position": 1,
+                            "recording": {"id": recording_id, "title": "Track 1", "artist-credit": []},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+
+class TestEnrichCandidatesWithAcoustidSeed:
+    """Tests for _enrich_candidates_with_acoustid_seed."""
+
+    def test_noop_when_acoustid_key_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Returns candidates unchanged when acoustid_key == '' (no network calls).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/01.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        mock_fpcalc = mocker.patch("music_annotator._discover._run_fpcalc")
+        mock_lookup = mocker.patch("music_annotator._discover.fetch_acoustid_lookup")
+        candidates = [_candidate(release_id="rel-1", score=90)]
+        result = _enrich_candidates_with_acoustid_seed([src], candidates, "")
+        assert result == candidates
+        mock_fpcalc.assert_not_called()
+        mock_lookup.assert_not_called()
+
+    def test_boost_when_recording_mbid_matches(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Score is boosted by +10 when AcoustID lookup confirms a track recording MBID.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/01.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        mocker.patch("music_annotator._discover._run_fpcalc", return_value="AQADtMmybckm")
+        mocker.patch("music_annotator._discover._read_duration_ms", return_value=180000)
+        mocker.patch("music_annotator._discover.fetch_acoustid_lookup", return_value=["rec-mbid-match"])
+
+        # Build a release with a track whose recording id matches the AcoustID result
+        release = _make_single_track_release("rel-1", "rec-mbid-match")
+        mocker.patch("music_annotator._discover.fetch_release", return_value=release)
+
+        candidates = [_candidate(release_id="rel-1", score=90)]
+        result = _enrich_candidates_with_acoustid_seed([src], candidates, "my-api-key")
+        assert result[0].score == 100
+
+    def test_no_boost_when_no_match(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Score is unchanged when AcoustID lookup returns no matching recording MBID.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/01.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        mocker.patch("music_annotator._discover._run_fpcalc", return_value="AQADtMmybckm")
+        mocker.patch("music_annotator._discover._read_duration_ms", return_value=180000)
+        mocker.patch("music_annotator._discover.fetch_acoustid_lookup", return_value=["rec-mbid-other"])
+
+        release = _make_single_track_release("rel-1", "rec-mbid-different")
+        mocker.patch("music_annotator._discover.fetch_release", return_value=release)
+
+        candidates = [_candidate(release_id="rel-1", score=90)]
+        result = _enrich_candidates_with_acoustid_seed([src], candidates, "my-api-key")
+        assert result[0].score == 90
+
+    def test_empty_fingerprint_candidates_unchanged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When fpcalc returns '' (unavailable), fetch_acoustid_lookup returns [] and candidates unchanged.
+
+        fetch_acoustid_lookup is called with an empty fingerprint but returns [] immediately
+        (early-exit inside the function).  The empty acoustid_recording_ids set means no boost
+        is applied and candidates are returned unchanged.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/01.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        mocker.patch("music_annotator._discover._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._discover._read_duration_ms", return_value=180000)
+        # fetch_acoustid_lookup returns [] for empty fingerprint (early-exit inside the function)
+        mocker.patch("music_annotator._discover.fetch_acoustid_lookup", return_value=[])
+
+        candidates = [_candidate(release_id="rel-1", score=90)]
+        result = _enrich_candidates_with_acoustid_seed([src], candidates, "my-api-key")
+        # No boost applied — candidates returned unchanged
+        assert result[0].score == 90
+
+    def test_fetch_release_failure_leaves_candidate_unchanged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When fetch_release raises for a candidate, that candidate is returned unchanged.
+
+        Covers the ``except Exception`` branch (lines 715-717) in _enrich_candidates_with_acoustid_seed.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/01.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        mocker.patch("music_annotator._discover._run_fpcalc", return_value="AQADtMmybckm")
+        mocker.patch("music_annotator._discover._read_duration_ms", return_value=180000)
+        mocker.patch("music_annotator._discover.fetch_acoustid_lookup", return_value=["rec-mbid-match"])
+        # fetch_release raises for this candidate
+        mocker.patch("music_annotator._discover.fetch_release", side_effect=RuntimeError("network error"))
+
+        candidates = [_candidate(release_id="rel-1", score=90)]
+        result = _enrich_candidates_with_acoustid_seed([src], candidates, "my-api-key")
+        # Candidate unchanged — fetch_release failure leaves score unchanged
+        assert result[0].score == 90
 
 
 # ---------------------------------------------------------------------------

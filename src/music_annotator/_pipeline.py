@@ -25,8 +25,10 @@ from rich.markup import escape as _markup_escape
 from music_annotator._artists import artist_credit_phrase
 from music_annotator._console import _console
 from music_annotator._mb_api import (
+    _fetch_acoustid_lookup_raw,
     _get_bottom_work,
     fetch_acoustid_id,
+    fetch_acoustid_lookup,
     fetch_cover_art,
     fetch_recording_detail,
     fetch_release,
@@ -40,6 +42,7 @@ from music_annotator._pipeline_io import (
     _audio_hash,
     _confirm_fragmentation,
     _needs_enrich,
+    _read_duration_ms,
     _read_tags_flac,
     _read_tags_mp3,
     _run_fpcalc,
@@ -754,6 +757,7 @@ def run(
     ui: DiscUI | None = None,
     no_cache: bool = False,
     disc_override: int | None = None,
+    acoustid_key: str = "",
 ) -> None:
     """Copy and tag an album directory using MusicBrainz metadata.
 
@@ -810,6 +814,9 @@ def run(
         1-based disc position.  Applies to both single-medium and multi-medium releases.  The downstream track-count
         validation still runs, so a mismatch between source file count and the selected medium's track count raises
         :exc:`RuntimeError`.
+    :param acoustid_key: AcoustID application API key.  When set, performs a keyed fingerprint lookup for each source
+        file after the per-track :func:`fetch_acoustid_id` loop and logs whether the selected recording MBID is
+        confirmed or contradicted by the AcoustID results.  Never alters the copy/tag/verify path.
     :raises mb.ResponseError: On a non-retryable MusicBrainz API error.
     :raises RuntimeError: If all retry attempts are exhausted for any API call, or if post-copy verification fails (copy
         integrity, tag round-trip, cover art, or mtime mismatch).
@@ -1323,6 +1330,29 @@ def run(
         # when fpcalc is not available; the empty string is stored as-is (no special-casing).
         # Mirrors the F1 pattern for audio_hash: computed on the source before apply_tags_*.
         final_tags.chromaprint_fp = _run_fpcalc(src_file)
+
+        # AcoustID identity-confirm: when an API key is supplied and a fingerprint is available,
+        # look up the recording MBIDs for this file and check whether the selected recording MBID
+        # is among them.  This is a read-only diagnostic step — it never alters the copy/tag/verify
+        # path, never raises, and never blocks on empty results.
+        if acoustid_key and final_tags.chromaprint_fp:
+            _confirm_dur_s = _read_duration_ms(src_file) // 1000
+            _confirm_mbids = fetch_acoustid_lookup(final_tags.chromaprint_fp, _confirm_dur_s, acoustid_key)
+            _selected_rec_id = final_tags.musicbrainz_recordingid
+            if _confirm_mbids and _selected_rec_id:
+                if _selected_rec_id in _confirm_mbids:
+                    log.info(
+                        "acoustid_confirm_ok",
+                        recording_id=_selected_rec_id,
+                        src=src_file.name,
+                    )
+                else:
+                    log.warning(
+                        "acoustid_confirm_mismatch",
+                        recording_id=_selected_rec_id,
+                        src=src_file.name,
+                        acoustid_top=_confirm_mbids[0] if _confirm_mbids else "",
+                    )
 
         # Set cover art sidecar reference tags so they are embedded in the audio file.
         def _filenames(images: list[CoverImage]) -> str:
@@ -1993,7 +2023,7 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
     log.info("regroup_complete", dest_root=str(dest_root), moved=len(plan_pairs))
 
 
-def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False) -> None:
+def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, acoustid_key: str = "") -> None:
     """Retroactively backfill fingerprint fields (``audio_hash``, ``chromaprint_fp``, ``acoustid_id``) into library files.
 
     Reads the transaction journal at ``dest_root``, resolves the current on-disk path for each
@@ -2008,12 +2038,21 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False) 
 
     **Anchor rule (P-FP1):** ``audio_hash`` is never overwritten, even under ``re_resolve=True``.
 
+    When ``re_resolve=True`` and ``acoustid_key`` is non-empty, calls
+    :func:`~music_annotator._mb_api._fetch_acoustid_lookup_raw` after recomputing ``chromaprint_fp``
+    to obtain the top AcoustID cluster UUID and backfill ``acoustid_id``.  When the lookup returns
+    no results, ``acoustid_id`` is left unchanged (inconclusive).
+
     :param dest_root: Root of the annotated music library (contains
         ``music_annotator_journal.json``).
     :param re_resolve: When ``True``, recompute ``chromaprint_fp`` even when already present in
         the file's tags.  ``audio_hash`` is never recomputed regardless of this flag.
     :param dry_run: When ``True``, log planned backfills without writing any tags or journal
         entries.
+    :param acoustid_key: AcoustID application API key.  When set together with ``re_resolve=True``,
+        performs a keyed fingerprint lookup after recomputing ``chromaprint_fp`` and backfills
+        ``acoustid_id`` with the top AcoustID cluster UUID.  Has no effect when ``re_resolve`` is
+        ``False``.
     """
     journal_path = dest_root / JOURNAL_FILENAME
     journal = read_journal(journal_path)
@@ -2059,6 +2098,18 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False) 
 
         # Determine which fields actually need a tag write (acoustid_id is copy-only, not a write)
         write_fields = {k: v for k, v in fields.items() if k in {"audio_hash", "chromaprint_fp"}}
+
+        # When re-resolving with an AcoustID key, perform a keyed fingerprint lookup to backfill
+        # acoustid_id.  This rides the same re-tag → _verify_copy → journal provenance chain as
+        # audio_hash and chromaprint_fp.  Only attempted when chromaprint_fp was (re)computed
+        # (i.e. it is present in write_fields), so that the lookup uses a fresh fingerprint.
+        # When the lookup returns no results, acoustid_id is left unchanged (inconclusive).
+        if re_resolve and acoustid_key and "chromaprint_fp" in write_fields:
+            _enrich_fp = write_fields["chromaprint_fp"]
+            _enrich_dur_s = _read_duration_ms(current_path) // 1000
+            _, _enrich_top_uuid = _fetch_acoustid_lookup_raw(_enrich_fp, _enrich_dur_s, acoustid_key)
+            if _enrich_top_uuid:
+                write_fields["acoustid_id"] = _enrich_top_uuid
 
         if not write_fields:
             # No tag writes needed — file is already fully enriched (or fpcalc unavailable)

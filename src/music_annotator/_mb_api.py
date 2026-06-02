@@ -863,6 +863,114 @@ def fetch_acoustid_id(recording_mbid: str) -> str:
     return ""
 
 
+def _fetch_acoustid_lookup_raw(fingerprint: str, duration_s: int, api_key: str) -> tuple[list[str], str]:
+    """Call the AcoustID ``/v2/lookup`` endpoint and return recording MBIDs plus the top cluster UUID.
+
+    Hits ``https://api.acoustid.org/v2/lookup`` with the supplied Chromaprint fingerprint, duration,
+    and API key.  Returns a 2-tuple ``(recording_mbids, top_acoustid_uuid)`` where ``recording_mbids``
+    is an ordered, de-duplicated list of MusicBrainz recording UUIDs ranked by descending AcoustID
+    match score (best first), and ``top_acoustid_uuid`` is the AcoustID cluster UUID of the
+    highest-scoring result (``results[0]["id"]``), or ``""`` when no results are returned.
+
+    **Early return** ``([], "")`` without any network call when ``api_key == ""``, ``fingerprint == ""``,
+    or ``duration_s <= 0``.
+
+    **Retry posture** mirrors :func:`fetch_acoustid_id`: up to three attempts with a 10-second socket
+    timeout.  4xx HTTP errors are treated as permanent failures and return ``([], "")`` immediately.
+    5xx errors and :exc:`OSError` trigger an exponential back-off sleep (``2 ** attempt`` seconds) and
+    a retry.  :exc:`json.JSONDecodeError` returns ``([], "")`` without retrying.  On success a 1-second
+    polite delay is observed before returning.  The function never raises.
+
+    :param fingerprint: Chromaprint fingerprint string produced by ``fpcalc``.
+    :param duration_s: Audio duration in whole seconds (``duration_ms // 1000``).
+    :param api_key: AcoustID application API key.
+    :returns: A 2-tuple ``(recording_mbids, top_acoustid_uuid)``.  Both elements are ``""`` / ``[]``
+        on any failure or when the lookup returns no results.
+    """
+    if not api_key or not fingerprint or duration_s <= 0:
+        return [], ""
+
+    url = (
+        f"https://api.acoustid.org/v2/lookup"
+        f"?client={api_key}&fingerprint={fingerprint}&duration={duration_s}&meta=recordingids&format=json"
+    )
+    log.debug("fetch_acoustid_lookup", duration_s=duration_s)
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                raw = resp.read()
+            time.sleep(1)
+            data: JSON = json.loads(raw)
+            results = data.get("results") if isinstance(data, dict) else None
+            if not isinstance(results, list) or not results:
+                return [], ""
+
+            # Sort results by descending score (best first); score may be absent → treat as 0.
+            def _score(r: object) -> float:
+                if isinstance(r, dict):
+                    s = r.get("score", 0)
+                    return float(s) if isinstance(s, (int, float)) else 0.0
+                return 0.0
+
+            sorted_results = sorted(results, key=_score, reverse=True)
+            top_result = sorted_results[0]
+            top_acoustid_uuid = str(top_result.get("id", "")) if isinstance(top_result, dict) else ""
+            # Flatten recording MBIDs in score order, de-duplicating while preserving order.
+            seen: set[str] = set()
+            recording_mbids: list[str] = []
+            for result in sorted_results:
+                if not isinstance(result, dict):
+                    continue
+                recordings = result.get("recordings")
+                if not isinstance(recordings, list):
+                    continue
+                for rec in recordings:
+                    if not isinstance(rec, dict):
+                        continue
+                    rec_id = rec.get("id", "")
+                    if rec_id and isinstance(rec_id, str) and rec_id not in seen:
+                        seen.add(rec_id)
+                        recording_mbids.append(rec_id)
+            return recording_mbids, top_acoustid_uuid
+        except json.JSONDecodeError:
+            log.warning("acoustid_lookup_parse_failed", duration_s=duration_s)
+            return [], ""
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                # 4xx: permanent client error — do not retry.
+                log.warning("acoustid_lookup_http_error", duration_s=duration_s, code=exc.code, error=str(exc))
+                return [], ""
+            wait = 2**attempt
+            log.warning("acoustid_lookup_failed", duration_s=duration_s, attempt=attempt, wait_s=wait, error=str(exc))
+            time.sleep(wait)
+        except OSError as exc:
+            wait = 2**attempt
+            log.warning("acoustid_lookup_failed", duration_s=duration_s, attempt=attempt, wait_s=wait, error=str(exc))
+            time.sleep(wait)
+    return [], ""
+
+
+def fetch_acoustid_lookup(fingerprint: str, duration_s: int, api_key: str) -> list[str]:
+    """Look up recording MBIDs for a Chromaprint fingerprint via the AcoustID ``/v2/lookup`` endpoint.
+
+    Calls :func:`_fetch_acoustid_lookup_raw` and returns only the ordered, de-duplicated list of
+    MusicBrainz recording UUIDs ranked by descending AcoustID match score (best first).  The top
+    AcoustID cluster UUID is discarded; use :func:`_fetch_acoustid_lookup_raw` directly when both
+    values are needed (e.g. in :func:`~music_annotator._pipeline.enrich`).
+
+    Returns ``[]`` on any failure, when the lookup returns no results, or when any of the early-exit
+    conditions apply (``api_key == ""``, ``fingerprint == ""``, ``duration_s <= 0``).  Never raises.
+
+    :param fingerprint: Chromaprint fingerprint string produced by ``fpcalc``.
+    :param duration_s: Audio duration in whole seconds (``duration_ms // 1000``).
+    :param api_key: AcoustID application API key.
+    :returns: Ordered, de-duplicated list of MusicBrainz recording MBID strings, best match first.
+        Returns ``[]`` on failure or when no results are found.
+    """
+    recording_mbids, _top_uuid = _fetch_acoustid_lookup_raw(fingerprint, duration_s, api_key)
+    return recording_mbids
+
+
 def _get_bottom_work(embedded: MBWork) -> MBWork:
     """Return the bottom work for a performance relation, using inlined data when available.
 

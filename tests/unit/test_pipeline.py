@@ -9079,3 +9079,219 @@ class TestIsrcIdentityRung:
         result = _isrc_matches(path, ["GBAYE0000001"])
         assert result.match is None
         assert result.method == "isrc"
+
+
+# ---------------------------------------------------------------------------
+# run() — AcoustID identity-confirm block
+# ---------------------------------------------------------------------------
+
+
+class TestRunAcoustidIdentityConfirm:
+    """Tests for the AcoustID identity-confirm block in run().
+
+    The identity-confirm block is a read-only diagnostic step that logs whether the selected
+    recording MBID is confirmed or contradicted by the AcoustID lookup results.  It never alters
+    the copy/tag/verify path.
+    """
+
+    def _patch_mb(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API calls and post-copy verification for run() tests.
+
+        :param mocker: pytest-mock fixture.
+        :param release: MBRelease model to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        def _fetch_rec(rec_id: str) -> MBRecording:
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "Track",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [],
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="test-fingerprint")
+
+    def test_acoustid_confirm_ok_logged_when_recording_in_results(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """acoustid_confirm_ok is logged when the selected recording MBID is in the AcoustID results.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        rec_id = release.medium_list[0].track_list[0].recording.id
+        self._patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_lookup", return_value=[rec_id])
+        mocker.patch("music_annotator._pipeline._read_duration_ms", return_value=180000)
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info",
+            side_effect=lambda event, **kw: log_events.append({"event": event, **kw}),
+        )
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            acoustid_key="my-api-key",
+        )
+        assert any(e["event"] == "acoustid_confirm_ok" for e in log_events)
+
+    def test_acoustid_confirm_mismatch_logged_when_recording_not_in_results(
+        self, mocker: MockerFixture, fs: FakeFilesystem
+    ) -> None:
+        """acoustid_confirm_mismatch is logged when the selected recording MBID is not in the AcoustID results.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_lookup", return_value=["other-mbid"])
+        mocker.patch("music_annotator._pipeline._read_duration_ms", return_value=180000)
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.warning",
+            side_effect=lambda event, **kw: log_events.append({"event": event, **kw}),
+        )
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            acoustid_key="my-api-key",
+        )
+        assert any(e["event"] == "acoustid_confirm_mismatch" for e in log_events)
+
+    def test_noop_when_acoustid_key_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """fetch_acoustid_lookup is not called when acoustid_key == ''.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mock_lookup = mocker.patch("music_annotator._pipeline.fetch_acoustid_lookup")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            acoustid_key="",
+        )
+        mock_lookup.assert_not_called()
+
+    def test_noop_when_chromaprint_fp_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """fetch_acoustid_lookup is not called when chromaprint_fp == '' (fpcalc unavailable).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+        # Override _run_fpcalc to return empty string (fpcalc unavailable)
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mock_lookup = mocker.patch("music_annotator._pipeline.fetch_acoustid_lookup")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            acoustid_key="my-api-key",
+        )
+        mock_lookup.assert_not_called()
+
+    def test_noop_when_lookup_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """No log event when fetch_acoustid_lookup returns [] (covers 1342->1358 branch).
+
+        When _confirm_mbids is empty, the ``if _confirm_mbids and _selected_rec_id:`` condition
+        is False and neither acoustid_confirm_ok nor acoustid_confirm_mismatch is logged.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_lookup", return_value=[])
+        mocker.patch("music_annotator._pipeline._read_duration_ms", return_value=180000)
+
+        log_info_events: list[dict[str, object]] = []
+        log_warn_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info",
+            side_effect=lambda event, **kw: log_info_events.append({"event": event, **kw}),
+        )
+        mocker.patch(
+            "music_annotator._pipeline.log.warning",
+            side_effect=lambda event, **kw: log_warn_events.append({"event": event, **kw}),
+        )
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            acoustid_key="my-api-key",
+        )
+        assert not any(e["event"] == "acoustid_confirm_ok" for e in log_info_events)
+        assert not any(e["event"] == "acoustid_confirm_mismatch" for e in log_warn_events)

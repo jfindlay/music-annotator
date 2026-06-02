@@ -30,6 +30,7 @@ from music_annotator import (
 from music_annotator._mb_api import (
     _cover_art_cache_dir,
     _cover_art_cache_key,
+    _fetch_acoustid_lookup_raw,
     _infer_mime,
     _mb_call,
     _mb_retry,
@@ -37,6 +38,7 @@ from music_annotator._mb_api import (
     _patched_safe_read,
     _sidecar_filename,
     fetch_acoustid_id,
+    fetch_acoustid_lookup,
 )
 from music_annotator._pipeline_io import _check_collisions
 from music_annotator.models import MBRecording, TransactionEntry
@@ -341,6 +343,300 @@ class TestFetchAcoustidId:
         assert result == ""
         # All three attempts were made before giving up.
         assert mock_urlopen.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# fetch_acoustid_lookup / _fetch_acoustid_lookup_raw
+# ---------------------------------------------------------------------------
+
+
+class TestFetchAcoustidLookup:
+    """Tests for fetch_acoustid_lookup and _fetch_acoustid_lookup_raw HTTP error handling."""
+
+    def _make_resp(self, mocker: MockerFixture, body: bytes) -> Any:
+        """Build a mock context manager that returns ``body`` from ``.read()``.
+
+        :param mocker: pytest-mock fixture.
+        :param body: Bytes to return from the context manager's read().
+        :returns: A mock usable as a context manager.
+        """
+        ctx = mocker.MagicMock()
+        ctx.__enter__ = mocker.MagicMock(return_value=ctx)
+        ctx.__exit__ = mocker.MagicMock(return_value=False)
+        ctx.read = mocker.MagicMock(return_value=body)
+        return ctx
+
+    def test_acoustid_lookup_seeds_release_search(self, mocker: MockerFixture) -> None:
+        """KAT: fetch_acoustid_lookup returns score-ordered, flattened recording MBIDs.
+
+        Mocks urlopen to return a valid /v2/lookup JSON response with two results.
+        Asserts the returned list is score-ordered and flattened, and that time.sleep(1)
+        is called for the polite delay.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+        body = json.dumps(
+            {
+                "status": "ok",
+                "results": [
+                    {"id": "acoustid-uuid-1", "score": 0.95, "recordings": [{"id": "rec-mbid-1"}, {"id": "rec-mbid-2"}]},
+                    {"id": "acoustid-uuid-2", "score": 0.80, "recordings": [{"id": "rec-mbid-3"}]},
+                ],
+            }
+        ).encode()
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            return_value=self._make_resp(mocker, body),
+        )
+        result = fetch_acoustid_lookup("fp", 180, "key")
+        assert result == ["rec-mbid-1", "rec-mbid-2", "rec-mbid-3"]
+        mock_sleep.assert_called_once_with(1)
+
+    def test_empty_api_key_returns_empty_no_network(self, mocker: MockerFixture) -> None:
+        """api_key == '' returns [] without any network call.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen")
+        result = fetch_acoustid_lookup("fp", 180, "")
+        assert result == []
+        mock_urlopen.assert_not_called()
+
+    def test_empty_fingerprint_returns_empty_no_network(self, mocker: MockerFixture) -> None:
+        """fingerprint == '' returns [] without any network call.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen")
+        result = fetch_acoustid_lookup("", 180, "key")
+        assert result == []
+        mock_urlopen.assert_not_called()
+
+    def test_zero_duration_returns_empty_no_network(self, mocker: MockerFixture) -> None:
+        """duration_s <= 0 returns [] without any network call.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen")
+        result = fetch_acoustid_lookup("fp", 0, "key")
+        assert result == []
+        mock_urlopen.assert_not_called()
+
+    def test_negative_duration_returns_empty_no_network(self, mocker: MockerFixture) -> None:
+        """duration_s < 0 returns [] without any network call.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen")
+        result = fetch_acoustid_lookup("fp", -1, "key")
+        assert result == []
+        mock_urlopen.assert_not_called()
+
+    def test_4xx_returns_empty_after_single_attempt(self, mocker: MockerFixture) -> None:
+        """A 4xx HTTP error returns [] after a single attempt (no retry).
+
+        4xx errors are permanent client errors; retrying them is wasteful and incorrect.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        http_exc = HTTPError("https://api.acoustid.org/", 400, "Bad Request", {}, None)  # type: ignore[arg-type]
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=http_exc,
+        )
+        result = fetch_acoustid_lookup("fp", 180, "key")
+        assert result == []
+        mock_urlopen.assert_called_once()
+
+    def test_5xx_retries_three_times_returns_empty(self, mocker: MockerFixture) -> None:
+        """A 5xx HTTP error is retried up to three times before returning [].
+
+        5xx errors are transient server errors; retry is appropriate.  After all three attempts fail,
+        the function returns [] rather than raising.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+        http_exc = HTTPError("https://api.acoustid.org/", 503, "Service Unavailable", {}, None)  # type: ignore[arg-type]
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=http_exc,
+        )
+        result = fetch_acoustid_lookup("fp", 180, "key")
+        assert result == []
+        assert mock_urlopen.call_count == 3
+        # Polite delay (sleep(1)) is called on success; backoff sleeps are called on 5xx.
+        # On 5xx, time.sleep is called with 2**attempt for each failed attempt (0, 1, 2).
+        sleep_args = [c.args[0] for c in mock_sleep.call_args_list]
+        assert 1 in sleep_args or 2 in sleep_args  # backoff sleeps present
+
+    def test_oserror_retries_returns_empty(self, mocker: MockerFixture) -> None:
+        """An OSError is retried and returns [] after all attempts.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=OSError("network error"),
+        )
+        result = fetch_acoustid_lookup("fp", 180, "key")
+        assert result == []
+        assert mock_urlopen.call_count == 3
+
+    def test_malformed_json_returns_empty(self, mocker: MockerFixture) -> None:
+        """Malformed JSON in the response returns [] without retrying.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            return_value=self._make_resp(mocker, b"not valid json {{{"),
+        )
+        result = fetch_acoustid_lookup("fp", 180, "key")
+        assert result == []
+
+    def test_status_not_ok_returns_empty(self, mocker: MockerFixture) -> None:
+        """A response with status != 'ok' returns [].
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        body = json.dumps({"status": "error", "error": {"code": 3, "message": "Invalid fingerprint"}}).encode()
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            return_value=self._make_resp(mocker, body),
+        )
+        result = fetch_acoustid_lookup("fp", 180, "key")
+        assert result == []
+
+    def test_empty_results_list_returns_empty(self, mocker: MockerFixture) -> None:
+        """A response with an empty results list returns [].
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        body = json.dumps({"status": "ok", "results": []}).encode()
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            return_value=self._make_resp(mocker, body),
+        )
+        result = fetch_acoustid_lookup("fp", 180, "key")
+        assert result == []
+
+    def test_result_without_recordings_key_handled_gracefully(self, mocker: MockerFixture) -> None:
+        """A result entry with no 'recordings' key is handled gracefully (returns []).
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        body = json.dumps({"status": "ok", "results": [{"id": "uuid", "score": 0.9}]}).encode()
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            return_value=self._make_resp(mocker, body),
+        )
+        result = fetch_acoustid_lookup("fp", 180, "key")
+        assert result == []
+
+    def test_fetch_acoustid_lookup_raw_returns_top_uuid(self, mocker: MockerFixture) -> None:
+        """_fetch_acoustid_lookup_raw returns (recording_mbids, top_acoustid_uuid).
+
+        The top UUID is the id of the highest-scoring result (results[0]["id"]).
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        body = json.dumps(
+            {
+                "status": "ok",
+                "results": [
+                    {"id": "acoustid-uuid-1", "score": 0.95, "recordings": [{"id": "rec-mbid-1"}, {"id": "rec-mbid-2"}]},
+                    {"id": "acoustid-uuid-2", "score": 0.80, "recordings": [{"id": "rec-mbid-3"}]},
+                ],
+            }
+        ).encode()
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            return_value=self._make_resp(mocker, body),
+        )
+        recording_mbids, top_uuid = _fetch_acoustid_lookup_raw("fp", 180, "key")
+        assert recording_mbids == ["rec-mbid-1", "rec-mbid-2", "rec-mbid-3"]
+        assert top_uuid == "acoustid-uuid-1"
+
+    def test_non_dict_result_item_skipped(self, mocker: MockerFixture) -> None:
+        """Non-dict items in the results list are skipped (covers _score else branch and loop continue).
+
+        A results list containing a non-dict item alongside a valid dict item exercises:
+        - The ``_score`` function's ``return 0.0`` else branch (line 913).
+        - The ``if not isinstance(result, dict): continue`` branch (line 923).
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        body = json.dumps(
+            {
+                "status": "ok",
+                "results": [
+                    "not-a-dict",
+                    {"id": "acoustid-uuid-1", "score": 0.95, "recordings": [{"id": "rec-mbid-1"}]},
+                ],
+            }
+        ).encode()
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            return_value=self._make_resp(mocker, body),
+        )
+        recording_mbids, top_uuid = _fetch_acoustid_lookup_raw("fp", 180, "key")
+        # The non-dict item is skipped; only the valid dict item contributes
+        assert "rec-mbid-1" in recording_mbids
+        assert top_uuid == "acoustid-uuid-1"
+
+    def test_non_dict_recording_item_skipped(self, mocker: MockerFixture) -> None:
+        """Non-dict items in a result's recordings list are skipped (covers line 929 continue).
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        body = json.dumps(
+            {
+                "status": "ok",
+                "results": [
+                    {"id": "acoustid-uuid-1", "score": 0.95, "recordings": ["not-a-dict", {"id": "rec-mbid-1"}]},
+                ],
+            }
+        ).encode()
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            return_value=self._make_resp(mocker, body),
+        )
+        recording_mbids, _ = _fetch_acoustid_lookup_raw("fp", 180, "key")
+        # The non-dict recording is skipped; only the valid dict recording contributes
+        assert recording_mbids == ["rec-mbid-1"]
+
+    def test_empty_rec_id_skipped(self, mocker: MockerFixture) -> None:
+        """Recording entries with empty id are skipped (covers line 931->927 branch).
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        body = json.dumps(
+            {
+                "status": "ok",
+                "results": [
+                    {"id": "acoustid-uuid-1", "score": 0.95, "recordings": [{"id": ""}, {"id": "rec-mbid-1"}]},
+                ],
+            }
+        ).encode()
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            return_value=self._make_resp(mocker, body),
+        )
+        recording_mbids, _ = _fetch_acoustid_lookup_raw("fp", 180, "key")
+        # The empty-id recording is skipped
+        assert recording_mbids == ["rec-mbid-1"]
 
 
 # ---------------------------------------------------------------------------
