@@ -1166,8 +1166,202 @@ def _confirm_fragmentation(
     return case_a, case_b
 
 
+#: Keys used in the :func:`_make_audit_counts` counter dict, one per finding category.
+_AUDIT_COUNT_KEYS: tuple[str, ...] = (
+    "total",
+    "needs_enrich",
+    "acoustid_missing",
+    "acoustid_journal_mismatch",
+    "audio_hash_tag_mismatch",
+    "audio_drift",
+    "audio_stable",
+    "file_missing",
+)
+
+
+def _make_audit_counts() -> dict[str, int]:
+    """Return a zeroed counter dict for the three audit passes.
+
+    Keys correspond to :data:`_AUDIT_COUNT_KEYS`:
+
+    * ``total`` — unique destination paths from eligible journal entries.
+    * ``needs_enrich`` — files with an empty ``audio_hash`` in the journal entry.
+    * ``acoustid_missing`` — files with an empty ``acoustid_id`` in the journal entry.
+    * ``acoustid_journal_mismatch`` — journal ``acoustid_id`` differs from the tag.
+    * ``audio_hash_tag_mismatch`` — journal ``audio_hash`` differs from the tag.
+    * ``audio_drift`` — recomputed ``audio_hash`` differs from the stored tag.
+    * ``audio_stable`` — recomputed ``audio_hash`` matches the stored tag.
+    * ``file_missing`` — destination file no longer exists on disk.
+
+    :returns: A ``dict[str, int]`` with all keys initialised to ``0``.
+    """
+    return dict.fromkeys(_AUDIT_COUNT_KEYS, 0)
+
+
+def _audit_journal_scan(
+    entries: list[TransactionEntry],
+    counts: dict[str, int],
+) -> None:
+    """Pass 1 — journal scan: flag entries with empty ``audio_hash`` or ``acoustid_id`` fields.
+
+    Iterates eligible journal entries (``action`` in ``{"tagged", "enriched"}``).  For each entry
+    whose destination path is unique (first occurrence wins), logs one event per finding:
+
+    * ``audit_needs_enrich`` — ``audio_hash`` is empty in the journal entry.
+    * ``audit_acoustid_missing`` — ``acoustid_id`` is empty in the journal entry.
+
+    Increments ``counts["total"]`` for each unique destination processed and the corresponding
+    per-finding counters.  This pass performs no file I/O.
+
+    :param entries: All :class:`~music_annotator.models.TransactionEntry` objects from the journal.
+    :param counts: Mutable counter dict from :func:`_make_audit_counts`, updated in place.
+    """
+    seen: set[str] = set()
+    for entry in entries:
+        if entry.action not in {"tagged", "enriched"}:
+            continue
+        dest = entry.destination
+        if dest in seen:
+            continue
+        seen.add(dest)
+        counts["total"] += 1
+
+        if not entry.audio_hash:
+            counts["needs_enrich"] += 1
+            log.info(
+                "audit_needs_enrich",
+                path=dest,
+                message="audio_hash empty in journal — run 'audit --enrich' to backfill",
+            )
+
+        if not entry.acoustid_id:
+            counts["acoustid_missing"] += 1
+            log.info("audit_acoustid_missing", path=dest, message="acoustid_id empty in journal entry")
+
+
+def _audit_tag_adjudication(
+    entries: list[TransactionEntry],
+    counts: dict[str, int],
+) -> None:
+    """Pass 2 — tag adjudication: compare journal identity fields against on-disk tags.
+
+    For each eligible journal entry (``action`` in ``{"tagged", "enriched"}``), reads the
+    ``ACOUSTID_ID`` and ``audio_hash`` tags from the destination file and compares them to the
+    journal's stored values.  Logs one event per mismatch:
+
+    * ``audit_file_missing`` — destination file does not exist on disk (skipped gracefully).
+    * ``audit_acoustid_journal_mismatch`` — journal ``acoustid_id`` differs from the tag value
+      (and neither is empty).
+    * ``audit_audio_hash_tag_mismatch`` — journal ``audio_hash`` differs from the tag value
+      (and neither is empty).
+
+    Only the most-recent journal entry per destination path is adjudicated (first occurrence in
+    reverse-chronological order, i.e. the last entry in the list).
+
+    :param entries: All :class:`~music_annotator.models.TransactionEntry` objects from the journal.
+    :param counts: Mutable counter dict from :func:`_make_audit_counts`, updated in place.
+    """
+    # Build a mapping from destination → most-recent eligible entry (last write wins).
+    latest: dict[str, TransactionEntry] = {}
+    for entry in entries:
+        if entry.action in {"tagged", "enriched"}:
+            latest[entry.destination] = entry
+
+    for dest, entry in latest.items():
+        path = Path(dest)
+        if not path.exists():
+            counts["file_missing"] += 1
+            log.warning("audit_file_missing", path=dest, message="destination file no longer exists on disk")
+            continue
+
+        tag_acoustid = _read_acoustid_tag(path)
+        if entry.acoustid_id and tag_acoustid and entry.acoustid_id != tag_acoustid:
+            counts["acoustid_journal_mismatch"] += 1
+            log.warning(
+                "audit_acoustid_journal_mismatch",
+                path=dest,
+                journal_acoustid=entry.acoustid_id,
+                tag_acoustid=tag_acoustid,
+                message="journal acoustid_id differs from embedded tag",
+            )
+
+        tag_audio_hash = _read_audio_hash_tag(path)
+        if entry.audio_hash and tag_audio_hash and entry.audio_hash != tag_audio_hash:
+            counts["audio_hash_tag_mismatch"] += 1
+            log.warning(
+                "audit_audio_hash_tag_mismatch",
+                path=dest,
+                journal_hash=entry.audio_hash,
+                tag_hash=tag_audio_hash,
+                message="journal audio_hash differs from embedded tag — tag was changed after journal was written",
+            )
+
+
+def _audit_audio_anchor(
+    entries: list[TransactionEntry],
+    counts: dict[str, int],
+) -> None:
+    """Pass 3 — audio anchor confirmation: recompute ``audio_hash`` and compare to the stored tag.
+
+    For each eligible journal entry (``action`` in ``{"tagged", "enriched"}``), reads the
+    ``audio_hash`` tag from the destination file, recomputes the hash via :func:`_audio_hash`,
+    and compares the two values.  Logs one event per finding:
+
+    * ``audit_file_missing`` — destination file does not exist (already counted in pass 2; skipped
+      here to avoid double-counting).
+    * ``audit_needs_enrich`` — stored tag is empty (no anchor yet; already counted in pass 1 if
+      the journal was also empty; counted here only when the tag is empty but the journal is not).
+    * ``audit_audio_drift`` — recomputed hash differs from the stored tag (audio content changed).
+    * ``audit_audio_stable`` — recomputed hash matches the stored tag (anchor confirmed; logged at
+      DEBUG level).
+
+    Only the most-recent journal entry per destination path is processed.
+
+    :param entries: All :class:`~music_annotator.models.TransactionEntry` objects from the journal.
+    :param counts: Mutable counter dict from :func:`_make_audit_counts`, updated in place.
+    """
+    latest: dict[str, TransactionEntry] = {}
+    for entry in entries:
+        if entry.action in {"tagged", "enriched"}:
+            latest[entry.destination] = entry
+
+    for dest, entry in latest.items():
+        path = Path(dest)
+        if not path.exists():
+            # Already counted and logged in pass 2; skip silently here.
+            continue
+
+        stored_hash = _read_audio_hash_tag(path)
+        if not stored_hash:
+            # Only flag as needs_enrich here when the journal also lacks the hash (pass 1 already
+            # flagged the journal-empty case); if the journal has a hash but the tag is empty, that
+            # is an audio_hash_tag_mismatch (pass 2) — not a separate needs_enrich event.
+            if not entry.audio_hash:
+                # Already counted in pass 1; log at debug level only to avoid duplicate warnings.
+                log.debug("audit_needs_enrich_tag_empty", path=dest, message="audio_hash tag empty — anchor not yet written")
+            continue
+
+        recomputed = _audio_hash(path)
+        if not recomputed:
+            # Unsupported format or read error — cannot confirm anchor; skip silently.
+            continue
+
+        if recomputed != stored_hash:
+            counts["audio_drift"] += 1
+            log.warning(
+                "audit_audio_drift",
+                path=dest,
+                stored_hash=stored_hash,
+                recomputed_hash=recomputed,
+                message="recomputed audio_hash differs from stored tag — audio content has changed (re-rip or replacement)",
+            )
+        else:
+            counts["audio_stable"] += 1
+            log.debug("audit_audio_stable", path=dest, audio_hash=stored_hash, message="audio anchor confirmed")
+
+
 def audit(dest_root: Path) -> None:
-    """Read the journal at ``dest_root`` and report release-fragmentation anomalies.
+    """Read the journal at ``dest_root`` and report release-fragmentation anomalies and identity integrity findings.
 
     Reads :data:`JOURNAL_FILENAME` from ``dest_root`` and analyses ``action == "tagged"`` entries to
     surface two fragmentation shapes:
@@ -1186,6 +1380,17 @@ def audit(dest_root: Path) -> None:
 
     When neither shape is detected a clean "no fragmentation detected" message is logged.
 
+    In addition, three identity-integrity passes are run over all ``action == "tagged"`` and
+    ``action == "enriched"`` journal entries:
+
+    * **Pass 1 — journal scan:** flags entries with empty ``audio_hash`` or ``acoustid_id`` fields.
+    * **Pass 2 — tag adjudication:** reads on-disk tags and compares them to the journal's stored
+      identity fields, flagging mismatches.
+    * **Pass 3 — audio anchor confirmation:** recomputes ``audio_hash`` from the file's decoded
+      audio content and compares it to the stored tag, flagging drift (audio content changed).
+
+    A summary of finding counts is logged at the end.
+
     This function is **read-only**: it does not move files or write any journal entries.
 
     :param dest_root: Root of the annotated music library (contains ``music_annotator_journal.json``).
@@ -1195,7 +1400,6 @@ def audit(dest_root: Path) -> None:
 
     if not case_a and not case_b:
         log.info("audit_clean", dest_root=str(dest_root), message="no fragmentation detected")
-        return
 
     for work_dir, (release_ids, confirmed) in sorted(case_a.items()):
         log.warning(
@@ -1222,6 +1426,24 @@ def audit(dest_root: Path) -> None:
                 else "one release_id maps to multiple work_dirs (split release — journal stale)"
             ),
         )
+
+    counts = _make_audit_counts()
+    _audit_journal_scan(journal.entries, counts)
+    _audit_tag_adjudication(journal.entries, counts)
+    _audit_audio_anchor(journal.entries, counts)
+
+    log.info(
+        "audit_summary",
+        dest_root=str(dest_root),
+        total_scanned=counts["total"],
+        needs_enrich=counts["needs_enrich"],
+        acoustid_missing=counts["acoustid_missing"],
+        acoustid_journal_mismatch=counts["acoustid_journal_mismatch"],
+        audio_hash_tag_mismatch=counts["audio_hash_tag_mismatch"],
+        audio_drift=counts["audio_drift"],
+        audio_stable=counts["audio_stable"],
+        file_missing=counts["file_missing"],
+    )
 
 
 def _check_collisions(dest_files: list[Path]) -> list[Path]:

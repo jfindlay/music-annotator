@@ -28,6 +28,11 @@ from music_annotator.__main__ import (
     main,
 )
 from music_annotator._pipeline_io import (
+    _audio_hash,
+    _audit_audio_anchor,
+    _audit_journal_scan,
+    _audit_tag_adjudication,
+    _make_audit_counts,
     _needs_enrich,
     _read_albumid_tag,
     _read_audio_hash_tag,
@@ -37,7 +42,7 @@ from music_annotator._pipeline_io import (
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path
-from music_annotator.models import MBRelease, MBTrack, TrackTags
+from music_annotator.models import MBRelease, MBTrack, TrackTags, TransactionEntry
 
 # ---------------------------------------------------------------------------
 # Minimal FLAC byte sequence (same constant as test_pipeline.py)
@@ -2775,6 +2780,18 @@ class TestAudit:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
+        # Create destination FLAC files so the new identity passes find no issues.
+        dest_paths = [
+            "/lib/Beethoven - Karajan/Work-A [2020]/01 - Mvt1.flac",
+            "/lib/Beethoven - Karajan/Work-A [2020]/02 - Mvt2.flac",
+            "/lib/Beethoven - Karajan/Work-B [2020]/01 - Mvt1.flac",
+            "/lib/Beethoven - Karajan/Work-C [2020]/01 - Mvt1.flac",
+        ]
+        for dp in dest_paths:
+            p = Path(dp)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(_MINIMAL_FLAC)
+
         # case (a): same work_dir, two different release_ids
         # case (b): same release_id, two different work_dirs
         _write_library_journal(
@@ -2787,6 +2804,8 @@ class TestAudit:
                     "source": "/src/01.flac",
                     "destination": "/lib/Beethoven - Karajan/Work-A [2020]/01 - Mvt1.flac",
                     "action": "tagged",
+                    "audio_hash": "flac-md5:00000000000000000000000000000000",
+                    "acoustid_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                 },
                 # case (a) entry 2: Work-A, release rel-2 — triggers case (a)
                 {
@@ -2795,6 +2814,8 @@ class TestAudit:
                     "source": "/src/02.flac",
                     "destination": "/lib/Beethoven - Karajan/Work-A [2020]/02 - Mvt2.flac",
                     "action": "tagged",
+                    "audio_hash": "flac-md5:00000000000000000000000000000000",
+                    "acoustid_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
                 },
                 # case (b) entry 1: rel-3 in Work-B
                 {
@@ -2803,6 +2824,8 @@ class TestAudit:
                     "source": "/src/03.flac",
                     "destination": "/lib/Beethoven - Karajan/Work-B [2020]/01 - Mvt1.flac",
                     "action": "tagged",
+                    "audio_hash": "flac-md5:00000000000000000000000000000000",
+                    "acoustid_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
                 },
                 # case (b) entry 2: rel-3 in Work-C — triggers case (b)
                 {
@@ -2811,6 +2834,8 @@ class TestAudit:
                     "source": "/src/04.flac",
                     "destination": "/lib/Beethoven - Karajan/Work-C [2020]/01 - Mvt1.flac",
                     "action": "tagged",
+                    "audio_hash": "flac-md5:00000000000000000000000000000000",
+                    "acoustid_id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
                 },
             ],
         )
@@ -2834,8 +2859,12 @@ class TestAudit:
         assert case_b_calls[0].kwargs["release_id"] == "rel-3"
         assert case_b_calls[0].kwargs["work_dirs"] == ["Work-B [2020]", "Work-C [2020]"]
 
-        # audit() must not have called log.info (fragmentation was present)
-        mock_log.info.assert_not_called()
+        # audit() must not have called log.info for fragmentation events (fragmentation was present);
+        # only audit_summary is expected as an info event.
+        info_events = [call.args[0] for call in mock_log.info.call_args_list]
+        assert "audit_multiple_release_ids" not in info_events
+        assert "audit_split_release" not in info_events
+        assert "audit_summary" in info_events
 
     def test_audit_clean_no_fragmentation(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """audit() logs a clean message and does not warn when no fragmentation is detected.
@@ -2849,6 +2878,15 @@ class TestAudit:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
+        # Create destination FLAC files so the new identity passes find no issues.
+        for dp in [
+            "/lib/Beethoven - Karajan/Symphony No 5 [2020]/01 - Mvt1.flac",
+            "/lib/Beethoven - Karajan/Symphony No 5 [2020]/02 - Mvt2.flac",
+        ]:
+            p = Path(dp)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(_MINIMAL_FLAC)
+
         _write_library_journal(
             dest_root,
             [
@@ -2858,6 +2896,8 @@ class TestAudit:
                     "source": "/src/01.flac",
                     "destination": "/lib/Beethoven - Karajan/Symphony No 5 [2020]/01 - Mvt1.flac",
                     "action": "tagged",
+                    "audio_hash": "flac-md5:00000000000000000000000000000000",
+                    "acoustid_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                 },
                 {
                     "timestamp": "2024-01-01T00:00:00Z",
@@ -2865,6 +2905,8 @@ class TestAudit:
                     "source": "/src/02.flac",
                     "destination": "/lib/Beethoven - Karajan/Symphony No 5 [2020]/02 - Mvt2.flac",
                     "action": "tagged",
+                    "audio_hash": "flac-md5:00000000000000000000000000000000",
+                    "acoustid_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
                 },
             ],
         )
@@ -2889,6 +2931,15 @@ class TestAudit:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
+        # Create both destination FLAC files so the new identity passes find no issues.
+        # The "malformed" entry is outside dest_root but Pass 2 still checks it on disk.
+        foreign_dest = Path("/other/Work-X/01.flac")
+        foreign_dest.parent.mkdir(parents=True, exist_ok=True)
+        foreign_dest.write_bytes(_MINIMAL_FLAC)
+        valid_dest = Path("/lib/Beethoven - Karajan/Work-A [2020]/01 - Mvt1.flac")
+        valid_dest.parent.mkdir(parents=True, exist_ok=True)
+        valid_dest.write_bytes(_MINIMAL_FLAC)
+
         _write_library_journal(
             dest_root,
             [
@@ -2899,6 +2950,8 @@ class TestAudit:
                     "source": "/src/01.flac",
                     "destination": "/other/Work-X/01.flac",
                     "action": "tagged",
+                    "audio_hash": "flac-md5:00000000000000000000000000000000",
+                    "acoustid_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                 },
                 # Valid entry: should still be processed
                 {
@@ -2907,6 +2960,8 @@ class TestAudit:
                     "source": "/src/02.flac",
                     "destination": "/lib/Beethoven - Karajan/Work-A [2020]/01 - Mvt1.flac",
                     "action": "tagged",
+                    "audio_hash": "flac-md5:00000000000000000000000000000000",
+                    "acoustid_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
                 },
             ],
         )
@@ -2932,6 +2987,10 @@ class TestAudit:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
+        # Create the shallow destination FLAC file so the new identity passes find no issues.
+        shallow_dest = Path("/lib/track.flac")
+        shallow_dest.write_bytes(_MINIMAL_FLAC)
+
         _write_library_journal(
             dest_root,
             [
@@ -2942,6 +3001,8 @@ class TestAudit:
                     "source": "/src/01.flac",
                     "destination": "/lib/track.flac",
                     "action": "tagged",
+                    "audio_hash": "flac-md5:00000000000000000000000000000000",
+                    "acoustid_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                 },
             ],
         )
@@ -2965,6 +3026,11 @@ class TestAudit:
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
+
+        # Create the tagged destination FLAC file so the new identity passes find no issues.
+        tagged_dest = Path("/lib/Beethoven - Karajan/Work-C [2020]/01 - Mvt1.flac")
+        tagged_dest.parent.mkdir(parents=True, exist_ok=True)
+        tagged_dest.write_bytes(_MINIMAL_FLAC)
 
         _write_library_journal(
             dest_root,
@@ -2991,6 +3057,8 @@ class TestAudit:
                     "source": "/src/03.flac",
                     "destination": "/lib/Beethoven - Karajan/Work-C [2020]/01 - Mvt1.flac",
                     "action": "tagged",
+                    "audio_hash": "flac-md5:00000000000000000000000000000000",
+                    "acoustid_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
                 },
             ],
         )
@@ -3055,6 +3123,653 @@ class TestAudit:
         ns = parser.parse_args(["audit", "/dest"])
         assert ns.subcommand == "audit"
         assert ns.dest_dir == Path("/dest")
+
+
+# ---------------------------------------------------------------------------
+# TestAuditIdentityPasses — F7 identity-integrity passes
+# ---------------------------------------------------------------------------
+
+
+class TestAuditIdentityPasses:
+    """Tests for the three identity-integrity passes added in F7.
+
+    Covers :func:`_audit_journal_scan` (Pass 1), :func:`_audit_tag_adjudication` (Pass 2),
+    :func:`_audit_audio_anchor` (Pass 3), and the full :func:`audit` integration with all
+    three passes active.
+
+    All tests use pyfakefs for filesystem isolation and patch the structlog ``log`` object in
+    ``music_annotator._pipeline_io`` to assert on logged events.
+    """
+
+    # ------------------------------------------------------------------
+    # KAT: test_audit_flags_wrong_acoustid_keeps_audio_anchor
+    # ------------------------------------------------------------------
+
+    def test_audit_flags_wrong_acoustid_keeps_audio_anchor(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """audit() flags an acoustid mismatch between journal and tag but confirms the audio anchor.
+
+        Scenario:
+        - A FLAC file has ``audio_hash`` tag matching the recomputed hash (anchor is stable).
+        - The file's ``ACOUSTID_ID`` tag is ``"tag-acoustid-id"``.
+        - The journal entry has ``audio_hash`` = same correct value, ``acoustid_id`` =
+          ``"journal-acoustid-id"`` (different from the tag — simulating a stale journal).
+
+        Asserts:
+        - ``audit_acoustid_journal_mismatch`` is logged (tag and journal acoustid_id differ).
+        - ``audit_audio_drift`` is NOT logged (audio is stable — anchor matches).
+        - ``audit_audio_stable`` is logged (anchor confirmed).
+        - ``audit_summary`` is logged with correct counts.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Create a FLAC file and embed the correct audio_hash + a tag acoustid_id.
+        dest_path = dest_root / "Composer - Performer" / "Work [2020]" / "01 - Track.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(_MINIMAL_FLAC)
+        correct_hash = _audio_hash(dest_path)
+        apply_tags_flac(dest_path, TrackTags(audio_hash=correct_hash, acoustid_id="tag-acoustid-id"))
+
+        # Journal entry: audio_hash matches the file's tag, but acoustid_id differs.
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(dest_path),
+                    "action": "tagged",
+                    "audio_hash": correct_hash,
+                    "acoustid_id": "journal-acoustid-id",
+                }
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        debug_events = [c.args[0] for c in mock_log.debug.call_args_list]
+        info_events = [c.args[0] for c in mock_log.info.call_args_list]
+
+        # acoustid mismatch must be flagged
+        assert "audit_acoustid_journal_mismatch" in warning_events
+
+        # audio anchor must be confirmed (no drift)
+        assert "audit_audio_drift" not in warning_events
+        assert "audit_audio_stable" in debug_events
+
+        # summary must be present
+        assert "audit_summary" in info_events
+        summary_call = next(c for c in mock_log.info.call_args_list if c.args[0] == "audit_summary")
+        assert summary_call.kwargs["acoustid_journal_mismatch"] == 1
+        assert summary_call.kwargs["audio_drift"] == 0
+        assert summary_call.kwargs["audio_stable"] == 1
+
+    # ------------------------------------------------------------------
+    # Pass 1 (_audit_journal_scan) branch coverage
+    # ------------------------------------------------------------------
+
+    def test_pass1_empty_audio_hash_logs_needs_enrich(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Pass 1 logs audit_needs_enrich when audio_hash is empty in the journal entry.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination="/lib/Work/01.flac",
+                action="tagged",
+                audio_hash="",
+                acoustid_id="some-acoustid",
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_journal_scan(entries, counts)
+
+        info_events = [c.args[0] for c in mock_log.info.call_args_list]
+        assert "audit_needs_enrich" in info_events
+        assert counts["needs_enrich"] == 1
+        assert counts["total"] == 1
+
+    def test_pass1_empty_acoustid_logs_acoustid_missing(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Pass 1 logs audit_acoustid_missing when acoustid_id is empty in the journal entry.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination="/lib/Work/01.flac",
+                action="tagged",
+                audio_hash="flac-md5:aabb",
+                acoustid_id="",
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_journal_scan(entries, counts)
+
+        info_events = [c.args[0] for c in mock_log.info.call_args_list]
+        assert "audit_acoustid_missing" in info_events
+        assert counts["acoustid_missing"] == 1
+        assert counts["total"] == 1
+
+    def test_pass1_both_non_empty_no_findings(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Pass 1 emits no findings when both audio_hash and acoustid_id are non-empty.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination="/lib/Work/01.flac",
+                action="tagged",
+                audio_hash="flac-md5:aabb",
+                acoustid_id="some-acoustid",
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_journal_scan(entries, counts)
+
+        info_events = [c.args[0] for c in mock_log.info.call_args_list]
+        assert "audit_needs_enrich" not in info_events
+        assert "audit_acoustid_missing" not in info_events
+        assert counts["needs_enrich"] == 0
+        assert counts["acoustid_missing"] == 0
+        assert counts["total"] == 1
+
+    def test_pass1_only_tagged_and_enriched_scanned(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Pass 1 only scans entries with action 'tagged' or 'enriched'; others are skipped.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination="/lib/Work/01.flac",
+                action="repathed",
+                audio_hash="",
+                acoustid_id="",
+            ),
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/02.flac",
+                destination="/lib/Work/02.flac",
+                action="enriched",
+                audio_hash="flac-md5:aabb",
+                acoustid_id="some-acoustid",
+            ),
+        ]
+        mocker.patch("music_annotator._pipeline_io.log")
+        _audit_journal_scan(entries, counts)
+
+        # Only the "enriched" entry is scanned; "repathed" is ignored.
+        assert counts["total"] == 1
+        assert counts["needs_enrich"] == 0
+        assert counts["acoustid_missing"] == 0
+
+    def test_pass1_duplicate_destination_counted_once(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Pass 1 counts each unique destination only once (first occurrence wins).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination="/lib/Work/01.flac",
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+            # Same destination — must be skipped (seen set)
+            TransactionEntry(
+                timestamp="2024-01-01T01:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination="/lib/Work/01.flac",
+                action="enriched",
+                audio_hash="flac-md5:aabb",
+                acoustid_id="some-acoustid",
+            ),
+        ]
+        mocker.patch("music_annotator._pipeline_io.log")
+        _audit_journal_scan(entries, counts)
+
+        assert counts["total"] == 1
+
+    # ------------------------------------------------------------------
+    # Pass 2 (_audit_tag_adjudication) branch coverage
+    # ------------------------------------------------------------------
+
+    def test_pass2_file_missing_logs_warning(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Pass 2 logs audit_file_missing when the destination file does not exist on disk.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination="/lib/Work/missing.flac",
+                action="tagged",
+                audio_hash="flac-md5:aabb",
+                acoustid_id="some-acoustid",
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_tag_adjudication(entries, counts)
+
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "audit_file_missing" in warning_events
+        assert counts["file_missing"] == 1
+
+    def test_pass2_acoustid_journal_mismatch_logged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Pass 2 logs audit_acoustid_journal_mismatch when journal and tag acoustid_id differ.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        dest_path = dest_root / "Work" / "01.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_path, TrackTags(acoustid_id="tag-acoustid", audio_hash="flac-md5:aabb"))
+
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination=str(dest_path),
+                action="tagged",
+                audio_hash="flac-md5:aabb",
+                acoustid_id="journal-acoustid",
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_tag_adjudication(entries, counts)
+
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "audit_acoustid_journal_mismatch" in warning_events
+        assert counts["acoustid_journal_mismatch"] == 1
+
+    def test_pass2_audio_hash_tag_mismatch_logged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Pass 2 logs audit_audio_hash_tag_mismatch when journal and tag audio_hash differ.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        dest_path = dest_root / "Work" / "01.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_path, TrackTags(audio_hash="flac-md5:tag-hash", acoustid_id="same-acoustid"))
+
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination=str(dest_path),
+                action="tagged",
+                audio_hash="flac-md5:journal-hash",
+                acoustid_id="same-acoustid",
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_tag_adjudication(entries, counts)
+
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "audit_audio_hash_tag_mismatch" in warning_events
+        assert counts["audio_hash_tag_mismatch"] == 1
+
+    def test_pass2_empty_journal_acoustid_no_mismatch(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Pass 2 does not log a mismatch when journal acoustid_id is empty (can't compare).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        dest_path = dest_root / "Work" / "01.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_path, TrackTags(acoustid_id="tag-acoustid", audio_hash="flac-md5:aabb"))
+
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination=str(dest_path),
+                action="tagged",
+                audio_hash="flac-md5:aabb",
+                acoustid_id="",  # empty journal acoustid → no comparison
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_tag_adjudication(entries, counts)
+
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "audit_acoustid_journal_mismatch" not in warning_events
+        assert counts["acoustid_journal_mismatch"] == 0
+
+    def test_pass2_empty_tag_acoustid_no_mismatch(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Pass 2 does not log a mismatch when tag acoustid_id is empty (can't compare).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        dest_path = dest_root / "Work" / "01.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(_MINIMAL_FLAC)
+        # File has no acoustid_id tag
+        apply_tags_flac(dest_path, TrackTags(audio_hash="flac-md5:aabb"))
+
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination=str(dest_path),
+                action="tagged",
+                audio_hash="flac-md5:aabb",
+                acoustid_id="journal-acoustid",  # journal has value but tag is empty
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_tag_adjudication(entries, counts)
+
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "audit_acoustid_journal_mismatch" not in warning_events
+        assert counts["acoustid_journal_mismatch"] == 0
+
+    def test_pass2_all_match_no_findings(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Pass 2 emits no findings when journal and tag values all match.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        dest_path = dest_root / "Work" / "01.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_path, TrackTags(acoustid_id="same-acoustid", audio_hash="flac-md5:same-hash"))
+
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination=str(dest_path),
+                action="tagged",
+                audio_hash="flac-md5:same-hash",
+                acoustid_id="same-acoustid",
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_tag_adjudication(entries, counts)
+
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "audit_acoustid_journal_mismatch" not in warning_events
+        assert "audit_audio_hash_tag_mismatch" not in warning_events
+        assert "audit_file_missing" not in warning_events
+
+    # ------------------------------------------------------------------
+    # Pass 3 (_audit_audio_anchor) branch coverage
+    # ------------------------------------------------------------------
+
+    def test_pass3_stored_hash_empty_logs_needs_enrich_tag_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Pass 3 logs audit_needs_enrich_tag_empty (debug) when stored audio_hash tag is empty.
+
+        This branch fires when both the journal and the tag are empty (journal-empty case was
+        already counted in pass 1; pass 3 logs at debug level only).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        dest_path = dest_root / "Work" / "01.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(_MINIMAL_FLAC)
+        # No audio_hash tag written
+        apply_tags_flac(dest_path, TrackTags(title="No Hash"))
+
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination=str(dest_path),
+                action="tagged",
+                audio_hash="",  # journal also empty
+                acoustid_id="some-acoustid",
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_audio_anchor(entries, counts)
+
+        debug_events = [c.args[0] for c in mock_log.debug.call_args_list]
+        assert "audit_needs_enrich_tag_empty" in debug_events
+
+    def test_pass3_audio_drift_logged_when_hash_differs(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Pass 3 logs audit_audio_drift when recomputed hash differs from the stored tag.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        dest_path = dest_root / "Work" / "01.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(_MINIMAL_FLAC)
+        # Store a deliberately wrong audio_hash in the tag
+        apply_tags_flac(dest_path, TrackTags(audio_hash="flac-md5:wronghash00000000000000000000000"))
+
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination=str(dest_path),
+                action="tagged",
+                audio_hash="flac-md5:wronghash00000000000000000000000",
+                acoustid_id="some-acoustid",
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_audio_anchor(entries, counts)
+
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "audit_audio_drift" in warning_events
+        assert counts["audio_drift"] == 1
+
+    def test_pass3_audio_stable_logged_when_hash_matches(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Pass 3 logs audit_audio_stable (debug) when recomputed hash matches the stored tag.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        dest_path = dest_root / "Work" / "01.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(_MINIMAL_FLAC)
+        correct_hash = _audio_hash(dest_path)
+        apply_tags_flac(dest_path, TrackTags(audio_hash=correct_hash))
+
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination=str(dest_path),
+                action="tagged",
+                audio_hash=correct_hash,
+                acoustid_id="some-acoustid",
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_audio_anchor(entries, counts)
+
+        debug_events = [c.args[0] for c in mock_log.debug.call_args_list]
+        assert "audit_audio_stable" in debug_events
+        assert counts["audio_stable"] == 1
+
+    def test_pass3_file_missing_skipped_silently(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Pass 3 silently skips entries whose destination file does not exist (already counted in pass 2).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination="/lib/Work/missing.flac",
+                action="tagged",
+                audio_hash="flac-md5:aabb",
+                acoustid_id="some-acoustid",
+            )
+        ]
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_audio_anchor(entries, counts)
+
+        # No warning logged (file_missing is pass 2's responsibility)
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "audit_file_missing" not in warning_events
+        assert counts["audio_drift"] == 0
+        assert counts["audio_stable"] == 0
+
+    def test_pass3_unsupported_format_skipped_silently(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Pass 3 silently skips entries when _audio_hash returns empty (unsupported format).
+
+        When the file exists but _audio_hash cannot compute a hash (e.g. unsupported format or
+        read error), the entry is skipped without logging any event.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        dest_path = dest_root / "Work" / "01.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_path, TrackTags(audio_hash="flac-md5:some-stored-hash"))
+
+        counts = _make_audit_counts()
+        entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="r1",
+                source="/src/01.flac",
+                destination=str(dest_path),
+                action="tagged",
+                audio_hash="flac-md5:some-stored-hash",
+                acoustid_id="some-acoustid",
+            )
+        ]
+        # Patch _audio_hash to return "" (simulating unsupported format / read error)
+        mocker.patch("music_annotator._pipeline_io._audio_hash", return_value="")
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        _audit_audio_anchor(entries, counts)
+
+        # No events logged — silently skipped
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        debug_events = [c.args[0] for c in mock_log.debug.call_args_list]
+        assert "audit_audio_drift" not in warning_events
+        assert "audit_audio_stable" not in debug_events
+        assert counts["audio_drift"] == 0
+        assert counts["audio_stable"] == 0
+
+    # ------------------------------------------------------------------
+    # audit_summary counts
+    # ------------------------------------------------------------------
+
+    def test_audit_summary_logged_with_correct_counts(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """audit() logs audit_summary with correct counts after all three passes.
+
+        Scenario: one entry with empty audio_hash (needs_enrich) and empty acoustid_id
+        (acoustid_missing), and the file does not exist on disk (file_missing).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Entry with empty identity fields and no file on disk
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": "/lib/Composer - Performer/Work [2020]/01.flac",
+                    "action": "tagged",
+                    "audio_hash": "",
+                    "acoustid_id": "",
+                }
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        info_events = [c.args[0] for c in mock_log.info.call_args_list]
+        assert "audit_summary" in info_events
+        summary_call = next(c for c in mock_log.info.call_args_list if c.args[0] == "audit_summary")
+        assert summary_call.kwargs["total_scanned"] == 1
+        assert summary_call.kwargs["needs_enrich"] == 1
+        assert summary_call.kwargs["acoustid_missing"] == 1
+        assert summary_call.kwargs["file_missing"] == 1
+        assert summary_call.kwargs["audio_drift"] == 0
+        assert summary_call.kwargs["audio_stable"] == 0
 
 
 # ---------------------------------------------------------------------------
