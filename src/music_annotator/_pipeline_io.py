@@ -8,9 +8,11 @@ against MB track lengths.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import shutil
+import struct
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +54,13 @@ _DURATION_TOLERANCE_MS: int = 2000
 #: Written by :func:`compare_audio_collision`; not thread-safe (acceptable for a single-threaded
 #: CLI tool).
 _FPCALC_WARNED: list[bool] = [False]
+
+#: Minimum Hamming-distance similarity score for two Chromaprint fingerprints to be considered a
+#: match.  AcoustID's own clustering heuristics treat fingerprints from the same recording as
+#: having >90% bit similarity, so 0.90 is the appropriate threshold for fuzzy comparison.
+#: Similarity is computed as ``1 - (hamming_distance / total_bits)`` over the decoded 32-bit
+#: integer arrays.
+_CHROMAPRINT_SIMILARITY_THRESHOLD: float = 0.90
 
 
 @dataclass
@@ -309,6 +318,43 @@ def _run_fpcalc(path: Path) -> str:
         return ""
 
 
+def _chromaprint_similarity(fp_a: str, fp_b: str) -> float | None:
+    """Compute the Hamming-distance similarity between two Chromaprint fingerprint strings.
+
+    Decodes both fingerprints from base64url (no-padding) format into sequences of 32-bit
+    unsigned integers, then computes the Hamming distance by XOR-ing each pair of integers and
+    counting the set bits.  Returns a similarity score in ``[0.0, 1.0]`` as
+    ``1 - (hamming_distance / total_bits)``.
+
+    Returns ``None`` when either fingerprint is empty, cannot be decoded, or the decoded arrays
+    have different lengths (indicating incompatible fingerprint versions).
+
+    :param fp_a: First Chromaprint fingerprint string (base64url-encoded, no padding).
+    :param fp_b: Second Chromaprint fingerprint string (base64url-encoded, no padding).
+    :returns: Similarity score in ``[0.0, 1.0]``, or ``None`` when comparison is not possible.
+    """
+    if not fp_a or not fp_b:
+        return None
+    try:
+        # Add the correct amount of base64 padding: 0, 1, or 2 '=' characters so that the total
+        # length is a multiple of 4.  Adding a fixed "==" is wrong when len(fp) % 4 == 0.
+        pad_a = "=" * (-len(fp_a) % 4)
+        pad_b = "=" * (-len(fp_b) % 4)
+        data_a = base64.b64decode(fp_a + pad_a, altchars=b"-_", validate=True)
+        data_b = base64.b64decode(fp_b + pad_b, altchars=b"-_", validate=True)
+    except Exception:  # noqa: BLE001 — any decode failure means fingerprint is unusable
+        return None
+    n_a = len(data_a) // 4
+    n_b = len(data_b) // 4
+    if n_a == 0 or n_b == 0 or n_a != n_b:
+        return None
+    ints_a: tuple[int, ...] = struct.unpack(f"<{n_a}I", data_a[: n_a * 4])
+    ints_b: tuple[int, ...] = struct.unpack(f"<{n_b}I", data_b[: n_b * 4])
+    hamming_distance = sum((a ^ b).bit_count() for a, b in zip(ints_a, ints_b))
+    total_bits = n_a * 32
+    return 1.0 - (hamming_distance / total_bits)
+
+
 def _compare_chromaprint_and_duration(
     src: Path,
     dest: Path,
@@ -334,13 +380,22 @@ def _compare_chromaprint_and_duration(
     if fpcalc_path:
         src_fp = _run_fpcalc(src)
         dest_fp = _run_fpcalc(dest)
-        if src_fp and dest_fp:
-            if src_fp == dest_fp:
+        similarity = _chromaprint_similarity(src_fp, dest_fp)
+        if similarity is not None:
+            if similarity >= _CHROMAPRINT_SIMILARITY_THRESHOLD:
                 return AudioCompareResult(
-                    src=src, dest=dest, match=True, method="chromaprint", detail="identical Chromaprint fingerprints"
+                    src=src,
+                    dest=dest,
+                    match=True,
+                    method="chromaprint",
+                    detail=f"similarity={similarity:.3f}",
                 )
             return AudioCompareResult(
-                src=src, dest=dest, match=False, method="chromaprint", detail="different Chromaprint fingerprints"
+                src=src,
+                dest=dest,
+                match=False,
+                method="chromaprint",
+                detail=f"similarity={similarity:.3f}",
             )
 
     if incoming_length_ms > 0:

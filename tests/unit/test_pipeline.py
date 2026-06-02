@@ -4,11 +4,13 @@ find_source_files, check_duration_preflight, _prompt_duration_warnings, and run 
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -53,11 +55,13 @@ from music_annotator._pipeline import (
     _write_sidecars,
 )
 from music_annotator._pipeline_io import (
+    _CHROMAPRINT_SIMILARITY_THRESHOLD,
     _DISC_INFO_FILENAME,
     _DISC_TOC_FILENAME,
     AudioCompareResult,
     _assess_collisions,
     _audio_hash,
+    _chromaprint_similarity,
     _isrc_matches,
     _read_acoustid_tag,
     _read_duration_ms,
@@ -1356,6 +1360,7 @@ class TestRunWritesFreedBYaml:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1412,6 +1417,7 @@ class TestCoverArtSidecarTagDedup:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1533,6 +1539,8 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
     def test_dest_root_created_if_absent(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """run() creates dest_root (and any missing parents) when it does not already exist.
@@ -1726,6 +1734,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1784,6 +1793,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1823,6 +1833,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1887,6 +1898,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         captured_dests: list[Path] = []
         real_build = music_annotator._tags.build_dest_path  # pylint: disable=protected-access
@@ -1992,6 +2004,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-norm",
@@ -2084,6 +2097,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-nodate",
@@ -2282,6 +2296,7 @@ class TestRunFullPipeline:
         spy = mocker.patch("music_annotator._pipeline.fetch_recording_detail")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -2406,6 +2421,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -2524,6 +2540,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         captured_dests: list[Path] = []
         real_build = music_annotator._tags.build_dest_path  # pylint: disable=protected-access
@@ -2652,6 +2669,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -2843,6 +2861,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-multi",
@@ -3064,6 +3083,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-multi",
@@ -3255,6 +3275,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-multi-frd",
@@ -3363,6 +3384,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -3615,6 +3637,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-sol-union",
@@ -3687,6 +3710,8 @@ class TestIntermediateSiblingIndexSubstrate:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
     def test_inter_index_gap_free_for_non_contiguous_ordering_keys(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """cwp_inter_index_1 is gap-free (1, 2) even when ordering-keys are non-contiguous (2, 5).
@@ -4444,6 +4469,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -4488,6 +4514,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -4533,6 +4560,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -4592,6 +4620,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -4643,6 +4672,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -4738,6 +4768,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -4790,6 +4821,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -4842,6 +4874,7 @@ def _setup_single_track_run(mocker: MockerFixture, fs: FakeFilesystem, src: Path
     mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
     mocker.patch("music_annotator._pipeline.apply_tags_flac")
     mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+    mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
 
 class TestPromptCollisionPolicy:
@@ -5247,6 +5280,7 @@ class TestRunCollisionAndJournal:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         # We'll intercept _assess_collisions to report the first dest as an inconclusive collision.
         captured_dests: list[Path] = []
@@ -5390,6 +5424,7 @@ class TestRunCollisionAndJournal:
         mocker.patch("music_annotator._pipeline._assess_collisions", return_value=[])  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -5971,6 +6006,8 @@ class TestRunMultiDisc:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
     def test_single_matching_medium_selected(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """When exactly one medium matches the source file count, it is selected automatically.
@@ -6099,6 +6136,8 @@ class TestRunDiscOverride:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
     def test_override_selects_correct_disc(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """disc_override=2 on a 3-disc release selects disc 2 directly.
@@ -6681,6 +6720,8 @@ class TestRunTitleMediumSelection:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
     def test_title_match_selects_disc_2_and_prompts(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Title match selects disc 2 (Sym 101) and calls ui.confirm_disc for confirmation.
@@ -6895,39 +6936,58 @@ class TestCompareAudioCollision:
     def test_fpcalc_match_returns_match_true(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Identical fpcalc fingerprints produce match=True, method='chromaprint'.
 
+        Uses a valid base64url-encoded fingerprint (4 × 32-bit integers) so the fuzzy
+        Hamming-distance comparison can decode it.  Identical fingerprints yield similarity=1.0
+        which is ≥ the 0.90 threshold.
+
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
         """
+        # 4 × 32-bit integers → 16 bytes → valid Chromaprint fingerprint payload
+        fp_bytes = struct.pack("<4I", 0x12345678, 0xABCDEF01, 0x87654321, 0x10FEDCBA)
+        fp_str = base64.b64encode(fp_bytes).decode().rstrip("=").replace("+", "-").replace("/", "_")
+
         src = Path("/src/track.flac")
         dest = Path("/dest/track.flac")
         fs.create_file(str(src), contents=_MINIMAL_FLAC)
         dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
         fs.create_file(str(dest), contents=dest_bytes)
         mocker.patch("music_annotator._pipeline_io.shutil.which", return_value="/usr/bin/fpcalc")
-        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="FINGERPRINT123")
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value=fp_str)
 
         result = compare_audio_collision(src, dest, "", 0)
         assert result.match is True
         assert result.method == "chromaprint"
+        assert "similarity=1.000" in result.detail
 
     def test_fpcalc_mismatch_returns_match_false(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Different fpcalc fingerprints produce match=False, method='chromaprint'.
+        """Sufficiently different fpcalc fingerprints produce match=False, method='chromaprint'.
+
+        Uses valid base64url-encoded fingerprints where all bits are flipped between src and dest,
+        yielding similarity=0.0 which is below the 0.90 threshold.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
         """
+        # src fingerprint: all zeros; dest fingerprint: all ones → all bits differ → similarity=0.0
+        fp_src_bytes = struct.pack("<4I", 0x00000000, 0x00000000, 0x00000000, 0x00000000)
+        fp_dest_bytes = struct.pack("<4I", 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF)
+        fp_src = base64.b64encode(fp_src_bytes).decode().rstrip("=").replace("+", "-").replace("/", "_")
+        fp_dest = base64.b64encode(fp_dest_bytes).decode().rstrip("=").replace("+", "-").replace("/", "_")
+
         src = Path("/src/track.flac")
         dest = Path("/dest/track.flac")
         fs.create_file(str(src), contents=_MINIMAL_FLAC)
         dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
         fs.create_file(str(dest), contents=dest_bytes)
         mocker.patch("music_annotator._pipeline_io.shutil.which", return_value="/usr/bin/fpcalc")
-        fingerprints = iter(["FP_SRC", "FP_DEST"])
+        fingerprints = iter([fp_src, fp_dest])
         mocker.patch("music_annotator._pipeline_io._run_fpcalc", side_effect=lambda _p: next(fingerprints))
 
         result = compare_audio_collision(src, dest, "", 0)
         assert result.match is False
         assert result.method == "chromaprint"
+        assert "similarity=0.000" in result.detail
 
     def test_no_acoustid_no_fpcalc_no_duration_returns_unknown(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """With no AcoustID, no fpcalc, and no length data the result is match=None, method='unknown'.
@@ -7201,6 +7261,205 @@ class TestCompareAudioCollision:
         mocker.patch("music_annotator._pipeline_io._read_duration_ms", return_value=60_500)
 
         result = compare_audio_collision(src, dest, "", 60_000)
+        assert result.match is None
+        assert result.method == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# _chromaprint_similarity — unit tests for the Hamming-distance helper
+# ---------------------------------------------------------------------------
+
+
+class TestChromaprintSimilarity:
+    """Unit tests for _chromaprint_similarity — the Hamming-distance fingerprint comparison helper."""
+
+    def _make_fp(self, ints: list[int]) -> str:
+        """Encode a list of 32-bit unsigned integers as a base64url fingerprint string.
+
+        :param ints: List of unsigned 32-bit integers to encode.
+        :returns: Base64url-encoded fingerprint string (no padding).
+        """
+        data = struct.pack(f"<{len(ints)}I", *ints)
+        return base64.b64encode(data).decode().rstrip("=").replace("+", "-").replace("/", "_")
+
+    def test_identical_fingerprints_return_similarity_one(self) -> None:
+        """Two identical fingerprints yield similarity=1.0."""
+        fp = self._make_fp([0x12345678, 0xABCDEF01, 0x87654321, 0x10FEDCBA])
+        result = _chromaprint_similarity(fp, fp)
+        assert result is not None
+        assert abs(result - 1.0) < 1e-9
+
+    def test_all_bits_flipped_returns_similarity_zero(self) -> None:
+        """Fingerprints with all bits flipped yield similarity=0.0."""
+        fp_a = self._make_fp([0x00000000, 0x00000000, 0x00000000, 0x00000000])
+        fp_b = self._make_fp([0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF])
+        result = _chromaprint_similarity(fp_a, fp_b)
+        assert result is not None
+        assert abs(result - 0.0) < 1e-9
+
+    def test_empty_first_fingerprint_returns_none(self) -> None:
+        """An empty first fingerprint returns None (cannot compare)."""
+        fp = self._make_fp([0x12345678, 0xABCDEF01])
+        assert _chromaprint_similarity("", fp) is None
+
+    def test_empty_second_fingerprint_returns_none(self) -> None:
+        """An empty second fingerprint returns None (cannot compare)."""
+        fp = self._make_fp([0x12345678, 0xABCDEF01])
+        assert _chromaprint_similarity(fp, "") is None
+
+    def test_both_empty_returns_none(self) -> None:
+        """Both empty fingerprints return None."""
+        assert _chromaprint_similarity("", "") is None
+
+    def test_invalid_base64_returns_none(self) -> None:
+        """A fingerprint that cannot be base64-decoded returns None."""
+        assert _chromaprint_similarity("!!!invalid!!!", "!!!invalid!!!") is None
+
+    def test_different_lengths_returns_none(self) -> None:
+        """Fingerprints of different lengths (different number of integers) return None."""
+        fp_short = self._make_fp([0x12345678, 0xABCDEF01])
+        fp_long = self._make_fp([0x12345678, 0xABCDEF01, 0x87654321, 0x10FEDCBA])
+        assert _chromaprint_similarity(fp_short, fp_long) is None
+
+    def test_partial_bit_flip_returns_intermediate_similarity(self) -> None:
+        """Flipping half the bits in one integer yields a similarity between 0 and 1."""
+        # 0x0000FFFF has 16 bits set; XOR with 0x00000000 gives 16 set bits out of 32.
+        fp_a = self._make_fp([0x00000000])
+        fp_b = self._make_fp([0x0000FFFF])
+        result = _chromaprint_similarity(fp_a, fp_b)
+        assert result is not None
+        # 16 bits differ out of 32 → similarity = 1 - 16/32 = 0.5
+        assert abs(result - 0.5) < 1e-9
+
+    def test_similarity_threshold_constant_is_0_90(self) -> None:
+        """The module-level threshold constant equals 0.90."""
+        assert _CHROMAPRINT_SIMILARITY_THRESHOLD == 0.90  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# KAT: test_chromaprint_fuzzy_same_recording_different_encode
+# ---------------------------------------------------------------------------
+
+
+class TestChromaprintFuzzyComparison:
+    """KAT F3: fuzzy Hamming-distance Chromaprint comparison replaces exact equality."""
+
+    def _make_fp(self, ints: list[int]) -> str:
+        """Encode a list of 32-bit unsigned integers as a base64url fingerprint string.
+
+        :param ints: List of unsigned 32-bit integers to encode.
+        :returns: Base64url-encoded fingerprint string (no padding).
+        """
+        data = struct.pack(f"<{len(ints)}I", *ints)
+        return base64.b64encode(data).decode().rstrip("=").replace("+", "-").replace("/", "_")
+
+    def test_chromaprint_fuzzy_same_recording_different_encode(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Two slightly different fingerprints (similarity ≥ 0.90) match under fuzzy comparison.
+
+        This KAT verifies that the fuzzy Hamming-distance comparison correctly identifies two
+        fingerprints from the same recording that differ slightly due to different encoding
+        parameters.  Exact equality would fail (the fingerprints differ), but fuzzy comparison
+        succeeds because the similarity is above the 0.90 threshold.
+
+        Construction: a 32-integer fingerprint where 2 out of 32 integers have a single bit
+        flipped.  This produces 2 bit differences out of 1024 total bits, giving a similarity
+        of 1 - 2/1024 ≈ 0.998, which is well above the 0.90 threshold.  Exact equality fails
+        because the fingerprints are not identical.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        # Build a 32-integer fingerprint (typical Chromaprint length for a ~30s clip).
+        # Use modulo to keep all values within the 32-bit unsigned integer range.
+        base_ints = [(0x12345678 + i * 0x01234567) & 0xFFFFFFFF for i in range(32)]
+        # Flip a single bit in two of the integers to simulate a different encode.
+        # This makes the fingerprints non-identical (exact equality fails) but very similar.
+        modified_ints = list(base_ints)
+        modified_ints[5] ^= 0x00000001  # flip bit 0 of integer 5
+        modified_ints[17] ^= 0x00010000  # flip bit 16 of integer 17
+
+        fp_src = self._make_fp(base_ints)
+        fp_dest = self._make_fp(modified_ints)
+
+        # Verify that exact equality would fail (the fingerprints differ).
+        assert fp_src != fp_dest, "Test setup error: fingerprints must differ for this KAT to be meaningful"
+
+        # Verify that fuzzy similarity is above the threshold.
+        similarity = _chromaprint_similarity(fp_src, fp_dest)
+        assert similarity is not None
+        assert similarity >= _CHROMAPRINT_SIMILARITY_THRESHOLD, (
+            f"Expected similarity ≥ {_CHROMAPRINT_SIMILARITY_THRESHOLD}, got {similarity:.6f}"
+        )
+
+        # Now verify that compare_audio_collision returns match=True, method='chromaprint'.
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value="/usr/bin/fpcalc")
+        fingerprints = iter([fp_src, fp_dest])
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", side_effect=lambda _p: next(fingerprints))
+
+        result = compare_audio_collision(src, dest, "", 0)
+        assert result.match is True, (
+            f"Expected match=True for similar fingerprints (similarity={similarity:.6f}), got match={result.match}"
+        )
+        assert result.method == "chromaprint"
+        assert "similarity=" in result.detail
+
+    def test_chromaprint_below_threshold_returns_match_false(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Fingerprints with similarity below 0.90 produce match=False, method='chromaprint'.
+
+        Uses fingerprints with ~50% bit similarity (half the bits differ), which is well below
+        the 0.90 threshold.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        # Alternating 0x0000FFFF and 0xFFFF0000 → XOR = 0xFFFFFFFF → all 32 bits differ per int.
+        # 4 integers × 32 bits = 128 bits total; all 128 differ → similarity = 0.0.
+        fp_src = self._make_fp([0x0000FFFF] * 4)
+        fp_dest = self._make_fp([0xFFFF0000] * 4)
+
+        similarity = _chromaprint_similarity(fp_src, fp_dest)
+        assert similarity is not None
+        assert similarity < _CHROMAPRINT_SIMILARITY_THRESHOLD
+
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value="/usr/bin/fpcalc")
+        fingerprints = iter([fp_src, fp_dest])
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", side_effect=lambda _p: next(fingerprints))
+
+        result = compare_audio_collision(src, dest, "", 0)
+        assert result.match is False
+        assert result.method == "chromaprint"
+        assert "similarity=" in result.detail
+
+    def test_invalid_fingerprint_falls_through_to_unknown(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When fingerprints cannot be decoded, comparison falls through to 'unknown'.
+
+        An invalid base64 string causes _chromaprint_similarity to return None, so the
+        chromaprint layer produces no result and the function falls through to the final
+        'unknown' outcome (no AcoustID, no duration).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/track.flac")
+        dest = Path("/dest/track.flac")
+        fs.create_file(str(src), contents=_MINIMAL_FLAC)
+        dest_bytes = _MINIMAL_FLAC[:16] + b"\xff" * 4 + _MINIMAL_FLAC[20:]
+        fs.create_file(str(dest), contents=dest_bytes)
+        mocker.patch("music_annotator._pipeline_io.shutil.which", return_value="/usr/bin/fpcalc")
+        # Return non-empty but invalid base64 strings so _chromaprint_similarity returns None.
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="!!!invalid!!!")
+
+        result = compare_audio_collision(src, dest, "", 0)
         assert result.match is None
         assert result.method == "unknown"
 
@@ -7576,7 +7835,9 @@ class TestRunNameTooLong:
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
     def _make_long_release(self) -> MBRelease:
         """Return a release whose dest path will have a component longer than _NAME_MAX when patched to 20.
@@ -7861,6 +8122,8 @@ class TestRunTocMediumSelection:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
     def test_toc_selects_disc2_when_both_discs_have_same_track_count(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """TOC offsets from 00 - disc info.yaml select disc 2 even when both discs have 4 tracks.
@@ -8227,6 +8490,8 @@ class TestRunDurationPreflight:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
     def test_no_warnings_no_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """When check_duration_preflight returns an empty list, no prompt is shown.
@@ -8477,6 +8742,7 @@ class TestIngestAudioHash:
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
     def test_ingest_writes_audio_hash_tag_and_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """After run(), the destination FLAC has a non-empty AUDIO_HASH tag and the journal entry carries it.
@@ -8532,6 +8798,138 @@ class TestIngestAudioHash:
         assert journal_audio_hash == audio_hash_tag, (
             f"Journal audio_hash {journal_audio_hash!r} does not match tag {audio_hash_tag!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# F3: chromaprint_fp written to tag and journal
+# ---------------------------------------------------------------------------
+
+
+class TestIngestChromaprintFp:
+    """Tests for F3: chromaprint_fp computed from source and stored in the journal entry.
+
+    Uses the real apply_tags_flac and _verify_copy (not mocked) so the full write-and-read-back
+    path executes.  _run_fpcalc is mocked because fpcalc is not available in the test environment.
+    """
+
+    def _patch_mb(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API calls for a single-track run.
+
+        Does NOT patch apply_tags_flac or _verify_copy so the real tagging and verification
+        path executes.
+
+        :param mocker: pytest-mock fixture.
+        :param release: Release model to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch(
+            "music_annotator._pipeline.fetch_recording_detail",
+            return_value=_rec(
+                {
+                    "id": "rec-1",
+                    "title": "Track 1",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [],
+                }
+            ),
+        )
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
+    def test_ingest_writes_chromaprint_fp_to_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """After run(), the journal entry carries the chromaprint_fp field from _run_fpcalc.
+
+        Verifies the F3 contract:
+
+        (a) The ``action="tagged"`` journal entry has a ``chromaprint_fp`` field that matches
+            the value returned by ``_run_fpcalc``.
+        (b) The ``chromaprint_fp`` field on the ``TrackTags`` passed to ``apply_tags_flac``
+            matches the mocked fingerprint value.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        # Construct a valid base64url fingerprint to return from the mocked _run_fpcalc.
+        fp_bytes = struct.pack("<4I", 0x12345678, 0xABCDEF01, 0x87654321, 0x10FEDCBA)
+        expected_fp = base64.b64encode(fp_bytes).decode().rstrip("=").replace("+", "-").replace("/", "_")
+
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+        # Mock _run_fpcalc in the pipeline module (where it is imported).
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value=expected_fp)
+
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        # Note: _run_fpcalc is already mocked above with expected_fp; do NOT add a second mock here.
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        # (a) Verify the journal entry carries the chromaprint_fp field.
+        journal_path = dest / JOURNAL_FILENAME
+        assert journal_path.exists(), "Journal file was not written"
+        data = json.loads(journal_path.read_text(encoding="utf-8"))
+        tagged_entries = [e for e in data if e.get("action") == "tagged"]
+        assert len(tagged_entries) == 1, f"Expected 1 tagged journal entry, found {len(tagged_entries)}"
+        journal_fp = tagged_entries[0].get("chromaprint_fp", "")
+        assert journal_fp == expected_fp, f"Journal chromaprint_fp {journal_fp!r} does not match expected {expected_fp!r}"
+
+        # (b) Verify the TrackTags passed to apply_tags_flac carries the fingerprint.
+        tags_used: TrackTags = mock_tag.call_args[0][1]
+        assert tags_used.chromaprint_fp == expected_fp, (
+            f"TrackTags.chromaprint_fp {tags_used.chromaprint_fp!r} does not match expected {expected_fp!r}"
+        )
+
+    def test_ingest_empty_fp_when_fpcalc_unavailable(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When _run_fpcalc returns '' (fpcalc unavailable), chromaprint_fp is '' in journal.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        journal_path = dest / JOURNAL_FILENAME
+        data = json.loads(journal_path.read_text(encoding="utf-8"))
+        tagged_entries = [e for e in data if e.get("action") == "tagged"]
+        assert len(tagged_entries) == 1
+        # chromaprint_fp should be "" (empty string, the default) when fpcalc is unavailable.
+        journal_fp = tagged_entries[0].get("chromaprint_fp", "NOT_PRESENT")
+        assert journal_fp == "", f"Expected empty chromaprint_fp, got {journal_fp!r}"
 
 
 # ---------------------------------------------------------------------------

@@ -41,6 +41,7 @@ from music_annotator._pipeline_io import (
     _confirm_fragmentation,
     _read_tags_flac,
     _read_tags_mp3,
+    _run_fpcalc,
     _sha256_file,
     _verify_copy,
     check_duration_preflight,
@@ -1317,6 +1318,11 @@ def run(
         # hashing the pre-tag destination while avoiding any timing dependency on the copy.
         final_tags.audio_hash = _audio_hash(src_file)
 
+        # Compute the Chromaprint fingerprint from the source file before tagging.  Returns ""
+        # when fpcalc is not available; the empty string is stored as-is (no special-casing).
+        # Mirrors the F1 pattern for audio_hash: computed on the source before apply_tags_*.
+        final_tags.chromaprint_fp = _run_fpcalc(src_file)
+
         # Set cover art sidecar reference tags so they are embedded in the audio file.
         def _filenames(images: list[CoverImage]) -> str:
             """Return unique semicolon-joined filenames from a list of CoverImages.
@@ -1385,6 +1391,7 @@ def run(
                 destination=str(dest_file),
                 action="tagged",
                 audio_hash=final_tags.audio_hash,
+                chromaprint_fp=final_tags.chromaprint_fp,
             )
         )
 

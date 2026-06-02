@@ -221,6 +221,7 @@ def _patch_mb(mocker: MockerFixture, release: MBRelease) -> None:
 
     mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_rec_detail)
     mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
+    mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +630,7 @@ class TestRunWorkHierarchy:
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_movement_work())
         # build_work_hierarchy calls fetch_work_detail via _works's binding to fetch the parent
         mocker.patch("music_annotator._works.fetch_work_detail", return_value=_make_parent_work())
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-beethoven",
@@ -680,6 +682,7 @@ class TestRunFastPath:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release())
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
         spy = mocker.patch("music_annotator._pipeline.fetch_recording_detail")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1182,6 +1185,7 @@ class TestRunMultiDisc:
         mocker.patch("music_annotator._mb_api.mb.set_useragent")
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-2disc",
@@ -1262,6 +1266,7 @@ class TestRunCoverArtFlac:
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1320,6 +1325,7 @@ class TestRunCoverArtMp3:
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
