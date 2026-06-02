@@ -324,6 +324,104 @@ establishes it is `done` (see the ledger); later sessions consume it and must no
       (optionally) validates the surface F2/F3/F5/F7 consume without an invasive Enum migration.
   Consumed by F2 (`"isrc"`), F3 (`"audio_hash"`; replaces exact-`"chromaprint"` arm with fuzzy),
   F5, F7.
+- **C-F4 — `audit --enrich` idempotent backfill (FROZEN BY F4).**  The backward-compat spine
+  (P-FP3, P-FP4).  First *write* mode of the `audit` subcommand; F7 adds read-only detection.
+  > **One override requires human sign-off before `@build` is dispatched** (flagged below as
+  > SIGN-OFF #1): the enrich *write path* needs the re-tag/verify machinery (`apply_tags_flac` /
+  > `apply_tags_mp3` / `_tags_from_file_dict`), but the public `audit()` lives in `_pipeline_io.py`,
+  > which **must not import `_pipeline.py`** (cycle: `_pipeline` → `_pipeline_io`).  Resolution: the
+  > enrich orchestrator (`enrich`) and its journal/predicate helpers live in **`_pipeline.py`**
+  > (alongside `repath`/`regroup`, which already own re-tag-and-verify maintenance), **not** in
+  > `_pipeline_io.py`.  The session's stated expected-files set (`__main__.py`, `_pipeline_io.py`,
+  > `tests/unit/test_main.py`) is therefore **widened to add `_pipeline.py`**; only the small,
+  > import-cycle-safe primitives (`_read_tags_*` already there; new `_enrich_one_file` *read* half
+  > and the `_needs_enrich` predicate) may sit in `_pipeline_io.py`.  See SIGN-OFF #1.
+    - **CLI shape (`__main__.py`).**  `audit` gains a mutually-non-exclusive write flag:
+      `music-annotator audit <dest_dir> [--enrich] [--re-resolve] [--dry-run]`.
+      - `--enrich` switches `audit` from read-only fragmentation reporting into the backfill write
+        mode.  Without it, `audit` is unchanged (F7's read-only detection rides the bare form).
+      - `--re-resolve` (only meaningful with `--enrich`) opts into *correcting* a pre-existing
+        non-empty `acoustid_id`/`chromaprint_fp` (P-FP1 "identity floats").  Absent, enrich is
+        **purely additive**: it fills only *empty* fields and never overwrites a present value.
+      - `--dry-run` logs planned backfills/corrections and writes nothing (mirrors `repath`).
+      - Dispatch (`main()`): `case "audit":` calls `music_annotator.enrich(dest_root=…,
+        re_resolve=…, dry_run=…)` when `args.enrich` else the existing `music_annotator.audit(…)`.
+    - **Public function (`_pipeline.py`, exported in `__init__.py` `__all__`).**
+      `def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False) -> None`.
+      Walks the journal's *latest-destination* view (same `tagged`→`repathed`→`regrouped` lineage
+      resolution `repath` already builds — reuse it; an enriched file later moved by `repath` must
+      still resolve to its current on-disk path), filters to existing FLAC/MP3 files, and for each
+      computes the backfill via `_enrich_one_file`.  Provenance-chain order per file mirrors
+      `repath` step 5: re-tag → `_verify_copy` → **only then** append the journal entry and flush.
+    - **Journal location.**  `dest_root / JOURNAL_FILENAME` (`music_annotator_journal.json`) — the
+      one journal-path convention shared by `run`/`repath`/`regroup`/`audit`.  No new path.
+    - **Journal mutation — NEW entry, never in-place (resolves Q5).**  Enrich appends a
+      `TransactionEntry(action="enriched", source=<current path>, destination=<current path>,
+      release_id=<carried from the latest tagged/regrouped entry for that file, "" if none>,
+      audio_hash=…, chromaprint_fp=…, acoustid_id=…)` — the **full triple** populated with the
+      post-enrich values.  The new action string is **`"enriched"`** (add to the `TransactionEntry`
+      docstring action-union list and to `_journal_fragmentation_groups`/`repath` lineage handling
+      so an `"enriched"` entry is treated as authoritative-latest for its destination).  Rationale
+      (P-FP4 "maintenance that mutates must re-journal"): append-only journal is the existing
+      invariant (`write_transaction_log` only ever appends; `repath`/`regroup` add new entries,
+      never rewrite old ones) — in-place mutation would break the audit-trail and the atomic-append
+      writer.  For an `"enriched"` entry `source == destination` (no move; the file is enriched in
+      place), distinguishing it from `"repathed"` (where `source != destination`).
+    - **Journal `acoustid_id` gap — backfill from the tag (resolves Q1, texture-item-a → option
+      i+ii fused).**  The F1/F3 `action="tagged"` write site populates `audio_hash`/`chromaprint_fp`
+      but **not** `acoustid_id` (even though `final_tags.acoustid_id` is written to the *file tag*
+      at ingest).  Enrich treats the **tag as authority** (P-FP4 "tag adjudicates"): it reads the
+      file's `ACOUSTID_ID` tag via the existing `_read_acoustid_tag(path)` and writes that value
+      into the new `"enriched"` journal entry's `acoustid_id`.  This is *recovery from the tag*,
+      not re-derivation — no network, no `fpcalc`.  Net effect: after one enrich pass, every
+      enriched file's journal entry carries the full triple even though ingest only journalled two
+      thirds.  (F1/F3 are **not** retrofitted to journal `acoustid_id` — enrich is the single
+      backfill path per P-FP3; a future session may also add it at ingest, but that is out of F4
+      scope and not required for F7, which can read the `"enriched"` entry.)
+    - **Idempotency predicate (resolves Q3).**  A file `needs_enrich` iff, comparing its **on-disk
+      tag values** (the authority) against the three archival fields:
+      - `audio_hash`: tag value differs from `_audio_hash(path)` recomputed — i.e. the tag is empty
+        **or** stale.  (For the additive baseline an *empty* tag is the trigger; recompute-and-
+        compare also catches drift, but per P-FP1 `audio_hash` is the anchor — a *changed* anchor
+        is an F7 audit event, **not** an enrich rewrite.  So the enrich trigger for `audio_hash` is
+        strictly **"tag is empty"**; never overwrite a present `audio_hash`, even under
+        `--re-resolve`.  Document the all-zero `flac-md5:0…0` value as *present* — it does not
+        re-trigger.)
+      - `chromaprint_fp`: tag is **empty** → backfill (compute via `_run_fpcalc`).  Tag present →
+        no-op **unless** `--re-resolve` (then recompute and overwrite; P-FP1 floats).
+      - `acoustid_id`: tag is **empty** → backfill is *inconclusive offline* (true AcoustID
+        resolution is rung 5 / F6 keyed) → leave empty, log once.  Tag present → copy tag→journal
+        (the journal-gap fill above); **`--re-resolve` does not re-resolve `acoustid_id` in F4**
+        (no keyed lookup yet — F6 wires that), it only re-derives `chromaprint_fp`.
+      A second run is a **no-op** (KAT `test_enrich_backfills_triple_idempotently`) because after
+      run 1 every tag is non-empty and `--re-resolve` is off by default: `needs_enrich` returns
+      `False` for all three fields, no file is re-tagged, **and no `"enriched"` journal entry is
+      appended** (the empty-diff guard: skip the per-file journal append when nothing changed).
+    - **"Correctable" `acoustid_id` (resolves Q4).**  Exposed via the explicit `--re-resolve` flag,
+      never automatic.  In F4 `--re-resolve` re-runs `_run_fpcalc` and overwrites `chromaprint_fp`
+      (both tag and journal), leaving `audio_hash` untouched as the anchor (P-FP1).  Correcting
+      `acoustid_id` itself requires the keyed lookup and is **deferred to F6** (`fetch_acoustid_lookup`
+      under `--acoustid-key`); F4's `--re-resolve` reserves the flag and the re-write mechanics so
+      F6 only adds the resolution call.  Flagged as SIGN-OFF #2 (scope boundary).
+    - **New helpers (`_pipeline_io.py`, cycle-safe — read/predicate only).**
+      `_needs_enrich(path: Path, re_resolve: bool) -> dict[str, str]` returns the *fields to write*
+      `{"audio_hash"?: …, "chromaprint_fp"?: …, "acoustid_id"?: …}` (empty dict ⇒ no-op for this
+      file), computed from on-disk tags + `_audio_hash`/`_run_fpcalc`/`_read_acoustid_tag`.  The
+      *write* half (`apply_tags_*` + `_verify_copy` + new-entry append) lives in `_pipeline.py`'s
+      `enrich`.  Logging: per-file `enrich_backfill` (fields filled) / `enrich_noop` / `enrich_dry_run`;
+      summary `enrich_complete` (counts: enriched / corrected / skipped / inconclusive-acoustid).
+    - **What it prints/logs.**  Structured `structlog` lines (matching `repath`): one per file
+      acted on (`old`→unchanged path, fields backfilled), `--dry-run` previews, final summary.
+    - **Tests (`tests/unit/test_main.py`).**  KAT `test_enrich_backfills_triple_idempotently`:
+      fabricate a library FLAC whose tag has *empty* `audio_hash`/`chromaprint_fp` and a present
+      `ACOUSTID_ID`, a `"tagged"` journal entry missing the triple; run `enrich`; assert run-1 writes
+      tag + an `"enriched"` journal entry with the full triple (audio_hash recomputed, chromaprint
+      from `_run_fpcalc`, acoustid copied from tag); run-2 produces **no new journal entry** and an
+      unchanged tag.  Per boundary texture-item-b, `_run_fpcalc` is mocked `""` ubiquitously — the
+      KAT must locally override it to return a non-empty fingerprint to exercise the chromaprint arm.
+  Consumed by F7 (reads `"enriched"` entries as authoritative-latest; relies on the journal triple
+  being complete post-enrich) and F8 (NOTES: P-FP3 spine, `audit` subcommand writeup).  **Additive
+  only — the `accuraterip` 4th dimension backfills through this same `enrich` path per P-FP3.**
 - **C-F6 — `fetch_acoustid_lookup` signature + `--acoustid-key` flag (FROZEN BY F6).**
   `fetch_acoustid_lookup(fingerprint, duration_s, api_key) -> list[str]`; absent key →
   inconclusive, never raises.  Consumed by F8 (§307 fold-in).
@@ -371,7 +469,7 @@ Source of truth for resuming the chain cold.  `/run-plan` updates this on each s
 | F1 | done     | `a095b63` | —                        | consumes C-F0a/b/c |
 | F2 | done     | `75a7357` | — (◆ sub-track A)        | consumes C-F0a/d |
 | F3 | done     | `ce5ffa9` | — (◆ sub-track A)        | consumes C-F0a/c/d; replaces exact-Chromaprint; integration tests mock _run_fpcalc="" ubiquitously |
-| F4 | pending  | —         | — (◆ sub-track B)        | Opus inflection — HALT; consumes F1,F2,F3; backward-compat spine |
+| F4 | done     | `9f8fdbb` | — (◆ sub-track B)        | enrich() in _pipeline.py (not _pipeline_io.py — import-cycle); action="enriched"; --re-resolve corrects chromaprint_fp only (acoustid_id deferred to F6) |
 | F5 | pending  | —         | — (◆ sub-track C)        | consumes C-F0d; soft-dep on PLAN.md S0 for cross-medium span |
 | F6 | pending  | —         | C-F6 (◆ sub-track C)     | Opus inflection — HALT; consumes C-F0d, F3; only keyed rung |
 | F7 | pending  | —         | — (◆ sub-track D)        | consumes F4,F1 |
@@ -436,6 +534,18 @@ sub-track boundaries.
 Appended by `@plan-admin` on non-trivial iterations (discovery flagged, contract flexed, or
 meaningful texture).  Trivial iterations (clean green run, no surprises) produce no entry.  Fed
 verbatim into every `@plan-deep` juncture fork.
+
+### Sub-track B boundary — 2026-06-02
+Discovery/flex: still-on-intent (driver self-review; @plan-deep fork blocked by OpenCode subagent-nesting limitation).
+Affected: none
+Deferred: no — acoustid_id --re-resolve deferral to F6 confirmed not a gap for F7 (F7 reads tag as authority, not journal; tag carries acoustid_id from ingest).
+Texture: F6 inflection adjudicator should know: enrich() is in _pipeline.py (import-cycle); action="enriched" lineage is treated as authoritative-latest; _run_fpcalc mocked "" ubiquitously in tests (F6 tests asserting non-empty fingerprints must override locally).
+
+### F4 — 2026-06-02
+Discovery/flex: enrich() placed in _pipeline.py (not _pipeline_io.py) to avoid import cycle; expected-files set widened (approved at sign-off). Fix-loop fired once: subagent wrote implementation but not tests; driver dispatched fix subagent; two mechanical issues (duplicate import in __init__.py, import-outside-toplevel in test_main.py) fixed directly by driver.
+Affected: C-F4 (file placement — _pipeline.py, not _pipeline_io.py)
+Deferred: acoustid_id --re-resolve correction deferred to F6 (keyed lookup not yet available).
+Texture: action="enriched" entries have source==destination (in-place); lineage resolution treats "enriched" as authoritative-latest alongside "repathed"/"regrouped".
 
 ### Sub-track A boundary — 2026-06-02
 Discovery/flex: still-on-intent; three texture items for F4 inflection adjudicator.
