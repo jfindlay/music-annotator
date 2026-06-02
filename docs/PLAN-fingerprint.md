@@ -470,7 +470,7 @@ Source of truth for resuming the chain cold.  `/run-plan` updates this on each s
 | F2 | done     | `75a7357` | — (◆ sub-track A)        | consumes C-F0a/d |
 | F3 | done     | `ce5ffa9` | — (◆ sub-track A)        | consumes C-F0a/c/d; replaces exact-Chromaprint; integration tests mock _run_fpcalc="" ubiquitously |
 | F4 | done     | `9f8fdbb` | — (◆ sub-track B)        | enrich() in _pipeline.py (not _pipeline_io.py — import-cycle); action="enriched"; --re-resolve corrects chromaprint_fp only (acoustid_id deferred to F6) |
-| F5 | pending  | —         | — (◆ sub-track C)        | consumes C-F0d; soft-dep on PLAN.md S0 for cross-medium span |
+| F5 | done     | `e3bdb9d` | — (◆ sub-track C)        | consumes C-F0d; "sequence" added to _IDENTITY_METHODS; cross-medium span noted as comment for future |
 | F6 | pending  | —         | C-F6 (◆ sub-track C)     | Opus inflection — HALT; consumes C-F0d, F3; only keyed rung |
 | F7 | pending  | —         | — (◆ sub-track D)        | consumes F4,F1 |
 | F8 | pending  | —         | — (◆ capstone)           | Opus writeup; consumes F1-F7; folds in old §307 |
