@@ -18,11 +18,16 @@ Conventions (see `~/.config/opencode/multi-session-planning.md`):
 
 | Plan                         | Status     | Scope                                                                 |
 |------------------------------|------------|-----------------------------------------------------------------------|
-| `docs/PLAN-fingerprint.md`   | sharded    | Acoustic fingerprinting & archival identity (F0–F8): the identity triple, ingest identification, `audit` integrity pass. |
-| `docs/PLAN-naming.md`        | pre-shard  | Library-wide dir/file-naming unification. The multi-medium S0 substrate it depended on has landed; still depends on `PLAN-fingerprint.md`'s identity layer. |
+| `docs/PLAN-naming.md`        | pre-shard  | Library-wide dir/file-naming unification. Both substrates have now landed (multimedium C-S0 ✓, fingerprint identity layer ✓); ready to be sharded. |
 
 ## Completed plans
 
+- **`PLAN-fingerprint.md`** (F0–F8, complete) — acoustic fingerprinting & archival identity: the identity triple (`audio_hash`,
+  `chromaprint_fp`, `acoustid_id`) stored in tag + journal at ingest, ISRC rung, fuzzy-Chromaprint collision, idempotent
+  `audit --enrich` retroactive backfill, medium-sequence corroboration, keyed `fetch_acoustid_lookup` + `--acoustid-key`,
+  and the read-only `audit` integrity pass (journal-detects → tag-adjudicates → audio-anchor-confirms).  Invariants in
+  `docs/NOTES.md` (archival identity section); two deferred follow-ons (AcoustID-seeded wholly-new-release-candidate
+  resolution; `accuraterip` 4th dimension) in `docs/BACKLOG.md`.
 - **`PLAN-multimedium.md`** (S0–S9, complete) — multi-medium-correct path construction + library
   maintenance: cross-medium work-group aggregation (C-S0 substrate the naming plan builds on),
   concerto-soloist path promotion accumulated across media (C-S4), and the journal-fragmentation
@@ -50,17 +55,16 @@ PLAN-multimedium.md  (S0 cross-medium substrate) ── COMPLETE; C-S0 frozen
         │
         ├──────────────► PLAN-naming.md      (library-wide unification consumes C-S0 — now available)
         │
-PLAN-fingerprint.md  (F0 identity substrate, audit machinery)
+PLAN-fingerprint.md  (F0–F8 identity substrate, audit machinery) ── COMPLETE
         │
         └──────────────► PLAN-naming.md      (same-work/recording detection uses the identity tag + audit)
 ```
 
 - `PLAN-multimedium.md` is **complete**: its C-S0 cross-medium substrate is frozen and available to
   the downstream naming plan.
-- `PLAN-fingerprint.md` was **independent** of `PLAN-multimedium.md` except for one soft dependency:
-  F5 (medium-sequence corroboration) gains a cross-medium-span generalisation now that S0 has landed,
-  but its medium-scoped form does not require it.
-- `PLAN-naming.md` is the downstream consumer of both; one of its two substrates (multimedium C-S0)
-  has landed, so it stays pre-shard only until `PLAN-fingerprint.md`'s identity layer lands.
+- `PLAN-fingerprint.md` is **complete** (F0–F8): the archival identity triple, ingest identification,
+  and `audit` integrity pass are all shipped.  Its identity layer is now available to the naming plan.
+- `PLAN-naming.md` is the downstream consumer of both; **both substrates have now landed** — it is
+  ready to be sharded into commit-shaped sessions for `/run-plan`.
 
 Each sharded plan runs its own `/run-plan` chain against its own ledger; they do not share a ledger.

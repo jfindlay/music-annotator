@@ -274,6 +274,42 @@ preserved; only the over-resolution (sub-parts deeper than the typical movement)
 naive goal "make every sibling the same depth" is wrong because it treats the two directions as
 interchangeable when one is faithful and the other fabricates.
 
+## Archival identity (fingerprinting plan)
+
+Four invariants govern the acoustic-identity featureset (sessions F0–F7 of `docs/PLAN-fingerprint.md`, now complete).
+
+**Invariant 1 — The archival identity triple.**  Every track carries three identity values in both the embedded tag (present-state
+authority) and the journal (cheap detector).  The three are complementary, not redundant — exact / fuzzy-acoustic / identity-cluster:
+
+- `audio_hash` — algorithm-tagged decoded-audio hash (`flac-md5:<32hex>` or `mp3-stream-sha256:<64hex>`); exact integrity anchor;
+  tagging-invariant; the only legitimate change is a re-rip or cleaner-source replacement.
+- `chromaprint_fp` — Chromaprint acoustic fingerprint string; fuzzy similarity (Hamming distance); correctable.
+- `acoustid_id` — AcoustID cluster UUID; identity grouping; correctable.
+
+The tag is the present-state authority; the journal is the detector.  Maintenance that mutates must re-journal (`action="enriched"`).
+
+**Invariant 2 — Hash anchors, identity floats (P-FP1).**  `audio_hash` is ground truth — invariant to tagging, derived from the
+audio itself.  A changed `audio_hash` is a meaningful event (re-rip or replacement), never noise.  `chromaprint_fp` and
+`acoustid_id` are fallible derived claims — correctable, re-derivable, never trusted as immutable.  The audit pass distinguishes
+audio drift (anchor changed) from tagging error (anchor stable but identity disagrees).
+
+**Invariant 3 — Generation vs resolution; no Chromaprint-exact (P-FP2).**  Chromaprint (`fpcalc`) *generates* a fingerprint from
+audio.  AcoustID is an online service that *resolves* a fingerprint to an identity cluster.  They are a pipeline, never
+alternatives.  Exact Chromaprint equality is a dominated middle — exact identity is `audio_hash`'s job; fuzzy similarity is
+Hamming-Chromaprint's job.  The `src_fp == dest_fp` collision check was replaced with a 90%-similarity Hamming threshold in F3.
+
+**Invariant 4 — Backward compatibility via idempotent maintenance (P-FP3).**  Every archival-field addition needs a re-runnable
+enrichment path over the already-annotated library.  No throwaway migrations.  `audit --enrich` is the permanent tool: idempotent,
+re-runnable, tolerant of pre-existing wrong values (correctable under `--re-resolve`).  The `accuraterip` 4th dimension (reserved
+field slot) will backfill through this same path when the whipper ingest mode exists.
+
+**§307 disposition — `--verify-fingerprints` source-check (retired).**  The old `PLAN.md §307` note described a
+`--verify-fingerprints` source-check (verify source audio against MB fingerprint before copy).  This is now fully subsumed:
+rung 5 (`fetch_acoustid_lookup`, F6) resolves a source file's Chromaprint fingerprint to recording MBIDs and confirms the
+selected recording's identity; the `run()` identity-confirm logs `acoustid_confirm_ok` / `acoustid_confirm_mismatch`.  The
+`--acoustid-key` CLI flag delivers the key mechanism §307 flagged as needed.  §307 is retired; no separate implementation
+required.
+
 ## Classical Extras as editorial anchor
 
 Every editorial decision on attribution, annotation, and path construction must refract

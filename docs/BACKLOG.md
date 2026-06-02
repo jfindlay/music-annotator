@@ -135,6 +135,27 @@ Extras path-vs-tag distinction (primary attribution in path, full credits in tag
 the C-S0 cross-medium soloist union, and the `build_dest_path` concerto-injection site), so this is a
 small additive session once the editorial signal is decided.
 
+## AcoustID-seeded wholly-new-release-candidate resolution (deferred from F6)
+
+When `discover()` with `--acoustid-key` finds recording MBIDs from the fingerprint lookup that do not match any existing
+candidate (organic search returned nothing), resolve those recording MBIDs to releases via MB and seed wholly-new candidates.
+Currently `_enrich_candidates_with_acoustid_seed` only boosts existing candidates — it re-scores candidates whose medium
+contains the AcoustID-returned recording MBIDs, but does not create new candidates from scratch.  The boost-existing form is
+the F6 deliverable; this richer extension is deferred.  Substrate: `fetch_acoustid_lookup` (C-F6a) and the existing
+`fetch_release` / `fetch_recording_detail` MB wrappers are all in place.  Deferred from F6 (C-F6c Discovery).
+
+## `accuraterip` 4th archival dimension (deferred from PLAN-fingerprint.md)
+
+The archival identity triple (`audio_hash`, `chromaprint_fp`, `acoustid_id`) has a reserved field slot for a 4th dimension:
+AccurateRip rip-fidelity (bit-accuracy against crowd consensus of the same pressing).  The `TrackTags` and `TransactionEntry`
+models carry a demarcating comment `# --- archival identity (extensible: 4th dim slots in here) ---` so the 4th field appends
+without renaming or restructuring.  `audit --enrich` will backfill it via P-FP3 (idempotent maintenance) once the value is
+available.  Depends on a **whipper ingest mode** (source-adapter plan, not yet started) that produces/exposes the AccurateRip
+result — music-annotator would read it as rung-0 provenance.  AccurateRip is orthogonal to the three identity values: the
+triple answers "what is this / is the audio stable"; AccurateRip answers "was this rip done correctly" (bit-fidelity against
+a crowd consensus of the same pressing).  See `docs/BACKLOG.md` "Source-adapter support" (whipper item) for the ingest-mode
+dependency.
+
 ## Other unsharded backlog
 
 - Playlist generation for collection/cycle groupings (Ring cycle, symphony cycles, etc.).

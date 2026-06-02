@@ -99,5 +99,5 @@ treatment through the Classical Extras anchor when sharded.)
   fragment-groups cheaply, confirm via the embedded tag, and re-journal any move.
 - **Classical Extras as editorial anchor** (`NOTES.md`).  Every reconciliation decision refracts
   through CE.
-- **Hash anchors, identity floats** (`PLAN-fingerprint.md` P-FP1).  When this plan uses identity to
-  group, the `audio_sha256` anchor proves "same audio" independent of fallible cluster IDs.
+- **Hash anchors, identity floats** (`docs/NOTES.md` archival identity invariants, P-FP1).  When this plan uses identity to
+  group, the `audio_hash` anchor proves "same audio" independent of fallible cluster IDs.

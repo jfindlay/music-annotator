@@ -6,7 +6,9 @@ Extras](https://github.com/metabrainz/picard-plugins/tree/2.0/plugins/classical_
 Given a MusicBrainz release MBID and a directory of source audio files, `music-annotator` fetches the full release metadata,
 resolves the work hierarchy for each recording (movement → symphony → collection), classifies performers into CEA roles
 (conductor, soloist, ensemble, …), and writes rich `_cwp_*` / `_cea_*` tags into copies of the files placed in a structured
-destination tree.
+destination tree.  An archival identity triple (`audio_hash`, `chromaprint_fp`, `acoustid_id`) is written to every output file
+and journal entry; the `audit` subcommand detects integrity issues and backfills missing identity fields across an
+already-annotated library.
 
 MusicBrainz API is expected to conform to the [MusicBrainz XML Metadata
 Schema](https://github.com/metabrainz/mmd-schema/blob/master/schema/musicbrainz_mmd-2.0.rng) and music-annotator validates the
@@ -30,7 +32,7 @@ music-annotator apply   <src_dir> <dest_dir> --release-id <MBID> --user-agent-em
 music-annotator search  <src_dir> [<src_dir> ...] <dest_dir> --user-agent-email <EMAIL> [options]
 music-annotator prune   <src_dir> [<src_dir> ...] <dest_dir> [-y]
 music-annotator repath  <dest_dir> [--dry-run]
-music-annotator audit   <dest_dir>
+music-annotator audit   <dest_dir> [--enrich] [--re-resolve] [--acoustid-key KEY] [--dry-run]
 music-annotator regroup <dest_dir> [--dry-run] [-y]
 ```
 
@@ -44,6 +46,7 @@ music-annotator regroup <dest_dir> [--dry-run] [-y]
 | `--user-agent-email EMAIL` | Contact e-mail for the MB API user-agent |
 | `--user-agent-app STRING` | App token (`AppName/Version`, default: `MusicAnnotator/<version>`) |
 | `--dry-run` | Log planned operations without writing files |
+| `--acoustid-key KEY` | AcoustID API key for keyed fingerprint lookup (rung 5); when absent, fingerprint-based identification degrades gracefully to inconclusive |
 | `--no-fetch-rels` | Skip per-recording lookups; produce minimal tags |
 | `-d / --delete` | After a successful copy, prompt to delete the source directory |
 | `-v / --verbose` | Enable DEBUG-level logging (must come before the subcommand) |
@@ -85,18 +88,32 @@ equal after the move, and `_verify_copy` confirms the tag round-trip — only th
 already moved.  Collisions (two legacy paths mapping to one new path) are resolved by the same
 acoustid+length-aware machinery used during ingest.
 
-### `audit` — detect release fragmentation in an annotated library
+### `audit` — detect integrity issues and backfill identity fields in an annotated library
 
 | Argument | Description |
 |---|---|
 | `dest_dir` | Root of the annotated library (the journal is read from here) |
+| `--enrich` | Idempotent backfill mode: write missing `audio_hash`, `chromaprint_fp`, and `acoustid_id` to tags and journal |
+| `--re-resolve` | With `--enrich`: also re-derive `chromaprint_fp` (and `acoustid_id` when `--acoustid-key` is set) for files that already have values |
+| `--acoustid-key KEY` | AcoustID API key; enables `acoustid_id` re-resolution under `--enrich --re-resolve` |
+| `--dry-run` | With `--enrich`: preview planned backfills without writing anything |
 
-Read-only; no `--user-agent-email` and no network calls.  Groups the journal's `action="tagged"`
-entries to surface two fragmentation shapes — one work directory populated from multiple release
-MBIDs (a regrouping candidate), and one release MBID whose tracks landed in multiple work directories
-(a split release).  Each candidate is then *adjudicated* by reading the embedded `MUSICBRAINZ_ALBUMID`
-tag back from its files and comparing it to the journal's recorded release: the journal detects, the
-tag confirms.  `audit` reports only; it never moves files or writes the journal.
+**Bare `audit <dest_dir>`** (read-only, no network calls): scans the journal and embedded tags for missing or mismatched
+identity fields, recomputes `audio_hash` to detect audio drift (anchor changed → re-rip or replacement) vs tagging errors
+(anchor stable but identity disagrees).  Also groups `action="tagged"` entries to surface two fragmentation shapes — one work
+directory populated from multiple release MBIDs (a regrouping candidate), and one release MBID whose tracks landed in multiple
+work directories (a split release) — adjudicated by reading the embedded `MUSICBRAINZ_ALBUMID` tag.  Reports only; never moves
+files or writes the journal.
+
+**`audit <dest_dir> --enrich`**: idempotent backfill — walks the journal's latest-destination view and writes missing
+`audio_hash` / `chromaprint_fp` / `acoustid_id` to both the tag and a new `action="enriched"` journal entry.  A second run
+over an already-enriched library is a no-op.
+
+**`audit <dest_dir> --enrich --re-resolve`**: also re-derives `chromaprint_fp` (and `acoustid_id` when `--acoustid-key` is
+set) for files that already carry values, correcting stale or wrong identity fields while leaving `audio_hash` untouched as
+the integrity anchor.
+
+**`audit <dest_dir> --enrich --dry-run`**: preview planned backfills without writing anything.
 
 ### `regroup` — consolidate confirmed split releases
 
@@ -151,8 +168,15 @@ music-annotator repath ~/Music/tagged --dry-run
 # Apply the current path policy to the whole library (moves files; journal is the recovery record)
 music-annotator repath ~/Music/tagged
 
-# Detect release fragmentation (read-only; no network)
+# Detect release fragmentation and identity issues (read-only; no network)
 music-annotator audit ~/Music/tagged
+
+# Backfill missing audio_hash / chromaprint_fp / acoustid_id across an existing library
+music-annotator audit ~/Music/tagged --enrich
+
+# Preview backfills without writing, then apply with AcoustID re-resolution
+music-annotator audit ~/Music/tagged --enrich --dry-run
+music-annotator audit ~/Music/tagged --enrich --re-resolve --acoustid-key <YOUR_KEY>
 
 # Preview, then consolidate tag-confirmed split releases (prompts before moving)
 music-annotator regroup ~/Music/tagged --dry-run
@@ -203,7 +227,9 @@ music-annotator regroup ~/Music/tagged
    - Fetch recording artist relations (conductor, soloists, ensembles, …).
    - Resolve the work linked via a `"performance"` relation.
    - Walk the parent work chain (movement → top-level work) using `"parts"` relations; cycle detection prevents infinite loops.
-4. **Build tags** — combine release, recording, and work data into `TrackTags`.
+4. **Build tags** — combine release, recording, and work data into `TrackTags`.  Tags written include the full `_cwp_*` / `_cea_*`
+   classical-extras set plus `isrc` (from `MBRecording.isrc_list`), `audio_hash` (algorithm-tagged decoded-audio hash, tagging-invariant),
+   and `chromaprint_fp` (Chromaprint acoustic fingerprint, written at ingest when `fpcalc` is available).
 5. **Movement numbers** — assigned after all tracks are processed by grouping under each top-level work MBID.
 6. **Write files** — copy source to destination, apply tags, embed cover art, restore original atime/mtime.
 
