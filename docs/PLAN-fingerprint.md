@@ -591,7 +591,7 @@ Source of truth for resuming the chain cold.  `/run-plan` updates this on each s
 | F4 | done     | `9f8fdbb` | — (◆ sub-track B)        | enrich() in _pipeline.py (not _pipeline_io.py — import-cycle); action="enriched"; --re-resolve corrects chromaprint_fp only (acoustid_id deferred to F6) |
 | F5 | done     | `e3bdb9d` | — (◆ sub-track C)        | consumes C-F0d; "sequence" added to _IDENTITY_METHODS; cross-medium span noted as comment for future |
 | F6 | done     | `6e046a8` | C-F6a/b/c/d (◆ sub-track C) | file-set widened (approved); split impl+test dispatch; _fetch_acoustid_lookup_raw private helper for enrich() re-resolve; completes F4-deferred acoustid_id --re-resolve |
-| F7 | pending  | —         | — (◆ sub-track D)        | consumes F4,F1 |
+| F7 | done     | `4b8bda3` | — (◆ sub-track D)        | 3 passes: journal scan, tag adjudication, audio anchor; audit_summary logged; 5 existing TestAudit tests updated to include audio_hash/acoustid_id fields |
 | F8 | pending  | —         | — (◆ capstone)           | Opus writeup; consumes F1-F7; folds in old §307 |
 
 **Frozen contracts:** C-F0a, C-F0b, C-F0c, C-F0d, C-F4, C-F6a/b/c/d
@@ -653,6 +653,12 @@ sub-track boundaries.
 Appended by `@plan-admin` on non-trivial iterations (discovery flagged, contract flexed, or
 meaningful texture).  Trivial iterations (clean green run, no surprises) produce no entry.  Fed
 verbatim into every `@plan-deep` juncture fork.
+
+### Sub-track D boundary — 2026-06-02
+Discovery/flex: still-on-intent (driver self-review). F7 delivers the three-pass read-only audit exactly as specified. No contract breaks.
+Affected: none
+Deferred: no. F8 consumes F1–F7 for the prose writeup.
+Texture: 5 existing TestAudit tests updated to include audio_hash/acoustid_id in journal entries and create destination files — the new passes are sensitive to journal completeness.
 
 ### Sub-track C boundary — 2026-06-02
 Discovery/flex: still-on-intent (driver self-review). F5+F6 deliver medium-sequence corroboration and the keyed AcoustID rung as specified. One Discovery noted in C-F6c: resolving wholly-new release candidates from AcoustID recording MBIDs (when organic search returns nothing) is deferred — the boost-existing form is the F6 deliverable.
