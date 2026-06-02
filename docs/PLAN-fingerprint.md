@@ -116,8 +116,8 @@ session-numbers / frozen contracts a row depends on.  This table is intentionall
 
 | #  | Title (commit-shaped)                                      | Cat | T | Dep        | Expected files                                                                 | KAT |
 |----|------------------------------------------------------------|-----|---|------------|--------------------------------------------------------------------------------|-----|
-| F0 | Archival-identity substrate: triple fields + audio hash    | A   | O | —          | `models.py`, `_pipeline_io.py`, `_tagger.py`, `tests/unit/test_pipeline.py`     | `test_audio_sha256_invariant_across_tagging` |
-| F1 | Compute + write `audio_sha256` at ingest (tag + journal)   | C   | S | F0         | `_pipeline.py`, `_pipeline_io.py`, `tests/unit/test_pipeline.py`                | `test_ingest_writes_audio_sha256_tag_and_journal` |
+| F0 | Archival-identity substrate: triple fields + audio hash    | A   | O | —          | `models.py`, `_pipeline_io.py`, `_tagger.py`, `tests/unit/test_pipeline.py`     | `test_audio_hash_invariant_across_tagging` |
+| F1 | Compute + write `audio_hash` at ingest (tag + journal)     | C   | S | F0         | `_pipeline.py`, `_pipeline_io.py`, `tests/unit/test_pipeline.py`                | `test_ingest_writes_audio_hash_tag_and_journal` |
 | F2 | ISRC rung: populate `isrc`, write tag, ISRC↔isrc_list match ◆ | B | S | F0         | `_tags.py`, `models.py`, `_pipeline_io.py`, `tests/unit/test_pipeline.py`       | `test_isrc_match_resolves_identity` |
 | F3 | Chromaprint fp at ingest + replace exact collision w/ fuzzy | B  | S | F0         | `_pipeline_io.py`, `_pipeline.py`, `tests/unit/test_pipeline.py`                | `test_chromaprint_fuzzy_same_recording_different_encode` |
 | F4 | `audit --enrich`: idempotent retroactive backfill ◆        | C   | O | F1,F2,F3   | `__main__.py`, `_pipeline_io.py`, `tests/unit/test_main.py`                     | `test_enrich_backfills_triple_idempotently` |
@@ -129,7 +129,7 @@ session-numbers / frozen contracts a row depends on.  This table is intentionall
 ### Sub-track boundaries
 
 - **◆ Sub-track A — archival identity at ingest** ends at F3.  Ships: the triple stored in tag +
-  journal for every *newly* ingested track (`audio_sha256`, `chromaprint_fp`, `acoustid_id`), ISRC
+  journal for every *newly* ingested track (`audio_hash`, `chromaprint_fp`, `acoustid_id`), ISRC
   as an identity rung, and fuzzy-Chromaprint collision replacing exact equality.
 - **◆ Sub-track B — retroactive enrichment** is F4 (single session, the backward-compat spine).
   Ships: idempotent `audit --enrich` that backfills the triple over the already-annotated library
@@ -146,23 +146,19 @@ session-numbers / frozen contracts a row depends on.  This table is intentionall
 
 - **F0 (Opus inflection — HALT for sign-off before dispatch).**  The substrate.  Three pieces, one
   commit:
-  1. Add `audio_sha256: str = ""` and `chromaprint_fp: str = ""` to `TrackTags` (`models.py`, near
-     the `acoustid_id` field at `models.py:1224`).  Both written to the output file (do **not** add
-     to the `to_file_dict` exclusion set at `models.py:1248`).  FLAC keys lowercase to
-     `audio_sha256` / `chromaprint_fp`; add MP3 TXXX mappings to `_MP3_TXXX_MAP` (`_tagger.py:115`,
-     e.g. `"AUDIO_SHA256": "Audio SHA256"`, `"CHROMAPRINT_FP": "Chromaprint Fingerprint"`).
-  2. Add `audio_sha256: str = ""` to `TransactionEntry` (`models.py:1487`).  Additive, defaulted,
-     backward-compatible — old journals read missing field as `""`.  (Store `chromaprint_fp` and
-     `acoustid_id` in the journal too if the orchestrator decides at sign-off; the tag is the
-     present-state authority, the journal the detector — over-specify the journal schema here.)
-  3. Define the **audio-payload hash primitive** in `_pipeline_io.py`: `_audio_sha256(path) -> str`
-     that hashes the *decoded-audio-only* portion, **not** the whole file.  For FLAC, prefer the
-     native `STREAMINFO.md5_signature` already in the stream (the 16 trailing bytes in the
-     `_MINIMAL_FLAC` test constant) promoted to a stable representation, or hash the decoded frames;
-     for MP3, hash the audio frames after the ID3 header.  This is the field whose value computed
-     *now* (post-annotation) equals what it would have been *pre-annotation* — that invariance is
-     the whole point and the KAT (`test_audio_sha256_invariant_across_tagging`) locks it: tag a
-     file, re-read, assert the audio hash is unchanged before vs after `apply_tags_*`.
+  1. Add `audio_hash: str = ""` and `chromaprint_fp: str = ""` to `TrackTags` (`models.py`, after
+     the `acoustid_id` field).  Both written to the output file (do **not** add to the
+     `to_file_dict` exclusion set).  FLAC keys lowercase to `audio_hash` / `chromaprint_fp`; MP3
+     TXXX mappings `"AUDIO_HASH": "Audio Hash"` and `"CHROMAPRINT_FP": "Chromaprint Fingerprint"`
+     added to `_MP3_TXXX_MAP`.  *(Implemented; field renamed from `audio_sha256` at F0 sign-off —
+     see C-F0c and the sign-off resolution note in Cross-session contracts.)*
+  2. Add full archival triple to `TransactionEntry` (`models.py`): `audio_hash`, `chromaprint_fp`,
+     `acoustid_id` — all `str = ""`, additive, backward-compatible.  *(Implemented.)*
+  3. Define the **audio-payload hash primitive** in `_pipeline_io.py`: `_audio_hash(path) -> str`
+     (renamed from `_audio_sha256` at sign-off).  Algorithm-tagged, decode-free: FLAC →
+     `"flac-md5:<32hex>"` from STREAMINFO; MP3 → `"mp3-stream-sha256:<64hex>"` over audio frames
+     post-ID3.  The invariance is the contract; the KAT (`test_audio_hash_invariant_across_tagging`)
+     locks it: tag a file, re-read, assert `audio_hash` unchanged before vs after `apply_tags_*`.
   4. Generalise the existing `AudioCompareResult` (`_pipeline_io.py:57`) into the identity-result
      shape the ladder needs, OR introduce a sibling `IdentityResult` — decide at sign-off; do
      **not** over-build a class hierarchy.  **This is the contract every later session consumes —
@@ -172,11 +168,11 @@ session-numbers / frozen contracts a row depends on.  This table is intentionall
      fourth dimension") is additive, not a re-shard — e.g. group the archival fields so a 4th slots
      in without renaming or restructuring.  Do **not** add `accuraterip` now (no whipper mode
      exists); just do not design it *out*.
-- **F1.**  In `run()`'s copy/tag/verify loop, compute `_audio_sha256(src_file)` and store it on
-  `final_tags.audio_sha256` *before* `apply_tags_*` writes it to the file (`_pipeline.py:1271`), and
-  carry it into the `action="tagged"` journal entry (`_pipeline.py:1292`).  Preserve the journal
-  provenance chain (AGENTS.md invariant): the hash is captured pre-tag but the journal entry is
-  still appended only after `_verify_copy` succeeds.  No new network call.
+- **F1.**  In `run()`'s copy/tag/verify loop, compute `_audio_hash(src_file)` and store it on
+  `final_tags.audio_hash` *before* `apply_tags_*` writes it to the file, and carry it into the
+  `action="tagged"` journal entry.  Preserve the journal provenance chain (AGENTS.md invariant):
+  the hash is captured pre-tag but the journal entry is still appended only after `_verify_copy`
+  succeeds.  No new network call.
 - **F2.**  Populate `TrackTags.isrc` (`models.py:1024`, currently never set) from
   `MBRecording.isrc_list` (`models.py:745`, fetched but unused) in `build_track_tags`/`build_*_tags`
   (`_tags.py`); write it as a tag.  Add an ISRC rung to the identity resolver: when a source file
@@ -242,20 +238,92 @@ establishes it is `done` (see the ledger); later sessions consume it and must no
 
 ### Compiler-enforced (interfaces / signatures / model fields)
 
-- **C-F0a — archival triple tag fields (FROZEN BY F0).**  `TrackTags` gains `audio_sha256: str = ""`
-  and `chromaprint_fp: str = ""` (`acoustid_id` already exists), all written to the output file as
-  tags (`AUDIO_SHA256`, `CHROMAPRINT_FP`, `ACOUSTID_ID`).  FLAC lowercase keys; MP3 TXXX descriptors
-  added to `_MP3_TXXX_MAP`.  Consumed by F1, F2, F3, F4, F7.  Additive only.
-- **C-F0b — `TransactionEntry.audio_sha256` (FROZEN BY F0).**  New `str = ""` field, additive,
-  backward-compatible with existing journals.  (Plus any further journal triple fields decided at
-  F0 sign-off.)  Consumed by F1, F4, F7.
-- **C-F0c — `_audio_sha256(path) -> str` audio-payload primitive (FROZEN BY F0).**  Hashes
-  decoded-audio-only; tagging-invariant.  The invariance is the contract — any change that makes the
-  hash depend on metadata breaks every downstream session.  Consumed by F1, F4, F7.
-- **C-F0d — identity-result shape (FROZEN BY F0).**  The generalised `AudioCompareResult` /
-  `IdentityResult` carrying `match: bool | None` and a `method` enum extended with the new rungs
-  (`isrc`, `audio_sha256`, plus existing `sha256`/`acoustid`/`chromaprint`/`duration`/`unknown`).
-  Consumed by F2, F3, F5, F7.
+> **F0 sign-off resolution (Opus inflection, juncture 1).**  The four open questions are resolved
+> below and baked into the specs.  **One override requires human sign-off** before `@build` is
+> dispatched: the archival hash field is renamed `audio_sha256` → **`audio_hash`** and stores an
+> **algorithm-tagged value** (`<algo>:<digest>`), because a uniform decoded-PCM SHA-256 (the name
+> `audio_sha256` presumes) would require a new heavyweight PCM-decoder binary — violating the
+> rung-3 "Binary: none" substrate constraint.  The plan's F0-open note pre-authorised exactly this
+> rename ("if (a) is chosen, rename to `audio_hash`").  The KAT renames in lockstep:
+> `test_audio_sha256_invariant_across_tagging` → **`test_audio_hash_invariant_across_tagging`**.
+> Decisions #1 (full journal triple), #3 (generalise `AudioCompareResult` in place, no sibling
+> class), and #4 (algorithm-tagged value + contiguous additive field group reserves the 4th
+> dimension) are within the inflection mandate and need no separate sign-off.
+
+- **C-F0a — archival identity tag fields (FROZEN BY F0).**  `TrackTags` gains two new `str = ""`
+  fields, placed contiguously immediately after the existing `acoustid_id` field (`models.py:1231`)
+  under a demarcating comment `# --- archival identity (extensible: 4th dim slots in here) ---`:
+    - `audio_hash: str = ""`  — algorithm-tagged decoded-audio hash; format `"<algo>:<hexdigest>"`
+      (see C-F0c for the two `<algo>` values).  **Not** `audio_sha256` (see sign-off resolution).
+    - `chromaprint_fp: str = ""` — Chromaprint fingerprint string (populated F3).
+  `acoustid_id` already exists.  All three are written to the output file (do **not** add to the
+  `to_file_dict` exclusion set at `models.py:1255`).  Tag keys:
+    - **FLAC** (lowercase Vorbis keys, written automatically by `apply_tags_flac`'s
+      `audio[key.lower()]` loop): `audio_hash`, `chromaprint_fp`, `acoustid_id`.
+    - **MP3** — add two entries to `_MP3_TXXX_MAP` (`_tagger.py:115`, beside the existing
+      `"ACOUSTID_ID": "Acoustid Id"`): `"AUDIO_HASH": "Audio Hash"` and
+      `"CHROMAPRINT_FP": "Chromaprint Fingerprint"`.  (`ACOUSTID_ID` TXXX already mapped.)  These
+      add two rows to the writable set used by `_verify_copy`, so the tag round-trip auto-covers
+      them — no `_read_tags_mp3` change needed (it inverts `_MP3_TXXX_MAP`).
+  Consumed by F1 (writes `audio_hash`), F2 (`isrc`), F3 (`chromaprint_fp`), F4 (enrich), F7 (audit).
+  **Additive only — never rename or reorder this group; a 4th field (`accuraterip`) appends here.**
+- **C-F0b — journal archival triple (FROZEN BY F0).**  `TransactionEntry` (`models.py:1495`) gains
+  the **full triple**, all `str = ""`, additive and backward-compatible (old journals read missing
+  fields as `""`), placed contiguously under the same `# --- archival identity (extensible) ---`
+  comment after the existing `action` field:
+    - `audio_hash: str = ""`
+    - `chromaprint_fp: str = ""`
+    - `acoustid_id: str = ""`
+  Decision #1 resolved **in favour of the full triple** (not `audio_hash` alone): F7's
+  "journal detects, tag adjudicates" (P-FP4) needs the journal rich enough to detect identity drift
+  without opening every file; the cost is purely additive-defaulted-string sync at the F1/F3/F4
+  write sites.  Write site is the existing `action="tagged"` append (`_pipeline.py:1373`); the
+  provenance chain (AGENTS.md) is preserved — values are captured pre-tag but the entry is appended
+  only after `_verify_copy` succeeds.  Consumed by F1, F3, F4, F7.  **Additive only; 4th field
+  (`accuraterip`) appends to this group too.**
+- **C-F0c — `_audio_hash(path) -> str` audio-payload primitive (FROZEN BY F0).**  New private
+  function in `_pipeline_io.py`.  Returns an **algorithm-tagged** decoded-audio hash, decode-free
+  (no new binary — honours the rung-3 "Binary: none" constraint), tagging-invariant:
+    - **FLAC** → `f"flac-md5:{FLAC(str(path)).info.md5_signature:032x}"`.  This is the encoder's
+      native STREAMINFO decoded-audio MD5 — *definitionally* the decoded-audio hash, written at rip
+      time, invariant to every metadata operation (empirically confirmed: mutagen preserves it
+      across `save()`).  Rendered as a 32-char zero-padded lowercase hex string.  **Constraint:** a
+      FLAC whose STREAMINFO MD5 is all-zero (some rippers omit it) yields
+      `flac-md5:00000000000000000000000000000000`; treat all-zero as "encoder did not record an
+      audio MD5" — still a stable value to store, but F7/F5 must not treat the zero-MD5 collision of
+      two such files as an audio match (document; do not special-case in F0).
+    - **MP3** → `f"mp3-stream-sha256:{sha256(<audio-frame bytes>).hexdigest()}"`, where the
+      audio-frame byte range is everything from the first MPEG frame (use mutagen `MP3(...)` /
+      `audio.info` or the ID3 header size `id3.size` to locate the start) to EOF, **excluding** the
+      leading ID3v2 tag and any trailing ID3v1/APE tag.  Decode-free; SHA-256 over the raw MPEG
+      audio frames.  Must be robust to ID3v2 size changes (compute the boundary on each read, never
+      hardcode).
+    - **Unsupported suffix** → `""` (best-effort, like `_read_acoustid_tag`).
+  **The invariance is the contract:** the value computed after `apply_tags_*` must byte-equal the
+  value computed before.  Any change making it metadata-dependent breaks every downstream session.
+  Named tradeoff: FLAC and MP3 hashes are **not cross-comparable** (different algorithms) — the
+  algorithm tag makes this explicit and prevents a silent FLAC-MD5 ↔ MP3-SHA collision.  Equality
+  is meaningful only within a format; cross-encode similarity is the chromaprint/acoustid rungs'
+  job, not this one.  Consumed by F1, F4, F7.  KAT: `test_audio_hash_invariant_across_tagging`
+  (tag a FLAC and an MP3, re-read, assert `audio_hash` unchanged before vs after `apply_tags_*`;
+  exercise **both** format arms).
+- **C-F0d — identity-result shape (FROZEN BY F0).**  Decision #3 resolved: **generalise the
+  existing `AudioCompareResult` in place** (`_pipeline_io.py:57`); do **not** introduce a sibling
+  `IdentityResult` (two near-identical dataclasses *is* the hierarchy the plan forbids).  Changes:
+    - Keep the dataclass name `AudioCompareResult` and its fields unchanged:
+      `src: Path`, `dest: Path`, `match: bool | None`, `method: str`, `detail: str`.  (No rename —
+      avoids churning F2–F7 imports; widen the docstring to note it now carries identity-rung
+      results, not only collision results.)
+    - `method` stays a **`str`** (not an Enum): existing tests assert string literals
+      (`result.method == "sha256"` etc.) and existing construction sites pass `method="..."`; an
+      Enum would break 30+ assertions for no gain.
+    - Freeze the closed value set as a module-level constant in `_pipeline_io.py`:
+      `_IDENTITY_METHODS: frozenset[str] = frozenset({"sha256", "acoustid", "chromaprint",
+      "duration", "unknown", "isrc", "audio_hash"})`.  Existing five + two new rungs (`"isrc"` for
+      F2's ISRC↔isrc_list match, `"audio_hash"` for F3's exact-integrity rung).  This documents and
+      (optionally) validates the surface F2/F3/F5/F7 consume without an invasive Enum migration.
+  Consumed by F2 (`"isrc"`), F3 (`"audio_hash"`; replaces exact-`"chromaprint"` arm with fuzzy),
+  F5, F7.
 - **C-F6 — `fetch_acoustid_lookup` signature + `--acoustid-key` flag (FROZEN BY F6).**
   `fetch_acoustid_lookup(fingerprint, duration_s, api_key) -> list[str]`; absent key →
   inconclusive, never raises.  Consumed by F8 (§307 fold-in).
@@ -263,19 +331,21 @@ establishes it is `done` (see the ledger); later sessions consume it and must no
 ### Test-enforced (KATs — grow monotonically)
 
 Each row's KAT (session-list table) must be present and green at every subsequent session.  The
-load-bearing regression guard is `test_audio_sha256_invariant_across_tagging` (F0): any later
-session that makes the audio hash metadata-dependent breaks it.  The existing AcoustID/fpcalc
+load-bearing regression guard is `test_audio_hash_invariant_across_tagging` (F0, renamed from
+`test_audio_sha256_invariant_across_tagging` at F0 sign-off — see C-F0c): any later session that
+makes the audio hash metadata-dependent breaks it.  It must exercise **both** the FLAC
+(`flac-md5:`) and MP3 (`mp3-stream-sha256:`) arms.  The existing AcoustID/fpcalc
 collision tests (`TestCompareAudioCollision` family, `test_pipeline.py:5490+`) **must continue to
 pass** — F3 *replaces* the exact-Chromaprint arm; update those tests rather than regressing the
 ladder's other layers.
 
 ### Prose-enforced (invariants — named, nothing auto-enforces)
 
-- **P-FP1 — Hash anchors, identity floats.**  `audio_sha256` is ground truth (re-rip-only change);
+- **P-FP1 — Hash anchors, identity floats.**  `audio_hash` is ground truth (re-rip-only change);
   `chromaprint_fp` / `acoustid_id` are correctable derived claims.  Consumed by F4 (must correct
   wrong values) and F7 (anchor distinguishes audio drift from tag error).
 - **P-FP2 — Generation vs resolution; no Chromaprint-exact.**  Chromaprint generates, AcoustID
-  resolves; exact-identity is `audio_sha256`'s job, fuzzy-similarity is Hamming-Chromaprint's.
+  resolves; exact-identity is `audio_hash`'s job, fuzzy-similarity is Hamming-Chromaprint's.
   Consumed by F3 (replace exact with fuzzy).
 - **P-FP3 — Backward compatibility via idempotent maintenance.**  Every archival-field addition needs
   a re-runnable enrichment path over the already-annotated library; no throwaway migrations.
@@ -295,19 +365,19 @@ ladder's other layers.
 
 Source of truth for resuming the chain cold.  `/run-plan` updates this on each successful commit.
 
-| #  | Status   | Commit | Froze / widened          | Notes |
-|----|----------|--------|--------------------------|-------|
-| F0 | pending  | —      | C-F0a,C-F0b,C-F0c,C-F0d  | Opus inflection — HALT for sign-off before dispatch |
-| F1 | pending  | —      | —                        | consumes C-F0a/b/c |
-| F2 | pending  | —      | — (◆ sub-track A)        | consumes C-F0a/d |
-| F3 | pending  | —      | — (◆ sub-track A)        | consumes C-F0a/c/d; replaces exact-Chromaprint |
-| F4 | pending  | —      | — (◆ sub-track B)        | Opus inflection — HALT; consumes F1,F2,F3; backward-compat spine |
-| F5 | pending  | —      | — (◆ sub-track C)        | consumes C-F0d; soft-dep on PLAN.md S0 for cross-medium span |
-| F6 | pending  | —      | C-F6 (◆ sub-track C)     | Opus inflection — HALT; consumes C-F0d, F3; only keyed rung |
-| F7 | pending  | —      | — (◆ sub-track D)        | consumes F4,F1 |
-| F8 | pending  | —      | — (◆ capstone)           | Opus writeup; consumes F1-F7; folds in old §307 |
+| #  | Status   | Commit    | Froze / widened          | Notes |
+|----|----------|-----------|--------------------------|-------|
+| F0 | done     | `166a316` | C-F0a,C-F0b,C-F0c,C-F0d  | audio_sha256→audio_hash rename approved at sign-off; KAT renamed to test_audio_hash_invariant_across_tagging |
+| F1 | pending  | —         | —                        | consumes C-F0a/b/c |
+| F2 | pending  | —         | — (◆ sub-track A)        | consumes C-F0a/d |
+| F3 | pending  | —         | — (◆ sub-track A)        | consumes C-F0a/c/d; replaces exact-Chromaprint |
+| F4 | pending  | —         | — (◆ sub-track B)        | Opus inflection — HALT; consumes F1,F2,F3; backward-compat spine |
+| F5 | pending  | —         | — (◆ sub-track C)        | consumes C-F0d; soft-dep on PLAN.md S0 for cross-medium span |
+| F6 | pending  | —         | C-F6 (◆ sub-track C)     | Opus inflection — HALT; consumes C-F0d, F3; only keyed rung |
+| F7 | pending  | —         | — (◆ sub-track D)        | consumes F4,F1 |
+| F8 | pending  | —         | — (◆ capstone)           | Opus writeup; consumes F1-F7; folds in old §307 |
 
-**Frozen contracts:** _(none yet — populated as sessions complete)_
+**Frozen contracts:** C-F0a (TrackTags archival triple tag fields), C-F0b (TransactionEntry archival triple), C-F0c (_audio_hash primitive — algorithm-tagged, decode-free), C-F0d (AudioCompareResult + _IDENTITY_METHODS)
 
 ---
 
@@ -367,7 +437,11 @@ Appended by `@plan-admin` on non-trivial iterations (discovery flagged, contract
 meaningful texture).  Trivial iterations (clean green run, no surprises) produce no entry.  Fed
 verbatim into every `@plan-deep` juncture fork.
 
-_(empty — chain not yet started)_
+### F0 — 2026-06-02
+Discovery/flex: audio_sha256 → audio_hash rename + algorithm-tagged format (approved at sign-off); uniform decoded-PCM SHA-256 would require a new binary dependency violating rung-3 "Binary: none".
+Affected: C-F0a (field name), C-F0c (function name + return format), KAT name
+Deferred: no — resolved at sign-off; all downstream sessions updated to consume audio_hash.
+Texture: FLAC uses STREAMINFO md5_signature (format "flac-md5:<32hex>"); MP3 uses SHA-256 of raw MPEG frames post-ID3 (format "mp3-stream-sha256:<64hex>"); algorithm prefix prevents silent cross-format collision.
 
 ---
 
