@@ -57,6 +57,7 @@ from music_annotator._pipeline_io import (
     _DISC_TOC_FILENAME,
     AudioCompareResult,
     _assess_collisions,
+    _audio_hash,
     _read_acoustid_tag,
     _read_duration_ms,
     _run_fpcalc,
@@ -8334,3 +8335,102 @@ class TestRunDurationPreflight:
             fetch_rels=False,
         )
         mock_preflight.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _audio_hash — KAT C-F0c: tagging-invariant decoded-audio hash
+# ---------------------------------------------------------------------------
+
+
+class TestAudioHashInvariantAcrossTagging:
+    """KAT test_audio_hash_invariant_across_tagging: _audio_hash is stable before and after tagging.
+
+    Verifies that the algorithm-tagged hash returned by :func:`_audio_hash` is unchanged after
+    :func:`apply_tags_flac` / :func:`apply_tags_mp3` modify the container metadata, confirming
+    the hash is tagging-invariant.  Also exercises the unsupported-suffix arm (returns ``""``).
+    """
+
+    def test_flac_hash_stable_across_tagging(self, fs: FakeFilesystem) -> None:
+        """_audio_hash on a FLAC file is unchanged after apply_tags_flac writes new tags.
+
+        The FLAC STREAMINFO MD5 reflects only the decoded PCM audio; Vorbis Comment and PICTURE
+        blocks do not affect it.  The hash must therefore be identical before and after tagging.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/out/track.flac")
+        fs.create_dir("/out")
+        fs.create_file(str(dest), contents=_MINIMAL_FLAC)
+
+        hash_before = _audio_hash(dest)
+        apply_tags_flac(dest, TrackTags(title="Tagged Title", album="Album", tracknumber="1"))
+        hash_after = _audio_hash(dest)
+
+        assert hash_before == hash_after
+        assert hash_before.startswith("flac-md5:")
+        assert hash_before != ""
+
+    def test_mp3_hash_stable_across_tagging(self, fs: FakeFilesystem) -> None:
+        """_audio_hash on an MP3 file is unchanged after apply_tags_mp3 writes new ID3 tags.
+
+        The MP3 hash covers only the raw audio-frame bytes (from the end of the ID3v2 header to
+        EOF, minus any trailing ID3v1 tag).  Rewriting the ID3v2 header changes its size, but
+        _audio_hash recomputes the boundary on each call, so the audio-frame bytes — and therefore
+        the hash — remain identical.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/out/track.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(dest), contents=_MINIMAL_MP3)
+
+        hash_before = _audio_hash(dest)
+        apply_tags_mp3(dest, TrackTags(title="Tagged Title", album="Album", tracknumber="1"))
+        hash_after = _audio_hash(dest)
+
+        assert hash_before == hash_after
+        assert hash_before.startswith("mp3-stream-sha256:")
+        assert hash_before != ""
+
+    def test_unsupported_suffix_returns_empty_string(self, fs: FakeFilesystem) -> None:
+        """_audio_hash returns '' for file extensions not supported by the hash function.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/out/track.ogg")
+        fs.create_dir("/out")
+        fs.create_file(str(dest), contents=b"OggS" + b"\x00" * 50)
+
+        assert _audio_hash(dest) == ""
+
+    def test_mp3_hash_strips_trailing_id3v1_tag(self, fs: FakeFilesystem) -> None:
+        """_audio_hash strips a trailing ID3v1 tag (128 bytes starting with b'TAG') before hashing.
+
+        An MP3 with a trailing ID3v1 tag must produce the same hash as the same audio bytes
+        without the ID3v1 tag, confirming the stripping branch is exercised.
+
+        :param fs: pyfakefs fixture.
+        """
+        # Build an MP3 with a trailing ID3v1 tag appended after the audio frames.
+        id3v1_tag = b"TAG" + b"\x00" * 125  # exactly 128 bytes
+        mp3_with_id3v1 = _MINIMAL_MP3 + id3v1_tag
+        mp3_without_id3v1 = _MINIMAL_MP3
+
+        dest_with = Path("/out/with_id3v1.mp3")
+        dest_without = Path("/out/without_id3v1.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(dest_with), contents=mp3_with_id3v1)
+        fs.create_file(str(dest_without), contents=mp3_without_id3v1)
+
+        hash_with = _audio_hash(dest_with)
+        hash_without = _audio_hash(dest_without)
+
+        # Both must produce the same hash — the ID3v1 tag is stripped before hashing.
+        assert hash_with == hash_without
+        assert hash_with.startswith("mp3-stream-sha256:")
+
+    def test_audio_hash_returns_empty_on_read_error(self) -> None:
+        """_audio_hash returns '' when the file cannot be read (exception path)."""
+        dest = Path("/nonexistent/path/missing.flac")
+        # File does not exist — FLAC() will raise an exception, caught by the bare except.
+        assert _audio_hash(dest) == ""

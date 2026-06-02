@@ -113,6 +113,8 @@ _MP3_TXXX_MAP: dict[str, str] = {
     "PREMIERED_DATE": "PREMIERED_DATE",
     "MUSICBRAINZ_RELEASETRACKID": "MusicBrainz Release Track Id",
     "ACOUSTID_ID": "Acoustid Id",
+    "AUDIO_HASH": "Audio Hash",
+    "CHROMAPRINT_FP": "Chromaprint Fingerprint",
     # CEA tags
     "CEA_RECORDING_ARTIST": "CEA_RECORDING_ARTIST",
     "CEA_RECORDING_ARTISTS": "CEA_RECORDING_ARTISTS",

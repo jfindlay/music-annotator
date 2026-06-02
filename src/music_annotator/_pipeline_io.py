@@ -62,6 +62,10 @@ class AudioCompareResult:
     Consumed by :func:`~music_annotator._pipeline.run` to decide whether a collision should
     trigger a user prompt (identical / inconclusive audio) or an automatic path-disambiguation
     suffix (definitively different audio).
+
+    The ``method`` field is drawn from :data:`_IDENTITY_METHODS` and carries identity-rung results
+    (``"audio_hash"``, ``"acoustid"``, ``"chromaprint"``, ``"isrc"``) as well as collision-resolution
+    results (``"sha256"``, ``"duration"``, ``"unknown"``).
     """
 
     src: Path
@@ -69,9 +73,56 @@ class AudioCompareResult:
     match: bool | None
     """``True`` = same audio content; ``False`` = different audio content; ``None`` = inconclusive."""
     method: str
-    """Comparison method used: ``"sha256"``, ``"acoustid"``, ``"chromaprint"``, ``"duration"``, or ``"unknown"``."""
+    """Comparison method used: one of the strings in :data:`_IDENTITY_METHODS`."""
     detail: str
     """One-line human-readable summary for display in the collision prompt."""
+
+
+#: All valid ``method`` values for :class:`AudioCompareResult`, covering both collision-resolution
+#: rungs (``"sha256"``, ``"duration"``, ``"unknown"``) and archival-identity rungs
+#: (``"acoustid"``, ``"chromaprint"``, ``"audio_hash"``, ``"isrc"``).
+_IDENTITY_METHODS: frozenset[str] = frozenset(
+    {"sha256", "acoustid", "chromaprint", "duration", "unknown", "isrc", "audio_hash"}
+)
+
+
+def _audio_hash(path: Path) -> str:
+    """Return an algorithm-tagged decoded-audio hash for ``path``, or ``""`` for unsupported formats.
+
+    The hash is tagging-invariant: it reflects only the decoded audio content, not the container
+    metadata.  For FLAC files the encoder's native STREAMINFO MD5 is used; for MP3 files the
+    SHA-256 of the raw audio-frame bytes (excluding ID3 tags) is computed.
+
+    The returned string has the format ``"<algo>:<hexdigest>"``, e.g.
+    ``"flac-md5:00000000000000000000000000000000"`` or
+    ``"mp3-stream-sha256:abcdef…"``.
+
+    A FLAC whose STREAMINFO MD5 is all-zero (e.g. a minimal test file with no audio samples)
+    yields ``"flac-md5:00000000000000000000000000000000"`` — stored as-is, not special-cased.
+
+    :param path: Path to the audio file to hash.
+    :returns: An algorithm-tagged hash string, or ``""`` for unsupported file extensions or on
+        any read error.
+    """
+    try:
+        match path.suffix.lower():
+            case ".flac":
+                md5_int = FLAC(str(path)).info.md5_signature
+                return f"flac-md5:{md5_int:032x}"
+            case ".mp3":
+                id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+                audio_start = id3.size
+                raw = path.read_bytes()
+                audio_bytes = raw[audio_start:]
+                # Strip trailing ID3v1 tag (exactly 128 bytes starting with b"TAG")
+                if len(audio_bytes) >= 128 and audio_bytes[-128:-125] == b"TAG":  # noqa: PLR2004
+                    audio_bytes = audio_bytes[:-128]
+                digest = hashlib.sha256(audio_bytes).hexdigest()
+                return f"mp3-stream-sha256:{digest}"
+            case _:
+                return ""
+    except Exception:  # noqa: BLE001 — best-effort; any failure means no hash
+        return ""
 
 
 def _read_acoustid_tag(path: Path) -> str:

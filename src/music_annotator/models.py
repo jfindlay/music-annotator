@@ -1229,6 +1229,9 @@ class TrackTags(BaseModel):
     cwp_worktype_genres: str = ""
     cwp_worktype_genres_top: str = ""
     acoustid_id: str = ""
+    # --- archival identity (extensible: 4th dim slots in here) ---
+    audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
+    chromaprint_fp: str = ""  # Chromaprint fingerprint string (populated in F3)
     # Internal flag: set to "1" when cwp_composers / cwp_composer_lastnames were populated from
     # the additional_composers fallback (i.e. no plain primary composer relation was found).  Used
     # by the cross-track composer unification pass in _pipeline.py to identify movements whose
@@ -1519,6 +1522,10 @@ class TransactionEntry(BaseModel):
     source: str
     destination: str
     action: str  # "tagged" | "skipped" | "dry_run" | "downloaded" | "sidecar" | "repathed" | "regrouped"
+    # --- archival identity (extensible: 4th dim slots in here) ---
+    audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
+    chromaprint_fp: str = ""  # Chromaprint fingerprint string (populated in F3)
+    acoustid_id: str = ""  # AcoustID UUID for this track
 
 
 class TransactionLog(BaseModel):
