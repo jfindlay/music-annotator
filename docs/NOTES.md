@@ -46,6 +46,65 @@ join key that goes stale the moment you act on it is the wrong *authority* for a
 purpose is to act — but it is fine as the *trigger*.  Corollary: any maintenance action that moves a
 directory must append its own journal entry, or the detector decays with use.
 
+## Database-as-infrastructure: tracks are authority, the journal is a regenerable cache
+
+"Tag adjudicates, journal detects" (above) taken to its endpoint: if the tag is *always* the
+present-state authority, the journal holds *no authority at all* — it is a derived index over
+authority that lives entirely in the tracks (+ their sidecars).  This inverts the normal
+infra-as-code stance into **database-as-infrastructure**: the annotated tracks are the committed
+source of truth; the journal/DB is a build artefact you can delete and regenerate by scanning the
+library.  The unit of self-containment is **a track + its sidecars**: it can reconstruct its own
+canonical library path, identity triple, and provenance from its own embedded tags and co-located
+sidecars alone.
+
+The diagnostic is the **reconstruction-gap test** — for each journal field, can a track+sidecars
+reproduce it?  It partitions cache data into four classes:
+
+- **Tag-reconstructable present-state** — path (`build_dest_path` offline, exactly what `repath`
+  does), `release_id` (`MUSICBRAINZ_ALBUMID`), the identity triple (`audio_hash` /
+  `chromaprint_fp` / `acoustid_id`).  Regenerable; no leak.
+- **Sidecar-held provenance** — FreeDB / disc-ToC data lives in a sidecar, part of the authoritative
+  unit (not journal-only).  *Legitimately absent* for some media: PrestoMusic downloads, discs with
+  no FreeDB entry, cdparanoia rips that produced no ToC.  "No provenance sidecar" is a valid state,
+  not an anomaly.
+- **Retained provenance timestamps (keep)** — exactly two: **origin time** (rip / download) and
+  **annotation time** (when music-annotator added tags + sidecars).  Cheap to keep; genuine
+  provenance value.  Placement is *sidecar, not tag*: there is no clean MB/Picard tag for a rip or
+  annotation timestamp (`TDEN` "encoding time" exists in ID3v2.4 but has no FLAC equivalent and
+  collides semantically with the recording/release dates), and the established rip-provenance
+  precedent (EAC/XLD/whipper logs) is a **sidecar log**.  Origin time therefore belongs in the
+  existing per-work_dir provenance sidecar (`freedb_disc_N.yaml` or a sibling rip-log), keeping it
+  inside the self-contained track+sidecars unit.  Annotation time is recoverable from file mtime
+  today.
+- **Discarded mutation-history** — full tag/annotation evolution is *not* the tracks' job and *not*
+  the cache's.  Storing it in tags is "building a database in track tags" — wrong place, unnecessary
+  overhead.  **MusicBrainz is the evolution store.**
+
+Consequences: because there is **no authority leak**, the cache is genuinely regenerable, so its
+**storage format (flat JSON vs SQLite vs …) is a free, low-cost-of-wrong choice** decided purely on
+queryability/performance — not a high-stakes substrate change.  The empirical proof of
+self-sufficiency is **regenerate-from-scan + diff-against-journal**: any field that diffs is either a
+leak (cache held something the tracks don't) or staleness (journal wrong, tags right) — and this is
+a natural mode of the existing `audit` machinery.
+
+**Empirically confirmed (2026-06 library audit, 343 top dirs / 1,384 work_dirs / 16,573 journal
+entries).**  The reconstruction-gap test was run against the real annotated library: `destination`
+reconstructs from embedded tags via `build_dest_path` at a 100% sample match rate; `release_id` and
+the identity triple are tag-held; `freedb_disc_N.yaml` provenance sidecars exist in **100%** of
+work_dirs.  The **only** non-reconstructable field is `source` (the rip-origin path) — provenance,
+not present-state authority, so *not* a leak.  The claim "the journal is fully regenerable from
+tracks+sidecars" **holds**.  One genuine gap: rip *origin-time* exists today only in the journal
+(`source` path + earliest `timestamp`); it is the one datum a blind regenerate would lose, which is
+why it must migrate into the provenance sidecar before the journal is ever discarded.
+
+**Note on host paths.**  The canonical library root is `/home/findlay/Music/Done` on hades; a dev
+mount (e.g. `~/Remote/hades/Music/Done`) is a convenience vantage only.  The journal's
+`/home/findlay/` paths are therefore *correct*, not stale — but `audit`/`regroup`/`repath` derive
+candidates via `Path(e.destination).relative_to(dest_root)`, which raises `ValueError` (silently
+yielding zero candidates) whenever `dest_root` does not match the journal's embedded root.  Running
+a maintenance command against a non-canonical mount is a **silent no-op hazard**, not a library
+defect: pass the host-matching `dest_root`.
+
 ## Cross-medium work-group aggregation (the multimedium substrate)
 
 `run()` processes one medium's *copy* at a time, but aggregates *path/tag* metadata across **all**

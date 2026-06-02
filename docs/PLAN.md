@@ -18,7 +18,7 @@ Conventions (see `~/.config/opencode/multi-session-planning.md`):
 
 | Plan                         | Status     | Scope                                                                 |
 |------------------------------|------------|-----------------------------------------------------------------------|
-| `docs/PLAN-naming.md`        | pre-shard  | Library-wide dir/file-naming unification. Both substrates have now landed (multimedium C-S0 ✓, fingerprint identity layer ✓); ready to be sharded. |
+| `docs/PLAN-naming.md`        | sharded — W1a next  | Library-wide maintenance: **W1** regenerable cache + origin-time rescue (9 sessions total; W1a→W1b→W1c first, then W2a–d and W3a–b in parallel, with two `@plan` junctures before W2b and W3b). Both substrates landed (C-S0 ✓, fingerprint ✓). |
 
 ## Completed plans
 
