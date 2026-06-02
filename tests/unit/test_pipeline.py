@@ -8434,3 +8434,99 @@ class TestAudioHashInvariantAcrossTagging:
         dest = Path("/nonexistent/path/missing.flac")
         # File does not exist — FLAC() will raise an exception, caught by the bare except.
         assert _audio_hash(dest) == ""
+
+
+# ---------------------------------------------------------------------------
+# F1: audio_hash written to tag and journal
+# ---------------------------------------------------------------------------
+
+
+class TestIngestAudioHash:
+    """Tests for F1: audio_hash computed from source and written to the FLAC tag and journal entry.
+
+    Uses the real apply_tags_flac and _verify_copy (not mocked) so the full write-and-read-back
+    path executes.  _audio_hash is also real: _MINIMAL_FLAC has an all-zero STREAMINFO MD5, so
+    the expected hash is "flac-md5:00000000000000000000000000000000".
+    """
+
+    def _patch_mb(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API calls for a single-track run.
+
+        Does NOT patch apply_tags_flac or _verify_copy so the real tagging and verification
+        path executes.
+
+        :param mocker: pytest-mock fixture.
+        :param release: Release model to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch(
+            "music_annotator._pipeline.fetch_recording_detail",
+            return_value=_rec(
+                {
+                    "id": "rec-1",
+                    "title": "Track 1",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [],
+                }
+            ),
+        )
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
+    def test_ingest_writes_audio_hash_tag_and_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """After run(), the destination FLAC has a non-empty AUDIO_HASH tag and the journal entry carries it.
+
+        Verifies both halves of the F1 contract:
+
+        (a) The destination FLAC file has an ``AUDIO_HASH`` Vorbis Comment tag that is non-empty
+            and starts with ``"flac-md5:"``.
+        (b) The corresponding ``action="tagged"`` journal entry has an ``audio_hash`` field that
+            matches the tag value.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        # _MINIMAL_FLAC has an all-zero STREAMINFO MD5, so _audio_hash returns
+        # "flac-md5:00000000000000000000000000000000".
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb(mocker, release)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        # (a) Verify the destination FLAC has a non-empty AUDIO_HASH tag starting with "flac-md5:".
+        dest_flac_files = list(dest.rglob("*.flac"))
+        assert len(dest_flac_files) == 1, f"Expected 1 FLAC in dest, found {len(dest_flac_files)}"
+        dest_flac = dest_flac_files[0]
+        audio = FLAC(str(dest_flac))
+        audio_hash_values = audio.get("audio_hash") or []
+        assert audio_hash_values, "AUDIO_HASH tag is missing from destination FLAC"
+        audio_hash_tag = audio_hash_values[0]
+        assert audio_hash_tag.startswith("flac-md5:"), f"AUDIO_HASH tag does not start with 'flac-md5:': {audio_hash_tag!r}"
+        assert audio_hash_tag != "", "AUDIO_HASH tag is empty"
+
+        # (b) Verify the journal entry carries the matching audio_hash field.
+        journal_path = dest / JOURNAL_FILENAME
+        assert journal_path.exists(), "Journal file was not written"
+        data = json.loads(journal_path.read_text(encoding="utf-8"))
+        tagged_entries = [e for e in data if e.get("action") == "tagged"]
+        assert len(tagged_entries) == 1, f"Expected 1 tagged journal entry, found {len(tagged_entries)}"
+        journal_audio_hash = tagged_entries[0].get("audio_hash", "")
+        assert journal_audio_hash == audio_hash_tag, (
+            f"Journal audio_hash {journal_audio_hash!r} does not match tag {audio_hash_tag!r}"
+        )

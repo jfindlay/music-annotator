@@ -37,6 +37,7 @@ from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
     AudioCompareResult,
     _assess_collisions,
+    _audio_hash,
     _confirm_fragmentation,
     _read_tags_flac,
     _read_tags_mp3,
@@ -1310,6 +1311,12 @@ def run(
                 f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_copy_hash[:12]}…"
             )
 
+        # Compute the tagging-invariant audio hash from the source file before tagging mutates
+        # the destination.  The source and destination bytes are identical at this point (the raw
+        # copy integrity check above has already passed), so hashing the source is equivalent to
+        # hashing the pre-tag destination while avoiding any timing dependency on the copy.
+        final_tags.audio_hash = _audio_hash(src_file)
+
         # Set cover art sidecar reference tags so they are embedded in the audio file.
         def _filenames(images: list[CoverImage]) -> str:
             """Return unique semicolon-joined filenames from a list of CoverImages.
@@ -1377,6 +1384,7 @@ def run(
                 source=str(src_file),
                 destination=str(dest_file),
                 action="tagged",
+                audio_hash=final_tags.audio_hash,
             )
         )
 
