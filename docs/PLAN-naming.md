@@ -424,7 +424,7 @@ W2 and W3a are independent of each other and can be scheduled in parallel after 
 | W1c     | done    | 2411e5f | `audit --diff` + `diff_journal()` + `JournalDiffResult`; matches/stale/leaked buckets |
 | W2a     | done    | fe8e65b | `unify` subcommand + `detect_fragmented_releases()`; C-W2 (performer-split) frozen |
 | W2b     | done    | 678acbf | Composer-split pre-processing in `unify()`; ALBUMARTISTSORT canonical; C-W2 fully frozen |
-| W2c     | pending | —      |       |
+| W2c     | done    | 44409a2 | `_unify_classical_composer_groups()` in `unify()`; patches both `cea_` and `cwp_composer_lastnames` |
 | W2d     | pending | —      |       |
 | W3a     | pending | —      |       |
 | W3b     | deferred | — | Moved to `docs/BACKLOG.md`; dedicated multisession planned |
@@ -434,6 +434,12 @@ W2 and W3a are independent of each other and can be scheduled in parallel after 
 ## Action-frame digest
 
 *Append-only.  Updated at non-trivial iterations (discoveries, contract flexes, notable texture).*
+
+### W2c — 2026-06-03
+Discovery/flex: Partial implementation (aborted subagent) only patched `cea_composer_lastnames`; `build_dest_path` prefers `cwp_composer_lastnames` — both fields must be patched for the canonical path to be computed correctly.
+Affected: none (caught and fixed within W2c; no frozen contract touched)
+Deferred: no
+Texture: The `cwp_composer_lastnames` / `cea_composer_lastnames` priority in `build_dest_path` is a subtle ordering that is easy to miss when writing retroactive tag-patching code.
 
 **2026-06 pre-shard audit** — Library scan confirmed no authority leak; journal regenerable; dominant
 naming anomaly is per-track performer/composer-split (29 releases), not spelling variation as the
