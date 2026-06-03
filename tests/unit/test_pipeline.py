@@ -1108,7 +1108,8 @@ class TestWriteSidecars:
         fs.create_dir(str(work_top))
         sidecars_written: set[Path] = set()
         journal: list[TransactionEntry] = []
-        _write_sidecars(self._make_cover(), work_top, sidecars_written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        # pylint: disable-next=protected-access
+        _write_sidecars(self._make_cover(), work_top, sidecars_written, journal, "now", "rel-1")
         actions = [e.action for e in journal]
         assert all(a == "downloaded" for a in actions)
         sources = {e.source for e in journal}
@@ -1125,9 +1126,11 @@ class TestWriteSidecars:
         fs.create_dir(str(work_top))
         sidecars_written: set[Path] = set()
         journal: list[TransactionEntry] = []
-        _write_sidecars(self._make_cover(), work_top, sidecars_written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        # pylint: disable-next=protected-access
+        _write_sidecars(self._make_cover(), work_top, sidecars_written, journal, "now", "rel-1")
         first_count = len(journal)
-        _write_sidecars(self._make_cover(), work_top, sidecars_written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        # pylint: disable-next=protected-access
+        _write_sidecars(self._make_cover(), work_top, sidecars_written, journal, "now", "rel-1")
         assert len(journal) == first_count  # no new entries on second call
 
     def test_images_without_filename_are_skipped(self, fs: FakeFilesystem) -> None:
@@ -1164,7 +1167,8 @@ class TestWriteSidecars:
 
         journal: list[TransactionEntry] = []
         sidecars_written: set[Path] = set()
-        _write_sidecars(cover, work_top, sidecars_written, journal, "2026-01-01T00:00:00+00:00", "rel-x")  # pylint: disable=protected-access
+        # pylint: disable-next=protected-access
+        _write_sidecars(cover, work_top, sidecars_written, journal, "2026-01-01T00:00:00+00:00", "rel-x")
 
         assert (work_top / "back.jpg").exists()
         assert len(journal) == 1
@@ -1189,7 +1193,8 @@ class TestWriteSidecars:
 
         journal: list[TransactionEntry] = []
         sidecars_written: set[Path] = set()
-        _write_sidecars(cover, work_top, sidecars_written, journal, "2026-01-01T00:00:00+00:00", "rel-x")  # pylint: disable=protected-access
+        # pylint: disable-next=protected-access
+        _write_sidecars(cover, work_top, sidecars_written, journal, "2026-01-01T00:00:00+00:00", "rel-x")
 
         assert (work_top / "back.jpg").exists()
         assert (work_top / "spine.jpg").exists()
@@ -5097,7 +5102,9 @@ def test_no_dd_suffix_on_distinct_titles() -> None:
         return tags
 
     leaves = [
-        music_annotator._tags.build_dest_path(dest_root, release, track, _make_split_tags(n)).name  # pylint: disable=protected-access
+        music_annotator._tags.build_dest_path(  # pylint: disable=protected-access
+            dest_root, release, track, _make_split_tags(n)
+        ).name
         for n in ("1", "2", "3")
     ]
 
@@ -5306,7 +5313,9 @@ class TestRunCollisionAndJournal:
             first_src, first_dest, _, _ = pairs[0]
             return [AudioCompareResult(src=first_src, dest=first_dest, match=None, method="unknown", detail="test")]
 
-        mocker.patch("music_annotator._pipeline._assess_collisions", side_effect=_capture_assess)  # pylint: disable=protected-access
+        mocker.patch(  # pylint: disable=protected-access
+            "music_annotator._pipeline._assess_collisions", side_effect=_capture_assess
+        )
         mocker.patch("builtins.input", return_value="s")
 
         music_annotator.run(
@@ -5609,7 +5618,8 @@ class TestReadTagsMp3:
         fs.create_file(str(path), contents=_MINIMAL_MP3)
         tags = TrackTags(title="Eroica", album="Beethoven Symphonies", tracknumber="3", totaltracks="9", composer="Beethoven")
         apply_tags_mp3(path, tags)
-        writable = music_annotator._tagger._MP3_STD_KEYS | frozenset(music_annotator._tagger._MP3_TXXX_MAP)  # pylint: disable=protected-access
+        # pylint: disable-next=protected-access
+        writable = music_annotator._tagger._MP3_STD_KEYS | frozenset(music_annotator._tagger._MP3_TXXX_MAP)
         expected = {k: v for k, v in tags.to_file_dict().items() if k in writable}
         assert _read_tags_mp3(path) == expected
 

@@ -8,8 +8,7 @@ import socket
 import xml.etree.ElementTree as ET
 from http.client import BadStatusLine, HTTPException, HTTPMessage
 from pathlib import Path
-from typing import Any
-from unittest.mock import patch as stdlib_patch
+from unittest.mock import MagicMock
 from urllib.error import HTTPError, URLError
 
 import musicbrainzngs as mb
@@ -41,7 +40,7 @@ from music_annotator._mb_api import (
     fetch_acoustid_lookup,
 )
 from music_annotator._pipeline_io import _check_collisions
-from music_annotator.models import MBRecording, TransactionEntry
+from music_annotator.models import JSON, MBRecording, TransactionEntry
 
 # ---------------------------------------------------------------------------
 # _mb_retry
@@ -60,7 +59,7 @@ class TestMbRetry:
         inner.__name__ = "mock_fn"
 
         @_mb_retry
-        def wrapped() -> dict[str, Any]:
+        def wrapped() -> dict[str, object]:
             return inner()  # type: ignore[no-any-return]
 
         result = wrapped()
@@ -78,7 +77,7 @@ class TestMbRetry:
         inner.__name__ = "mock_fn"
 
         @_mb_retry
-        def wrapped() -> dict[str, Any]:
+        def wrapped() -> dict[str, object]:
             return inner()  # type: ignore[no-any-return]
 
         result = wrapped()
@@ -96,7 +95,7 @@ class TestMbRetry:
         inner.__name__ = "mock_fn"
 
         @_mb_retry
-        def wrapped() -> dict[str, Any]:
+        def wrapped() -> dict[str, object]:
             return inner()  # type: ignore[no-any-return]
 
         result = wrapped()
@@ -353,14 +352,14 @@ class TestFetchAcoustidId:
 class TestFetchAcoustidLookup:
     """Tests for fetch_acoustid_lookup and _fetch_acoustid_lookup_raw HTTP error handling."""
 
-    def _make_resp(self, mocker: MockerFixture, body: bytes) -> Any:
+    def _make_resp(self, mocker: MockerFixture, body: bytes) -> MagicMock:
         """Build a mock context manager that returns ``body`` from ``.read()``.
 
         :param mocker: pytest-mock fixture.
         :param body: Bytes to return from the context manager's read().
         :returns: A mock usable as a context manager.
         """
-        ctx = mocker.MagicMock()
+        ctx: MagicMock = mocker.MagicMock()
         ctx.__enter__ = mocker.MagicMock(return_value=ctx)
         ctx.__exit__ = mocker.MagicMock(return_value=False)
         ctx.read = mocker.MagicMock(return_value=body)
@@ -718,7 +717,7 @@ class TestFetchRecordingDetail:
 # ---------------------------------------------------------------------------
 
 
-def _make_listing(*entries: tuple[str, str]) -> dict[str, Any]:
+def _make_listing(*entries: tuple[str, str]) -> JSON:
     """Build a fake CAA image-list response dict.
 
     :param entries: Pairs of (image_id, type_string), e.g. ``("111", "Front")``.
@@ -1487,7 +1486,7 @@ class TestPatchMbxmlParseRecording:
 class TestPatchedSafeRead:
     """Tests for the _patched_safe_read workaround that fast-fails on non-retryable HTTP codes."""
 
-    def _make_opener(self, mocker: MockerFixture, exc: Exception | None = None, data: bytes = b"") -> Any:
+    def _make_opener(self, mocker: MockerFixture, exc: Exception | None = None, data: bytes = b"") -> MagicMock:
         """Build a mock opener that raises ``exc`` or returns a mock file object yielding ``data``.
 
         :param mocker: pytest-mock fixture.
@@ -1495,11 +1494,11 @@ class TestPatchedSafeRead:
         :param data: Bytes returned by ``open().read()`` when ``exc`` is ``None``.
         :returns: A MagicMock with an ``open`` method matching the ``_HttpOpener`` protocol.
         """
-        opener = mocker.MagicMock()
+        opener: MagicMock = mocker.MagicMock()
         if exc is not None:
             opener.open.side_effect = exc
         else:
-            fake_file = mocker.MagicMock()
+            fake_file: MagicMock = mocker.MagicMock()
             fake_file.read.return_value = data
             opener.open.return_value = fake_file
         return opener
@@ -1803,14 +1802,14 @@ class TestSidecarFilename:
 class TestFetchCoverArtReleaseGroupFallback:
     """Tests for the release-group fallback dual-fetch in fetch_cover_art."""
 
-    def _make_jpeg_ctx(self, mocker: MockerFixture, data: bytes) -> Any:
+    def _make_jpeg_ctx(self, mocker: MockerFixture, data: bytes) -> MagicMock:
         """Build a mock context manager that returns ``data`` from ``.read()``.
 
         :param mocker: pytest-mock fixture.
         :param data: Bytes to return from the context manager.
         :returns: A mock usable as a context manager.
         """
-        ctx = mocker.MagicMock()
+        ctx: MagicMock = mocker.MagicMock()
         ctx.__enter__ = mocker.MagicMock(return_value=ctx)
         ctx.__exit__ = mocker.MagicMock(return_value=False)
         ctx.read = mocker.MagicMock(return_value=data)
@@ -1865,19 +1864,21 @@ _JPEG_BYTES: bytes = b"\xff\xd8" + b"\x00" * 100
 class TestCoverArtCacheDir:
     """Tests for _cover_art_cache_dir()."""
 
-    def test_creates_directory_under_xdg_cache_home(self, fs: FakeFilesystem) -> None:
+    def test_creates_directory_under_xdg_cache_home(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
         """Cache dir is created under $XDG_CACHE_HOME when set.
 
         :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
         """
 
         fs.create_dir("/custom/cache")
-        with stdlib_patch.dict(os.environ, {"XDG_CACHE_HOME": "/custom/cache"}):
-            result = _cover_art_cache_dir()
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/custom/cache"})
+        result = _cover_art_cache_dir()
         assert result == Path("/custom/cache/music-annotator/cover-art")
         assert result.is_dir()
 
-    def test_falls_back_to_home_cache_when_xdg_unset(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_falls_back_to_home_cache_when_xdg_unset(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
         """Falls back to ~/.cache when XDG_CACHE_HOME is not set.
 
         :param fs: pyfakefs fixture.
@@ -1889,15 +1890,16 @@ class TestCoverArtCacheDir:
         result = _cover_art_cache_dir()
         assert result == Path("/home/user/.cache/music-annotator/cover-art")
 
-    def test_creates_dir_if_absent(self, fs: FakeFilesystem) -> None:
+    def test_creates_dir_if_absent(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
         """Cache directory is created if it does not yet exist.
 
         :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
         """
 
         fs.create_dir("/xdg")
-        with stdlib_patch.dict(os.environ, {"XDG_CACHE_HOME": "/xdg"}):
-            result = _cover_art_cache_dir()
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/xdg"})
+        result = _cover_art_cache_dir()
         assert result.is_dir()
 
 

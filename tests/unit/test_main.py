@@ -10,7 +10,6 @@ import logging
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from mutagen._util import MutagenError
@@ -198,17 +197,18 @@ class TestBuildParser:
             parser.parse_args([])
         assert exc.value.code == 2
 
-    def test_version_flag_exits_0(self, capsys: pytest.CaptureFixture[str]) -> None:
+    @pytest.mark.parametrize("flag", ["-V", "--version"])
+    def test_version_flag_exits_0(self, flag: str, capsys: pytest.CaptureFixture[str]) -> None:
         """-V/--version prints the version string and exits with code 0.
 
+        :param flag: The version flag to test (``-V`` or ``--version``).
         :param capsys: pytest stdout/stderr capture fixture.
         """
         parser = _build_parser()
-        for flag in ("-V", "--version"):
-            with pytest.raises(SystemExit) as exc:
-                parser.parse_args([flag])
-            assert exc.value.code == 0
-            assert _VERSION in capsys.readouterr().out
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args([flag])
+        assert exc.value.code == 0
+        assert _VERSION in capsys.readouterr().out
 
     # ------------------------------------------------------------------
     # apply parser tests
@@ -572,18 +572,18 @@ class TestMain:
     # apply subcommand
     # ------------------------------------------------------------------
 
-    def test_apply_exits_1_when_src_dir_missing(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_apply_exits_1_when_src_dir_missing(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() apply exits with code 1 when src_dir does not exist.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
         """
         self._patch_common(mocker)
-        with patch.object(
-            sys, "argv", ["music-annotator", "apply", "/no/such", "/d", "--release-id", "x", "--user-agent-email", "t@x.com"]
-        ):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        argv = ["music-annotator", "apply", "/no/such", "/d", "--release-id", "x", "--user-agent-email", "t@x.com"]
+        mocker.patch.object(sys, "argv", new=argv)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_apply_exits_0_on_success(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -595,8 +595,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_run = mocker.patch("music_annotator.run")
-        with patch.object(sys, "argv", [*self._APPLY_ARGV, "--dry-run"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._APPLY_ARGV, "--dry-run"])
+        main()
         mock_run.assert_called_once()
 
     def test_apply_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -608,9 +608,9 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mocker.patch("music_annotator.run", side_effect=RuntimeError("boom"))
-        with patch.object(sys, "argv", self._APPLY_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._APPLY_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_apply_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -622,9 +622,9 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mocker.patch("music_annotator.run", side_effect=KeyboardInterrupt)
-        with patch.object(sys, "argv", self._APPLY_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._APPLY_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_apply_no_fetch_rels_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -636,8 +636,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_run = mocker.patch("music_annotator.run")
-        with patch.object(sys, "argv", [*self._APPLY_ARGV, "--no-fetch-rels"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._APPLY_ARGV, "--no-fetch-rels"])
+        main()
         _, kwargs = mock_run.call_args
         assert kwargs["fetch_rels"] is False
 
@@ -650,8 +650,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_run = mocker.patch("music_annotator.run")
-        with patch.object(sys, "argv", [*self._APPLY_ARGV, "--no-cache"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._APPLY_ARGV, "--no-cache"])
+        main()
         _, kwargs = mock_run.call_args
         assert kwargs["no_cache"] is True
 
@@ -664,8 +664,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_run = mocker.patch("music_annotator.run")
-        with patch.object(sys, "argv", [*self._APPLY_ARGV, "--disc", "2"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._APPLY_ARGV, "--disc", "2"])
+        main()
         _, kwargs = mock_run.call_args
         assert kwargs["disc_override"] == 2
 
@@ -678,8 +678,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_run = mocker.patch("music_annotator.run")
-        with patch.object(sys, "argv", self._APPLY_ARGV):
-            main()
+        mocker.patch.object(sys, "argv", new=self._APPLY_ARGV)
+        main()
         _, kwargs = mock_run.call_args
         assert kwargs["disc_override"] is None
 
@@ -692,10 +692,10 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_run = mocker.patch("music_annotator.run")
-        with patch.object(
+        mocker.patch.object(
             sys,
             "argv",
-            [
+            new=[
                 "music-annotator",
                 "apply",
                 "/src",
@@ -707,8 +707,8 @@ class TestMain:
                 "--user-agent-email",
                 "me@example.com",
             ],
-        ):
-            main()
+        )
+        main()
         _, kwargs = mock_run.call_args
         assert kwargs["user_agent"] == "MyApp/2.0 me@example.com"
 
@@ -722,13 +722,22 @@ class TestMain:
         mocker.patch("music_annotator.__main__.structlog.get_logger")
         mocker.patch("music_annotator.run")
         fs.create_dir("/src")
-        with patch.object(sys, "argv", ["-v", *self._APPLY_ARGV[1:]]):
-            with patch.object(
-                sys,
-                "argv",
-                ["music-annotator", "-v", "apply", "/src", "/d", "--release-id", "x", "--user-agent-email", "t@x.com"],
-            ):
-                main()
+        mocker.patch.object(
+            sys,
+            "argv",
+            new=[
+                "music-annotator",
+                "-v",
+                "apply",
+                "/src",
+                "/d",
+                "--release-id",
+                "x",
+                "--user-agent-email",
+                "t@x.com",
+            ],
+        )
+        main()
         mock_cfg.assert_called_once_with(True, no_color=False)
 
     def test_apply_delete_calls_prompt_delete_src(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -741,8 +750,8 @@ class TestMain:
         fs.create_dir("/src")
         mocker.patch("music_annotator.run")
         mock_prompt = mocker.patch("music_annotator.prompt_delete_src")
-        with patch.object(sys, "argv", [*self._APPLY_ARGV, "--delete"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._APPLY_ARGV, "--delete"])
+        main()
         mock_prompt.assert_called_once_with(Path("/src"))
 
     def test_apply_delete_not_called_without_flag(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -755,8 +764,8 @@ class TestMain:
         fs.create_dir("/src")
         mocker.patch("music_annotator.run")
         mock_prompt = mocker.patch("music_annotator.prompt_delete_src")
-        with patch.object(sys, "argv", self._APPLY_ARGV):
-            main()
+        mocker.patch.object(sys, "argv", new=self._APPLY_ARGV)
+        main()
         mock_prompt.assert_not_called()
 
     def test_apply_delete_suppressed_on_dry_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -769,24 +778,25 @@ class TestMain:
         fs.create_dir("/src")
         mocker.patch("music_annotator.run")
         mock_prompt = mocker.patch("music_annotator.prompt_delete_src")
-        with patch.object(sys, "argv", [*self._APPLY_ARGV, "--delete", "--dry-run"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._APPLY_ARGV, "--delete", "--dry-run"])
+        main()
         mock_prompt.assert_not_called()
 
     # ------------------------------------------------------------------
     # search subcommand
     # ------------------------------------------------------------------
 
-    def test_search_exits_1_when_src_dir_missing(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_search_exits_1_when_src_dir_missing(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() search exits with code 1 when src_dir does not exist.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
         """
         self._patch_common(mocker)
-        with patch.object(sys, "argv", ["music-annotator", "search", "/no/such", "/d", "--user-agent-email", "t@x.com"]):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=["music-annotator", "search", "/no/such", "/d", "--user-agent-email", "t@x.com"])
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_search_exits_0_on_success(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -798,8 +808,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_discover = mocker.patch("music_annotator.discover")
-        with patch.object(sys, "argv", self._SEARCH_ARGV):
-            main()
+        mocker.patch.object(sys, "argv", new=self._SEARCH_ARGV)
+        main()
         mock_discover.assert_called_once()
 
     def test_search_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -811,9 +821,9 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mocker.patch("music_annotator.discover", side_effect=RuntimeError("boom"))
-        with patch.object(sys, "argv", self._SEARCH_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._SEARCH_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_search_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -825,9 +835,9 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mocker.patch("music_annotator.discover", side_effect=KeyboardInterrupt)
-        with patch.object(sys, "argv", self._SEARCH_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._SEARCH_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_search_no_fetch_rels_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -839,8 +849,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_discover = mocker.patch("music_annotator.discover")
-        with patch.object(sys, "argv", [*self._SEARCH_ARGV, "--no-fetch-rels"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._SEARCH_ARGV, "--no-fetch-rels"])
+        main()
         _, kwargs = mock_discover.call_args
         assert kwargs["fetch_rels"] is False
 
@@ -853,8 +863,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_discover = mocker.patch("music_annotator.discover")
-        with patch.object(sys, "argv", [*self._SEARCH_ARGV, "--no-cache"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._SEARCH_ARGV, "--no-cache"])
+        main()
         _, kwargs = mock_discover.call_args
         assert kwargs["no_cache"] is True
 
@@ -867,8 +877,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_discover = mocker.patch("music_annotator.discover")
-        with patch.object(sys, "argv", [*self._SEARCH_ARGV, "--limit", "5"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._SEARCH_ARGV, "--limit", "5"])
+        main()
         _, kwargs = mock_discover.call_args
         assert kwargs["limit"] == 5
 
@@ -881,10 +891,10 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_discover = mocker.patch("music_annotator.discover")
-        with patch.object(
+        mocker.patch.object(
             sys,
             "argv",
-            [
+            new=[
                 "music-annotator",
                 "search",
                 "/src",
@@ -894,8 +904,8 @@ class TestMain:
                 "--user-agent-email",
                 "me@example.com",
             ],
-        ):
-            main()
+        )
+        main()
         _, kwargs = mock_discover.call_args
         assert kwargs["user_agent"] == "MyApp/2.0 me@example.com"
 
@@ -908,8 +918,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_discover = mocker.patch("music_annotator.discover")
-        with patch.object(sys, "argv", self._SEARCH_ARGV):
-            main()
+        mocker.patch.object(sys, "argv", new=self._SEARCH_ARGV)
+        main()
         _, kwargs = mock_discover.call_args
         assert kwargs["src_dirs"] == [Path("/src")]
 
@@ -923,8 +933,9 @@ class TestMain:
         fs.create_dir("/src1")
         fs.create_dir("/src2")
         mock_discover = mocker.patch("music_annotator.discover")
-        with patch.object(sys, "argv", ["music-annotator", "search", "/src1", "/src2", "/d", "--user-agent-email", "t@x.com"]):
-            main()
+        argv = ["music-annotator", "search", "/src1", "/src2", "/d", "--user-agent-email", "t@x.com"]
+        mocker.patch.object(sys, "argv", new=argv)
+        main()
         _, kwargs = mock_discover.call_args
         assert kwargs["src_dirs"] == [Path("/src1"), Path("/src2")]
 
@@ -937,9 +948,10 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src1")
         # /src2 does not exist
-        with patch.object(sys, "argv", ["music-annotator", "search", "/src1", "/src2", "/d", "--user-agent-email", "t@x.com"]):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        argv = ["music-annotator", "search", "/src1", "/src2", "/d", "--user-agent-email", "t@x.com"]
+        mocker.patch.object(sys, "argv", new=argv)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_search_delete_passed_to_discover(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -951,8 +963,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_discover = mocker.patch("music_annotator.discover")
-        with patch.object(sys, "argv", [*self._SEARCH_ARGV, "--delete"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._SEARCH_ARGV, "--delete"])
+        main()
         _, kwargs = mock_discover.call_args
         assert kwargs["delete"] is True
 
@@ -965,8 +977,8 @@ class TestMain:
         self._patch_common(mocker)
         fs.create_dir("/src")
         mock_discover = mocker.patch("music_annotator.discover")
-        with patch.object(sys, "argv", self._SEARCH_ARGV):
-            main()
+        mocker.patch.object(sys, "argv", new=self._SEARCH_ARGV)
+        main()
         _, kwargs = mock_discover.call_args
         assert kwargs["delete"] is False
 
@@ -980,8 +992,9 @@ class TestMain:
         mocker.patch("music_annotator.__main__.structlog.get_logger")
         mocker.patch("music_annotator.discover")
         fs.create_dir("/src")
-        with patch.object(sys, "argv", ["music-annotator", "-v", "search", "/src", "/d", "--user-agent-email", "t@x.com"]):
-            main()
+        argv = ["music-annotator", "-v", "search", "/src", "/d", "--user-agent-email", "t@x.com"]
+        mocker.patch.object(sys, "argv", new=argv)
+        main()
         mock_cfg.assert_called_once_with(True, no_color=False)
 
     def test_no_color_passed_to_configure_logging(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -994,15 +1007,17 @@ class TestMain:
         mocker.patch("music_annotator.__main__.structlog.get_logger")
         mocker.patch("music_annotator.discover")
         fs.create_dir("/src")
-        with patch.object(sys, "argv", ["music-annotator", "-C", "search", "/src", "/d", "--user-agent-email", "t@x.com"]):
-            main()
+        argv = ["music-annotator", "-C", "search", "/src", "/d", "--user-agent-email", "t@x.com"]
+        mocker.patch.object(sys, "argv", new=argv)
+        main()
         mock_cfg.assert_called_once_with(False, no_color=True)
 
     # ------------------------------------------------------------------
     # prune subcommand
     # ------------------------------------------------------------------
 
-    def test_prune_dispatches_to_prune_sources(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_prune_dispatches_to_prune_sources(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() prune calls prune_sources with correct arguments.
 
         :param mocker: pytest-mock fixture.
@@ -1010,11 +1025,12 @@ class TestMain:
         """
         self._patch_common(mocker)
         mock_prune = mocker.patch("music_annotator.prune_sources")
-        with patch.object(sys, "argv", self._PRUNE_ARGV):
-            main()
+        mocker.patch.object(sys, "argv", new=self._PRUNE_ARGV)
+        main()
         mock_prune.assert_called_once_with(src_dir=Path("/src"), dest_root=Path("/d"), yes=False)  # single src
 
-    def test_prune_yes_flag_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_prune_yes_flag_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() prune -y passes yes=True to prune_sources.
 
         :param mocker: pytest-mock fixture.
@@ -1022,12 +1038,13 @@ class TestMain:
         """
         self._patch_common(mocker)
         mock_prune = mocker.patch("music_annotator.prune_sources")
-        with patch.object(sys, "argv", [*self._PRUNE_ARGV, "-y"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._PRUNE_ARGV, "-y"])
+        main()
         _, kwargs = mock_prune.call_args
         assert kwargs["yes"] is True
 
-    def test_prune_logs_error_and_continues_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_prune_logs_error_and_continues_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() prune logs the error and completes normally (no exit 1) when prune_sources raises.
 
         Each src_dir is processed independently; an error on one does not abort the others.
@@ -1037,10 +1054,11 @@ class TestMain:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.prune_sources", side_effect=RuntimeError("boom"))
-        with patch.object(sys, "argv", self._PRUNE_ARGV):
-            main()  # should not raise or sys.exit(1)
+        mocker.patch.object(sys, "argv", new=self._PRUNE_ARGV)
+        main()  # should not raise or sys.exit(1)
 
-    def test_prune_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_prune_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() prune exits with code 1 on KeyboardInterrupt.
 
         :param mocker: pytest-mock fixture.
@@ -1048,12 +1066,13 @@ class TestMain:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.prune_sources", side_effect=KeyboardInterrupt)
-        with patch.object(sys, "argv", self._PRUNE_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._PRUNE_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
-    def test_prune_multiple_src_dirs_calls_prune_sources_for_each(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_prune_multiple_src_dirs_calls_prune_sources_for_each(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() prune calls prune_sources once per src_dir.
 
         :param mocker: pytest-mock fixture.
@@ -1061,8 +1080,8 @@ class TestMain:
         """
         self._patch_common(mocker)
         mock_prune = mocker.patch("music_annotator.prune_sources")
-        with patch.object(sys, "argv", ["music-annotator", "prune", "/src1", "/src2", "/d"]):
-            main()
+        mocker.patch.object(sys, "argv", new=["music-annotator", "prune", "/src1", "/src2", "/d"])
+        main()
         assert mock_prune.call_count == 2
         calls = mock_prune.call_args_list
         assert calls[0].kwargs["src_dir"] == Path("/src1")
@@ -1070,7 +1089,8 @@ class TestMain:
         assert calls[0].kwargs["dest_root"] == Path("/d")
         assert calls[1].kwargs["dest_root"] == Path("/d")
 
-    def test_prune_continues_after_error_on_first_src(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_prune_continues_after_error_on_first_src(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() prune logs error and continues to next src_dir when one raises.
 
         :param mocker: pytest-mock fixture.
@@ -1081,8 +1101,8 @@ class TestMain:
             "music_annotator.prune_sources",
             side_effect=[RuntimeError("boom"), None],
         )
-        with patch.object(sys, "argv", ["music-annotator", "prune", "/src1", "/src2", "/d"]):
-            main()  # should not raise or exit 1
+        mocker.patch.object(sys, "argv", new=["music-annotator", "prune", "/src1", "/src2", "/d"])
+        main()  # should not raise or exit 1
         assert mock_prune.call_count == 2
 
     def test_parser_search_multiple_src_dirs(self) -> None:
@@ -1108,7 +1128,8 @@ class TestMain:
 
     _REPATH_ARGV = ["music-annotator", "repath", "/d"]
 
-    def test_repath_dispatches_to_repath(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_repath_dispatches_to_repath(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() repath calls music_annotator.repath with dest_root and dry_run=False.
 
         :param mocker: pytest-mock fixture.
@@ -1116,11 +1137,12 @@ class TestMain:
         """
         self._patch_common(mocker)
         mock_repath = mocker.patch("music_annotator.repath")
-        with patch.object(sys, "argv", self._REPATH_ARGV):
-            main()
+        mocker.patch.object(sys, "argv", new=self._REPATH_ARGV)
+        main()
         mock_repath.assert_called_once_with(dest_root=Path("/d"), dry_run=False)
 
-    def test_repath_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_repath_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() repath --dry-run passes dry_run=True to repath().
 
         :param mocker: pytest-mock fixture.
@@ -1128,12 +1150,13 @@ class TestMain:
         """
         self._patch_common(mocker)
         mock_repath = mocker.patch("music_annotator.repath")
-        with patch.object(sys, "argv", [*self._REPATH_ARGV, "--dry-run"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._REPATH_ARGV, "--dry-run"])
+        main()
         _, kwargs = mock_repath.call_args
         assert kwargs["dry_run"] is True
 
-    def test_repath_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_repath_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() repath exits with code 1 when repath() raises an unexpected exception.
 
         :param mocker: pytest-mock fixture.
@@ -1141,12 +1164,13 @@ class TestMain:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.repath", side_effect=RuntimeError("boom"))
-        with patch.object(sys, "argv", self._REPATH_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._REPATH_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
-    def test_repath_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_repath_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() repath exits with code 1 on KeyboardInterrupt.
 
         :param mocker: pytest-mock fixture.
@@ -1154,9 +1178,9 @@ class TestMain:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.repath", side_effect=KeyboardInterrupt)
-        with patch.object(sys, "argv", self._REPATH_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._REPATH_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     # ------------------------------------------------------------------
@@ -1165,7 +1189,8 @@ class TestMain:
 
     _REGROUP_ARGV = ["music-annotator", "regroup", "/d"]
 
-    def test_regroup_dispatches_to_regroup(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_regroup_dispatches_to_regroup(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() regroup calls music_annotator.regroup with dest_root, yes=False, dry_run=False.
 
         :param mocker: pytest-mock fixture.
@@ -1173,11 +1198,12 @@ class TestMain:
         """
         self._patch_common(mocker)
         mock_regroup = mocker.patch("music_annotator.regroup")
-        with patch.object(sys, "argv", self._REGROUP_ARGV):
-            main()
+        mocker.patch.object(sys, "argv", new=self._REGROUP_ARGV)
+        main()
         mock_regroup.assert_called_once_with(dest_root=Path("/d"), yes=False, dry_run=False)
 
-    def test_regroup_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_regroup_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() regroup --dry-run passes dry_run=True to regroup().
 
         :param mocker: pytest-mock fixture.
@@ -1185,12 +1211,13 @@ class TestMain:
         """
         self._patch_common(mocker)
         mock_regroup = mocker.patch("music_annotator.regroup")
-        with patch.object(sys, "argv", [*self._REGROUP_ARGV, "--dry-run"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._REGROUP_ARGV, "--dry-run"])
+        main()
         _, kwargs = mock_regroup.call_args
         assert kwargs["dry_run"] is True
 
-    def test_regroup_yes_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_regroup_yes_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() regroup --yes passes yes=True to regroup().
 
         :param mocker: pytest-mock fixture.
@@ -1198,12 +1225,13 @@ class TestMain:
         """
         self._patch_common(mocker)
         mock_regroup = mocker.patch("music_annotator.regroup")
-        with patch.object(sys, "argv", [*self._REGROUP_ARGV, "--yes"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._REGROUP_ARGV, "--yes"])
+        main()
         _, kwargs = mock_regroup.call_args
         assert kwargs["yes"] is True
 
-    def test_regroup_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_regroup_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() regroup exits with code 1 when regroup() raises an unexpected exception.
 
         :param mocker: pytest-mock fixture.
@@ -1211,12 +1239,13 @@ class TestMain:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.regroup", side_effect=RuntimeError("boom"))
-        with patch.object(sys, "argv", self._REGROUP_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._REGROUP_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
-    def test_regroup_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_regroup_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() regroup exits with code 1 on KeyboardInterrupt.
 
         :param mocker: pytest-mock fixture.
@@ -1224,9 +1253,9 @@ class TestMain:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.regroup", side_effect=KeyboardInterrupt)
-        with patch.object(sys, "argv", self._REGROUP_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._REGROUP_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
 
@@ -1367,7 +1396,8 @@ class TestPruneSources:
         journal_path = dest_root / "music_annotator_journal.json"
         fs.create_file(str(journal_path), contents=json.dumps(entries))
 
-    def test_src_dir_already_deleted_logs_info(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_src_dir_already_deleted_logs_info(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """prune_sources logs info and returns when src_dir does not exist.
 
         :param mocker: pytest-mock fixture.
@@ -3410,7 +3440,8 @@ class TestAudit:
         assert "audit_clean" in info_events
         mock_log.warning.assert_not_called()
 
-    def test_audit_dispatches_from_main(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_audit_dispatches_from_main(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit subcommand dispatches to music_annotator.audit with dest_root.
 
         :param mocker: pytest-mock fixture.
@@ -3420,11 +3451,12 @@ class TestAudit:
         mocker.patch("music_annotator.__main__.structlog.configure")
         mocker.patch("music_annotator.__main__.structlog.get_logger")
         mock_audit = mocker.patch("music_annotator.audit")
-        with patch.object(sys, "argv", ["music-annotator", "audit", "/d"]):
-            main()
+        mocker.patch.object(sys, "argv", new=["music-annotator", "audit", "/d"])
+        main()
         mock_audit.assert_called_once_with(dest_root=Path("/d"))
 
-    def test_audit_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_audit_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit exits with code 1 when audit() raises an unexpected exception.
 
         :param mocker: pytest-mock fixture.
@@ -3434,12 +3466,13 @@ class TestAudit:
         mocker.patch("music_annotator.__main__.structlog.configure")
         mocker.patch("music_annotator.__main__.structlog.get_logger")
         mocker.patch("music_annotator.audit", side_effect=RuntimeError("boom"))
-        with patch.object(sys, "argv", ["music-annotator", "audit", "/d"]):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=["music-annotator", "audit", "/d"])
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
-    def test_audit_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_audit_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit exits with code 1 on KeyboardInterrupt.
 
         :param mocker: pytest-mock fixture.
@@ -3449,9 +3482,9 @@ class TestAudit:
         mocker.patch("music_annotator.__main__.structlog.configure")
         mocker.patch("music_annotator.__main__.structlog.get_logger")
         mocker.patch("music_annotator.audit", side_effect=KeyboardInterrupt)
-        with patch.object(sys, "argv", ["music-annotator", "audit", "/d"]):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=["music-annotator", "audit", "/d"])
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_audit_parser_parses_dest_dir(self) -> None:
@@ -3464,7 +3497,8 @@ class TestAudit:
         assert ns.subcommand == "audit"
         assert ns.dest_dir == Path("/dest")
 
-    def test_audit_diff_dispatches_from_main(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_audit_diff_dispatches_from_main(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit --diff dispatches to music_annotator.diff_journal with dest_root.
 
         :param mocker: pytest-mock fixture.
@@ -3474,8 +3508,8 @@ class TestAudit:
         mocker.patch("music_annotator.__main__.structlog.configure")
         mocker.patch("music_annotator.__main__.structlog.get_logger")
         mock_diff = mocker.patch("music_annotator.diff_journal")
-        with patch.object(sys, "argv", ["music-annotator", "audit", "/d", "--diff"]):
-            main()
+        mocker.patch.object(sys, "argv", new=["music-annotator", "audit", "/d", "--diff"])
+        main()
         mock_diff.assert_called_once_with(dest_root=Path("/d"))
 
 
@@ -3568,7 +3602,8 @@ class TestAuditIdentityPasses:
     # Pass 1 (_audit_journal_scan) branch coverage
     # ------------------------------------------------------------------
 
-    def test_pass1_empty_audio_hash_logs_needs_enrich(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_pass1_empty_audio_hash_logs_needs_enrich(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Pass 1 logs audit_needs_enrich when audio_hash is empty in the journal entry.
 
         :param mocker: pytest-mock fixture.
@@ -3594,7 +3629,8 @@ class TestAuditIdentityPasses:
         assert counts["needs_enrich"] == 1
         assert counts["total"] == 1
 
-    def test_pass1_empty_acoustid_logs_acoustid_missing(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_pass1_empty_acoustid_logs_acoustid_missing(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Pass 1 logs audit_acoustid_missing when acoustid_id is empty in the journal entry.
 
         :param mocker: pytest-mock fixture.
@@ -3620,7 +3656,8 @@ class TestAuditIdentityPasses:
         assert counts["acoustid_missing"] == 1
         assert counts["total"] == 1
 
-    def test_pass1_both_non_empty_no_findings(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_pass1_both_non_empty_no_findings(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Pass 1 emits no findings when both audio_hash and acoustid_id are non-empty.
 
         :param mocker: pytest-mock fixture.
@@ -3648,7 +3685,8 @@ class TestAuditIdentityPasses:
         assert counts["acoustid_missing"] == 0
         assert counts["total"] == 1
 
-    def test_pass1_only_tagged_and_enriched_scanned(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_pass1_only_tagged_and_enriched_scanned(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Pass 1 only scans entries with action 'tagged' or 'enriched'; others are skipped.
 
         :param mocker: pytest-mock fixture.
@@ -3683,7 +3721,8 @@ class TestAuditIdentityPasses:
         assert counts["needs_enrich"] == 0
         assert counts["acoustid_missing"] == 0
 
-    def test_pass1_duplicate_destination_counted_once(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_pass1_duplicate_destination_counted_once(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Pass 1 counts each unique destination only once (first occurrence wins).
 
         :param mocker: pytest-mock fixture.
@@ -3720,7 +3759,8 @@ class TestAuditIdentityPasses:
     # Pass 2 (_audit_tag_adjudication) branch coverage
     # ------------------------------------------------------------------
 
-    def test_pass2_file_missing_logs_warning(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_pass2_file_missing_logs_warning(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Pass 2 logs audit_file_missing when the destination file does not exist on disk.
 
         :param mocker: pytest-mock fixture.
@@ -4012,7 +4052,8 @@ class TestAuditIdentityPasses:
         assert "audit_audio_stable" in debug_events
         assert counts["audio_stable"] == 1
 
-    def test_pass3_file_missing_skipped_silently(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_pass3_file_missing_skipped_silently(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Pass 3 silently skips entries whose destination file does not exist (already counted in pass 2).
 
         :param mocker: pytest-mock fixture.
@@ -4168,7 +4209,8 @@ class TestReadAlbumidTag:
 
         assert _read_albumid_tag(path) == ""
 
-    def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """_read_albumid_tag returns "" and logs a warning when the tag read raises.
 
         :param mocker: pytest-mock fixture.
@@ -5588,7 +5630,8 @@ class TestReadAudioHashTag:
 
         assert _read_audio_hash_tag(path) == ""
 
-    def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """_read_audio_hash_tag returns "" when the file read raises an exception.
 
         :param mocker: pytest-mock fixture.
@@ -5678,7 +5721,8 @@ class TestReadChromaprintFpTag:
 
         assert _read_chromaprint_fp_tag(path) == ""
 
-    def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """_read_chromaprint_fp_tag returns "" when the file read raises an exception.
 
         :param mocker: pytest-mock fixture.
@@ -6054,7 +6098,8 @@ class TestEnrich:
     # empty journal → nothing to enrich
     # ------------------------------------------------------------------
 
-    def test_enrich_empty_journal_is_noop(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_enrich_empty_journal_is_noop(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """enrich() is a no-op when the journal has no entries.
 
         :param mocker: pytest-mock fixture.
@@ -6075,7 +6120,8 @@ class TestEnrich:
     # file not on disk → skipped gracefully
     # ------------------------------------------------------------------
 
-    def test_enrich_skips_file_not_on_disk(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_enrich_skips_file_not_on_disk(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """enrich() skips files that are in the journal but do not exist on disk.
 
         :param mocker: pytest-mock fixture.
@@ -6397,7 +6443,8 @@ class TestAuditEnrichCLI:
 
     _AUDIT_ARGV = ["music-annotator", "audit", "/d"]
 
-    def test_audit_enrich_dispatches_to_enrich(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_audit_enrich_dispatches_to_enrich(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit --enrich calls music_annotator.enrich with dest_root, re_resolve, dry_run.
 
         :param mocker: pytest-mock fixture.
@@ -6405,11 +6452,12 @@ class TestAuditEnrichCLI:
         """
         self._patch_common(mocker)
         mock_enrich = mocker.patch("music_annotator.enrich")
-        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--enrich"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._AUDIT_ARGV, "--enrich"])
+        main()
         mock_enrich.assert_called_once_with(dest_root=Path("/d"), re_resolve=False, dry_run=False, acoustid_key="")
 
-    def test_audit_enrich_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_audit_enrich_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit --enrich --dry-run passes dry_run=True to enrich().
 
         :param mocker: pytest-mock fixture.
@@ -6417,12 +6465,13 @@ class TestAuditEnrichCLI:
         """
         self._patch_common(mocker)
         mock_enrich = mocker.patch("music_annotator.enrich")
-        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--enrich", "--dry-run"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._AUDIT_ARGV, "--enrich", "--dry-run"])
+        main()
         _, kwargs = mock_enrich.call_args
         assert kwargs["dry_run"] is True
 
-    def test_audit_enrich_re_resolve_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_audit_enrich_re_resolve_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit --enrich --re-resolve passes re_resolve=True to enrich().
 
         :param mocker: pytest-mock fixture.
@@ -6430,12 +6479,13 @@ class TestAuditEnrichCLI:
         """
         self._patch_common(mocker)
         mock_enrich = mocker.patch("music_annotator.enrich")
-        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--enrich", "--re-resolve"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._AUDIT_ARGV, "--enrich", "--re-resolve"])
+        main()
         _, kwargs = mock_enrich.call_args
         assert kwargs["re_resolve"] is True
 
-    def test_audit_enrich_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_audit_enrich_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit --enrich exits with code 1 when enrich() raises an unexpected exception.
 
         :param mocker: pytest-mock fixture.
@@ -6443,12 +6493,13 @@ class TestAuditEnrichCLI:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.enrich", side_effect=RuntimeError("boom"))
-        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--enrich"]):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=[*self._AUDIT_ARGV, "--enrich"])
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
-    def test_audit_enrich_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_audit_enrich_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit --enrich exits with code 1 on KeyboardInterrupt.
 
         :param mocker: pytest-mock fixture.
@@ -6456,9 +6507,9 @@ class TestAuditEnrichCLI:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.enrich", side_effect=KeyboardInterrupt)
-        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--enrich"]):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=[*self._AUDIT_ARGV, "--enrich"])
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_audit_enrich_parser_flags(self) -> None:
@@ -6974,7 +7025,8 @@ class TestAuditOriginTimeCLI:
 
     _AUDIT_ARGV = ["music-annotator", "audit", "/d"]
 
-    def test_origin_time_dispatches_to_enrich_origin_time(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_origin_time_dispatches_to_enrich_origin_time(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit --origin-time calls music_annotator.enrich_origin_time with dest_root and dry_run=False.
 
         :param mocker: pytest-mock fixture.
@@ -6982,11 +7034,12 @@ class TestAuditOriginTimeCLI:
         """
         self._patch_common(mocker)
         mock_fn = mocker.patch("music_annotator.enrich_origin_time")
-        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--origin-time"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._AUDIT_ARGV, "--origin-time"])
+        main()
         mock_fn.assert_called_once_with(dest_root=Path("/d"), dry_run=False)
 
-    def test_origin_time_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_origin_time_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit --origin-time --dry-run passes dry_run=True to enrich_origin_time().
 
         :param mocker: pytest-mock fixture.
@@ -6994,12 +7047,13 @@ class TestAuditOriginTimeCLI:
         """
         self._patch_common(mocker)
         mock_fn = mocker.patch("music_annotator.enrich_origin_time")
-        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--origin-time", "--dry-run"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._AUDIT_ARGV, "--origin-time", "--dry-run"])
+        main()
         _, kwargs = mock_fn.call_args
         assert kwargs["dry_run"] is True
 
-    def test_origin_time_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_origin_time_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit --origin-time exits with code 1 when enrich_origin_time() raises.
 
         :param mocker: pytest-mock fixture.
@@ -7007,12 +7061,13 @@ class TestAuditOriginTimeCLI:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.enrich_origin_time", side_effect=RuntimeError("boom"))
-        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--origin-time"]):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=[*self._AUDIT_ARGV, "--origin-time"])
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
-    def test_origin_time_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_origin_time_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() audit --origin-time exits with code 1 on KeyboardInterrupt.
 
         :param mocker: pytest-mock fixture.
@@ -7020,9 +7075,9 @@ class TestAuditOriginTimeCLI:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.enrich_origin_time", side_effect=KeyboardInterrupt)
-        with patch.object(sys, "argv", [*self._AUDIT_ARGV, "--origin-time"]):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=[*self._AUDIT_ARGV, "--origin-time"])
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_origin_time_parser_flag(self) -> None:
@@ -7049,7 +7104,8 @@ class TestAuditOriginTimeCLI:
 
     _REBUILD_ARGV = ["music-annotator", "rebuild", "/d"]
 
-    def test_rebuild_dispatches_to_rebuild_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_rebuild_dispatches_to_rebuild_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() rebuild calls music_annotator.rebuild_journal with dest_root and dry_run=True.
 
         :param mocker: pytest-mock fixture.
@@ -7057,11 +7113,12 @@ class TestAuditOriginTimeCLI:
         """
         self._patch_common(mocker)
         mock_rebuild = mocker.patch("music_annotator.rebuild_journal")
-        with patch.object(sys, "argv", self._REBUILD_ARGV):
-            main()
+        mocker.patch.object(sys, "argv", new=self._REBUILD_ARGV)
+        main()
         mock_rebuild.assert_called_once_with(dest_root=Path("/d"), dry_run=True)
 
-    def test_rebuild_write_flag_passes_dry_run_false(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_rebuild_write_flag_passes_dry_run_false(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() rebuild --write passes dry_run=False to rebuild_journal().
 
         :param mocker: pytest-mock fixture.
@@ -7069,12 +7126,13 @@ class TestAuditOriginTimeCLI:
         """
         self._patch_common(mocker)
         mock_rebuild = mocker.patch("music_annotator.rebuild_journal")
-        with patch.object(sys, "argv", [*self._REBUILD_ARGV, "--write"]):
-            main()
+        mocker.patch.object(sys, "argv", new=[*self._REBUILD_ARGV, "--write"])
+        main()
         _, kwargs = mock_rebuild.call_args
         assert kwargs["dry_run"] is False
 
-    def test_rebuild_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_rebuild_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() rebuild exits with code 1 when rebuild_journal() raises an unexpected exception.
 
         :param mocker: pytest-mock fixture.
@@ -7082,12 +7140,13 @@ class TestAuditOriginTimeCLI:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.rebuild_journal", side_effect=RuntimeError("boom"))
-        with patch.object(sys, "argv", self._REBUILD_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._REBUILD_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
-    def test_rebuild_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+    # pylint: disable-next=unused-argument
+    def test_rebuild_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() rebuild exits with code 1 on KeyboardInterrupt.
 
         :param mocker: pytest-mock fixture.
@@ -7095,9 +7154,9 @@ class TestAuditOriginTimeCLI:
         """
         self._patch_common(mocker)
         mocker.patch("music_annotator.rebuild_journal", side_effect=KeyboardInterrupt)
-        with patch.object(sys, "argv", self._REBUILD_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._REBUILD_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_rebuild_parser_dry_run_default(self) -> None:
@@ -7555,8 +7614,8 @@ class TestUnify:
         self._patch_common(mocker)
         fs.create_dir("/dest")
         mock_unify = mocker.patch("music_annotator.unify")
-        with patch.object(sys, "argv", self._UNIFY_ARGV):
-            main()
+        mocker.patch.object(sys, "argv", new=self._UNIFY_ARGV)
+        main()
         mock_unify.assert_called_once_with(dest_root=Path("/dest"), yes=False, dry_run=False)
 
     def test_main_unify_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -7568,9 +7627,9 @@ class TestUnify:
         self._patch_common(mocker)
         fs.create_dir("/dest")
         mocker.patch("music_annotator.unify", side_effect=RuntimeError("boom"))
-        with patch.object(sys, "argv", self._UNIFY_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._UNIFY_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_main_unify_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -7582,9 +7641,9 @@ class TestUnify:
         self._patch_common(mocker)
         fs.create_dir("/dest")
         mocker.patch("music_annotator.unify", side_effect=KeyboardInterrupt)
-        with patch.object(sys, "argv", self._UNIFY_ARGV):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        mocker.patch.object(sys, "argv", new=self._UNIFY_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
         assert exc.value.code == 1
 
     def test_unify_parser_dry_run_flag(self) -> None:

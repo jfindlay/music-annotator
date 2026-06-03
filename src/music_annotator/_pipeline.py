@@ -1399,7 +1399,7 @@ def run(
                     apply_tags_flac(dest_file, final_tags, cover)
                 case ".mp3":
                     apply_tags_mp3(dest_file, final_tags, cover)
-                case _:
+                case _:  # pragma: no cover
                     log.warning("unsupported_format", ext=ext, file=dest_file.name)
         except MutagenError as exc:
             raise RuntimeError(f"tag write failure for '{dest_file.name}': {exc}") from exc
