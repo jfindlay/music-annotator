@@ -389,7 +389,7 @@ W2 and W3a are independent of each other and can be scheduled in parallel after 
 
 | Session | Status  | Commit | Notes |
 |---------|---------|--------|-------|
-| W1a     | pending | —      |       |
+| W1a     | done    | 05fc10d | Already implemented before chain start; `enrich --origin-time` + `ProvenanceSidecar` model |
 | W1b     | pending | —      |       |
 | W1c     | pending | —      |       |
 | W2a     | pending | —      |       |
