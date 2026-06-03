@@ -177,7 +177,7 @@ C-PROV, C-MOVE).
 | Q2 | Q | — | done | b428b71 |
 | S1 | S | — (substrate) | done | cc6ae67 | C-PROV frozen, C-MOVE frozen |
 | S2 | S | S1 | done | 4938cba |
-| S3 | S | S1 | pending | |
+| S3 | S | S1 | done | 5e4a3fb |
 | S4 | S | S2, S3 | pending | |
 | S5 | S | — (indep) | pending | |
 | S6 | S | — (indep) | pending | |
