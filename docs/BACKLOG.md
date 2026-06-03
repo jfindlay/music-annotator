@@ -144,6 +144,41 @@ an MB submit-mode correction (add the missing `part of` link upstream), or an ed
 Per the "ragged depth has two sources" rule in `docs/NOTES.md`, the defect should be kept *visible*
 in the path until fixed at the data/resolution layer, never papered over in the renderer.
 
+## Execution learnings (from PLAN-naming.md run)
+
+Durable findings from the naming plan's `/run-plan` chain; recorded here so they survive the plan
+deletion.
+
+- **`repath()` intra-plan collision gap (W3a)**: `_assess_collisions` only checks whether the
+  destination already exists on disk — it cannot detect that two entries in the same plan recompute
+  to the same destination.  Before the W3a fix, `os.replace` would silently overwrite the first
+  collision-suffixed file with the second.  Fixed by an intra-plan collision guard (group plan
+  entries by recomputed destination before the move loop; skip entries that share a destination).
+  Any future repath-style loop must include this guard.
+
+- **`cwp_composer_lastnames` / `cea_composer_lastnames` priority in `build_dest_path` (W2c)**:
+  `build_dest_path` prefers `CWP_COMPOSER_LASTNAMES` (from `cwp_composer_lastnames`) over
+  `CEA_COMPOSER_LASTNAMES`.  Retroactive tag-patching code that only patches the `cea_` field
+  silently produces the wrong path.  Always patch both fields when overriding the composer
+  component in `unify()` or any similar retroactive pass.
+
+## Codebase-audit items (handoff from PLAN-naming.md)
+
+Four cross-cutting items surfaced during the multimedium plan and carried into the naming plan.
+Independent of naming/repath work; can be scheduled in any order after W1b (now complete).
+
+1. **`WorkGroup`/`ReleaseContext` aggregation object** — five passes over the same `group_idxs` in
+   `run()`.  Decide whether to lift into a first-class object.  Likely one session; may be zero-code
+   if the decision is "not yet."
+2. **`__init__.py` API-surface coherence** — the private-helper re-export pattern for test patching.
+   One session; likely small refactor.
+3. **`repath` confirmation-prompt gap** — `repath` mass-relocates with no prompt; all other
+   destructive commands confirm.  One session; small.  (See also "Destructive maintenance commands"
+   entry below for the broader cross-command coherence question.)
+4. **Module-boundary review** — `_pipeline.py` hosts three entry points sharing a near-verbatim
+   move/verify/journal loop.  Likely one session to factor the shared primitive; may be a
+   `_pipeline_maint.py` split.
+
 ## Destructive maintenance commands — confirmation-prompt consistency
 
 The library-mutating maintenance commands are **inconsistent about interactive confirmation**, and
