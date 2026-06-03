@@ -26,13 +26,15 @@ from music_annotator.__main__ import (
     _resolve_path,
     main,
 )
-from music_annotator._pipeline_io import (
-    AudioCompareResult,
-    _audio_hash,
+from music_annotator._audit import (
     _audit_audio_anchor,
     _audit_journal_scan,
     _audit_tag_adjudication,
     _make_audit_counts,
+)
+from music_annotator._pipeline_io import (
+    AudioCompareResult,
+    _audio_hash,
     _needs_enrich,
     _read_albumid_tag,
     _read_audio_hash_tag,
@@ -3242,7 +3244,7 @@ class TestAudit:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         music_annotator.audit(dest_root=dest_root)
 
         warning_events = [call.args[0] for call in mock_log.warning.call_args_list]
@@ -3313,7 +3315,7 @@ class TestAudit:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         music_annotator.audit(dest_root=dest_root)
 
         info_events = [call.args[0] for call in mock_log.info.call_args_list]
@@ -3368,7 +3370,7 @@ class TestAudit:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         music_annotator.audit(dest_root=dest_root)
 
         # Only the valid entry was processed; no fragmentation → clean log
@@ -3409,7 +3411,7 @@ class TestAudit:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         music_annotator.audit(dest_root=dest_root)
 
         # The shallow entry was skipped; no tagged entries qualify → clean log
@@ -3465,7 +3467,7 @@ class TestAudit:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         music_annotator.audit(dest_root=dest_root)
 
         info_events = [call.args[0] for call in mock_log.info.call_args_list]
@@ -3638,7 +3640,7 @@ class TestAuditIdentityPasses:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         music_annotator.audit(dest_root=dest_root)
 
         warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
@@ -3682,7 +3684,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="some-acoustid",
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_journal_scan(entries, counts)
 
         info_events = [c.args[0] for c in mock_log.info.call_args_list]
@@ -3709,7 +3711,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="",
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_journal_scan(entries, counts)
 
         info_events = [c.args[0] for c in mock_log.info.call_args_list]
@@ -3736,7 +3738,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="some-acoustid",
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_journal_scan(entries, counts)
 
         info_events = [c.args[0] for c in mock_log.info.call_args_list]
@@ -3774,7 +3776,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="some-acoustid",
             ),
         ]
-        mocker.patch("music_annotator._pipeline_io.log")
+        mocker.patch("music_annotator._audit.log")
         _audit_journal_scan(entries, counts)
 
         # Only the "enriched" entry is scanned; "repathed" is ignored.
@@ -3811,7 +3813,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="some-acoustid",
             ),
         ]
-        mocker.patch("music_annotator._pipeline_io.log")
+        mocker.patch("music_annotator._audit.log")
         _audit_journal_scan(entries, counts)
 
         assert counts["total"] == 1
@@ -3839,7 +3841,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="some-acoustid",
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_tag_adjudication(entries, counts)
 
         warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
@@ -3871,7 +3873,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="journal-acoustid",
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_tag_adjudication(entries, counts)
 
         warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
@@ -3903,7 +3905,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="same-acoustid",
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_tag_adjudication(entries, counts)
 
         warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
@@ -3935,7 +3937,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="",  # empty journal acoustid → no comparison
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_tag_adjudication(entries, counts)
 
         warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
@@ -3968,7 +3970,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="journal-acoustid",  # journal has value but tag is empty
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_tag_adjudication(entries, counts)
 
         warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
@@ -4000,7 +4002,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="same-acoustid",
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_tag_adjudication(entries, counts)
 
         warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
@@ -4041,7 +4043,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="some-acoustid",
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_audio_anchor(entries, counts)
 
         debug_events = [c.args[0] for c in mock_log.debug.call_args_list]
@@ -4073,7 +4075,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="some-acoustid",
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_audio_anchor(entries, counts)
 
         warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
@@ -4106,7 +4108,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="some-acoustid",
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_audio_anchor(entries, counts)
 
         debug_events = [c.args[0] for c in mock_log.debug.call_args_list]
@@ -4132,7 +4134,7 @@ class TestAuditIdentityPasses:
                 acoustid_id="some-acoustid",
             )
         ]
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_audio_anchor(entries, counts)
 
         # No warning logged (file_missing is pass 2's responsibility)
@@ -4170,8 +4172,8 @@ class TestAuditIdentityPasses:
             )
         ]
         # Patch _audio_hash to return "" (simulating unsupported format / read error)
-        mocker.patch("music_annotator._pipeline_io._audio_hash", return_value="")
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mocker.patch("music_annotator._audit._audio_hash", return_value="")
+        mock_log = mocker.patch("music_annotator._audit.log")
         _audit_audio_anchor(entries, counts)
 
         # No events logged — silently skipped
@@ -4214,7 +4216,7 @@ class TestAuditIdentityPasses:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         music_annotator.audit(dest_root=dest_root)
 
         info_events = [c.args[0] for c in mock_log.info.call_args_list]
@@ -4397,7 +4399,7 @@ class TestAuditConfirmsViaTag:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         music_annotator.audit(dest_root=dest_root)
 
         warning_calls = mock_log.warning.call_args_list
@@ -4452,7 +4454,7 @@ class TestAuditConfirmsViaTag:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         music_annotator.audit(dest_root=dest_root)
 
         work_a_calls = [c for c in mock_log.warning.call_args_list if c.kwargs.get("work_dir") == "Work-A [2020]"]
@@ -4498,7 +4500,7 @@ class TestAuditConfirmsViaTag:
         )
 
         # Patch log so we can check the stale result without noise from the read-error warning
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         music_annotator.audit(dest_root=dest_root)
 
         work_a_calls = [c for c in mock_log.warning.call_args_list if c.kwargs.get("work_dir") == "Work-A [2020]"]
@@ -4555,7 +4557,7 @@ class TestAuditConfirmsViaTag:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        mock_log = mocker.patch("music_annotator._audit.log")
         music_annotator.audit(dest_root=dest_root)
 
         warning_events = [c.args[0] for c in mock_log.warning.call_args_list]

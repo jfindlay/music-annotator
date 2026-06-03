@@ -35,20 +35,22 @@ from mutagen._util import MutagenError
 from rich.markup import escape as _markup_escape
 
 from music_annotator._artists import last_name
+from music_annotator._audit import (
+    _confirm_fragmentation,
+    detect_fragmented_releases,
+)
 from music_annotator._console import _console
 from music_annotator._mb_api import _fetch_acoustid_lookup_raw
 from music_annotator._pipeline import _apply_collision_suffix
 from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
     _assess_collisions,
-    _confirm_fragmentation,
     _needs_enrich,
     _read_duration_ms,
     _read_tags_flac,
     _read_tags_mp3,
     _sha256_file,
     _verify_copy,
-    detect_fragmented_releases,
     read_journal,
     write_transaction_log,
 )

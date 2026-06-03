@@ -47,6 +47,11 @@ from music_annotator import (
     read_journal,
     repath,
 )
+from music_annotator._audit import (
+    JournalDiffResult,
+    detect_fragmented_releases,
+    diff_journal,
+)
 from music_annotator._pipeline import (
     SelectionMethod,
     _apply_collision_suffix,
@@ -68,7 +73,6 @@ from music_annotator._pipeline_io import (
     _DISC_TOC_FILENAME,
     PROVENANCE_FILENAME,
     AudioCompareResult,
-    JournalDiffResult,
     _assess_collisions,
     _audio_hash,
     _chromaprint_similarity,
@@ -85,8 +89,6 @@ from music_annotator._pipeline_io import (
     _write_provenance_fields,
     check_duration_preflight,
     compare_audio_collision,
-    detect_fragmented_releases,
-    diff_journal,
     enrich_origin_time,
     rebuild_journal,
 )

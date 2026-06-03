@@ -94,6 +94,14 @@ from music_annotator._artists import (
     is_orchestra,
     last_name,
 )
+from music_annotator._audit import (
+    JournalDiffResult,
+    _confirm_fragmentation,
+    _journal_fragmentation_groups,
+    audit,
+    detect_fragmented_releases,
+    diff_journal,
+)
 from music_annotator._console import _console, configure_color
 from music_annotator._discover import (
     DiscoverUI,
@@ -154,13 +162,10 @@ from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
     PROVENANCE_FILENAME,
     AudioCompareResult,
-    JournalDiffResult,
     _assess_collisions,
     _check_collisions,
     _collect_work_dir_provenance,
-    _confirm_fragmentation,
     _find_freedb_sidecar,
-    _journal_fragmentation_groups,
     _mtime_iso,
     _needs_enrich,
     _parse_disc_id_list,
@@ -181,10 +186,7 @@ from music_annotator._pipeline_io import (
     _sha256_file,
     _verify_copy,
     _write_provenance_fields,
-    audit,
     compare_audio_collision,
-    detect_fragmented_releases,
-    diff_journal,
     enrich_origin_time,
     find_source_files,
     parse_disc_title,

@@ -20,8 +20,9 @@ from pytest_mock import MockerFixture
 
 import music_annotator
 from music_annotator import JOURNAL_FILENAME, CollisionPolicy
+from music_annotator._audit import detect_fragmented_releases
 from music_annotator._discover import DiscoverUI
-from music_annotator._pipeline_io import detect_fragmented_releases, rebuild_journal
+from music_annotator._pipeline_io import rebuild_journal
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path
 from music_annotator.models import (
