@@ -380,41 +380,16 @@ proposed, the validation step is: does CE's framing of the same question agree, 
 not, what's the principled reason for diverging?  The default is to follow CE; divergences
 need a documented rationale.
 
-## Codebase audit — handoff brief (post-multimedium)
+## Move/verify/journal provenance chain (C-PROV, C-MOVE — from audit action plan)
 
-The multimedium featureset (cross-medium paths + concerto-soloist promotion + the release-fragmentation
-audit/regroup cycle) is the explicit hand-off point into the **user-flagged imperative Codebase
-audit**.  As the project has grown, do a thorough review of principles, structure, and goals before
-the next featureset lands.  Concrete items this featureset surfaced:
+**C-PROV** — The transaction-journal provenance chain.  A `"copied"`/`"repathed"`/`"regrouped"`/`"unified"`
+journal entry is appended **only after** the file passes: SHA-256(dest)==SHA-256(src) **and** `_verify_copy`
+(tag round-trip + cover bytes + mtime).  `_move_verify_journal` in `_pipeline_maint.py` is the **single site**
+that may append these entries; the ordering inside it is the contract.  Every maintenance command consumes the
+primitive and MUST NOT append a move-entry by any other path.  Test-enforced: `test_move_verify_journal_no_entry_on_verify_failure`
+asserts no journal entry exists after a forced `_verify_copy` failure.
 
-- **Deferred `ReleaseContext` / `WorkGroup` aggregation object — decide now whether it is warranted.**
-  S0 deliberately did *not* introduce a first-class aggregation object; it threaded the cross-medium
-  grouping through `tags_map` (global-indexed) + `top_work_groups` + ad-hoc unification passes in
-  `run()`.  That was the smallest correct change, but `run()`'s top-work-group loop now carries five
-  passes (leaf index, intermediate sibling index, composer unification, recording-date unification,
-  first-release-date normalisation, soloist union) all iterating the same `group_idxs`.  The audit
-  should decide whether to lift these into a `WorkGroup`/`ReleaseContext` object — the repeated
-  `for grp_idx in group_idxs:` scaffolding is the signal that the abstraction may now pay for itself.
-
-- **`__init__.py` API-surface coherence.**  The thin re-export layer has grown a large `_reexports`
-  tuple of *private* helpers (`_assess_collisions`, `_journal_fragmentation_groups`,
-  `_confirm_fragmentation`, `_read_albumid_tag`, …) that exist only to bind names for test patching
-  (per the "patch where bound" rule).  Audit whether this is the right mechanism or whether the test
-  suite should patch the submodule directly, and whether the public `__all__` still reads as a
-  coherent API surface distinct from the test-patching re-exports.
-
-- **Maintenance-command confirmation consistency (`repath` gap).**  `prune`, `apply --delete`, and the
-  new `regroup` all confirm before destructive action (`confirm`/`--yes`); `repath` mass-relocates the
-  whole library with no prompt (only `--dry-run`).  The most destructive command is the least guarded.
-  Consider a single shared confirmation helper for all library-mutating maintenance commands.  (Also
-  recorded durably in `docs/BACKLOG.md` so it survives this note's eventual absorption.)
-
-- **Module-boundary review.**  `_pipeline.py` now hosts three top-level maintenance entry points
-  (`run`, `repath`, `regroup`) that share a move/verify/journal provenance loop near-verbatim three
-  times.  Evaluate factoring the shared "move one file with SHA + `_verify_copy` + journal" primitive,
-  and whether the maintenance commands belong in their own module distinct from the ingest pipeline.
-
-- **Concerto-soloist editorial allowlist (follow-on to the mechanical case).**  Only
-  `top_work.type == "Concerto"` ships; organ symphonies, violin-feature works, and symphony-with-soloist
-  are canonical-identity but not type-`Concerto`.  The audit should decide whether the allowlist /
-  "solo X" instrument-relation signal is in scope or stays deferred.
+**C-MOVE** — The primitive's frozen signature: `_move_verify_journal(plan_pairs, *, journal_path, action,
+dest_root, now, release_id="") -> int` returning the moved count; `_resolve_current_lib(journal) ->
+dict[Path, str]` for the lineage walk.  `release_id` is over-specified (included even though `repath` passes
+`""`) so callers never need to widen it.
