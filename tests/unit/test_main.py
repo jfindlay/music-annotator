@@ -2528,7 +2528,7 @@ class TestRepath:
 
         mocker.patch("music_annotator._pipeline.os.replace", side_effect=_replace_then_corrupt)
 
-        with pytest.raises(RuntimeError, match="repath integrity failure"):
+        with pytest.raises(RuntimeError, match="repathed integrity failure"):
             music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # No journal entry was added (hash mismatch before journal write)
@@ -2765,7 +2765,7 @@ class TestRepath:
 
         mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=_read_tags_side_effect)
 
-        with pytest.raises(RuntimeError, match="repath tag re-read failure"):
+        with pytest.raises(RuntimeError, match="repathed tag re-read failure"):
             music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
     def test_repath_cleans_up_empty_dirs_to_root(self, fs: FakeFilesystem) -> None:
@@ -4976,7 +4976,7 @@ class TestRegroup:
 
         mocker.patch("music_annotator._pipeline._sha256_file", side_effect=_fake_sha256)
 
-        with pytest.raises(RuntimeError, match="regroup integrity failure"):
+        with pytest.raises(RuntimeError, match="regrouped integrity failure"):
             music_annotator.regroup(dest_root=dest_root, yes=True)
 
         # No "regrouped" journal entry must have been written
@@ -5414,7 +5414,7 @@ class TestRegroup:
 
         mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=_fake_read)
 
-        with pytest.raises(RuntimeError, match="regroup tag re-read failure"):
+        with pytest.raises(RuntimeError, match="regrouped tag re-read failure"):
             music_annotator.regroup(dest_root=dest_root, yes=True)
 
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
@@ -7596,7 +7596,7 @@ class TestUnify:
 
         mocker.patch("music_annotator._pipeline._sha256_file", side_effect=_fake_sha256)
 
-        with pytest.raises(RuntimeError, match="unify integrity failure"):
+        with pytest.raises(RuntimeError, match="unified integrity failure"):
             music_annotator.unify(dest_root=dest_root, yes=True)
 
         # No "unified" entry written
@@ -7957,7 +7957,7 @@ class TestUnify:
 
         mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=_fake_read)
 
-        with pytest.raises(RuntimeError, match="unify tag re-read failure"):
+        with pytest.raises(RuntimeError, match="unified tag re-read failure"):
             music_annotator.unify(dest_root=dest_root, yes=True)
 
     # ------------------------------------------------------------------

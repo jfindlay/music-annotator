@@ -69,6 +69,7 @@ from music_annotator.models import (
     MBWork,
     TrackTags,
     TransactionEntry,
+    TransactionLog,
 )
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
@@ -1502,6 +1503,170 @@ def _tags_from_file_dict(file_dict: dict[str, str]) -> TrackTags:
     return tags
 
 
+def _resolve_current_lib(journal: TransactionLog) -> dict[Path, str]:
+    """Resolve the current on-disk path for each logical library file from the journal.
+
+    Walks journal entries in chronological order to build a mapping from each file's current
+    on-disk path to its associated release MBID.  The walk handles the full lineage chain:
+
+    * ``"tagged"`` entries seed the map (destination → release_id).
+    * ``"repathed"`` and ``"regrouped"`` entries update the map: the old path is removed and the
+      new path is registered with the same release_id.
+    * ``"enriched"`` entries are in-place updates (source == destination); they re-register the
+      path to keep the release_id current.
+
+    Multi-hop chains (a file that was repathed and then regrouped) resolve correctly because
+    entries are processed in chronological order: each move pops the old path and registers the
+    new one, so the map always reflects the latest known location.
+
+    :param journal: The :class:`~music_annotator.models.TransactionLog` to walk.
+    :returns: A ``{current_path: release_id}`` mapping for all logical library files.
+    """
+    current_lib: dict[Path, str] = {}
+
+    for entry in journal.entries:
+        dest_path = Path(entry.destination)
+        if entry.action == "tagged":
+            current_lib[dest_path] = entry.release_id
+        elif entry.action in {"repathed", "regrouped"}:
+            old_path = Path(entry.source)
+            release_id_for_path = current_lib.pop(old_path, entry.release_id)
+            current_lib[dest_path] = release_id_for_path
+        elif entry.action == "enriched":
+            # In-place update: source == destination, path unchanged.
+            # Re-register to keep release_id current.
+            current_lib[dest_path] = entry.release_id
+
+    return current_lib
+
+
+def _move_verify_journal(
+    plan_pairs: list[tuple[Path, Path]],
+    *,
+    journal_path: Path,
+    action: str,
+    dest_root: Path,
+    now: datetime.datetime,
+    release_id: str = "",
+) -> int:
+    """Move each ``(src, dest)`` pair atomically, verify integrity, and journal each success.
+
+    This is the single site that may append move-type journal entries (``"repathed"``,
+    ``"regrouped"``, ``"unified"``), enforcing the C-PROV provenance-chain invariant: a journal
+    entry is written **only after** the file passes both the SHA-256 destination check and
+    :func:`~music_annotator._pipeline_io._verify_copy`.
+
+    For each pair the sequence is:
+
+    1. Capture source SHA-256 and mtime before the move.
+    2. Ensure the destination parent directory exists.
+    3. Move atomically via :func:`os.replace` (rename within the same filesystem).  On
+       ``OSError`` with ``errno.EXDEV`` (cross-filesystem move), fall back to
+       :func:`shutil.copy2` + :func:`os.unlink`; the copy is integrity-checked before the
+       source is unlinked.
+    4. Verify destination SHA-256 == source SHA-256 (raises :exc:`RuntimeError` on mismatch —
+       **no journal entry is written**).
+    5. Read back the destination tags and run :func:`~music_annotator._pipeline_io._verify_copy`
+       (raises :exc:`RuntimeError` on mismatch — **no journal entry is written**).
+    6. **Only then** append a :class:`~music_annotator.models.TransactionEntry` with the given
+       ``action`` and ``release_id`` and flush it to the journal.
+    7. Clean up now-empty source directories (best-effort; non-empty directories are skipped).
+
+    :param plan_pairs: List of ``(src, dest)`` path pairs to move.
+    :param journal_path: Path to the journal file (``<dest_root>/music_annotator_journal.json``).
+    :param action: Journal action string (e.g. ``"repathed"``, ``"regrouped"``, ``"unified"``).
+    :param dest_root: Root of the destination library; used for empty-directory cleanup and
+        log messages.
+    :param now: UTC datetime for the journal entry timestamp (ISO-format string is derived from
+        this value).
+    :param release_id: MusicBrainz release MBID for the journal entry.  Empty string for
+        ``"repathed"`` entries (repath operates offline from embedded tags).
+    :returns: Count of files successfully moved and journalled.
+    :raises RuntimeError: If the post-move SHA-256 check or :func:`_verify_copy` fails.
+    :raises OSError: If the source file cannot be read or the destination cannot be written
+        (except ``EXDEV``, which is handled by the cross-filesystem fallback).
+    """
+    now_str = now.isoformat()
+    moved_count = 0
+
+    for src, dest in plan_pairs:
+        # a. Capture source SHA-256 and mtime before the move.
+        src_hash = _sha256_file(src)
+        src_stat = src.stat()
+        src_mtime = src_stat.st_mtime
+
+        # b. Ensure parent directory exists; move atomically.
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(src, dest)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            # Cross-filesystem fallback: copy + verify + unlink.
+            shutil.copy2(src, dest)
+            cross_hash = _sha256_file(dest)
+            if cross_hash != src_hash:
+                dest.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"cross-fs copy integrity failure for '{src.name}': "
+                    f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {cross_hash[:12]}…"
+                ) from exc
+            os.unlink(src)
+
+        # c. Verify destination SHA-256 == source SHA-256.
+        dest_hash = _sha256_file(dest)
+        if dest_hash != src_hash:
+            raise RuntimeError(
+                f"{action} integrity failure for '{dest.name}': src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_hash[:12]}…"
+            )
+
+        # d. Reconstruct tags for _verify_copy (tags are unchanged by the move).
+        ext = src.suffix.lower()
+        try:
+            match ext:
+                case ".flac":
+                    post_dict = _read_tags_flac(dest)
+                case ".mp3":
+                    post_dict = _read_tags_mp3(dest)
+                case _:  # pragma: no cover
+                    post_dict = {}
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"{action} tag re-read failure for '{dest.name}': {exc}") from exc
+        moved_tags = _tags_from_file_dict(post_dict)
+        # _verify_copy checks mtime; for os.replace (same-fs rename) mtime is preserved.
+        # For cross-fs copy2+unlink, shutil.copy2 copies atime/mtime so src_mtime still holds.
+        _verify_copy(src, dest, moved_tags, None, src_mtime)
+
+        # e. Journal the move and flush before proceeding to the next file (C-PROV invariant:
+        #    entry is written ONLY after _verify_copy passes).
+        entry = TransactionEntry(
+            timestamp=now_str,
+            release_id=release_id,
+            source=str(src),
+            destination=str(dest),
+            action=action,
+        )
+        write_transaction_log(journal_path, [entry])
+        log.info(
+            f"{action}_moved",
+            old=str(src.relative_to(dest_root)) if src.is_relative_to(dest_root) else str(src),
+            new=str(dest.relative_to(dest_root)),
+        )
+        moved_count += 1
+
+        # f. Clean up now-empty source directories (best-effort; non-empty dirs are skipped).
+        src_dir = src.parent
+        while src_dir != dest_root and src_dir.is_relative_to(dest_root):
+            try:
+                src_dir.rmdir()  # Only succeeds if directory is now empty.
+                log.info(f"{action}_removed_empty_dir", dir=str(src_dir.relative_to(dest_root)))
+                src_dir = src_dir.parent
+            except OSError:
+                break
+
+    return moved_count
+
+
 def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None:
     """Re-path all verified library files under ``dest_root`` to their corrected destinations.
 
@@ -1556,45 +1721,10 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
     journal = read_journal(journal_path)
 
     # --- Determine the current canonical path for each logical file ---
-    # A "repathed" entry supersedes an earlier "tagged" entry for the same logical file.
-    # Track the latest destination per original source lineage: use the destination of the
-    # latest entry per (source -> latest dest) chain.
-    # Strategy: walk entries in order, building a map from each destination -> (source_lineage).
-    # A "repathed" entry's source is the OLD path = a previous destination.
-    # We want: for each current on-disk file, what was the original ingest source?
-    # Use a union-find-like approach: dest_to_current maps each old dest to the latest dest
-    # in its chain.
-
-    # Build the set of current library file paths from journal.
-    # dest_to_lineage_source: current_dest -> original ingest source
-    # last_dest_for_source: original_source -> latest_dest
-    current_lib: dict[Path, str] = {}  # current_path -> original_source (for journal release_id lookup)
-
-    for entry in journal.entries:
-        if entry.action not in {"tagged", "repathed"}:
-            continue
-        dest_path = Path(entry.destination)
-        source_path = entry.source
-
-        if entry.action == "tagged":
-            # This is an ingest entry; source = original ingest path
-            # Check if this destination was later repathed (it will appear as source of a later
-            # repathed entry).  For now, register it; a later "repathed" entry will update.
-            current_lib[dest_path] = source_path
-        else:
-            # action == "repathed": source = old path, destination = new path
-            old_path = Path(entry.source)
-            # Remove the old path from current_lib (it moved)
-            current_lib.pop(old_path, None)
-            # Register the new path — carry the original source lineage info from old if available
-            original_src = current_lib.get(old_path, source_path)
-            current_lib[dest_path] = original_src
-
-    # Re-walk to carry forward lineage for multi-hop repath chains
-    # (repathed entry's source may itself have been repathed — iterate until stable)
-    # Actually the above loop handles it correctly because we process entries in order:
-    # each "repathed" entry pops the old path and registers the new one, so multi-hop chains
-    # naturally resolve as long as we process in chronological order (which we do).
+    # _resolve_current_lib walks entries in chronological order; "tagged" seeds the map and
+    # "repathed"/"regrouped" entries update it.  Multi-hop chains resolve naturally because
+    # each move pops the old path and registers the new one.
+    current_lib = _resolve_current_lib(journal)
 
     # Filter to files that actually exist on disk
     existing_files: list[Path] = [p for p in current_lib if p.exists()]
@@ -1732,82 +1862,17 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
             return
 
     # --- Perform moves, verify, journal ---
-    now = datetime.datetime.now(datetime.UTC).isoformat()
-    for current_path, new_dest, _, _ in plan_pairs:
-        # a. Capture source SHA-256 and mtime before the move
-        src_hash = _sha256_file(current_path)
-        src_stat = current_path.stat()
-        src_mtime = src_stat.st_mtime
-
-        # b. Ensure parent directory exists; move atomically
-        new_dest.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.replace(current_path, new_dest)
-        except OSError as exc:
-            if exc.errno != errno.EXDEV:
-                raise
-            # Cross-filesystem fallback: copy + verify + unlink
-            shutil.copy2(current_path, new_dest)
-            # Verify the copy before unlinking the source
-            cross_hash = _sha256_file(new_dest)
-            if cross_hash != src_hash:
-                new_dest.unlink(missing_ok=True)
-                raise RuntimeError(
-                    f"cross-fs copy integrity failure for '{current_path.name}': "
-                    f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {cross_hash[:12]}…"
-                ) from exc
-            os.unlink(current_path)
-
-        # c. Verify destination SHA-256 == source SHA-256
-        dest_hash = _sha256_file(new_dest)
-        if dest_hash != src_hash:
-            raise RuntimeError(
-                f"repath integrity failure for '{new_dest.name}': src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_hash[:12]}…"
-            )
-
-        # d. Reconstruct tags for _verify_copy (tags are unchanged by the move)
-        ext = current_path.suffix.lower()
-        try:
-            match ext:
-                case ".flac":
-                    post_dict = _read_tags_flac(new_dest)
-                case ".mp3":
-                    post_dict = _read_tags_mp3(new_dest)
-                case _:  # pragma: no cover
-                    post_dict = {}
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"repath tag re-read failure for '{new_dest.name}': {exc}") from exc
-        moved_tags = _tags_from_file_dict(post_dict)
-        # _verify_copy checks mtime; for os.replace (same-fs rename) mtime is preserved.
-        # For cross-fs copy2+unlink, shutil.copy2 copies atime/mtime so src_mtime still holds.
-        _verify_copy(current_path, new_dest, moved_tags, None, src_mtime)
-
-        # e. Journal the move and flush before proceeding to the next file
-        entry = TransactionEntry(
-            timestamp=now,
-            release_id="",
-            source=str(current_path),
-            destination=str(new_dest),
-            action="repathed",
-        )
-        write_transaction_log(journal_path, [entry])
-        log.info(
-            "repath_moved",
-            old=str(current_path.relative_to(dest_root)),
-            new=str(new_dest.relative_to(dest_root)),
-        )
-
-        # Clean up now-empty source directories (best-effort; non-empty dirs are skipped)
-        src_dir = current_path.parent
-        while src_dir != dest_root:
-            try:
-                src_dir.rmdir()  # Only succeeds if directory is now empty
-                log.info("repath_removed_empty_dir", dir=str(src_dir.relative_to(dest_root)))
-                src_dir = src_dir.parent
-            except OSError:
-                break
-
-    log.info("repath_complete", dest_root=str(dest_root), moved=len(plan_pairs))
+    now = datetime.datetime.now(datetime.UTC)
+    move_pairs = [(src, dest) for src, dest, _, _ in plan_pairs]
+    moved = _move_verify_journal(
+        move_pairs,
+        journal_path=journal_path,
+        action="repathed",
+        dest_root=dest_root,
+        now=now,
+        release_id="",
+    )
+    log.info("repath_complete", dest_root=str(dest_root), moved=moved)
 
 
 def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
@@ -1873,29 +1938,9 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
         return
 
     # --- Identify affected files from journal entries ---
-    # Map each confirmed release_id to the current on-disk path of its "tagged" entries.
-    # We need to resolve the current path, accounting for any subsequent "repathed" moves.
-    # Build current_lib: current_path -> (original_release_id) for confirmed releases,
-    # mirroring repath's lineage-tracking approach for consistency.
-    #
-    # Strategy: walk all entries in order.  "tagged" entries for confirmed release_ids seed
-    # the map.  "repathed" entries update the current location of any path that moved.
-    current_lib: dict[Path, str] = {}  # current_path -> release_id
-
-    for entry in journal.entries:
-        dest_path = Path(entry.destination)
-        if entry.action == "tagged" and entry.release_id in confirmed_release_ids:
-            current_lib[dest_path] = entry.release_id
-        elif entry.action in {"repathed", "regrouped"}:
-            old_path = Path(entry.source)
-            if old_path in current_lib:
-                release_id_for_path = current_lib.pop(old_path)
-                current_lib[dest_path] = release_id_for_path
-        elif entry.action == "enriched":
-            # In-place update: source == destination, path unchanged.
-            # Re-register to keep release_id current for confirmed release IDs.
-            if dest_path in current_lib:
-                current_lib[dest_path] = entry.release_id
+    # _resolve_current_lib resolves the full library lineage; filter to confirmed release IDs.
+    full_lib = _resolve_current_lib(journal)
+    current_lib: dict[Path, str] = {p: rid for p, rid in full_lib.items() if rid in confirmed_release_ids}
 
     # Filter to files that actually exist on disk
     existing_files: list[tuple[Path, str]] = [(p, rid) for p, rid in current_lib.items() if p.exists()]
@@ -1995,86 +2040,25 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
             return
 
     # --- Perform moves, verify, journal ---
-    now = datetime.datetime.now(datetime.UTC).isoformat()
-    for current_path, new_dest, _, _, release_id in plan_pairs:
-        # a. Capture source SHA-256 and mtime before the move
-        src_hash = _sha256_file(current_path)
-        src_stat = current_path.stat()
-        src_mtime = src_stat.st_mtime
+    # regroup is release-driven: each file may belong to a different release_id, so we call
+    # _move_verify_journal once per unique release_id group to preserve the per-entry release_id.
+    now = datetime.datetime.now(datetime.UTC)
+    total_moved = 0
+    # Group plan_pairs by release_id so each batch shares the same journal release_id.
+    release_groups: dict[str, list[tuple[Path, Path]]] = {}
+    for src, dest, _, _, rid in plan_pairs:
+        release_groups.setdefault(rid, []).append((src, dest))
 
-        # b. Ensure parent directory exists; move atomically
-        new_dest.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.replace(current_path, new_dest)
-        except OSError as exc:
-            if exc.errno != errno.EXDEV:
-                raise
-            # Cross-filesystem fallback: copy + verify + unlink
-            shutil.copy2(current_path, new_dest)
-            # Verify the copy before unlinking the source
-            cross_hash = _sha256_file(new_dest)
-            if cross_hash != src_hash:
-                new_dest.unlink(missing_ok=True)
-                raise RuntimeError(
-                    f"cross-fs copy integrity failure for '{current_path.name}': "
-                    f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {cross_hash[:12]}…"
-                ) from exc
-            os.unlink(current_path)
-
-        # c. Verify destination SHA-256 == source SHA-256
-        dest_hash = _sha256_file(new_dest)
-        if dest_hash != src_hash:
-            raise RuntimeError(
-                f"regroup integrity failure for '{new_dest.name}': "
-                f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_hash[:12]}…"
-            )
-
-        # d. Reconstruct tags for _verify_copy (tags are unchanged by the move)
-        ext = current_path.suffix.lower()
-        try:
-            match ext:
-                case ".flac":
-                    post_dict = _read_tags_flac(new_dest)
-                case ".mp3":
-                    post_dict = _read_tags_mp3(new_dest)
-                case _:  # pragma: no cover
-                    post_dict = {}
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"regroup tag re-read failure for '{new_dest.name}': {exc}") from exc
-        moved_tags = _tags_from_file_dict(post_dict)
-        # _verify_copy checks mtime; for os.replace (same-fs rename) mtime is preserved.
-        # For cross-fs copy2+unlink, shutil.copy2 copies atime/mtime so src_mtime still holds.
-        _verify_copy(current_path, new_dest, moved_tags, None, src_mtime)
-
-        # e. Journal the move with the release_id (unlike repath, which uses release_id="").
-        # Recording the release_id keeps the entry self-describing: future audits can re-confirm
-        # without a MusicBrainz lookup, preserving P2 (journal detects, tag adjudicates).
-        entry = TransactionEntry(
-            timestamp=now,
-            release_id=release_id,
-            source=str(current_path),
-            destination=str(new_dest),
+    for rid, move_pairs in release_groups.items():
+        total_moved += _move_verify_journal(
+            move_pairs,
+            journal_path=journal_path,
             action="regrouped",
+            dest_root=dest_root,
+            now=now,
+            release_id=rid,
         )
-        write_transaction_log(journal_path, [entry])
-        log.info(
-            "regroup_moved",
-            old=str(current_path.relative_to(dest_root)),
-            new=str(new_dest.relative_to(dest_root)),
-            release_id=release_id,
-        )
-
-        # Clean up now-empty source directories (best-effort; non-empty dirs are skipped)
-        src_dir = current_path.parent
-        while src_dir != dest_root:
-            try:
-                src_dir.rmdir()  # Only succeeds if directory is now empty
-                log.info("regroup_removed_empty_dir", dir=str(src_dir.relative_to(dest_root)))
-                src_dir = src_dir.parent
-            except OSError:
-                break
-
-    log.info("regroup_complete", dest_root=str(dest_root), moved=len(plan_pairs))
+    log.info("regroup_complete", dest_root=str(dest_root), moved=total_moved)
 
 
 def _is_composer_split_release(group_tags: list[tuple[Path, TrackTags, dict[str, str]]]) -> bool:
@@ -2427,85 +2411,24 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
             return
 
     # --- Perform moves, verify, journal ---
-    now = datetime.datetime.now(datetime.UTC).isoformat()
-    for current_path, new_dest, _, _, release_id in plan_pairs:
-        # a. Capture source SHA-256 and mtime before the move
-        src_hash = _sha256_file(current_path)
-        src_stat = current_path.stat()
-        src_mtime = src_stat.st_mtime
+    # unify is release-driven: each file may belong to a different release_id, so we call
+    # _move_verify_journal once per unique release_id group to preserve the per-entry release_id.
+    now = datetime.datetime.now(datetime.UTC)
+    total_moved = 0
+    release_groups: dict[str, list[tuple[Path, Path]]] = {}
+    for src, dest, _, _, rid in plan_pairs:
+        release_groups.setdefault(rid, []).append((src, dest))
 
-        # b. Ensure parent directory exists; move atomically
-        new_dest.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.replace(current_path, new_dest)
-        except OSError as exc:
-            if exc.errno != errno.EXDEV:
-                raise
-            # Cross-filesystem fallback: copy + verify + unlink
-            shutil.copy2(current_path, new_dest)
-            # Verify the copy before unlinking the source
-            cross_hash = _sha256_file(new_dest)
-            if cross_hash != src_hash:
-                new_dest.unlink(missing_ok=True)
-                raise RuntimeError(
-                    f"cross-fs copy integrity failure for '{current_path.name}': "
-                    f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {cross_hash[:12]}…"
-                ) from exc
-            os.unlink(current_path)
-
-        # c. Verify destination SHA-256 == source SHA-256
-        dest_hash = _sha256_file(new_dest)
-        if dest_hash != src_hash:
-            raise RuntimeError(
-                f"unify integrity failure for '{new_dest.name}': src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_hash[:12]}…"
-            )
-
-        # d. Reconstruct tags for _verify_copy (tags are unchanged by the move)
-        ext = current_path.suffix.lower()
-        try:
-            match ext:
-                case ".flac":
-                    post_dict = _read_tags_flac(new_dest)
-                case ".mp3":
-                    post_dict = _read_tags_mp3(new_dest)
-                case _:  # pragma: no cover
-                    post_dict = {}
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"unify tag re-read failure for '{new_dest.name}': {exc}") from exc
-        moved_tags = _tags_from_file_dict(post_dict)
-        # _verify_copy checks mtime; for os.replace (same-fs rename) mtime is preserved.
-        # For cross-fs copy2+unlink, shutil.copy2 copies atime/mtime so src_mtime still holds.
-        _verify_copy(current_path, new_dest, moved_tags, None, src_mtime)
-
-        # e. Journal the move with the release_id (same pattern as regroup).
-        # Recording the release_id keeps the entry self-describing: future audits can re-confirm
-        # without a MusicBrainz lookup, preserving P2 (journal detects, tag adjudicates).
-        entry = TransactionEntry(
-            timestamp=now,
-            release_id=release_id,
-            source=str(current_path),
-            destination=str(new_dest),
+    for rid, move_pairs in release_groups.items():
+        total_moved += _move_verify_journal(
+            move_pairs,
+            journal_path=journal_path,
             action="unified",
+            dest_root=dest_root,
+            now=now,
+            release_id=rid,
         )
-        write_transaction_log(journal_path, [entry])
-        log.info(
-            "unify_moved",
-            old=str(current_path.relative_to(dest_root)),
-            new=str(new_dest.relative_to(dest_root)),
-            release_id=release_id,
-        )
-
-        # Clean up now-empty source directories (best-effort; non-empty dirs are skipped)
-        src_dir = current_path.parent
-        while src_dir != dest_root:
-            try:
-                src_dir.rmdir()  # Only succeeds if directory is now empty
-                log.info("unify_removed_empty_dir", dir=str(src_dir.relative_to(dest_root)))
-                src_dir = src_dir.parent
-            except OSError:
-                break
-
-    log.info("unify_complete", dest_root=str(dest_root), moved=len(plan_pairs))
+    log.info("unify_complete", dest_root=str(dest_root), moved=total_moved)
 
 
 def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, acoustid_key: str = "") -> None:
@@ -2543,24 +2466,10 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
     journal = read_journal(journal_path)
 
     # --- Resolve current on-disk path for each logical library file ---
-    # Walk entries in chronological order.  "tagged" seeds the map; "repathed", "regrouped",
-    # and "enriched" update it.  "enriched" has source == destination so it does not change
-    # the path, but we process it for completeness.
-    current_lib: dict[Path, str] = {}  # current_path -> release_id (from the latest tagged entry)
-
-    for entry in journal.entries:
-        dest_path = Path(entry.destination)
-        if entry.action == "tagged":
-            current_lib[dest_path] = entry.release_id
-        elif entry.action in {"repathed", "regrouped"}:
-            old_path = Path(entry.source)
-            current_lib.pop(old_path, None)
-            release_id_for_path = current_lib.get(old_path, entry.release_id)
-            current_lib[dest_path] = release_id_for_path
-        elif entry.action == "enriched":
-            # In-place update: source == destination, path unchanged.
-            # Re-register to keep release_id current.
-            current_lib[dest_path] = entry.release_id
+    # _resolve_current_lib walks entries in chronological order; "tagged" seeds the map;
+    # "repathed"/"regrouped" update it; "enriched" re-registers the path with the current
+    # release_id.  Multi-hop chains resolve naturally.
+    current_lib = _resolve_current_lib(journal)
 
     # Filter to files that actually exist on disk and are FLAC or MP3
     existing_files: list[tuple[Path, str]] = [

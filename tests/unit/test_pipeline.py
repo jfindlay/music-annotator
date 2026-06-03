@@ -2,9 +2,13 @@
 find_source_files, check_duration_preflight, _prompt_duration_warnings, run (non-dry-run), and enrich_origin_time.
 """
 
+# pylint: disable=duplicate-code  # _move_verify_journal call pattern intentionally mirrors _pipeline.py source
+
 from __future__ import annotations
 
 import base64
+import datetime
+import errno
 import hashlib
 import json
 import os
@@ -49,8 +53,10 @@ from music_annotator._pipeline import (
     _collision_suffix,
     _match_medium_by_title,
     _match_medium_by_toc,
+    _move_verify_journal,
     _prompt_collision_policy,
     _prompt_duration_warnings,
+    _resolve_current_lib,
     _resolve_long_names,
     _score_medium_title,
     _select_medium_with_reason,
@@ -10341,6 +10347,472 @@ class TestDiffJournal:
         assert result.matches == []
         assert result.stale == []
         assert result.leaked == []
+
+
+# ---------------------------------------------------------------------------
+# _resolve_current_lib
+# ---------------------------------------------------------------------------
+
+
+class TestResolveCurrentLib:
+    """Tests for :func:`_resolve_current_lib`.
+
+    Verifies that the lineage walk correctly resolves the current on-disk path for each logical
+    library file from the journal, handling tagged, repathed, regrouped, and enriched entries.
+    """
+
+    def test_tagged_entry_seeds_map(self) -> None:
+        """A 'tagged' entry seeds the map with destination → release_id.
+
+        :returns: None.
+        """
+        journal = TransactionLog(
+            entries=[
+                TransactionEntry(
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    release_id="r1",
+                    source="/src/01.flac",
+                    destination="/lib/Composer/Work/01.flac",
+                    action="tagged",
+                )
+            ]
+        )
+        result = _resolve_current_lib(journal)
+        assert result == {Path("/lib/Composer/Work/01.flac"): "r1"}
+
+    def test_repathed_entry_updates_path(self) -> None:
+        """A 'repathed' entry removes the old path and registers the new path with the same release_id.
+
+        :returns: None.
+        """
+        journal = TransactionLog(
+            entries=[
+                TransactionEntry(
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    release_id="r1",
+                    source="/src/01.flac",
+                    destination="/lib/Old/01.flac",
+                    action="tagged",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-02T00:00:00+00:00",
+                    release_id="",
+                    source="/lib/Old/01.flac",
+                    destination="/lib/New/01.flac",
+                    action="repathed",
+                ),
+            ]
+        )
+        result = _resolve_current_lib(journal)
+        assert Path("/lib/Old/01.flac") not in result
+        assert result == {Path("/lib/New/01.flac"): "r1"}
+
+    def test_regrouped_entry_updates_path(self) -> None:
+        """A 'regrouped' entry removes the old path and registers the new path with the same release_id.
+
+        :returns: None.
+        """
+        journal = TransactionLog(
+            entries=[
+                TransactionEntry(
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    release_id="r1",
+                    source="/src/01.flac",
+                    destination="/lib/Old/01.flac",
+                    action="tagged",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-02T00:00:00+00:00",
+                    release_id="r1",
+                    source="/lib/Old/01.flac",
+                    destination="/lib/New/01.flac",
+                    action="regrouped",
+                ),
+            ]
+        )
+        result = _resolve_current_lib(journal)
+        assert Path("/lib/Old/01.flac") not in result
+        assert result == {Path("/lib/New/01.flac"): "r1"}
+
+    def test_enriched_entry_reregisters_release_id(self) -> None:
+        """An 'enriched' entry re-registers the path with the current release_id.
+
+        :returns: None.
+        """
+        journal = TransactionLog(
+            entries=[
+                TransactionEntry(
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    release_id="r1",
+                    source="/src/01.flac",
+                    destination="/lib/Composer/Work/01.flac",
+                    action="tagged",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-02T00:00:00+00:00",
+                    release_id="r1",
+                    source="/lib/Composer/Work/01.flac",
+                    destination="/lib/Composer/Work/01.flac",
+                    action="enriched",
+                ),
+            ]
+        )
+        result = _resolve_current_lib(journal)
+        assert result == {Path("/lib/Composer/Work/01.flac"): "r1"}
+
+    def test_multi_hop_chain_resolves(self) -> None:
+        """A file that is repathed and then regrouped resolves to the final destination.
+
+        :returns: None.
+        """
+        journal = TransactionLog(
+            entries=[
+                TransactionEntry(
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    release_id="r1",
+                    source="/src/01.flac",
+                    destination="/lib/A/01.flac",
+                    action="tagged",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-02T00:00:00+00:00",
+                    release_id="",
+                    source="/lib/A/01.flac",
+                    destination="/lib/B/01.flac",
+                    action="repathed",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-03T00:00:00+00:00",
+                    release_id="r1",
+                    source="/lib/B/01.flac",
+                    destination="/lib/C/01.flac",
+                    action="regrouped",
+                ),
+            ]
+        )
+        result = _resolve_current_lib(journal)
+        assert Path("/lib/A/01.flac") not in result
+        assert Path("/lib/B/01.flac") not in result
+        assert result == {Path("/lib/C/01.flac"): "r1"}
+
+    def test_non_move_actions_ignored(self) -> None:
+        """Actions other than tagged/repathed/regrouped/enriched are ignored.
+
+        :returns: None.
+        """
+        journal = TransactionLog(
+            entries=[
+                TransactionEntry(
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    release_id="r1",
+                    source="/src/01.flac",
+                    destination="/lib/Composer/Work/01.flac",
+                    action="tagged",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-02T00:00:00+00:00",
+                    release_id="r1",
+                    source="/src/cover.jpg",
+                    destination="/lib/Composer/Work/cover.jpg",
+                    action="downloaded",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-03T00:00:00+00:00",
+                    release_id="r1",
+                    source="/src/01.flac",
+                    destination="/lib/Composer/Work/01.flac",
+                    action="skipped",
+                ),
+            ]
+        )
+        result = _resolve_current_lib(journal)
+        # Only the tagged entry should be in the result.
+        assert result == {Path("/lib/Composer/Work/01.flac"): "r1"}
+
+    def test_empty_journal_returns_empty(self) -> None:
+        """An empty journal returns an empty dict.
+
+        :returns: None.
+        """
+        journal = TransactionLog(entries=[])
+        result = _resolve_current_lib(journal)
+        assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# _move_verify_journal
+# ---------------------------------------------------------------------------
+
+
+class TestMoveVerifyJournal:
+    """Tests for :func:`_move_verify_journal`.
+
+    Covers the C-PROV provenance-chain invariant (no journal entry on verify failure), the
+    EXDEV cross-filesystem fallback, and the basic success path.
+    """
+
+    # Tags that produce a valid FLAC file for _verify_copy.
+    _TAGS = TrackTags(
+        cwp_composer_lastnames="Beethoven",
+        cwp_work_top="Symphony No. 5",
+        recording_date="2020",
+        cwp_movt_num="1",
+        movementtotal="1",
+        cwp_part_levels="1",
+        title="Allegro con brio",
+        artist="Karajan",
+    )
+
+    def _make_flac(self, path: Path) -> None:
+        """Write a minimal FLAC with embedded tags to ``path``.
+
+        :param path: Destination path (parent must exist).
+        """
+        path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path, self._TAGS)
+
+    def test_move_verify_journal_no_entry_on_verify_failure(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """C-PROV regression: no journal entry is appended when _verify_copy raises RuntimeError.
+
+        Forces _verify_copy to raise RuntimeError after the file has been moved and the SHA-256
+        check has passed.  Asserts that the journal file contains no entries with the move action.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/src")
+        fs.create_dir(str(dest_root))
+        fs.create_dir(str(src_dir))
+
+        src = src_dir / "01.flac"
+        dest = dest_root / "Beethoven - Karajan" / "Symphony No. 5 [rec 2020]" / "01 - Allegro con brio.flac"
+        self._make_flac(src)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        # Force _verify_copy to raise RuntimeError after the move succeeds.
+        mocker.patch("music_annotator._pipeline._verify_copy", side_effect=RuntimeError("verify failed"))
+
+        now = datetime.datetime.now(datetime.UTC)
+        with pytest.raises(RuntimeError, match="verify failed"):
+            _move_verify_journal(
+                [(src, dest)],
+                journal_path=journal_path,
+                action="repathed",
+                dest_root=dest_root,
+                now=now,
+                release_id="",
+            )
+
+        # C-PROV: no journal entry must have been appended.
+        journal = read_journal(journal_path)
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert repathed == [], "C-PROV violated: journal entry written despite _verify_copy failure"
+
+    def test_move_verify_journal_success_appends_entry(self, fs: FakeFilesystem) -> None:
+        """A successful move appends exactly one journal entry with the correct fields.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/src")
+        fs.create_dir(str(dest_root))
+        fs.create_dir(str(src_dir))
+
+        src = src_dir / "01.flac"
+        dest = dest_root / "Beethoven - Karajan" / "Symphony No. 5 [rec 2020]" / "01 - Allegro con brio.flac"
+        self._make_flac(src)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        now = datetime.datetime.now(datetime.UTC)
+        moved = _move_verify_journal(
+            [(src, dest)],
+            journal_path=journal_path,
+            action="repathed",
+            dest_root=dest_root,
+            now=now,
+            release_id="",
+        )
+
+        assert moved == 1
+        assert dest.exists()
+        assert not src.exists()
+
+        journal = read_journal(journal_path)
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 1
+        assert repathed[0].source == str(src)
+        assert repathed[0].destination == str(dest)
+        assert repathed[0].release_id == ""
+
+    def test_move_verify_journal_exdev_fallback(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """EXDEV cross-filesystem fallback: shutil.copy2 + os.unlink is used when os.replace raises EXDEV.
+
+        Patches os.replace to raise OSError(EXDEV) and verifies that the file is moved via
+        shutil.copy2 + os.unlink, and that a journal entry is appended.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/src")
+        fs.create_dir(str(dest_root))
+        fs.create_dir(str(src_dir))
+
+        src = src_dir / "01.flac"
+        dest = dest_root / "Beethoven - Karajan" / "Symphony No. 5 [rec 2020]" / "01 - Allegro con brio.flac"
+        self._make_flac(src)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        # Patch os.replace to raise EXDEV so the cross-fs fallback is exercised.
+        exdev_error = OSError(errno.EXDEV, "Cross-device link")
+        mocker.patch("music_annotator._pipeline.os.replace", side_effect=exdev_error)
+
+        now = datetime.datetime.now(datetime.UTC)
+        moved = _move_verify_journal(
+            [(src, dest)],
+            journal_path=journal_path,
+            action="repathed",
+            dest_root=dest_root,
+            now=now,
+            release_id="",
+        )
+
+        assert moved == 1
+        assert dest.exists()
+        # Source should be unlinked after cross-fs copy.
+        assert not src.exists()
+
+        journal = read_journal(journal_path)
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 1
+
+    def test_move_verify_journal_non_exdev_oserror_propagates(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """A non-EXDEV OSError from os.replace propagates without journalling.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/src")
+        fs.create_dir(str(dest_root))
+        fs.create_dir(str(src_dir))
+
+        src = src_dir / "01.flac"
+        dest = dest_root / "Beethoven - Karajan" / "Symphony No. 5 [rec 2020]" / "01 - Allegro con brio.flac"
+        self._make_flac(src)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        # Patch os.replace to raise a non-EXDEV OSError (e.g. EPERM).
+        perm_error = OSError(errno.EPERM, "Operation not permitted")
+        mocker.patch("music_annotator._pipeline.os.replace", side_effect=perm_error)
+
+        now = datetime.datetime.now(datetime.UTC)
+        with pytest.raises(OSError, match="Operation not permitted"):
+            _move_verify_journal(
+                [(src, dest)],
+                journal_path=journal_path,
+                action="repathed",
+                dest_root=dest_root,
+                now=now,
+                release_id="",
+            )
+
+        # No journal entry should have been written.
+        journal = read_journal(journal_path)
+        assert journal.entries == []
+
+    def test_move_verify_journal_empty_plan_returns_zero(self, fs: FakeFilesystem) -> None:
+        """An empty plan_pairs list returns 0 without touching the journal.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        now = datetime.datetime.now(datetime.UTC)
+        moved = _move_verify_journal(
+            [],
+            journal_path=journal_path,
+            action="repathed",
+            dest_root=dest_root,
+            now=now,
+        )
+
+        assert moved == 0
+        journal = read_journal(journal_path)
+        assert journal.entries == []
+
+    def test_move_verify_journal_release_id_recorded(self, fs: FakeFilesystem) -> None:
+        """The release_id parameter is recorded in the journal entry.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/src")
+        fs.create_dir(str(dest_root))
+        fs.create_dir(str(src_dir))
+
+        src = src_dir / "01.flac"
+        dest = dest_root / "Beethoven - Karajan" / "Symphony No. 5 [rec 2020]" / "01 - Allegro con brio.flac"
+        self._make_flac(src)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        now = datetime.datetime.now(datetime.UTC)
+        _move_verify_journal(
+            [(src, dest)],
+            journal_path=journal_path,
+            action="regrouped",
+            dest_root=dest_root,
+            now=now,
+            release_id="release-mbid-abc123",
+        )
+
+        journal = read_journal(journal_path)
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 1
+        assert regrouped[0].release_id == "release-mbid-abc123"
+
+    def test_move_verify_journal_empty_dir_cleaned_up(self, fs: FakeFilesystem) -> None:
+        """After a successful move, now-empty source directories are removed.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/lib/OldComposer/OldWork")
+        fs.create_dir(str(src_dir))
+
+        src = src_dir / "01.flac"
+        dest = dest_root / "Beethoven - Karajan" / "Symphony No. 5 [rec 2020]" / "01 - Allegro con brio.flac"
+        self._make_flac(src)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        now = datetime.datetime.now(datetime.UTC)
+        _move_verify_journal(
+            [(src, dest)],
+            journal_path=journal_path,
+            action="repathed",
+            dest_root=dest_root,
+            now=now,
+        )
+
+        # The now-empty source directories should have been removed.
+        assert not src_dir.exists()
+        assert not (dest_root / "OldComposer").exists()
 
 
 # ---------------------------------------------------------------------------
