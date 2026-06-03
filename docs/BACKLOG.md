@@ -162,44 +162,23 @@ deletion.
   silently produces the wrong path.  Always patch both fields when overriding the composer
   component in `unify()` or any similar retroactive pass.
 
-## Codebase-audit items (handoff from PLAN-naming.md)
+## Codebase-audit items + destructive-command consistency → GRADUATED to `PLAN-audit.md`
 
-Four cross-cutting items surfaced during the multimedium plan and carried into the naming plan.
-Independent of naming/repath work; can be scheduled in any order after W1b (now complete).
+The four codebase-audit items (handoff from PLAN-naming.md) and the destructive-maintenance-command
+confirmation-consistency question (handoff from PLAN-multimedium.md S8/S9) **graduated to
+`docs/PLAN-audit.md`** (2026-06-03), where the user expanded them into a three-axis
+structural-coherence audit (app-code / test-code / CLI taxonomy).  The five point-items are now
+re-derived there as symptoms of larger structural facts, mapped to axes in that plan's
+"Point-item → axis mapping" table:
 
-1. **`WorkGroup`/`ReleaseContext` aggregation object** — five passes over the same `group_idxs` in
-   `run()`.  Decide whether to lift into a first-class object.  Likely one session; may be zero-code
-   if the decision is "not yet."
-2. **`__init__.py` API-surface coherence** — the private-helper re-export pattern for test patching.
-   One session; likely small refactor.
-3. **`repath` confirmation-prompt gap** — `repath` mass-relocates with no prompt; all other
-   destructive commands confirm.  One session; small.  (See also "Destructive maintenance commands"
-   entry below for the broader cross-command coherence question.)
-4. **Module-boundary review** — `_pipeline.py` hosts three entry points sharing a near-verbatim
-   move/verify/journal loop.  Likely one session to factor the shared primitive; may be a
-   `_pipeline_maint.py` split.
+1. `WorkGroup`/`ReleaseContext` aggregation object (5+ passes over `group_idxs` in `run()`) → axis A1.
+2. `__init__.py` API-surface coherence (private-helper re-export for test patching) → axis A1.
+3. `repath` confirmation-prompt gap → axis A3.
+4. Module-boundary review (`_pipeline.py` hosts the triplicated move/verify/journal loop) → axis A1.
+5. Destructive-command confirmation consistency (single shared helper vs. per-command) → axis A3.
 
-## Destructive maintenance commands — confirmation-prompt consistency
-
-The library-mutating maintenance commands are **inconsistent about interactive confirmation**, and
-the most destructive one is the least guarded:
-
-- `prune` (deletes source directories) and `apply --delete` both confirm via
-  `TerminalDiscoverUI.confirm_delete` (a `y/n` prompt), with `-y/--yes` to skip.
-- `regroup` (added in `PLAN-multimedium.md` S8) follows the same careful posture: it prompts before
-  moving files, with `-y/--yes` to skip and `--dry-run` to preview.
-- **`repath` is the outlier:** a bare `repath <dest>` **mass-relocates the entire library** with no
-  interactive prompt — its only safety is `--dry-run`.  The journal (`action="repathed"`) is the
-  recovery record, but there is no pre-flight confirmation.
-
-The asymmetry is a latent foot-gun: the command with the largest blast radius (whole-library
-relocation) asks for the least confirmation.  The fix is small — give `repath` a confirmation prompt
-(listing the planned move count / a preview) and a `-y/--yes` skip flag, for parity with
-`prune`/`regroup`.  Open design question for the codebase audit: should all destructive maintenance
-commands share a single confirmation helper rather than each re-implementing the `confirm + --yes`
-pattern?  Surfaced from the `PLAN-multimedium.md` S8 interface decision and routed here so it survives
-that plan's deletion; the S9 capstone hands the broader cross-command-coherence review into the
-Codebase audit track.
+`PLAN-audit.md` is investigation-only; if its A4 HALT defers any item without action, that item
+returns here with the deferral rationale.
 
 ## Concerto-like soloist override — editorial allowlist (follow-on to multimedium S5)
 
