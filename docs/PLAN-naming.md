@@ -391,7 +391,7 @@ W2 and W3a are independent of each other and can be scheduled in parallel after 
 |---------|---------|--------|-------|
 | W1a     | done    | 05fc10d | Already implemented before chain start; `enrich --origin-time` + `ProvenanceSidecar` model |
 | W1b     | done    | 9e70188 | `rebuild_journal()` + `rebuild` subcommand; `origin_time` on `TransactionEntry`; C-W1 frozen |
-| W1c     | pending | —      |       |
+| W1c     | done    | 2411e5f | `audit --diff` + `diff_journal()` + `JournalDiffResult`; matches/stale/leaked buckets |
 | W2a     | pending | —      |       |
 | W2b     | blocked (`@plan` juncture) | — | Editorial decision on multi-composer top_dir needed before sharding |
 | W2c     | pending | —      |       |
