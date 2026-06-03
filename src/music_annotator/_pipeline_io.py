@@ -2059,6 +2059,53 @@ class JournalDiffResult:
     """Each entry is ``(destination, {field: (journal_value, rebuild_value)})``."""
 
 
+def detect_fragmented_releases(dest_root: Path) -> dict[str, list[Path]]:
+    """Scan ``dest_root`` for releases fragmented across ≥2 distinct top_dirs.
+
+    Walks the two-level ``<top_dir>/<work_dir>/`` library structure under ``dest_root``, reads the
+    ``MUSICBRAINZ_ALBUMID`` tag from every FLAC and MP3 file, and groups the files by release MBID.
+    A release is **fragmented** when its files are spread across ≥2 distinct top_dirs (the first
+    path component under ``dest_root``).
+
+    The join key is the embedded tag, not the journal (C-W2 contract).  Files whose tag cannot be
+    read or is empty are silently skipped.
+
+    :param dest_root: Root of the annotated music library.
+    :returns: A mapping from release MBID to a sorted list of all audio file paths belonging to
+        that release, for every release with ≥2 distinct top_dirs.  Releases whose files all share
+        the same top_dir are omitted.
+    """
+    # release_id -> list of (top_dir_name, file_path)
+    release_files: dict[str, list[tuple[str, Path]]] = {}
+
+    if not dest_root.is_dir():
+        return {}
+
+    for top_dir in sorted(dest_root.iterdir()):
+        if not top_dir.is_dir():
+            continue
+        for work_dir in sorted(top_dir.iterdir()):
+            if not work_dir.is_dir():
+                continue
+            for file_path in sorted(work_dir.rglob("*")):
+                if not file_path.is_file():
+                    continue
+                if file_path.suffix.lower() not in _REBUILD_AUDIO_EXTENSIONS:
+                    continue
+                release_id = _read_albumid_tag(file_path)
+                if not release_id:
+                    continue
+                release_files.setdefault(release_id, []).append((top_dir.name, file_path))
+
+    result: dict[str, list[Path]] = {}
+    for release_id, entries in release_files.items():
+        top_dirs = {td for td, _ in entries}
+        if len(top_dirs) >= 2:  # noqa: PLR2004 — 2 is the fragmentation threshold (C-W2)
+            result[release_id] = sorted(fp for _, fp in entries)
+
+    return result
+
+
 def diff_journal(dest_root: Path) -> JournalDiffResult:
     """Diff the on-disk journal against a freshly-rebuilt in-memory cache, field by field per destination path.
 

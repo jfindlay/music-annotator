@@ -1,4 +1,4 @@
-"""Integration tests for music_annotator.run() and discover().
+"""Integration tests for music_annotator.run(), discover(), and unify().
 
 These tests exercise the full pipeline end-to-end against a fabricated release.  All MusicBrainz API calls are replaced by
 pytest-mock stubs and all file I/O is handled by pyfakefs so no real network or disk access occurs.  Internal helpers such as
@@ -21,8 +21,9 @@ from pytest_mock import MockerFixture
 import music_annotator
 from music_annotator import JOURNAL_FILENAME, CollisionPolicy
 from music_annotator._discover import DiscoverUI
-from music_annotator._pipeline_io import rebuild_journal
+from music_annotator._pipeline_io import detect_fragmented_releases, rebuild_journal
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
+from music_annotator._tags import build_dest_path
 from music_annotator.models import (
     CoverArt,
     CoverImage,
@@ -30,6 +31,7 @@ from music_annotator.models import (
     MBRecording,
     MBRelease,
     MBReleaseCandidate,
+    MBTrack,
     MBWork,
     TrackTags,
 )
@@ -1748,3 +1750,98 @@ class TestRebuildJournalIntegration:
         assert str(mp3_path) in destinations
         for entry in audio_entries:
             assert entry.release_id == "rel-1"
+
+
+# ---------------------------------------------------------------------------
+# Integration tests for unify()
+# ---------------------------------------------------------------------------
+
+
+class TestUnifyIntegration:
+    """Integration tests for :func:`music_annotator.unify` — performer-split unification.
+
+    These tests exercise the full detect → plan → move → verify → journal chain without mocking
+    any internal helpers.  The real mutagen write-and-read-back path executes via pyfakefs.
+
+    The performer-split scenario: one release (MUSICBRAINZ_ALBUMID="int-rel-1") has files under
+    two distinct top_dirs ("Brahms - Pollini" and "Brahms - Karajan").  After unify(), all files
+    should be under the canonical top_dir derived from their embedded tags.
+    """
+
+    @staticmethod
+    def _make_frag_tags(performer: str = "Karajan") -> TrackTags:
+        """Build TrackTags for the fragmented-release integration test.
+
+        :param performer: The ARTIST value to embed (affects the top_dir path).
+        :returns: A :class:`TrackTags` instance with CWP, performer, and MB album ID tags set.
+        """
+        return TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist=performer,
+            musicbrainz_albumid="int-rel-1",
+        )
+
+    def test_unify_full_pipeline(self, fs: FakeFilesystem) -> None:
+        """unify() detects fragmentation, moves files, and appends action="unified" journal entries.
+
+        Full integration: no internal helpers are mocked.  The real detect_fragmented_releases,
+        build_dest_path, _sha256_file, _verify_copy, and write_transaction_log all execute.
+
+        Asserts:
+        (a) detect_fragmented_releases detects the fragmented release before unify().
+        (b) After unify(yes=True), the file is at the canonical path.
+        (c) A TransactionEntry(action="unified") is in the journal.
+        (d) detect_fragmented_releases returns empty after unify() (idempotency).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Tags that drive build_dest_path to produce "Brahms - Karajan/..." canonical path
+        tags_canonical = self._make_frag_tags("Karajan")
+
+        # File A: wrong top_dir (Pollini instead of Karajan)
+        old_path = dest_root / "Brahms - Pollini" / "Piano Concerto No. 1 [rec 2021]" / "01 - First movement.flac"
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags_canonical)
+
+        # File B: already at canonical path (Karajan) — creates the second top_dir
+        canonical_path = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_canonical, global_track_idx=0)
+        canonical_path = canonical_path.with_suffix(".flac")
+        canonical_path.parent.mkdir(parents=True, exist_ok=True)
+        canonical_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(canonical_path, tags_canonical)
+
+        # (a) Fragmentation detected before unify
+        fragmented_before = detect_fragmented_releases(dest_root)
+        assert "int-rel-1" in fragmented_before
+        assert old_path in fragmented_before["int-rel-1"]
+
+        # Act: unify with yes=True
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # (b) File moved to canonical path
+        assert canonical_path.exists()
+        assert not old_path.exists()
+
+        # (c) Journal has a "unified" entry
+        journal = music_annotator.read_journal(dest_root / JOURNAL_FILENAME)
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 1
+        assert unified[0].source == str(old_path)
+        assert unified[0].destination == str(canonical_path)
+        assert unified[0].release_id == "int-rel-1"
+
+        # (d) Idempotency: second run finds nothing to do
+        music_annotator.unify(dest_root=dest_root, yes=True)
+        journal2 = music_annotator.read_journal(dest_root / JOURNAL_FILENAME)
+        unified2 = [e for e in journal2.entries if e.action == "unified"]
+        assert len(unified2) == 1  # still only one entry from the first run

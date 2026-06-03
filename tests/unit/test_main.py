@@ -28,6 +28,7 @@ from music_annotator.__main__ import (
     main,
 )
 from music_annotator._pipeline_io import (
+    AudioCompareResult,
     _audio_hash,
     _audit_audio_anchor,
     _audit_journal_scan,
@@ -6778,3 +6779,766 @@ class TestAuditOriginTimeCLI:
         parser = _build_parser()
         ns = parser.parse_args(["rebuild", "/dest", "--write"])
         assert ns.write is True
+
+
+# ---------------------------------------------------------------------------
+# TestUnify
+# ---------------------------------------------------------------------------
+
+
+class TestUnify:
+    """Tests for :func:`music_annotator.unify` — performer-split fragmentation consolidation.
+
+    The KAT ``test_unify_appends_journal_entry`` is the load-bearing assertion: it drives a
+    full performer-split fragmented release scenario (two top_dirs for one MUSICBRAINZ_ALBUMID)
+    through ``unify()`` and asserts that a ``TransactionEntry(action="unified")`` is appended to
+    the journal, with source=old path, destination=new path, release_id=the release's MBID.
+
+    All other tests cover the required branches for 100% branch coverage:
+    dry_run, prompt-accepted, prompt-declined, yes=True, empty-plan (nothing to unify),
+    idempotency (second run is a no-op), SHA-mismatch (provenance invariant: NO journal entry
+    on mismatch), EXDEV cross-fs fallback, and the main() dispatch arms.
+
+    Uses real FLAC bytes and :func:`apply_tags_flac` so that :func:`_read_tags_flac` executes
+    the real mutagen round-trip rather than a mock.  No MusicBrainz network calls are involved
+    (unify is fully offline — detection is by embedded tag, not journal).
+    """
+
+    # Tags for a file that should be unified.
+    # The MUSICBRAINZ_ALBUMID tag is set to "frag-rel-1" so detect_fragmented_releases picks it up.
+    # build_dest_path (with these tags) produces:
+    #   <dest_root>/Brahms - Karajan/Piano Concerto No. 1 [rec 2021]/01 - First movement.flac
+    # The split scenario: same MUSICBRAINZ_ALBUMID "frag-rel-1" has files under TWO different
+    # top_dirs:
+    #   "Brahms - Pollini"  (where file A currently lives — wrong performer in path)
+    #   "Brahms - Karajan"  (the canonical path from tags)
+    # After unify(), file A should move to "Brahms - Karajan".
+
+    @staticmethod
+    def _make_frag_tags() -> TrackTags:
+        """Build TrackTags for the fragmented-release test file.
+
+        Sets MUSICBRAINZ_ALBUMID so detect_fragmented_releases detects the fragmentation.
+        The tags drive build_dest_path to produce the canonical path under "Brahms - Karajan".
+
+        :returns: A :class:`TrackTags` instance with CWP, performer, and MB album ID tags set.
+        """
+        return TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Karajan",
+            musicbrainz_albumid="frag-rel-1",
+        )
+
+    @staticmethod
+    def _canonical_path(dest_root: Path, tags: TrackTags, ext: str = ".flac") -> Path:
+        """Compute the canonical destination path for given tags.
+
+        :param dest_root: Library root.
+        :param tags: Tags to drive build_dest_path.
+        :param ext: File extension.
+        :returns: Full absolute canonical path.
+        """
+        base = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0)
+        return base.with_suffix(ext)
+
+    def _build_frag_scenario(self, dest_root: Path) -> tuple[Path, Path]:
+        """Create a performer-split fragmented release scenario under dest_root.
+
+        Two FLAC files for release_id "frag-rel-1" land under different top_dirs:
+        - File A lives at "Brahms - Pollini/..." (wrong performer in path) with
+          MUSICBRAINZ_ALBUMID="frag-rel-1" embedded.
+        - File B lives at the canonical path "Brahms - Karajan/..." (already correct).
+
+        detect_fragmented_releases will detect two distinct top_dirs for "frag-rel-1".
+        unify() should move File A to the canonical path.
+
+        Returns (old_path, new_path) where old_path is File A's current location and new_path is
+        the recomputed canonical destination from the embedded tags.
+
+        :param dest_root: Library root (must already exist).
+        :returns: Tuple of (current file path, expected canonical path after unify).
+        """
+        tags = self._make_frag_tags()
+
+        # File A: lives at wrong top_dir (Pollini instead of Karajan)
+        old_path = _make_library_flac(
+            dest_root, "Brahms - Pollini/Piano Concerto No. 1 [rec 2021]/01 - First movement.flac", tags
+        )
+
+        # File B: already at canonical path (Karajan) — ensures two distinct top_dirs
+        canonical_path = self._canonical_path(dest_root, tags)
+        canonical_rel = str(canonical_path.relative_to(dest_root))
+        _make_library_flac(dest_root, canonical_rel, tags)
+
+        # The old and canonical paths must differ for the scenario to be non-trivial
+        assert old_path != canonical_path, "test setup error: old and canonical paths must differ"
+
+        return old_path, canonical_path
+
+    # ------------------------------------------------------------------
+    # KAT: test_unify_appends_journal_entry
+    # ------------------------------------------------------------------
+
+    def test_unify_appends_journal_entry(self, fs: FakeFilesystem) -> None:
+        """unify() moves the file and appends a TransactionEntry(action="unified") to the journal.
+
+        This is the KAT for W2a.  Constructs a performer-split fragmented release scenario (one
+        MUSICBRAINZ_ALBUMID scattered across two top_dirs) and drives unify(yes=True) through the
+        full move+verify+journal provenance chain.  Asserts:
+
+        (a) A TransactionEntry with action="unified", source=old path, destination=new path,
+            release_id="frag-rel-1" is appended to the journal.
+        (b) The file exists at the new canonical path and no longer at the old path.
+        (c) The file bytes are intact (re-read MUSICBRAINZ_ALBUMID via _read_albumid_tag).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, new_path = self._build_frag_scenario(dest_root)
+
+        # Act: unify with yes=True to skip the interactive prompt
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # (a) Journal gained a "unified" entry with correct fields
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 1
+        entry = unified[0]
+        assert entry.source == str(old_path)
+        assert entry.destination == str(new_path)
+        assert entry.release_id == "frag-rel-1"
+
+        # (b) File moved: new path exists, old path gone
+        assert new_path.exists()
+        assert not old_path.exists()
+
+        # (c) Bytes intact: MUSICBRAINZ_ALBUMID readable at new path
+        assert _read_albumid_tag(new_path) == "frag-rel-1"
+
+    # ------------------------------------------------------------------
+    # dry_run: no move, no journal write
+    # ------------------------------------------------------------------
+
+    def test_unify_dry_run_no_move_no_journal(self, fs: FakeFilesystem) -> None:
+        """unify(dry_run=True) logs planned moves but writes nothing to disk or journal.
+
+        Asserts that (a) File A remains at its old (wrong) path and (b) no "unified" journal
+        entries are added.  Note: File B already exists at the canonical path (new_path) as part
+        of the fragmented scenario setup, so we only check that old_path is not moved.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, _new_path = self._build_frag_scenario(dest_root)
+
+        music_annotator.unify(dest_root=dest_root, dry_run=True)
+
+        # (a) File A still at old (wrong) path — not moved
+        assert old_path.exists()
+
+        # (b) No "unified" entries
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 0
+
+    # ------------------------------------------------------------------
+    # Confirmation prompt: accepted (y) and declined (n)
+    # ------------------------------------------------------------------
+
+    def test_unify_prompt_accepted_moves_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify() with yes=False prompts; answering 'y' proceeds with the move.
+
+        Mocks input() to return "y" and asserts the file is moved and journalled.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, new_path = self._build_frag_scenario(dest_root)
+
+        mocker.patch("music_annotator._pipeline.input", return_value="y")
+
+        music_annotator.unify(dest_root=dest_root, yes=False)
+
+        assert new_path.exists()
+        assert not old_path.exists()
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 1
+        assert unified[0].release_id == "frag-rel-1"
+
+    def test_unify_prompt_declined_no_move(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify() with yes=False prompts; answering 'n' aborts with no move and no journal entry.
+
+        Mocks input() to return "n" and asserts File A remains at its old path and no
+        "unified" journal entry is written.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, _new_path = self._build_frag_scenario(dest_root)
+
+        mocker.patch("music_annotator._pipeline.input", return_value="n")
+
+        music_annotator.unify(dest_root=dest_root, yes=False)
+
+        # File A stays at old path — not moved
+        assert old_path.exists()
+
+        # No "unified" entries
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 0
+
+    # ------------------------------------------------------------------
+    # yes=True: prompt skipped
+    # ------------------------------------------------------------------
+
+    def test_unify_yes_skips_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify(yes=True) does not call input() at all.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_frag_scenario(dest_root)
+
+        mock_input = mocker.patch("music_annotator._pipeline.input")
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        mock_input.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Empty plan / nothing-to-unify paths
+    # ------------------------------------------------------------------
+
+    def test_unify_nothing_to_unify_empty_library(self, fs: FakeFilesystem) -> None:
+        """unify() on an empty library returns immediately (no plan, no prompt).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        # No files → no fragmented releases
+        music_annotator.unify(dest_root=dest_root, yes=True)
+        # No exception raised; no journal created
+
+    def test_unify_nothing_to_unify_when_all_paths_already_canonical(self, fs: FakeFilesystem) -> None:
+        """unify() is a no-op when all files already live at their canonical paths.
+
+        The plan is empty even for a fragmented release if every file already lives at its
+        canonical destination (build_dest_path returns the same path as the current path).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_frag_tags()
+        # Place both files at canonical paths (same top_dir → not fragmented)
+        canonical_path = self._canonical_path(dest_root, tags)
+        canonical_rel = str(canonical_path.relative_to(dest_root))
+        _make_library_flac(dest_root, canonical_rel, tags)
+
+        # Only one top_dir → detect_fragmented_releases returns empty → nothing to unify
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # File stays at canonical path; no journal entries added
+        assert canonical_path.exists()
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 0
+
+    # ------------------------------------------------------------------
+    # Idempotency: second run finds nothing to do
+    # ------------------------------------------------------------------
+
+    def test_unify_idempotent_second_run_noop(self, fs: FakeFilesystem) -> None:
+        """A second unify() run after the first is a complete no-op.
+
+        After the first run moves all fragments to canonical paths, all files share the same
+        top_dir, so detect_fragmented_releases returns empty and unify() returns immediately.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, new_path = self._build_frag_scenario(dest_root)
+
+        # First run: moves the file
+        music_annotator.unify(dest_root=dest_root, yes=True)
+        assert new_path.exists()
+        assert not old_path.exists()
+
+        # Second run: no-op
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # Still only one "unified" entry from the first run
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 1
+
+    # ------------------------------------------------------------------
+    # SHA mismatch after move → RuntimeError, NO journal entry
+    # (Provenance invariant: the most critical test)
+    # ------------------------------------------------------------------
+
+    def test_unify_sha_mismatch_raises_no_journal_entry(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify() raises RuntimeError on SHA-256 mismatch and writes NO journal entry.
+
+        This is the provenance-invariant test.  Patches _sha256_file to return a mismatched hash
+        for the destination check (simulating silent corruption during the move), and asserts that:
+        (a) RuntimeError is raised, and
+        (b) no "unified" journal entry is written.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_frag_scenario(dest_root)
+
+        # Patch _sha256_file: first call returns "aaa..." (src), second returns "bbb..." (dest ≠ src)
+        call_count = {"n": 0}
+
+        def _fake_sha256(path: Path) -> str:
+            """Return mismatched hash on second call to simulate corruption.
+
+            :param path: File path (unused).
+            :returns: Hash string.
+            """
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return "a" * 64  # src hash
+            if call_count["n"] == 2:
+                return "b" * 64  # dest hash ≠ src → triggers RuntimeError
+            return _sha256_file(path)  # subsequent calls use real implementation
+
+        mocker.patch("music_annotator._pipeline._sha256_file", side_effect=_fake_sha256)
+
+        with pytest.raises(RuntimeError, match="unify integrity failure"):
+            music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # No "unified" entry written
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 0
+
+    # ------------------------------------------------------------------
+    # EXDEV cross-filesystem fallback
+    # ------------------------------------------------------------------
+
+    def test_unify_exdev_cross_fs_fallback(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify() falls back to copy+unlink when os.replace raises EXDEV.
+
+        Patches os.replace to raise OSError(EXDEV) on the first call (the atomic rename attempt)
+        and asserts the file is still moved correctly via the shutil.copy2 + os.unlink fallback.
+        The real shutil.copy2 is used (not mocked) so the file is actually copied.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, new_path = self._build_frag_scenario(dest_root)
+
+        # Patch os.replace to raise EXDEV only on the first call (the atomic rename attempt).
+        # Subsequent calls (e.g. from shutil.copy2 internals) use the real implementation.
+        original_replace = os.replace
+        call_count = {"n": 0}
+
+        def _fake_replace(src: str, dst: str) -> None:
+            """Raise EXDEV on first call to simulate cross-filesystem move.
+
+            :param src: Source path.
+            :param dst: Destination path.
+            """
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise OSError(errno.EXDEV, "Cross-device link")
+            original_replace(src, dst)
+
+        mocker.patch("music_annotator._pipeline.os.replace", side_effect=_fake_replace)
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # File A was removed (unlinked after copy); canonical path still exists
+        assert not old_path.exists()
+        assert new_path.exists()
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 1
+
+    # ------------------------------------------------------------------
+    # main() dispatch: unify subcommand
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _patch_common(mocker: MockerFixture) -> None:
+        """Patch structlog and configure_color for main() dispatch tests.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.configure_color")
+        mocker.patch("structlog.configure")
+
+    _UNIFY_ARGV = ["music-annotator", "unify", "/dest"]
+
+    def test_main_unify_dispatches(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() dispatches 'unify' subcommand to music_annotator.unify.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        fs.create_dir("/dest")
+        mock_unify = mocker.patch("music_annotator.unify")
+        with patch.object(sys, "argv", self._UNIFY_ARGV):
+            main()
+        mock_unify.assert_called_once_with(dest_root=Path("/dest"), yes=False, dry_run=False)
+
+    def test_main_unify_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() unify exits with code 1 on unhandled exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        fs.create_dir("/dest")
+        mocker.patch("music_annotator.unify", side_effect=RuntimeError("boom"))
+        with patch.object(sys, "argv", self._UNIFY_ARGV):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_main_unify_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() unify exits with code 1 on KeyboardInterrupt.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        fs.create_dir("/dest")
+        mocker.patch("music_annotator.unify", side_effect=KeyboardInterrupt)
+        with patch.object(sys, "argv", self._UNIFY_ARGV):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_unify_parser_dry_run_flag(self) -> None:
+        """unify parser accepts --dry-run flag.
+
+        :param mocker: Not used — pure parser test.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["unify", "/dest", "--dry-run"])
+        assert ns.dry_run is True
+
+    def test_unify_parser_yes_flag(self) -> None:
+        """unify parser accepts -y/--yes flag.
+
+        :param mocker: Not used — pure parser test.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["unify", "/dest", "--yes"])
+        assert ns.yes is True
+
+    # ------------------------------------------------------------------
+    # MP3 file path in unify
+    # ------------------------------------------------------------------
+
+    def test_unify_moves_mp3_file(self, fs: FakeFilesystem) -> None:
+        """unify() handles MP3 files correctly (exercises the .mp3 tag-read branch).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_frag_tags()
+
+        # File A: MP3 at wrong top_dir
+        old_path = dest_root / "Brahms - Pollini" / "Piano Concerto No. 1 [rec 2021]" / "01 - First movement.mp3"
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_MP3)
+        apply_tags_mp3(old_path, tags)
+
+        # File B: FLAC at canonical path (creates second top_dir)
+        canonical_path = self._canonical_path(dest_root, tags)
+        canonical_path.parent.mkdir(parents=True, exist_ok=True)
+        canonical_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(canonical_path, tags)
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # MP3 file moved to canonical path
+        new_mp3 = canonical_path.with_suffix(".mp3")
+        assert new_mp3.exists()
+        assert not old_path.exists()
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 1
+
+    # ------------------------------------------------------------------
+    # group_tags empty → continue (all files in a release group fail to read)
+    # ------------------------------------------------------------------
+
+    def test_unify_skips_release_when_all_files_unreadable(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify() skips a release when all its files fail tag-read (group_tags empty).
+
+        Patches _read_tags_flac to raise an exception for all files, exercising the
+        ``if not group_tags: continue`` branch.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_frag_scenario(dest_root)
+
+        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=RuntimeError("unreadable"))
+
+        # Should not raise; just skips the release
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # No "unified" entries since all files were unreadable
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 0
+
+    # ------------------------------------------------------------------
+    # ValueError in length_ms parsing
+    # ------------------------------------------------------------------
+
+    def test_unify_handles_invalid_length_tag(self, fs: FakeFilesystem) -> None:
+        """unify() handles a non-integer LENGTH tag gracefully (exercises ValueError branch).
+
+        Creates a file with a non-integer LENGTH tag so the ``except ValueError: length_ms = 0``
+        branch is exercised.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_frag_tags()
+        # Add an invalid LENGTH tag via model_extra
+        if tags.model_extra is None:  # pragma: no cover
+            pass
+        else:
+            tags.model_extra["length"] = "not-a-number"
+
+        # File A: wrong top_dir
+        old_path = _make_library_flac(
+            dest_root, "Brahms - Pollini/Piano Concerto No. 1 [rec 2021]/01 - First movement.flac", tags
+        )
+
+        # File B: canonical path
+        canonical_path = self._canonical_path(dest_root, tags)
+        canonical_rel = str(canonical_path.relative_to(dest_root))
+        _make_library_flac(dest_root, canonical_rel, tags)
+
+        # Should not raise; length_ms defaults to 0
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        assert not old_path.exists()
+        assert canonical_path.exists()
+
+    # ------------------------------------------------------------------
+    # Collision suffix applied
+    # ------------------------------------------------------------------
+
+    def test_unify_collision_suffix_applied(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify() applies a collision suffix when two files recompute to the same destination.
+
+        Patches _assess_collisions to return a confirmed non-match, exercising the
+        collision-suffix branch.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path, new_path = self._build_frag_scenario(dest_root)
+
+        # Simulate a confirmed non-match collision at the destination
+        mocker.patch(
+            "music_annotator._pipeline._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_path, match=False, method="sha256", detail="different")],
+        )
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # A journal entry should exist (file moved with suffix)
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 1
+
+    # ------------------------------------------------------------------
+    # EXDEV cross-fs fallback with cross-hash mismatch
+    # ------------------------------------------------------------------
+
+    def test_unify_non_exdev_oserror_propagates(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify() re-raises OSError when it is not EXDEV (e.g. EACCES permission denied).
+
+        Patches os.replace to raise OSError(EACCES), exercising the ``if exc.errno != errno.EXDEV: raise``
+        branch.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_frag_scenario(dest_root)
+
+        mocker.patch("music_annotator._pipeline.os.replace", side_effect=OSError(errno.EACCES, "Permission denied"))
+
+        with pytest.raises(OSError):
+            music_annotator.unify(dest_root=dest_root, yes=True)
+
+    def test_unify_exdev_cross_hash_mismatch_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify() raises RuntimeError when cross-fs copy produces a hash mismatch.
+
+        Patches os.replace to raise EXDEV and _sha256_file to return mismatched hashes
+        for the cross-fs copy verification, exercising the cross-hash-mismatch branch.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_frag_scenario(dest_root)
+
+        # Patch os.replace to always raise EXDEV
+        mocker.patch("music_annotator._pipeline.os.replace", side_effect=OSError(errno.EXDEV, "Cross-device link"))
+
+        # Patch _sha256_file: first call (src) returns "aaa...", second call (cross-fs dest) returns "bbb..."
+        call_count = {"n": 0}
+
+        def _fake_sha256(_path: Path) -> str:
+            """Return mismatched hash on second call.
+
+            :param _path: File path (unused; hash is determined by call count).
+            :returns: Hash string.
+            """
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return "a" * 64  # src hash
+            return "b" * 64  # cross-fs dest hash ≠ src → triggers RuntimeError
+
+        mocker.patch("music_annotator._pipeline._sha256_file", side_effect=_fake_sha256)
+
+        with pytest.raises(RuntimeError, match="cross-fs copy integrity failure"):
+            music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # No "unified" entry written
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 0
+
+    # ------------------------------------------------------------------
+    # Tag re-read failure after move
+    # ------------------------------------------------------------------
+
+    def test_unify_tag_reread_failure_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify() raises RuntimeError when tag re-read fails after the move.
+
+        Patches _read_tags_flac to raise on the second call (post-move re-read), exercising
+        the ``except Exception: raise RuntimeError(...)`` branch in the tag re-read step.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        self._build_frag_scenario(dest_root)
+
+        original_read = _read_tags_flac
+        call_count = {"n": 0}
+
+        def _fake_read(path: Path) -> dict[str, str]:
+            """Raise on second call to simulate post-move tag read failure.
+
+            :param path: File path.
+            :returns: Tag dict.
+            """
+            call_count["n"] += 1
+            if call_count["n"] >= 3:  # First two calls are during plan-building; third is post-move
+                raise RuntimeError("tag read failed")
+            return original_read(path)
+
+        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=_fake_read)
+
+        with pytest.raises(RuntimeError, match="unify tag re-read failure"):
+            music_annotator.unify(dest_root=dest_root, yes=True)
+
+    # ------------------------------------------------------------------
+    # OSError in directory cleanup (non-empty dir)
+    # ------------------------------------------------------------------
+
+    def test_unify_cleanup_skips_nonempty_dir(self, fs: FakeFilesystem) -> None:
+        """unify() skips directory cleanup when the source dir is not empty.
+
+        Creates a second file in the source directory so rmdir() raises OSError, exercising
+        the ``except OSError: break`` branch in the cleanup loop.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_frag_tags()
+
+        # File A: wrong top_dir
+        old_path = _make_library_flac(
+            dest_root, "Brahms - Pollini/Piano Concerto No. 1 [rec 2021]/01 - First movement.flac", tags
+        )
+
+        # Extra file in the same directory — prevents rmdir() from succeeding
+        extra = old_path.parent / "extra.txt"
+        extra.write_text("extra", encoding="utf-8")
+
+        # File B: canonical path
+        canonical_path = self._canonical_path(dest_root, tags)
+        canonical_rel = str(canonical_path.relative_to(dest_root))
+        _make_library_flac(dest_root, canonical_rel, tags)
+
+        # Should not raise; cleanup just breaks out of the loop
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # File A moved; source dir still exists (not empty due to extra.txt)
+        assert not old_path.exists()
+        assert old_path.parent.exists()  # dir not removed (still has extra.txt)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 1

@@ -49,6 +49,7 @@ from music_annotator._pipeline_io import (
     _sha256_file,
     _verify_copy,
     check_duration_preflight,
+    detect_fragmented_releases,
     find_source_files,
     parse_disc_title,
     parse_disc_toc,
@@ -2021,6 +2022,247 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
                 break
 
     log.info("regroup_complete", dest_root=str(dest_root), moved=len(plan_pairs))
+
+
+def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
+    """Consolidate performer-split fragmented releases into their canonical top_dirs.
+
+    Scans ``dest_root`` for releases whose tracks are spread across ≥2 distinct top_dirs due to
+    per-track ``CEA_SOLOISTS`` variation (the dominant N1 shape: 29 releases in the 2026-06 audit).
+    For each fragmented release, reads the embedded tags from all its files, runs
+    :func:`~music_annotator._tags.build_dest_path` over the full release group to compute the
+    canonical destination for every file, and moves files that are not already at their canonical
+    path.
+
+    **Detection (C-W2):** a release is fragmented when ≥2 distinct top_dirs share the same
+    ``MUSICBRAINZ_ALBUMID`` tag.  The join key is the embedded tag, not the journal.
+
+    **Canonical path algorithm (C-W2):** :func:`~music_annotator._tags.build_dest_path` already
+    computes the correct unified path when given all tracks of the release as a group, because the
+    cross-medium composer pass and ``recording_date_work`` pass run over the full release group.
+    The unified performer credit comes from the ``cea_album_soloists_unified`` field, which
+    accumulates the cross-medium union of ``CEA_SOLOISTS`` (C-S4 concerto-soloist rule).
+
+    **Move semantics (provenance-chain invariant preserved):** for each file that needs moving:
+
+    1. Capture source SHA-256.
+    2. Move atomically via ``os.replace`` (rename within the library); fall back to
+       ``shutil.copy2`` + ``os.unlink`` on ``OSError`` with ``errno.EXDEV`` (cross-filesystem).
+    3. Verify destination SHA-256 == source SHA-256 (``RuntimeError`` on mismatch — NO journal
+       entry written).
+    4. Run ``_verify_copy`` tag round-trip on the new path (``RuntimeError`` on mismatch — NO
+       journal entry written).
+    5. **Only then** append ``TransactionEntry(action="unified", release_id=<the release's MBID>,
+       source=<old path>, destination=<new path>)`` and flush it to the journal before moving the
+       next file.
+
+    In ``dry_run`` mode: all planned moves are logged but **no files are moved and no journal
+    entries are written**.  The confirmation prompt is not shown in dry-run mode.
+
+    When ``yes=True`` the confirmation prompt is skipped; files are moved immediately after
+    building the plan.  When ``yes=False`` (default), the planned moves are printed and the user
+    must confirm with ``y``/``yes`` before any move is performed.  When the plan is empty, a
+    "nothing to unify" message is logged and the function returns immediately.
+
+    :param dest_root: Root of the annotated music library (contains
+        ``music_annotator_journal.json``).
+    :param yes: When ``True``, skip the interactive confirmation prompt.
+    :param dry_run: When ``True``, log planned moves without performing any filesystem
+        operations or writing journal entries.
+    """
+    journal_path = dest_root / JOURNAL_FILENAME
+
+    # --- Detect fragmented releases by scanning embedded MUSICBRAINZ_ALBUMID tags ---
+    fragmented = detect_fragmented_releases(dest_root)
+
+    if not fragmented:
+        log.info("unify_nothing_to_unify", dest_root=str(dest_root))
+        return
+
+    # --- Build unify plan: (current_path, new_dest, acoustid, length_ms, release_id) ---
+    plan_pairs: list[tuple[Path, Path, str, int, str]] = []
+
+    for release_id, file_paths in sorted(fragmented.items()):
+        # Read tags from all files in this release group.
+        # Build a list of (file_path, tags, file_dict) for the group.
+        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = []
+        for file_path in file_paths:
+            ext = file_path.suffix.lower()
+            try:
+                match ext:
+                    case ".flac":
+                        file_dict = _read_tags_flac(file_path)
+                    case ".mp3":
+                        file_dict = _read_tags_mp3(file_path)
+                    case _:  # pragma: no cover — detect_fragmented_releases only returns .flac/.mp3
+                        log.warning("unify_unsupported_format", path=str(file_path), ext=ext)
+                        continue
+            except Exception as exc:  # noqa: BLE001 — tag read failure: log and skip
+                log.warning("unify_tag_read_error", path=str(file_path), error=str(exc))
+                continue
+            tags = _tags_from_file_dict(file_dict)
+            group_tags.append((file_path, tags, file_dict))
+
+        if not group_tags:
+            continue
+
+        # Compute canonical destinations for every file in the group.
+        # build_dest_path uses the unified path fields (cea_album_soloists_unified, etc.) that
+        # are already embedded in the tags from the original annotation pipeline run.
+        # global_track_idx=0 is acceptable here because CWP_MOVT_NUM is present in the tags
+        # for properly annotated files (same as repath/regroup).
+        stub_release = MBRelease()
+        stub_track = MBTrack()
+
+        for file_path, tags, file_dict in group_tags:
+            ext = file_path.suffix.lower()
+            new_dest_base = build_dest_path(dest_root, stub_release, stub_track, tags, global_track_idx=0)
+            new_dest = new_dest_base.with_suffix(ext)
+
+            if new_dest == file_path:
+                log.debug("unify_noop", path=str(file_path.relative_to(dest_root)))
+                continue
+
+            acoustid = file_dict.get("ACOUSTID_ID", "")
+            length_str = file_dict.get("LENGTH", "0")
+            try:
+                length_ms = int(length_str) if length_str else 0
+            except ValueError:
+                length_ms = 0
+
+            plan_pairs.append((file_path, new_dest, acoustid, length_ms, release_id))
+            log.info(
+                "unify_plan",
+                old=str(file_path.relative_to(dest_root)),
+                new=str(new_dest.relative_to(dest_root)),
+                release_id=release_id,
+                dry_run=dry_run,
+            )
+
+    if not plan_pairs:
+        log.info("unify_nothing_to_unify", dest_root=str(dest_root))
+        return
+
+    # --- Collision detection and resolution ---
+    collision_pairs = [(src, dest, acust, length) for src, dest, acust, length, _ in plan_pairs]
+    collision_results = _assess_collisions(collision_pairs)
+    confirmed_nonmatches = [r for r in collision_results if r.match is False]
+    if confirmed_nonmatches:
+        stub_plan = [CopyPlanEntry(idx=0, src_file=src, dest_file=dest) for src, dest, _, _, _ in plan_pairs]
+        stub_release_for_suffix = MBRelease()
+        _apply_collision_suffix(stub_plan, confirmed_nonmatches, stub_release_for_suffix, dest_root)
+        plan_pairs = [
+            (entry.src_file, entry.dest_file, acust, length, rid)
+            for entry, (_, _, acust, length, rid) in zip(stub_plan, plan_pairs)
+        ]
+        log.warning("unify_collision_suffix_applied", count=len(confirmed_nonmatches))
+
+    if dry_run:
+        for current_path, new_dest, _, _, release_id in plan_pairs:
+            log.info(
+                "unify_dry_run",
+                old=str(current_path.relative_to(dest_root)),
+                new=str(new_dest.relative_to(dest_root)),
+                release_id=release_id,
+            )
+        return
+
+    # --- Confirmation prompt ---
+    if not yes:
+        _console.print("\n[bold yellow]unify[/] will move the following files:\n")
+        for current_path, new_dest, _, _, release_id in plan_pairs:
+            _console.print(
+                f"  [dim]{_markup_escape(str(current_path.relative_to(dest_root)))}[/]\n"
+                f"    → [green]{_markup_escape(str(new_dest.relative_to(dest_root)))}[/]"
+                f"  [dim](release {_markup_escape(release_id)})[/]"
+            )
+        _console.print(f"\n[bold]{len(plan_pairs)} file(s) will be moved.[/]  Proceed? [dim](y/n)[/]")
+        _console.print("\n[bold cyan]>[/] ", end="")
+        answer = input("").strip().lower()
+        if answer not in {"y", "yes"}:
+            log.info("unify_aborted", dest_root=str(dest_root))
+            return
+
+    # --- Perform moves, verify, journal ---
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    for current_path, new_dest, _, _, release_id in plan_pairs:
+        # a. Capture source SHA-256 and mtime before the move
+        src_hash = _sha256_file(current_path)
+        src_stat = current_path.stat()
+        src_mtime = src_stat.st_mtime
+
+        # b. Ensure parent directory exists; move atomically
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.replace(current_path, new_dest)
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            # Cross-filesystem fallback: copy + verify + unlink
+            shutil.copy2(current_path, new_dest)
+            # Verify the copy before unlinking the source
+            cross_hash = _sha256_file(new_dest)
+            if cross_hash != src_hash:
+                new_dest.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"cross-fs copy integrity failure for '{current_path.name}': "
+                    f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {cross_hash[:12]}…"
+                ) from exc
+            os.unlink(current_path)
+
+        # c. Verify destination SHA-256 == source SHA-256
+        dest_hash = _sha256_file(new_dest)
+        if dest_hash != src_hash:
+            raise RuntimeError(
+                f"unify integrity failure for '{new_dest.name}': src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_hash[:12]}…"
+            )
+
+        # d. Reconstruct tags for _verify_copy (tags are unchanged by the move)
+        ext = current_path.suffix.lower()
+        try:
+            match ext:
+                case ".flac":
+                    post_dict = _read_tags_flac(new_dest)
+                case ".mp3":
+                    post_dict = _read_tags_mp3(new_dest)
+                case _:  # pragma: no cover
+                    post_dict = {}
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"unify tag re-read failure for '{new_dest.name}': {exc}") from exc
+        moved_tags = _tags_from_file_dict(post_dict)
+        # _verify_copy checks mtime; for os.replace (same-fs rename) mtime is preserved.
+        # For cross-fs copy2+unlink, shutil.copy2 copies atime/mtime so src_mtime still holds.
+        _verify_copy(current_path, new_dest, moved_tags, None, src_mtime)
+
+        # e. Journal the move with the release_id (same pattern as regroup).
+        # Recording the release_id keeps the entry self-describing: future audits can re-confirm
+        # without a MusicBrainz lookup, preserving P2 (journal detects, tag adjudicates).
+        entry = TransactionEntry(
+            timestamp=now,
+            release_id=release_id,
+            source=str(current_path),
+            destination=str(new_dest),
+            action="unified",
+        )
+        write_transaction_log(journal_path, [entry])
+        log.info(
+            "unify_moved",
+            old=str(current_path.relative_to(dest_root)),
+            new=str(new_dest.relative_to(dest_root)),
+            release_id=release_id,
+        )
+
+        # Clean up now-empty source directories (best-effort; non-empty dirs are skipped)
+        src_dir = current_path.parent
+        while src_dir != dest_root:
+            try:
+                src_dir.rmdir()  # Only succeeds if directory is now empty
+                log.info("unify_removed_empty_dir", dir=str(src_dir.relative_to(dest_root)))
+                src_dir = src_dir.parent
+            except OSError:
+                break
+
+    log.info("unify_complete", dest_root=str(dest_root), moved=len(plan_pairs))
 
 
 def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, acoustid_key: str = "") -> None:

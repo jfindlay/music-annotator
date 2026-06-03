@@ -78,6 +78,7 @@ from music_annotator._pipeline_io import (
     _write_provenance_fields,
     check_duration_preflight,
     compare_audio_collision,
+    detect_fragmented_releases,
     diff_journal,
     enrich_origin_time,
     rebuild_journal,
@@ -10327,6 +10328,216 @@ class TestDiffJournal:
         assert result.matches == []
         assert result.stale == []
         assert result.leaked == []
+
+    def test_non_tagged_entries_skipped(self, fs: FakeFilesystem) -> None:
+        """diff_journal ignores non-tagged entries in both the journal and the rebuild.
+
+        A sidecar entry in the journal and a sidecar file on disk (producing a sidecar entry in
+        the rebuild) must not appear in any bucket.  This exercises the action-filter branches in
+        both the rebuild-map construction loop and the journal-latest construction loop.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        # A sidecar file on disk — rebuild will emit action="sidecar" for it.
+        cover_path = work_dir / "cover.jpg"
+        fs.create_file(str(cover_path), contents=b"\xff\xd8\xff\xe0")
+
+        # Journal has only a sidecar entry (action != "tagged") — must be ignored.
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "timestamp": "2024-01-01T00:00:00+00:00",
+                        "release_id": "",
+                        "source": str(cover_path),
+                        "destination": str(cover_path),
+                        "action": "sidecar",
+                        "audio_hash": "",
+                        "chromaprint_fp": "",
+                        "acoustid_id": "",
+                        "origin_time": "",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = diff_journal(dest_root)
+
+        assert result.matches == []
+        assert result.stale == []
+        assert result.leaked == []
+
+
+# ---------------------------------------------------------------------------
+# detect_fragmented_releases
+# ---------------------------------------------------------------------------
+
+
+class TestDetectFragmentedReleases:
+    """Tests for :func:`detect_fragmented_releases` — tag-based performer-split detection.
+
+    Exercises the detection logic (C-W2): a release is fragmented when ≥2 distinct top_dirs share
+    the same ``MUSICBRAINZ_ALBUMID`` tag.  The join key is the embedded tag, not the journal.
+    """
+
+    # pylint: disable=unused-argument  # fs activates pyfakefs; not all tests call fs.create_* directly
+
+    def test_fragmented_release_detected(self, fs: FakeFilesystem) -> None:
+        """detect_fragmented_releases returns a release whose files span ≥2 top_dirs.
+
+        Creates two FLAC files for the same release_id under different top_dirs and asserts that
+        the release is returned in the result dict.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        # File A: top_dir "Brahms - Karajan"
+        path_a = dest_root / "Brahms - Karajan" / "Piano Concerto No. 1 [rec 2021]" / "01.flac"
+        path_a.parent.mkdir(parents=True, exist_ok=True)
+        path_a.write_bytes(_MINIMAL_FLAC)
+        audio_a = FLAC(str(path_a))
+        audio_a["MUSICBRAINZ_ALBUMID"] = "rel-frag"
+        audio_a.save()
+
+        # File B: top_dir "Brahms - Pollini" (different performer → different top_dir)
+        path_b = dest_root / "Brahms - Pollini" / "Piano Concerto No. 1 [rec 2021]" / "01.flac"
+        path_b.parent.mkdir(parents=True, exist_ok=True)
+        path_b.write_bytes(_MINIMAL_FLAC)
+        audio_b = FLAC(str(path_b))
+        audio_b["MUSICBRAINZ_ALBUMID"] = "rel-frag"
+        audio_b.save()
+
+        result = detect_fragmented_releases(dest_root)
+
+        assert "rel-frag" in result
+        assert sorted(result["rel-frag"]) == sorted([path_a, path_b])
+
+    def test_non_fragmented_release_excluded(self, fs: FakeFilesystem) -> None:
+        """detect_fragmented_releases excludes releases whose files all share one top_dir.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        path_a = dest_root / "Brahms - Karajan" / "Piano Concerto No. 1 [rec 2021]" / "01.flac"
+        path_a.parent.mkdir(parents=True, exist_ok=True)
+        path_a.write_bytes(_MINIMAL_FLAC)
+        audio_a = FLAC(str(path_a))
+        audio_a["MUSICBRAINZ_ALBUMID"] = "rel-clean"
+        audio_a.save()
+
+        path_b = dest_root / "Brahms - Karajan" / "Piano Concerto No. 1 [rec 2021]" / "02.flac"
+        path_b.write_bytes(_MINIMAL_FLAC)
+        audio_b = FLAC(str(path_b))
+        audio_b["MUSICBRAINZ_ALBUMID"] = "rel-clean"
+        audio_b.save()
+
+        result = detect_fragmented_releases(dest_root)
+
+        assert "rel-clean" not in result
+
+    def test_empty_dest_root_returns_empty(self, fs: FakeFilesystem) -> None:
+        """detect_fragmented_releases returns an empty dict for an empty library.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        dest_root.mkdir()
+
+        result = detect_fragmented_releases(dest_root)
+
+        assert result == {}
+
+    def test_missing_dest_root_returns_empty(self, fs: FakeFilesystem) -> None:
+        """detect_fragmented_releases returns an empty dict when dest_root does not exist.
+
+        :param fs: pyfakefs fixture (activates fake filesystem so /nonexistent truly does not exist).
+        """
+        result = detect_fragmented_releases(Path("/nonexistent"))
+
+        assert result == {}
+
+    def test_files_with_empty_albumid_skipped(self, fs: FakeFilesystem) -> None:
+        """detect_fragmented_releases skips files whose MUSICBRAINZ_ALBUMID tag is empty.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        path_a = dest_root / "Brahms - Karajan" / "Work [2021]" / "01.flac"
+        path_a.parent.mkdir(parents=True, exist_ok=True)
+        path_a.write_bytes(_MINIMAL_FLAC)
+        # No MUSICBRAINZ_ALBUMID tag written → empty tag → skipped
+
+        path_b = dest_root / "Brahms - Pollini" / "Work [2021]" / "01.flac"
+        path_b.parent.mkdir(parents=True, exist_ok=True)
+        path_b.write_bytes(_MINIMAL_FLAC)
+        # No MUSICBRAINZ_ALBUMID tag written → empty tag → skipped
+
+        result = detect_fragmented_releases(dest_root)
+
+        assert result == {}
+
+    def test_non_audio_files_skipped(self, fs: FakeFilesystem) -> None:
+        """detect_fragmented_releases skips non-audio files (e.g. YAML sidecars).
+
+        Exercises the ``file_path.suffix.lower() not in _REBUILD_AUDIO_EXTENSIONS`` branch.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        # Create a sidecar YAML file (not an audio file) under two different top_dirs
+        sidecar_a = dest_root / "Brahms - Karajan" / "Work [2021]" / "freedb_disc_1.yaml"
+        sidecar_a.parent.mkdir(parents=True, exist_ok=True)
+        sidecar_a.write_text("release_id: rel-1\n", encoding="utf-8")
+
+        sidecar_b = dest_root / "Brahms - Pollini" / "Work [2021]" / "freedb_disc_1.yaml"
+        sidecar_b.parent.mkdir(parents=True, exist_ok=True)
+        sidecar_b.write_text("release_id: rel-1\n", encoding="utf-8")
+
+        result = detect_fragmented_releases(dest_root)
+
+        # YAML files are not audio files → skipped → no fragmented releases detected
+        assert result == {}
+
+    def test_non_dir_work_dir_skipped(self, fs: FakeFilesystem) -> None:
+        """detect_fragmented_releases skips non-directory entries under top_dir.
+
+        Exercises the ``not work_dir.is_dir()`` branch.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        top_dir = dest_root / "Brahms - Karajan"
+        top_dir.mkdir(parents=True)
+        # Create a file directly under top_dir (not a directory) — should be skipped
+        (top_dir / "not_a_dir.txt").write_text("hello", encoding="utf-8")
+
+        result = detect_fragmented_releases(dest_root)
+
+        assert result == {}
+
+    def test_non_dir_file_in_work_dir_skipped(self, fs: FakeFilesystem) -> None:
+        """detect_fragmented_releases skips non-file entries when walking work_dir.
+
+        Exercises the ``not file_path.is_file()`` branch by creating a subdirectory inside
+        the work_dir (rglob returns it, but it is not a file).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Brahms - Karajan" / "Work [2021]"
+        work_dir.mkdir(parents=True)
+        # Create a subdirectory inside work_dir — rglob will yield it, but it is not a file
+        sub_dir = work_dir / "subdir"
+        sub_dir.mkdir()
+
+        result = detect_fragmented_releases(dest_root)
+
+        assert result == {}
 
     def test_non_tagged_entries_skipped(self, fs: FakeFilesystem) -> None:
         """diff_journal ignores non-tagged entries in both the journal and the rebuild.

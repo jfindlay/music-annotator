@@ -1501,7 +1501,8 @@ class TransactionEntry(BaseModel):
     Important attributes: ``timestamp`` (ISO-8601 UTC string), ``release_id`` (MusicBrainz MBID),
     ``source`` (absolute path of the input audio file), ``destination`` (absolute path of the output
     file including extension), ``action`` (one of ``"tagged"``, ``"skipped"``, ``"dry_run"``,
-    ``"downloaded"``, ``"sidecar"``, ``"repathed"``, ``"regrouped"``, ``"enriched"``).
+    ``"downloaded"``, ``"sidecar"``, ``"repathed"``, ``"regrouped"``, ``"enriched"``,
+    ``"unified"``).
 
     The ``"repathed"`` action is written by :func:`~music_annotator.repath` when a library file
     is moved to a corrected destination under the current path-construction policy.  For
@@ -1521,13 +1522,21 @@ class TransactionEntry(BaseModel):
     already-tagged library file.  For ``"enriched"`` entries, ``source`` and ``destination`` are
     the same path (in-place tag update).  The ``audio_hash``, ``chromaprint_fp``, and
     ``acoustid_id`` fields carry the full triple as written.
+
+    The ``"unified"`` action is written by :func:`~music_annotator.unify` when a fragmented release
+    (one whose tracks are split across ≥2 top_dirs due to per-track ``CEA_SOLOISTS`` variation) is
+    consolidated into the canonical top_dir computed by running ``build_dest_path`` over all tracks
+    of the release as a single group.  For ``"unified"`` entries, ``source`` is the old on-disk path
+    and ``destination`` is the new canonical path.  The ``release_id`` field is populated because
+    the move is release-driven (same as ``"regrouped"``).
     """
 
     timestamp: str
     release_id: str
     source: str
     destination: str
-    action: str  # "tagged" | "skipped" | "dry_run" | "downloaded" | "sidecar" | "repathed" | "regrouped" | "enriched"
+    # "tagged" | "skipped" | "dry_run" | "downloaded" | "sidecar" | "repathed" | "regrouped" | "enriched" | "unified"
+    action: str
     # --- archival identity (extensible: 4th dim slots in here) ---
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
     chromaprint_fp: str = ""  # Chromaprint fingerprint string (populated in F3)

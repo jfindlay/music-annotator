@@ -150,6 +150,7 @@ from music_annotator._pipeline import (
     regroup,
     repath,
     run,
+    unify,
 )
 from music_annotator._pipeline_io import (
     _DISC_INFO_FILENAME,
@@ -186,6 +187,7 @@ from music_annotator._pipeline_io import (
     _write_provenance_fields,
     audit,
     compare_audio_collision,
+    detect_fragmented_releases,
     diff_journal,
     enrich_origin_time,
     find_source_files,
@@ -269,6 +271,7 @@ __all__ = [
     "regroup",
     "repath",
     "run",
+    "unify",
     "parse_disc_info_yaml",
     "parse_disc_title",
     "parse_disc_toc",
@@ -280,6 +283,7 @@ __all__ = [
     "read_journal",
     "write_transaction_log",
     "audit",
+    "detect_fragmented_releases",
     "diff_journal",
     "enrich_origin_time",
     "rebuild_journal",

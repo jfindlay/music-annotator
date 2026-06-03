@@ -1,6 +1,6 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes six subcommands:
+Configures structlog for human-friendly console output and exposes seven subcommands:
 
 * ``apply``   — copy and tag a directory of tracks for a known MusicBrainz release MBID.
 * ``search``  — search MusicBrainz for a release matching a source directory, prompt for
@@ -14,6 +14,8 @@ Configures structlog for human-friendly console output and exposes six subcomman
   in-memory cache and report matches, stale, and leaked entries.
 * ``rebuild`` — walk the library, read tags and sidecars per file, and emit a new journal
   (dry-run by default; use ``--write`` to replace the on-disk journal).
+* ``unify``   — consolidate performer-split fragmented releases into their canonical top_dirs
+  (detects releases with ≥2 top_dirs sharing the same ``MUSICBRAINZ_ALBUMID``).
 
 Usage::
 
@@ -45,6 +47,10 @@ Usage::
     music-annotator rebuild \\
         <dest_dir> \\
         [--dry-run | --write]
+
+    music-annotator unify \\
+        <dest_dir> \\
+        [--dry-run] [-y/--yes]
 """
 
 from __future__ import annotations
@@ -196,6 +202,8 @@ def _build_parser() -> argparse.ArgumentParser:
     matches, stale, and leaked entries.
     ``rebuild`` walks the library and reconstructs the journal from embedded tags and sidecars; default is
     ``--dry-run`` (no write); pass ``--write`` to replace the on-disk journal.
+    ``unify`` scans the library for releases fragmented across ≥2 top_dirs (by ``MUSICBRAINZ_ALBUMID`` tag),
+    computes the canonical top_dir for each, and moves the fragments.  Supports ``--dry-run`` and ``-y``/``--yes``.
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -581,6 +589,50 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Replace music_annotator_journal.json with the rebuilt journal.",
     )
 
+    # ------------------------------------------------------------------
+    # unify subcommand
+    # ------------------------------------------------------------------
+    unify_parser = subparsers.add_parser(
+        "unify",
+        help="Consolidate performer-split fragmented releases into their canonical top_dirs.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Scans the library at <dest_dir> for releases whose tracks are spread across ≥2
+            distinct top_dirs (detected by reading MUSICBRAINZ_ALBUMID from embedded tags).
+            For each fragmented release, computes the canonical destination for every file
+            using build_dest_path over the full release group, and moves fragments to the
+            canonical path.
+
+            The join key is the embedded MUSICBRAINZ_ALBUMID tag, not the journal (C-W2).
+            No MusicBrainz network calls are made.
+
+            Use --dry-run first to preview all planned moves.  Use -y/--yes to skip the
+            confirmation prompt.
+
+            Examples:
+              music-annotator unify /tmp/music_library --dry-run
+              music-annotator unify /tmp/music_library
+              music-annotator unify /tmp/music_library --yes
+            """),
+    )
+    unify_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    unify_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log planned moves without performing any filesystem operations or writing journal entries.",
+    )
+    unify_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt and move files immediately.",
+    )
+
     return parser
 
 
@@ -588,12 +640,13 @@ def main() -> None:
     """Parse CLI arguments, configure logging, and dispatch to subcommands.
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
-    ``rebuild``.  The ``audit`` subcommand dispatches to :func:`~music_annotator.audit`,
+    ``rebuild``, ``unify``.  The ``audit`` subcommand dispatches to :func:`~music_annotator.audit`,
     :func:`~music_annotator.enrich`, :func:`~music_annotator.enrich_origin_time`, or
     :func:`~music_annotator.diff_journal` depending on the flags provided (``--enrich``,
     ``--origin-time``, ``--diff``).  The ``rebuild`` subcommand dispatches to
     :func:`~music_annotator.rebuild_journal` with ``dry_run=True`` (default) or ``dry_run=False``
-    when ``--write`` is passed.
+    when ``--write`` is passed.  The ``unify`` subcommand dispatches to
+    :func:`~music_annotator.unify`.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating and converts any unhandled exception or keyboard interrupt into a logged error with exit code 1.
@@ -729,6 +782,16 @@ def main() -> None:
                 sys.exit(1)
             except Exception as exc:  # noqa: BLE001
                 log.error("rebuild_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
+                sys.exit(1)
+
+        case "unify":
+            try:
+                music_annotator.unify(dest_root=args.dest_dir, yes=args.yes, dry_run=args.dry_run)
+            except KeyboardInterrupt:
+                log.warning("interrupted")
+                sys.exit(1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("unify_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
                 sys.exit(1)
 
         case _:  # pragma: no cover
