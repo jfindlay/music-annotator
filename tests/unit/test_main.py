@@ -2750,6 +2750,344 @@ class TestRepath:
         # The old empty parent directories should have been removed
         assert not (dest_root / "TempComp - TempPerf").exists()
 
+    # ------------------------------------------------------------------
+    # W3a fossil-shape tests
+    # ------------------------------------------------------------------
+
+    def test_repath_leaf_collision_suffix_preserved(self, fs: FakeFilesystem) -> None:
+        """W3a fossil shape 1: legitimate collision-suffix files are not overwritten.
+
+        Two recordings of the same work live at paths with distinct collision suffixes
+        (e.g. ``Work [rec 2020] [CAT-001]`` and ``Work [rec 2020] [CAT-002]``).  Both
+        recompute to the same clean path via ``build_dest_path``.  ``repath`` must NOT
+        move either file — doing so would cause one to overwrite the other.
+
+        Asserts that both files still exist after ``repath`` and that no "repathed"
+        journal entries were written (the intra-plan collision guard skips both files).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Both recordings share the same work/movement tags — they recompute to the same
+        # clean destination.  The collision suffix distinguishes them on disk.
+        tags_a = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+            acoustid_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+        tags_b = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+            acoustid_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        )
+
+        # Place both files at paths with collision suffixes on the work_dir.
+        path_a = _make_library_flac(
+            dest_root,
+            "Beethoven - Karajan/Symphony No. 5 [rec 2020] [CAT-001]/01 - Allegro con brio.flac",
+            tags_a,
+        )
+        path_b = _make_library_flac(
+            dest_root,
+            "Beethoven - Karajan/Symphony No. 5 [rec 2020] [CAT-002]/01 - Allegro con brio.flac",
+            tags_b,
+        )
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r2",
+                    "source": "/src/02.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False)
+
+        # Both files must still exist — neither was overwritten.
+        assert path_a.exists(), "File A (CAT-001 suffix) was lost after repath"
+        assert path_b.exists(), "File B (CAT-002 suffix) was lost after repath"
+
+        # No "repathed" journal entries: the intra-plan collision guard skipped both files.
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 0, f"Expected 0 repathed entries (collision guard should skip both files), got {len(repathed)}"
+
+    def test_repath_intra_collision_mixed_with_moveable_file(self, fs: FakeFilesystem) -> None:
+        """W3a: intra-plan collision guard skips colliding files but still moves others.
+
+        When the plan contains both intra-plan-colliding files (same recomputed destination)
+        and a file that needs to be moved to a unique destination, the guard must skip the
+        colliding files while still moving the non-colliding file.
+
+        This covers the branch where ``plan_pairs`` is non-empty after filtering out the
+        intra-plan collision group.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two files that recompute to the same clean destination (intra-plan collision).
+        tags_a = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+            acoustid_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+        tags_b = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+            acoustid_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        )
+
+        # A third file that recomputes to a DIFFERENT destination (no intra-plan collision).
+        tags_c = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Symphony No. 1",
+            recording_date="2019",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro",
+            artist="Karajan",
+        )
+
+        path_a = _make_library_flac(
+            dest_root,
+            "Beethoven - Karajan/Symphony No. 5 [rec 2020] [CAT-001]/01 - Allegro con brio.flac",
+            tags_a,
+        )
+        path_b = _make_library_flac(
+            dest_root,
+            "Beethoven - Karajan/Symphony No. 5 [rec 2020] [CAT-002]/01 - Allegro con brio.flac",
+            tags_b,
+        )
+        # File C is at a stale path (different old work name) — should be moved.
+        path_c_old = _make_library_flac(
+            dest_root,
+            "Brahms - Karajan/OldSym1 [rec 2019]/01 - Allegro.flac",
+            tags_c,
+        )
+        path_c_new = self._new_path(dest_root, tags_c)
+        assert path_c_new != path_c_old
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r2",
+                    "source": "/src/02.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r3",
+                    "source": "/src/03.flac",
+                    "destination": str(path_c_old),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False)
+
+        # Colliding files A and B must still exist at their original paths.
+        assert path_a.exists(), "File A (collision) was lost"
+        assert path_b.exists(), "File B (collision) was lost"
+
+        # File C must have been moved to its correct path.
+        assert path_c_new.exists(), "File C was not moved to its correct path"
+        assert not path_c_old.exists(), "File C still exists at old path"
+
+        # Journal has exactly one "repathed" entry (for file C only).
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 1
+        assert repathed[0].destination == str(path_c_new)
+
+    def test_repath_stale_collision_suffix_removed(self, fs: FakeFilesystem) -> None:
+        """W3a fossil shape 2: stale collision suffix (dd.dd over-application) is removed.
+
+        A single file lives at a path with a collision suffix on the work_dir (e.g.
+        ``Work [rec 2020] [CAT-001]``) but it is the ONLY recording of that work — no
+        other file recomputes to the same clean destination.  ``repath`` must move it to
+        the clean path (removing the stale suffix).
+
+        This is the ``dd.dd`` over-application case from the 2026-06 library audit
+        (4 work_dirs / 79 files).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+        )
+
+        # File at a path with a stale collision suffix — only one recording of this work.
+        old_path = _make_library_flac(
+            dest_root,
+            "Beethoven - Karajan/Symphony No. 5 [rec 2020] [CAT-001]/01 - Allegro con brio.flac",
+            tags,
+        )
+
+        # The clean path (without the stale suffix) is what build_dest_path computes.
+        clean_path = self._new_path(dest_root, tags)
+        assert clean_path != old_path, "Test precondition: clean path must differ from old path"
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False)
+
+        # File must be at the clean path (stale suffix removed).
+        assert clean_path.exists(), f"File was not moved to clean path {clean_path}"
+        assert not old_path.exists(), "File still exists at old (stale-suffix) path"
+
+        # Journal has a "repathed" entry recording the move.
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 1
+        assert repathed[0].source == str(old_path)
+        assert repathed[0].destination == str(clean_path)
+
+    def test_repath_missing_inter_index_added(self, fs: FakeFilesystem) -> None:
+        """W3a fossil shape 3: missing CWP_INTER_INDEX_{i} is added to the path.
+
+        A file lives at a 2-level path (no intermediate directory) but its tags carry
+        ``CWP_PART_LEVELS=2`` and ``CWP_INTER_INDEX_1`` — indicating a 3-level hierarchy
+        with an intermediate directory.  ``repath`` must move it to the correct 3-level
+        path that includes the intermediate directory.
+
+        This covers the missing-inter-index fossil shape from the 2026-06 library audit.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Tags for a 3-level hierarchy: Opera > Act I > Aria.
+        # CWP_PART_LEVELS=2 means 3 levels total (root + 1 intermediate + leaf).
+        # CWP_INTER_INDEX_1=1 is the gap-free sibling index for the intermediate level.
+        tags = TrackTags(
+            cwp_composer_lastnames="Mozart",
+            cwp_work_top="Don Giovanni",
+            recording_date="1985",
+            cwp_movt_num="1",
+            movementtotal="3",
+            cwp_part_levels="2",
+            title="Madamina, il catalogo",
+            artist="Karajan",
+        )
+        # Add the intermediate-level fields as model_extra (dynamic per-level fields).
+        if tags.model_extra is not None:
+            tags.model_extra["cwp_part_1"] = "Act I"
+            tags.model_extra["cwp_inter_index_1"] = "1"
+            tags.model_extra["cwp_ordering_key_1"] = "1"
+
+        # Compute the correct (3-level) destination path.
+        correct_path = self._new_path(dest_root, tags)
+        # The correct path must include an intermediate directory (3 levels below dest_root).
+        assert len(correct_path.relative_to(dest_root).parts) == 4, (
+            f"Expected 4 path parts (top_dir/work_dir/inter_dir/leaf), got {correct_path.relative_to(dest_root).parts!r}"
+        )
+
+        # Place the file at a stale 2-level path (missing the intermediate directory).
+        # This simulates the fossil: the file was annotated before the inter-index was computed.
+        stale_rel = "Mozart - Karajan/Don Giovanni [rec 1985]/01 - Madamina, il catalogo.flac"
+        old_path = _make_library_flac(dest_root, stale_rel, tags)
+        assert old_path != correct_path, "Test precondition: stale path must differ from correct path"
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False)
+
+        # File must be at the correct 3-level path (intermediate directory added).
+        assert correct_path.exists(), f"File was not moved to correct path {correct_path.relative_to(dest_root)}"
+        assert not old_path.exists(), "File still exists at stale (missing-inter-index) path"
+
+        # Journal has a "repathed" entry recording the move.
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 1
+        assert repathed[0].source == str(old_path)
+        assert repathed[0].destination == str(correct_path)
+
 
 # ---------------------------------------------------------------------------
 # audit()

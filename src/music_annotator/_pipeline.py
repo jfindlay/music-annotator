@@ -1653,6 +1653,39 @@ def repath(dest_root: Path, *, dry_run: bool = False) -> None:
         log.info("repath_all_current", dest_root=str(dest_root))
         return
 
+    # --- Intra-plan collision guard (legitimate partial-performance collisions) ---
+    # When two or more files in the plan recompute to the same clean destination, they are
+    # likely legitimate partial-performance collisions: different recordings of the same work
+    # that were previously disambiguated by a collision suffix on the work_dir.  Moving them
+    # would cause one to overwrite the other (os.replace is atomic and silently clobbers).
+    # Guard: skip all files in such groups — they are already at valid (collision-suffixed)
+    # locations and must not lose their disambiguation.
+    #
+    # This is distinct from the existing on-disk collision detection below, which handles
+    # the case where a planned destination already exists on disk before any moves begin.
+    # Intra-plan collisions are invisible to _assess_collisions because neither destination
+    # exists on disk yet when the plan is built.
+    _dest_to_plan_indices: dict[Path, list[int]] = {}
+    for _i, (_, _dest, _, _) in enumerate(plan_pairs):
+        _dest_to_plan_indices.setdefault(_dest, []).append(_i)
+
+    _intra_collision_indices: set[int] = set()
+    for _dest, _indices in _dest_to_plan_indices.items():
+        if len(_indices) > 1:
+            for _idx in _indices:
+                _intra_collision_indices.add(_idx)
+            log.info(
+                "repath_intra_plan_collision_skipped",
+                dest=str(_dest.relative_to(dest_root)),
+                count=len(_indices),
+            )
+
+    if _intra_collision_indices:
+        plan_pairs = [pair for _i, pair in enumerate(plan_pairs) if _i not in _intra_collision_indices]
+        if not plan_pairs:
+            log.info("repath_all_current", dest_root=str(dest_root))
+            return
+
     # --- Collision detection and resolution ---
     collision_results = _assess_collisions(plan_pairs)
     confirmed_nonmatches = [r for r in collision_results if r.match is False]
