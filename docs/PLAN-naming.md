@@ -333,6 +333,17 @@ no MB work link on the tracks).
 **Files expected**: possibly none (editorial resolution only).  If a renderer fallback is warranted,
 extends `src/music_annotator/_tags.py` (`build_dest_path`).
 
+**Resolution (2026-06-03): zero code.**  `build_dest_path` produces `" [rel YYYY]"` (leading-space
+`work_dir`) when `cwp_work_top` is empty.  This is correct and intentional under NOTES Rule 1
+(ragged-depth source routing): the blank work component keeps the data-quality gap visible upstream.
+A renderer fallback (substituting `ALBUM`/`TITLE`) would bury the gap and violate Rule 1.  The
+leading-space directory name is valid on all target filesystems, distinctive to players/browsers,
+and reconstructable by `build_dest_path` (journal-regeneration invariant holds).  The fix is to
+submit the missing work links to MusicBrainz for the ~5 affected releases; once re-annotated,
+`repath` will move the files to their correct work-titled directories.  To enumerate affected
+releases: `find /home/findlay/Music/Done -maxdepth 2 -type d -name " [rel *]"` — each directory's
+`MUSICBRAINZ_ALBUMID` tag identifies the release needing a MB work-link submission.
+
 ---
 
 ### W3a — Mechanical repath  `[algorithm]`
@@ -425,7 +436,7 @@ W2 and W3a are independent of each other and can be scheduled in parallel after 
 | W2a     | done    | fe8e65b | `unify` subcommand + `detect_fragmented_releases()`; C-W2 (performer-split) frozen |
 | W2b     | done    | 678acbf | Composer-split pre-processing in `unify()`; ALBUMARTISTSORT canonical; C-W2 fully frozen |
 | W2c     | done    | 44409a2 | `_unify_classical_composer_groups()` in `unify()`; patches both `cea_` and `cwp_composer_lastnames` |
-| W2d     | pending | —      |       |
+| W2d     | done    | —      | Zero code: `" [rel YYYY]"` is correct per NOTES Rule 1; fix is MB work-link submissions upstream |
 | W3a     | pending | —      |       |
 | W3b     | deferred | — | Moved to `docs/BACKLOG.md`; dedicated multisession planned |
 
