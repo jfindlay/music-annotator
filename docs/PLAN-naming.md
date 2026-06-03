@@ -423,7 +423,7 @@ W2 and W3a are independent of each other and can be scheduled in parallel after 
 | W1b     | done    | 9e70188 | `rebuild_journal()` + `rebuild` subcommand; `origin_time` on `TransactionEntry`; C-W1 frozen |
 | W1c     | done    | 2411e5f | `audit --diff` + `diff_journal()` + `JournalDiffResult`; matches/stale/leaked buckets |
 | W2a     | done    | fe8e65b | `unify` subcommand + `detect_fragmented_releases()`; C-W2 (performer-split) frozen |
-| W2b     | blocked (`@plan` juncture) | — | Editorial decision on multi-composer top_dir needed before sharding |
+| W2b     | done    | 678acbf | Composer-split pre-processing in `unify()`; ALBUMARTISTSORT canonical; C-W2 fully frozen |
 | W2c     | pending | —      |       |
 | W2d     | pending | —      |       |
 | W3a     | pending | —      |       |
