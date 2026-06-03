@@ -7542,3 +7542,306 @@ class TestUnify:
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
         unified = [e for e in journal.entries if e.action == "unified"]
         assert len(unified) == 1
+
+    # ------------------------------------------------------------------
+    # W2b: Composer-split unification (Benny Goodman shape)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_composer_split_tags(composer: str, album_artist_sort: str = "Goodman, Benny") -> TrackTags:
+        """Build TrackTags for a non-classical multi-composer compilation track.
+
+        The release has no CWP_WORK_TOP (non-classical) and a varying CEA_COMPOSER_LASTNAMES
+        across tracks.  ALBUMARTISTSORT is set to ``album_artist_sort`` so the canonical
+        composer component can be derived from it.
+
+        :param composer: The per-track CEA_COMPOSER_LASTNAMES value.
+        :param album_artist_sort: The ALBUMARTISTSORT value (uniform across the release).
+        :returns: A :class:`TrackTags` instance.
+        """
+        return TrackTags(
+            cea_composer_lastnames=composer,
+            albumartistsort=album_artist_sort,
+            cwp_work_top="",  # non-classical: no MB work link
+            cwp_worktype_genres_top="",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Track 1",
+            artist="Benny Goodman",
+            musicbrainz_albumid="goodman-rel-1",
+        )
+
+    def test_composer_split_detected_and_unified(self, fs: FakeFilesystem) -> None:
+        """unify() detects a composer-split release and unifies all tracks under ALBUMARTISTSORT.
+
+        Creates two FLAC files for the same release_id under different top_dirs due to varying
+        CEA_COMPOSER_LASTNAMES ("Goodman" vs "Berlin").  After unify(), both files should land
+        under the canonical top_dir derived from ALBUMARTISTSORT ("Goodman, Benny").
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File A: CEA_COMPOSER_LASTNAMES="Goodman" → top_dir "Goodman - Benny Goodman"
+        tags_a = self._make_composer_split_tags("Goodman")
+        path_a = _make_library_flac(dest_root, "Goodman - Benny Goodman/The Story [rel 1956]/01 - Track 1.flac", tags_a)
+
+        # File B: CEA_COMPOSER_LASTNAMES="Berlin" → different top_dir (triggers fragmentation)
+        tags_b = self._make_composer_split_tags("Berlin")
+        path_b = _make_library_flac(dest_root, "Berlin - Benny Goodman/The Story [rel 1956]/02 - Track 2.flac", tags_b)
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # Both files should now be under the canonical composer component "Goodman"
+        # (last_name("Goodman, Benny") == "Goodman" — strips the given-name suffix)
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        # At least one file was moved (the one not already at the canonical path)
+        assert len(unified) >= 1
+
+        # The file that was at the wrong path should have moved
+        moved_dests = {e.destination for e in unified}
+        # All moved destinations should be under the canonical top_dir
+        for dest_str in moved_dests:
+            dest_path = Path(dest_str)
+            top_dir = dest_path.relative_to(dest_root).parts[0]
+            # The canonical composer component is last_name("Goodman, Benny") = "Goodman"
+            assert top_dir.startswith("Goodman"), f"Expected top_dir to start with 'Goodman', got {top_dir!r}"
+
+        # Original paths should no longer exist (they were moved)
+        assert not path_a.exists() or not path_b.exists()
+
+    def test_composer_split_canonical_path_uses_albumartistsort(self, fs: FakeFilesystem) -> None:
+        """unify() uses ALBUMARTISTSORT to derive the canonical composer component.
+
+        Creates a composer-split scenario where ALBUMARTISTSORT="Goodman, Benny".
+        Asserts that the moved file lands in a top_dir derived from last_name("Goodman, Benny").
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File A: wrong composer in path
+        tags_a = self._make_composer_split_tags("Berlin", album_artist_sort="Goodman, Benny")
+        path_a = _make_library_flac(dest_root, "Berlin - Benny Goodman/The Story [rel 1956]/01 - Track 1.flac", tags_a)
+
+        # File B: also wrong composer, different top_dir (triggers fragmentation detection)
+        tags_b = self._make_composer_split_tags("Goodman", album_artist_sort="Goodman, Benny")
+        path_b = _make_library_flac(dest_root, "Goodman - Benny Goodman/The Story [rel 1956]/02 - Track 2.flac", tags_b)
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) >= 1
+
+        # All moved destinations must be under a top_dir starting with "Goodman"
+        # (last_name("Goodman, Benny") == "Goodman")
+        for entry in unified:
+            top_dir = Path(entry.destination).relative_to(dest_root).parts[0]
+            assert top_dir.startswith("Goodman"), f"Expected canonical top_dir to start with 'Goodman', got {top_dir!r}"
+
+        # At least one file was moved
+        assert not path_a.exists() or not path_b.exists()
+
+    def test_composer_split_albumartistsort_empty_uses_various(self, fs: FakeFilesystem) -> None:
+        """unify() falls back to 'Various' when ALBUMARTISTSORT is empty.
+
+        Creates a composer-split release with ALBUMARTISTSORT="" and asserts that the canonical
+        composer component is "Various".
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File A: CEA_COMPOSER_LASTNAMES="Goodman", ALBUMARTISTSORT="" → fallback to "Various"
+        tags_a = self._make_composer_split_tags("Goodman", album_artist_sort="")
+        path_a = _make_library_flac(dest_root, "Goodman - Various/The Story [rel 1956]/01 - Track 1.flac", tags_a)
+
+        # File B: CEA_COMPOSER_LASTNAMES="Berlin", ALBUMARTISTSORT="" → same fallback
+        tags_b = self._make_composer_split_tags("Berlin", album_artist_sort="")
+        path_b = _make_library_flac(dest_root, "Berlin - Various/The Story [rel 1956]/02 - Track 2.flac", tags_b)
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) >= 1
+
+        # All moved destinations must be under a top_dir starting with "Various"
+        for entry in unified:
+            top_dir = Path(entry.destination).relative_to(dest_root).parts[0]
+            assert top_dir.startswith("Various"), f"Expected 'Various' top_dir, got {top_dir!r}"
+
+        assert not path_a.exists() or not path_b.exists()
+
+    def test_composer_split_various_artists_albumartistsort_uses_various(self, fs: FakeFilesystem) -> None:
+        """unify() falls back to 'Various' when ALBUMARTISTSORT is 'Various Artists'.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_a = self._make_composer_split_tags("Goodman", album_artist_sort="Various Artists")
+        path_a = _make_library_flac(dest_root, "Goodman - Various/The Story [rel 1956]/01 - Track 1.flac", tags_a)
+
+        tags_b = self._make_composer_split_tags("Berlin", album_artist_sort="Various Artists")
+        path_b = _make_library_flac(dest_root, "Berlin - Various/The Story [rel 1956]/02 - Track 2.flac", tags_b)
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) >= 1
+
+        for entry in unified:
+            top_dir = Path(entry.destination).relative_to(dest_root).parts[0]
+            assert top_dir.startswith("Various"), f"Expected 'Various' top_dir, got {top_dir!r}"
+
+        assert not path_a.exists() or not path_b.exists()
+
+    def test_composer_split_non_classical_with_work_top_triggers_rule(self, fs: FakeFilesystem) -> None:
+        """unify() applies composer-split rule when CWP_WORK_TOP is set but genre is not Classical.
+
+        Exercises the ``"Classical" not in tags.cwp_worktype_genres_top`` branch of the scope gate:
+        a release with a MB work link (CWP_WORK_TOP non-empty) but a non-classical genre (e.g.
+        "Jazz") is still treated as a non-classical multi-composer compilation.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Non-classical release with a work link but genre "Jazz" (not "Classical")
+        tags_a = TrackTags(
+            cea_composer_lastnames="Goodman",
+            albumartistsort="Goodman, Benny",
+            cwp_work_top="The Benny Goodman Story",  # has MB work link
+            cwp_worktype_genres_top="Jazz",  # NOT "Classical" → composer-split rule applies
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Track 1",
+            artist="Benny Goodman",
+            musicbrainz_albumid="jazz-rel-1",
+        )
+        tags_b = TrackTags(
+            cea_composer_lastnames="Berlin",  # different composer → composer-split
+            albumartistsort="Goodman, Benny",
+            cwp_work_top="The Benny Goodman Story",
+            cwp_worktype_genres_top="Jazz",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Track 2",
+            artist="Benny Goodman",
+            musicbrainz_albumid="jazz-rel-1",
+        )
+
+        _make_library_flac(dest_root, "Goodman - Benny Goodman/The Story [rel 1956]/01 - Track 1.flac", tags_a)
+        _make_library_flac(dest_root, "Berlin - Benny Goodman/The Story [rel 1956]/02 - Track 2.flac", tags_b)
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # Composer-split rule should have fired: canonical composer = last_name("Goodman, Benny") = "Goodman"
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) >= 1
+
+        for entry in unified:
+            top_dir = Path(entry.destination).relative_to(dest_root).parts[0]
+            assert top_dir.startswith("Goodman"), (
+                f"Expected composer-split rule to fire for Jazz genre; got top_dir={top_dir!r}"
+            )
+
+    def test_composer_split_classical_release_not_affected(self, fs: FakeFilesystem) -> None:
+        """unify() does not apply composer-split rule to classical releases.
+
+        A classical release (CWP_WORK_TOP non-empty AND CWP_WORKTYPE_GENRES_TOP contains
+        "Classical") with varying CEA_COMPOSER_LASTNAMES is NOT treated as a composer-split
+        compilation.  The performer-split unification still runs, but the composer component
+        is not patched.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Classical release: CWP_WORK_TOP set, CWP_WORKTYPE_GENRES_TOP contains "Classical"
+        tags_a = TrackTags(
+            cea_composer_lastnames="Mozart",
+            albumartistsort="Goodman, Benny",  # would be used if composer-split applied
+            cwp_work_top="Symphony No. 40",  # classical: has MB work link
+            cwp_worktype_genres_top="Classical",  # classical genre
+            cwp_movt_num="1",
+            movementtotal="2",
+            cwp_part_levels="1",
+            title="Mvt 1",
+            artist="Karajan",
+            musicbrainz_albumid="classical-rel-1",
+        )
+        tags_b = TrackTags(
+            cea_composer_lastnames="Haydn",  # different composer — but classical → not composer-split
+            albumartistsort="Goodman, Benny",
+            cwp_work_top="Symphony No. 40",
+            cwp_worktype_genres_top="Classical",
+            cwp_movt_num="2",
+            movementtotal="2",
+            cwp_part_levels="1",
+            title="Mvt 2",
+            artist="Karajan",
+            musicbrainz_albumid="classical-rel-1",
+        )
+
+        # Place files under two different top_dirs (triggers fragmentation detection)
+        _make_library_flac(dest_root, "Mozart - Karajan/Symphony No. 40 [rec 2020]/01 - Mvt 1.flac", tags_a)
+        _make_library_flac(dest_root, "Haydn - Karajan/Symphony No. 40 [rec 2020]/02 - Mvt 2.flac", tags_b)
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # The composer-split rule must NOT have fired: no "Goodman, Benny" top_dir should appear
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        for entry in unified:
+            top_dir = Path(entry.destination).relative_to(dest_root).parts[0]
+            assert "Goodman" not in top_dir, (
+                f"Composer-split rule must not fire for classical releases; got top_dir={top_dir!r}"
+            )
+
+    def test_composer_split_idempotent_second_run_noop(self, fs: FakeFilesystem) -> None:
+        """A second unify() run after composer-split unification is a complete no-op.
+
+        After the first run moves all fragments to the canonical path, all files share the same
+        top_dir, so detect_fragmented_releases returns empty and unify() returns immediately.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_a = self._make_composer_split_tags("Goodman")
+        tags_b = self._make_composer_split_tags("Berlin")
+
+        _make_library_flac(dest_root, "Goodman - Benny Goodman/The Story [rel 1956]/01 - Track 1.flac", tags_a)
+        _make_library_flac(dest_root, "Berlin - Benny Goodman/The Story [rel 1956]/02 - Track 2.flac", tags_b)
+
+        # First run: unifies the composer-split release
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        journal_after_first = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified_after_first = [e for e in journal_after_first.entries if e.action == "unified"]
+        first_count = len(unified_after_first)
+        assert first_count >= 1
+
+        # Second run: no-op (all files already at canonical paths)
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        journal_after_second = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified_after_second = [e for e in journal_after_second.entries if e.action == "unified"]
+        # No new "unified" entries from the second run
+        assert len(unified_after_second) == first_count
