@@ -1532,6 +1532,8 @@ class TransactionEntry(BaseModel):
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
     chromaprint_fp: str = ""  # Chromaprint fingerprint string (populated in F3)
     acoustid_id: str = ""  # AcoustID UUID for this track
+    # --- provenance (W1b rebuild) ---
+    origin_time: str = ""  # ISO-8601 rip/download origin time from freedb_disc_N.yaml sidecar
 
 
 class TransactionLog(BaseModel):

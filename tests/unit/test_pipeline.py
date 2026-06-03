@@ -67,7 +67,9 @@ from music_annotator._pipeline_io import (
     _collect_work_dir_provenance,
     _find_freedb_sidecar,
     _isrc_matches,
+    _mtime_iso,
     _read_acoustid_tag,
+    _read_albumid_from_tags,
     _read_duration_ms,
     _read_isrc_tag,
     _read_provenance_sidecar,
@@ -76,6 +78,7 @@ from music_annotator._pipeline_io import (
     check_duration_preflight,
     compare_audio_collision,
     enrich_origin_time,
+    rebuild_journal,
 )
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
@@ -9825,3 +9828,334 @@ class TestEnrichOriginTime:
         # noop log event emitted at debug level
         noop_calls = [c for c in mock_log.debug.call_args_list if c.args and c.args[0] == "enrich_origin_time_noop"]
         assert len(noop_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# _mtime_iso
+# ---------------------------------------------------------------------------
+
+
+class TestMtimeIso:
+    """Tests for :func:`music_annotator._pipeline_io._mtime_iso`."""
+
+    def test_returns_iso8601_utc_string(self, fs: FakeFilesystem) -> None:
+        """_mtime_iso returns a timezone-aware ISO-8601 UTC string for an existing file.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/tmp/test.flac")
+        fs.create_file(str(path), contents=b"data")
+        result = _mtime_iso(path)
+        # Must be a non-empty string ending with UTC offset
+        assert result
+        assert "+" in result or result.endswith("Z")
+
+
+# ---------------------------------------------------------------------------
+# rebuild_journal
+# ---------------------------------------------------------------------------
+
+
+class TestRebuildJournal:
+    """Tests for :func:`music_annotator._pipeline_io.rebuild_journal`.
+
+    Covers: dry-run (default) vs write mode; origin-time present/absent; mixed FLAC+MP3;
+    missing dest_root; sidecar files included; journal file excluded from entries.
+    """
+
+    def test_dry_run_does_not_write_journal(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal(dry_run=True) returns entries without replacing the on-disk journal.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        original_journal = "[]\n"
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text(original_journal, encoding="utf-8")
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        # Journal file must not be modified
+        assert journal_path.read_text(encoding="utf-8") == original_journal
+        # Returned log has one audio entry
+        assert len(result.entries) == 1
+        assert result.entries[0].action == "tagged"
+        assert result.entries[0].destination == str(flac_path)
+        assert result.entries[0].release_id == "rel-1"
+
+    def test_write_mode_replaces_journal(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal(dry_run=False) replaces the on-disk journal with the rebuilt entries.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        result = rebuild_journal(dest_root, dry_run=False)
+
+        # Journal file must be replaced with the rebuilt entries
+        written = json.loads(journal_path.read_text(encoding="utf-8"))
+        assert len(written) == 1
+        assert written[0]["action"] == "tagged"
+        assert written[0]["destination"] == str(flac_path)
+        assert len(result.entries) == 1
+
+    def test_origin_time_present(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal populates origin_time from the freedb_disc_N.yaml sidecar.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        freedb_sidecar = work_dir / "freedb_disc_1.yaml"
+        freedb_sidecar.write_text(
+            "origin_time: '2024-05-01T10:00:00+00:00'\norigin_source: /rip/source\n",
+            encoding="utf-8",
+        )
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        audio_entries = [e for e in result.entries if e.action == "tagged"]
+        assert len(audio_entries) == 1
+        assert audio_entries[0].origin_time == "2024-05-01T10:00:00+00:00"
+
+    def test_origin_time_absent(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal sets origin_time to empty string when no provenance sidecar exists.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        audio_entries = [e for e in result.entries if e.action == "tagged"]
+        assert len(audio_entries) == 1
+        assert audio_entries[0].origin_time == ""
+
+    def test_mixed_flac_and_mp3(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal reconstructs entries for both FLAC and MP3 files.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement 1", musicbrainz_albumid="rel-1"))
+
+        mp3_path = work_dir / "02 - Movement.mp3"
+        fs.create_file(str(mp3_path), contents=_MINIMAL_MP3)
+        apply_tags_mp3(mp3_path, TrackTags(title="Movement 2", musicbrainz_albumid="rel-1"))
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        audio_entries = [e for e in result.entries if e.action == "tagged"]
+        assert len(audio_entries) == 2
+        destinations = {e.destination for e in audio_entries}
+        assert str(flac_path) in destinations
+        assert str(mp3_path) in destinations
+        for entry in audio_entries:
+            assert entry.release_id == "rel-1"
+
+    def test_sidecar_files_included(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal includes sidecar YAML and image files as action="sidecar" entries.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        cover_path = work_dir / "cover.jpg"
+        fs.create_file(str(cover_path), contents=b"\xff\xd8\xff\xe0")
+
+        freedb_path = work_dir / "freedb_disc_1.yaml"
+        fs.create_file(str(freedb_path), contents=b"disc_id: [1, 2, 3]\n")
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        sidecar_entries = [e for e in result.entries if e.action == "sidecar"]
+        sidecar_dests = {e.destination for e in sidecar_entries}
+        assert str(cover_path) in sidecar_dests
+        assert str(freedb_path) in sidecar_dests
+        for entry in sidecar_entries:
+            assert entry.release_id == ""
+
+    def test_journal_file_excluded(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal never includes the journal file itself as an entry.
+
+        A music_annotator_journal.json file inside a work_dir (unusual but possible) must be
+        skipped by the _REBUILD_SKIP_FILENAMES guard.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        # Place a journal file inside the work_dir to exercise the skip-filename guard
+        inner_journal = work_dir / JOURNAL_FILENAME
+        inner_journal.write_text("[]", encoding="utf-8")
+
+        # Also place the real journal at dest_root level
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        all_dests = {e.destination for e in result.entries}
+        assert str(inner_journal) not in all_dests
+        assert str(journal_path) not in all_dests
+
+    def test_missing_dest_root_returns_empty(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """rebuild_journal returns an empty TransactionLog when dest_root does not exist.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/nonexistent")
+        result = rebuild_journal(dest_root, dry_run=True)
+        assert result.entries == []
+
+    def test_audio_hash_recomputed(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal recomputes audio_hash from the file's decoded audio content.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        audio_entries = [e for e in result.entries if e.action == "tagged"]
+        assert len(audio_entries) == 1
+        # audio_hash must be a non-empty algorithm-tagged string for FLAC
+        assert audio_entries[0].audio_hash.startswith("flac-md5:")
+
+    def test_timestamp_from_mtime(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal derives timestamp from the file's mtime as an ISO-8601 UTC string.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        audio_entries = [e for e in result.entries if e.action == "tagged"]
+        assert len(audio_entries) == 1
+        ts = audio_entries[0].timestamp
+        assert ts  # non-empty
+        # ISO-8601 UTC: must contain a "+" or end with "Z"
+        assert "+" in ts or ts.endswith("Z")
+
+    def test_non_dir_under_top_dir_skipped(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal skips non-directory entries directly under a top_dir.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        top_dir = dest_root / "Composer"
+        fs.create_dir(str(top_dir))
+        # A file directly under top_dir (not a work_dir) must be skipped
+        stray_file = top_dir / "stray.txt"
+        fs.create_file(str(stray_file), contents=b"stray")
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        assert result.entries == []
+
+    def test_subdir_in_work_dir_not_added_as_entry(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal skips subdirectories encountered during rglob (only files are entries).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        sub_dir = work_dir / "Act I"
+        fs.create_dir(str(sub_dir))
+        flac_path = sub_dir / "01 - Scene.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Scene", musicbrainz_albumid="rel-1"))
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        # Only the FLAC file should appear; the subdirectory itself must not be an entry
+        assert all(e.destination != str(sub_dir) for e in result.entries)
+        audio_entries = [e for e in result.entries if e.action == "tagged"]
+        assert len(audio_entries) == 1
+
+    def test_unknown_extension_file_skipped(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal silently skips files with extensions that are neither audio nor sidecar.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+        # A .cue file should be silently skipped
+        cue_path = work_dir / "disc.cue"
+        fs.create_file(str(cue_path), contents=b"FILE disc.wav WAVE\n")
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        all_dests = {e.destination for e in result.entries}
+        assert str(cue_path) not in all_dests
+        assert len([e for e in result.entries if e.action == "tagged"]) == 1
+
+    def test_read_albumid_from_tags_exception_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_read_albumid_from_tags returns empty string when tag read raises an exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+
+        mocker.patch("music_annotator._pipeline_io._read_tags_flac", side_effect=RuntimeError("corrupt"))
+        result = _read_albumid_from_tags(flac_path)
+        assert result == ""

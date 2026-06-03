@@ -21,7 +21,18 @@ from pytest_mock import MockerFixture
 import music_annotator
 from music_annotator import JOURNAL_FILENAME, CollisionPolicy
 from music_annotator._discover import DiscoverUI
-from music_annotator.models import CoverArt, CoverImage, MBMedium, MBRecording, MBRelease, MBReleaseCandidate, MBWork
+from music_annotator._pipeline_io import rebuild_journal
+from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
+from music_annotator.models import (
+    CoverArt,
+    CoverImage,
+    MBMedium,
+    MBRecording,
+    MBRelease,
+    MBReleaseCandidate,
+    MBWork,
+    TrackTags,
+)
 
 # ---------------------------------------------------------------------------
 # Minimal audio file byte sequences
@@ -1611,3 +1622,129 @@ class TestDiscoverRunError:
 
         # run() must have been called twice (once per directory).
         assert call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# rebuild_journal integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestRebuildJournalIntegration:
+    """Integration tests for :func:`music_annotator._pipeline_io.rebuild_journal`.
+
+    Exercises the full scan-and-reconstruct path with real mutagen tag reads.
+    Covers: dry-run vs write mode; origin-time present/absent; mixed FLAC+MP3.
+    """
+
+    def test_dry_run_returns_entries_without_writing(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal dry-run returns entries but does not replace the on-disk journal.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        original_journal = "[]"
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text(original_journal, encoding="utf-8")
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        assert journal_path.read_text(encoding="utf-8") == original_journal
+        audio_entries = [e for e in result.entries if e.action == "tagged"]
+        assert len(audio_entries) == 1
+        assert audio_entries[0].release_id == "rel-1"
+
+    def test_write_mode_replaces_journal(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal write mode replaces the on-disk journal with reconstructed entries.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        rebuild_journal(dest_root, dry_run=False)
+
+        written = json.loads(journal_path.read_text(encoding="utf-8"))
+        assert len(written) == 1
+        assert written[0]["action"] == "tagged"
+        assert written[0]["release_id"] == "rel-1"
+
+    def test_origin_time_from_sidecar(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal reads origin_time from freedb_disc_N.yaml when present.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        sidecar = work_dir / "freedb_disc_1.yaml"
+        sidecar.write_text(
+            "origin_time: '2024-01-15T09:00:00+00:00'\norigin_source: /rip/src\n",
+            encoding="utf-8",
+        )
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        audio_entries = [e for e in result.entries if e.action == "tagged"]
+        assert len(audio_entries) == 1
+        assert audio_entries[0].origin_time == "2024-01-15T09:00:00+00:00"
+
+    def test_origin_time_absent(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal sets origin_time to empty string when no provenance sidecar exists.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        audio_entries = [e for e in result.entries if e.action == "tagged"]
+        assert len(audio_entries) == 1
+        assert audio_entries[0].origin_time == ""
+
+    def test_mixed_flac_and_mp3(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal reconstructs entries for both FLAC and MP3 files in the same work_dir.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement 1", musicbrainz_albumid="rel-1"))
+
+        mp3_path = work_dir / "02 - Movement.mp3"
+        fs.create_file(str(mp3_path), contents=_MINIMAL_MP3)
+        apply_tags_mp3(mp3_path, TrackTags(title="Movement 2", musicbrainz_albumid="rel-1"))
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        audio_entries = [e for e in result.entries if e.action == "tagged"]
+        assert len(audio_entries) == 2
+        destinations = {e.destination for e in audio_entries}
+        assert str(flac_path) in destinations
+        assert str(mp3_path) in destinations
+        for entry in audio_entries:
+            assert entry.release_id == "rel-1"

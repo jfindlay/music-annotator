@@ -6688,3 +6688,79 @@ class TestAuditOriginTimeCLI:
         parser = _build_parser()
         ns = parser.parse_args(["audit", "/dest"])
         assert ns.origin_time is False
+
+    # ------------------------------------------------------------------
+    # rebuild dispatch tests
+    # ------------------------------------------------------------------
+
+    _REBUILD_ARGV = ["music-annotator", "rebuild", "/d"]
+
+    def test_rebuild_dispatches_to_rebuild_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() rebuild calls music_annotator.rebuild_journal with dest_root and dry_run=True.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_rebuild = mocker.patch("music_annotator.rebuild_journal")
+        with patch.object(sys, "argv", self._REBUILD_ARGV):
+            main()
+        mock_rebuild.assert_called_once_with(dest_root=Path("/d"), dry_run=True)
+
+    def test_rebuild_write_flag_passes_dry_run_false(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() rebuild --write passes dry_run=False to rebuild_journal().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_rebuild = mocker.patch("music_annotator.rebuild_journal")
+        with patch.object(sys, "argv", [*self._REBUILD_ARGV, "--write"]):
+            main()
+        _, kwargs = mock_rebuild.call_args
+        assert kwargs["dry_run"] is False
+
+    def test_rebuild_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() rebuild exits with code 1 when rebuild_journal() raises an unexpected exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.rebuild_journal", side_effect=RuntimeError("boom"))
+        with patch.object(sys, "argv", self._REBUILD_ARGV):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_rebuild_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() rebuild exits with code 1 on KeyboardInterrupt.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.rebuild_journal", side_effect=KeyboardInterrupt)
+        with patch.object(sys, "argv", self._REBUILD_ARGV):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        assert exc.value.code == 1
+
+    def test_rebuild_parser_dry_run_default(self) -> None:
+        """rebuild parser defaults to dry_run=True when no mode flag is given.
+
+        :param mocker: Not used — pure parser test.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["rebuild", "/dest"])
+        assert ns.dry_run is True
+        assert ns.write is False
+
+    def test_rebuild_parser_write_flag(self) -> None:
+        """rebuild parser accepts --write flag and sets write=True.
+
+        :param mocker: Not used — pure parser test.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["rebuild", "/dest", "--write"])
+        assert ns.write is True

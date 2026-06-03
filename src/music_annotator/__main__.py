@@ -1,16 +1,18 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes five subcommands:
+Configures structlog for human-friendly console output and exposes six subcommands:
 
-* ``apply``  — copy and tag a directory of tracks for a known MusicBrainz release MBID.
-* ``search`` — search MusicBrainz for a release matching a source directory, prompt for
+* ``apply``   — copy and tag a directory of tracks for a known MusicBrainz release MBID.
+* ``search``  — search MusicBrainz for a release matching a source directory, prompt for
   confirmation, then apply tags.
-* ``prune``  — read the journal, verify source and destination file presence, and prompt to
+* ``prune``   — read the journal, verify source and destination file presence, and prompt to
   delete the source directory.
-* ``repath`` — re-path all verified library files to their corrected destinations under
+* ``repath``  — re-path all verified library files to their corrected destinations under
   the current path-construction policy, using only embedded tags (no network calls).
-* ``audit``  — read the journal and report release-fragmentation anomalies (no network calls,
+* ``audit``   — read the journal and report release-fragmentation anomalies (no network calls,
   no filesystem writes).
+* ``rebuild`` — walk the library, read tags and sidecars per file, and emit a new journal
+  (dry-run by default; use ``--write`` to replace the on-disk journal).
 
 Usage::
 
@@ -38,6 +40,10 @@ Usage::
     music-annotator audit \\
         <dest_dir>
         [--enrich] [--origin-time] [--dry-run]
+
+    music-annotator rebuild \\
+        <dest_dir> \\
+        [--dry-run | --write]
 """
 
 from __future__ import annotations
@@ -174,8 +180,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Build and return the top-level CLI argument parser with ``apply``, ``search``, ``prune``, ``repath``, and ``audit``
-    subcommands.
+    """Build and return the top-level CLI argument parser with all subcommands.
 
     ``-v``/``--verbose`` is registered on the top-level parser and must appear before the subcommand token.
     ``apply`` takes a single ``src_dir`` positional (one release per invocation, paired with ``--release-id``).
@@ -186,6 +191,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ``repath`` takes only ``dest_dir`` and an optional ``--dry-run`` flag.  ``audit`` takes only ``dest_dir``
     and requires no network credentials (read-only journal analysis).  ``audit --origin-time`` migrates
     rip/download origin-time from the journal into authoritative sidecar YAML files (idempotent).
+    ``rebuild`` walks the library and reconstructs the journal from embedded tags and sidecars; default is
+    ``--dry-run`` (no write); pass ``--write`` to replace the on-disk journal.
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -512,16 +519,61 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # ------------------------------------------------------------------
+    # rebuild subcommand
+    # ------------------------------------------------------------------
+    rebuild_parser = subparsers.add_parser(
+        "rebuild",
+        help="Reconstruct the journal from embedded tags and sidecars (dry-run by default).",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Walks the library at <dest_dir>, reads embedded tags and sidecar YAML files per
+            FLAC/MP3 file, and emits a new music_annotator_journal.json in the existing format.
+
+            Default is --dry-run: the rebuilt journal is computed and logged but the on-disk
+            journal is NOT replaced.  Pass --write to replace the journal.
+
+            Use rebuild --dry-run to prove the database-as-infrastructure claim: run it, diff
+            against the existing journal.  Any unexplained non-match is a candidate authority
+            leak or expected staleness (repathed/regrouped entries not yet re-scanned).
+
+            Examples:
+              music-annotator rebuild /tmp/music_library
+              music-annotator rebuild /tmp/music_library --dry-run
+              music-annotator rebuild /tmp/music_library --write
+            """),
+    )
+    rebuild_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    _rebuild_mode = rebuild_parser.add_mutually_exclusive_group()
+    _rebuild_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Compute the rebuilt journal without writing it to disk (default).",
+    )
+    _rebuild_mode.add_argument(
+        "--write",
+        action="store_true",
+        help="Replace music_annotator_journal.json with the rebuilt journal.",
+    )
+
     return parser
 
 
 def main() -> None:
     """Parse CLI arguments, configure logging, and dispatch to subcommands.
 
-    Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``.
-    The ``audit`` subcommand dispatches to :func:`~music_annotator.audit`,
+    Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
+    ``rebuild``.  The ``audit`` subcommand dispatches to :func:`~music_annotator.audit`,
     :func:`~music_annotator.enrich`, or :func:`~music_annotator.enrich_origin_time` depending on
-    the flags provided (``--enrich``, ``--origin-time``).
+    the flags provided (``--enrich``, ``--origin-time``).  The ``rebuild`` subcommand dispatches to
+    :func:`~music_annotator.rebuild_journal` with ``dry_run=True`` (default) or ``dry_run=False``
+    when ``--write`` is passed.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating and converts any unhandled exception or keyboard interrupt into a logged error with exit code 1.
@@ -642,6 +694,19 @@ def main() -> None:
                 sys.exit(1)
             except Exception as exc:  # noqa: BLE001
                 log.error("audit_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
+                sys.exit(1)
+
+        case "rebuild":
+            try:
+                music_annotator.rebuild_journal(
+                    dest_root=args.dest_dir,
+                    dry_run=not args.write,
+                )
+            except KeyboardInterrupt:
+                log.warning("interrupted")
+                sys.exit(1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("rebuild_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
                 sys.exit(1)
 
         case _:  # pragma: no cover

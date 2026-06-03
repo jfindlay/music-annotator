@@ -9,6 +9,7 @@ against MB track lengths.
 from __future__ import annotations
 
 import base64
+import datetime
 import hashlib
 import json
 import shutil
@@ -1812,3 +1813,214 @@ def enrich_origin_time(dest_root: Path, *, dry_run: bool = False) -> None:
         noop=count_noop,
         dry_run=count_dry_run,
     )
+
+
+#: Audio file extensions that ``rebuild_journal`` reconstructs as ``action="tagged"`` entries.
+_REBUILD_AUDIO_EXTENSIONS: frozenset[str] = frozenset({".flac", ".mp3"})
+
+#: Sidecar file extensions that ``rebuild_journal`` reconstructs as ``action="sidecar"`` entries.
+_REBUILD_SIDECAR_EXTENSIONS: frozenset[str] = frozenset({".yaml", ".yml", ".jpg", ".jpeg", ".png", ".pdf", ".json"})
+
+#: Filenames that ``rebuild_journal`` always skips (the journal itself and disc-info sidecars that
+#: are not provenance sidecars).
+_REBUILD_SKIP_FILENAMES: frozenset[str] = frozenset({JOURNAL_FILENAME})
+
+
+def _read_albumid_from_tags(path: Path) -> str:
+    """Read ``MUSICBRAINZ_ALBUMID`` from a FLAC or MP3 file's tags, returning ``""`` on failure.
+
+    Delegates to :func:`_read_tags_flac` or :func:`_read_tags_mp3` and extracts the
+    ``MUSICBRAINZ_ALBUMID`` key.  Returns ``""`` for unsupported extensions or on any read error.
+
+    :param path: Path to the audio file.
+    :returns: The release MBID string, or ``""`` if absent or unreadable.
+    """
+    try:
+        match path.suffix.lower():
+            case ".flac":
+                tags = _read_tags_flac(path)
+            case ".mp3":
+                tags = _read_tags_mp3(path)
+            case _:  # pragma: no cover — only called for .flac/.mp3 by rebuild_journal
+                return ""  # pragma: no cover
+        return tags.get("MUSICBRAINZ_ALBUMID", "")
+    except Exception:  # noqa: BLE001 — best-effort read; any failure means no release ID
+        return ""
+
+
+def _mtime_iso(path: Path) -> str:
+    """Return the modification time of ``path`` as an ISO-8601 UTC string.
+
+    Uses ``datetime.datetime.fromtimestamp`` with ``datetime.UTC`` to convert the POSIX mtime to
+    a timezone-aware UTC datetime, then formats it with ``isoformat()``.
+
+    :param path: Path to the file whose mtime is read.
+    :returns: ISO-8601 UTC timestamp string (e.g. ``"2024-06-01T08:00:00+00:00"``).
+    :raises OSError: If the file cannot be stat'd.
+    """
+    mtime = path.stat().st_mtime
+    return datetime.datetime.fromtimestamp(mtime, tz=datetime.UTC).isoformat()
+
+
+def _read_origin_time_for_dir(work_top_dir: Path) -> str:
+    """Read the ``origin_time`` field from the provenance sidecar in ``work_top_dir``.
+
+    Looks first for a ``freedb_disc_N.yaml`` sidecar, then falls back to
+    ``music_annotator_provenance.yaml``.  Returns ``""`` when neither file exists or neither
+    carries an ``origin_time`` field.
+
+    :param work_top_dir: The work top directory (two levels below ``dest_root``).
+    :returns: The ``origin_time`` ISO-8601 string, or ``""`` if unavailable.
+    """
+    sidecar = _find_freedb_sidecar(work_top_dir)
+    if sidecar is None:
+        sidecar = work_top_dir / PROVENANCE_FILENAME
+    return _read_provenance_sidecar(sidecar).origin_time
+
+
+def _rebuild_audio_entry(path: Path, dest_root: Path, origin_time: str) -> TransactionEntry:
+    """Reconstruct a ``TransactionEntry`` for a single audio file during ``rebuild_journal``.
+
+    Reads the file's embedded tags to obtain ``release_id``, ``chromaprint_fp``, and
+    ``acoustid_id``; recomputes ``audio_hash`` from the decoded audio content; and derives
+    ``timestamp`` from the file's mtime.
+
+    :param path: Absolute path to the FLAC or MP3 file.
+    :param dest_root: Root of the annotated music library (used only for log messages).
+    :param origin_time: ISO-8601 origin time from the work directory's provenance sidecar, or
+        ``""`` when no sidecar is present.
+    :returns: A :class:`~music_annotator.models.TransactionEntry` with ``action="tagged"``.
+    """
+    release_id = _read_albumid_from_tags(path)
+    chromaprint_fp = _read_chromaprint_fp_tag(path)
+    acoustid_id = _read_acoustid_tag(path)
+    audio_hash = _audio_hash(path)
+    try:
+        timestamp = _mtime_iso(path)
+    except OSError:  # pragma: no cover — pyfakefs always provides mtime; defensive guard only
+        log.warning("rebuild_mtime_error", path=str(path.relative_to(dest_root)))  # pragma: no cover
+        timestamp = ""  # pragma: no cover
+
+    return TransactionEntry(
+        timestamp=timestamp,
+        release_id=release_id,
+        source=str(path),
+        destination=str(path),
+        action="tagged",
+        audio_hash=audio_hash,
+        chromaprint_fp=chromaprint_fp,
+        acoustid_id=acoustid_id,
+        origin_time=origin_time,
+    )
+
+
+def _rebuild_sidecar_entry(path: Path, dest_root: Path, origin_time: str) -> TransactionEntry:
+    """Reconstruct a ``TransactionEntry`` for a single sidecar file during ``rebuild_journal``.
+
+    Derives ``timestamp`` from the file's mtime.  ``release_id`` and identity fields are empty
+    for sidecar entries (sidecars are not audio files and carry no MB identity tags).
+
+    :param path: Absolute path to the sidecar file.
+    :param dest_root: Root of the annotated music library (used only for log messages).
+    :param origin_time: ISO-8601 origin time from the work directory's provenance sidecar, or
+        ``""`` when no sidecar is present.
+    :returns: A :class:`~music_annotator.models.TransactionEntry` with ``action="sidecar"``.
+    """
+    try:
+        timestamp = _mtime_iso(path)
+    except OSError:  # pragma: no cover — pyfakefs always provides mtime; defensive guard only
+        log.warning("rebuild_mtime_error", path=str(path.relative_to(dest_root)))  # pragma: no cover
+        timestamp = ""  # pragma: no cover
+
+    return TransactionEntry(
+        timestamp=timestamp,
+        release_id="",
+        source=str(path),
+        destination=str(path),
+        action="sidecar",
+        origin_time=origin_time,
+    )
+
+
+def rebuild_journal(dest_root: Path, *, dry_run: bool = True) -> TransactionLog:
+    """Walk ``dest_root``, read tags and sidecars per file, and emit a new :class:`TransactionLog`.
+
+    Reconstructs the transaction journal from the library on disk, proving the
+    database-as-infrastructure claim: the journal is regenerable from the tracks and sidecars alone.
+
+    Each reconstructed :class:`~music_annotator.models.TransactionEntry` carries:
+
+    * ``destination`` — the file's current absolute path.
+    * ``release_id`` — from the ``MUSICBRAINZ_ALBUMID`` tag (audio files only).
+    * ``audio_hash`` — recomputed from decoded audio content (audio files only).
+    * ``chromaprint_fp`` — read from the ``CHROMAPRINT_FP`` tag (audio files only).
+    * ``acoustid_id`` — read from the ``ACOUSTID_ID`` tag (audio files only).
+    * ``timestamp`` — annotation time from the file's mtime, ISO-8601 UTC.
+    * ``origin_time`` — from the ``freedb_disc_N.yaml`` or ``music_annotator_provenance.yaml``
+      sidecar in the file's work top directory (populated by ``enrich --origin-time``).
+    * ``action`` — ``"tagged"`` for audio files, ``"sidecar"`` for sidecar files.
+
+    The ``source`` field is set equal to ``destination`` (the file's current path) because
+    ``rebuild`` operates offline from the original rip source.
+
+    **Dry-run default**: when ``dry_run=True`` (the default), the rebuilt log is returned but the
+    journal file on disk is **not** modified.  Pass ``dry_run=False`` to replace
+    ``music_annotator_journal.json`` with the rebuilt log.
+
+    The walk covers the two-level ``<top_dir>/<work_dir>/`` structure.  Files directly under
+    ``dest_root`` (e.g. the journal itself) are skipped.  The journal filename is always excluded.
+
+    :param dest_root: Root of the annotated music library (contains
+        ``music_annotator_journal.json``).
+    :param dry_run: When ``True`` (default), return the rebuilt log without writing it to disk.
+        When ``False``, replace ``music_annotator_journal.json`` with the rebuilt log.
+    :returns: A :class:`~music_annotator.models.TransactionLog` with all reconstructed entries,
+        sorted by destination path for deterministic output.
+    """
+    entries: list[TransactionEntry] = []
+
+    # Walk the two-level library structure: dest_root/<top_dir>/<work_dir>/...
+    # Files directly under dest_root are skipped (they are not library files).
+    if not dest_root.is_dir():
+        log.warning("rebuild_dest_root_missing", dest_root=str(dest_root))
+        return TransactionLog()
+
+    for top_dir in sorted(dest_root.iterdir()):
+        if not top_dir.is_dir():
+            continue
+        for work_dir in sorted(top_dir.iterdir()):
+            if not work_dir.is_dir():
+                continue
+            # Read origin_time once per work_dir (shared by all files in the directory tree)
+            origin_time = _read_origin_time_for_dir(work_dir)
+            # Walk the work_dir tree (may have sub-directories for intermediate divisions)
+            for file_path in sorted(work_dir.rglob("*")):
+                if not file_path.is_file():
+                    continue
+                if file_path.name in _REBUILD_SKIP_FILENAMES:
+                    continue
+                ext = file_path.suffix.lower()
+                if ext in _REBUILD_AUDIO_EXTENSIONS:
+                    entries.append(_rebuild_audio_entry(file_path, dest_root, origin_time))
+                elif ext in _REBUILD_SIDECAR_EXTENSIONS:
+                    entries.append(_rebuild_sidecar_entry(file_path, dest_root, origin_time))
+                # Files with other extensions (e.g. .cue, .log) are silently skipped.
+
+    log.info(
+        "rebuild_journal_complete",
+        dest_root=str(dest_root),
+        total=len(entries),
+        dry_run=dry_run,
+    )
+
+    rebuilt = TransactionLog(entries=entries)
+
+    if not dry_run:
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text(
+            json.dumps([e.model_dump() for e in rebuilt.entries], indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        log.info("rebuild_journal_written", path=str(journal_path), total=len(entries))
+
+    return rebuilt
