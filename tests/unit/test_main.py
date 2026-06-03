@@ -20,6 +20,7 @@ from music_annotator.__main__ import (
     _VERSION,
     _build_parser,
     _configure_logging,
+    _dispatch,
     _resolve_path,
     main,
 )
@@ -153,6 +154,53 @@ class TestConfigureLogging:
         mock_renderer = mocker.patch("music_annotator.__main__.structlog.dev.ConsoleRenderer")
         _configure_logging(verbose=False)
         mock_renderer.assert_called_once_with(colors=True)
+
+
+# ---------------------------------------------------------------------------
+# _dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestDispatch:
+    """Tests for the _dispatch helper."""
+
+    def test_calls_fn_successfully(self, mocker: MockerFixture) -> None:
+        """_dispatch calls fn and returns normally when fn succeeds.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.__main__.structlog.get_logger")
+        called: list[bool] = []
+        _dispatch(lambda: called.append(True), "some_event")
+        assert called == [True]
+
+    def test_exits_1_on_exception(self, mocker: MockerFixture) -> None:
+        """_dispatch logs the event and exits with code 1 when fn raises an exception.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_log = mocker.MagicMock()
+        mocker.patch("music_annotator.__main__.structlog.get_logger", return_value=mock_log)
+        with pytest.raises(SystemExit) as exc:
+            _dispatch(lambda: (_ for _ in ()).throw(RuntimeError("boom")), "my_event", dest_root="/d")
+        assert exc.value.code == 1
+        mock_log.error.assert_called_once()
+        call_args = mock_log.error.call_args
+        assert call_args.args[0] == "my_event"
+        assert call_args.kwargs["dest_root"] == "/d"
+
+    def test_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture) -> None:
+        """_dispatch logs 'interrupted' and exits with code 1 on KeyboardInterrupt.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mock_log = mocker.MagicMock()
+        mocker.patch("music_annotator.__main__.structlog.get_logger", return_value=mock_log)
+        with pytest.raises(SystemExit) as exc:
+            _dispatch(lambda: (_ for _ in ()).throw(KeyboardInterrupt()), "my_event")
+        assert exc.value.code == 1
+        mock_log.warning.assert_called_once_with("interrupted")
+        mock_log.error.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +586,54 @@ class TestBuildParser:
         parser = _build_parser()
         with pytest.raises(SystemExit) as exc:
             parser.parse_args(["regroup"])
+        assert exc.value.code == 2
+
+    # ------------------------------------------------------------------
+    # rebuild parser tests
+    # ------------------------------------------------------------------
+
+    _REBUILD_BASE = ["rebuild", "/dest"]
+
+    def test_rebuild_parses_dest_dir(self) -> None:
+        """rebuild accepts dest_dir as a positional argument and defaults to dry-run."""
+        parser = _build_parser()
+        ns = parser.parse_args(self._REBUILD_BASE)
+        assert ns.subcommand == "rebuild"
+        assert ns.dest_dir == Path("/dest")
+        assert not ns.apply
+
+    def test_rebuild_dry_run_flag(self) -> None:
+        """rebuild --dry-run sets dry_run=True (explicit; same as default)."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._REBUILD_BASE, "--dry-run"])
+        assert ns.dry_run
+        assert not ns.apply
+
+    def test_rebuild_apply_flag(self) -> None:
+        """rebuild --apply sets apply=True."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._REBUILD_BASE, "--apply"])
+        assert ns.apply
+
+    def test_rebuild_write_flag_rejected(self) -> None:
+        """rebuild --write is rejected (renamed to --apply)."""
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args([*self._REBUILD_BASE, "--write"])
+        assert exc.value.code == 2
+
+    def test_rebuild_apply_and_dry_run_mutually_exclusive(self) -> None:
+        """rebuild --apply --dry-run exits with code 2 (mutually exclusive)."""
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args([*self._REBUILD_BASE, "--apply", "--dry-run"])
+        assert exc.value.code == 2
+
+    def test_rebuild_requires_dest_dir(self) -> None:
+        """rebuild exits with code 2 when dest_dir positional is missing."""
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["rebuild"])
         assert exc.value.code == 2
 
 
@@ -1272,6 +1368,68 @@ class TestMain:
         self._patch_common(mocker)
         mocker.patch("music_annotator.regroup", side_effect=KeyboardInterrupt)
         mocker.patch.object(sys, "argv", new=self._REGROUP_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    # ------------------------------------------------------------------
+    # rebuild dispatch tests
+    # ------------------------------------------------------------------
+
+    _REBUILD_ARGV = ["music-annotator", "rebuild", "/d"]
+
+    # pylint: disable-next=unused-argument
+    def test_rebuild_dispatches_dry_run_by_default(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() rebuild calls rebuild_journal with dry_run=True when --apply is absent.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_rebuild = mocker.patch("music_annotator.rebuild_journal")
+        mocker.patch.object(sys, "argv", new=self._REBUILD_ARGV)
+        main()
+        _, kwargs = mock_rebuild.call_args
+        assert kwargs["dry_run"] is True
+
+    # pylint: disable-next=unused-argument
+    def test_rebuild_apply_flag_passes_dry_run_false(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() rebuild --apply calls rebuild_journal with dry_run=False.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_rebuild = mocker.patch("music_annotator.rebuild_journal")
+        mocker.patch.object(sys, "argv", new=[*self._REBUILD_ARGV, "--apply"])
+        main()
+        _, kwargs = mock_rebuild.call_args
+        assert kwargs["dry_run"] is False
+
+    # pylint: disable-next=unused-argument
+    def test_rebuild_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() rebuild exits with code 1 when rebuild_journal raises an unexpected exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.rebuild_journal", side_effect=RuntimeError("boom"))
+        mocker.patch.object(sys, "argv", new=self._REBUILD_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    # pylint: disable-next=unused-argument
+    def test_rebuild_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() rebuild exits with code 1 on KeyboardInterrupt.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.rebuild_journal", side_effect=KeyboardInterrupt)
+        mocker.patch.object(sys, "argv", new=self._REBUILD_ARGV)
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 1

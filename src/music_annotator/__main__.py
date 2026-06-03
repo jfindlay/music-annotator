@@ -20,7 +20,7 @@ Configures structlog for human-friendly console output and exposes eleven subcom
 * ``origin-time`` — migrate rip/download origin-time from the journal into authoritative sidecar
   YAML files (freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent.
 * ``rebuild``     — walk the library, read tags and sidecars per file, and emit a new journal
-  (dry-run by default; use ``--write`` to replace the on-disk journal).
+  (dry-run by default; use ``--apply`` to replace the on-disk journal).
 * ``unify``       — consolidate performer-split fragmented releases into their canonical top_dirs
   (detects releases with ≥2 top_dirs sharing the same ``MUSICBRAINZ_ALBUMID`` tag).
 
@@ -67,7 +67,7 @@ Usage::
 
     music-annotator rebuild \\
         <dest_dir> \\
-        [--dry-run | --write]
+        [--dry-run | --apply]
 
     music-annotator unify \\
         <dest_dir> \\
@@ -81,6 +81,7 @@ import importlib.metadata
 import logging
 import sys
 import textwrap
+from collections.abc import Callable
 from pathlib import Path
 
 import structlog
@@ -145,6 +146,34 @@ def _configure_logging(verbose: bool, no_color: bool = False) -> None:
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+
+def _dispatch(fn: Callable[[], object], log_event: str, **log_kwargs: str) -> None:
+    """Call *fn* and convert any exception or keyboard interrupt into a logged error and ``SystemExit(1)``.
+
+    Encapsulates the repetitive ``try/except`` pattern shared by all subcommand dispatch arms
+    (excluding ``prune``, which continues on per-file errors rather than aborting).
+
+    On :class:`KeyboardInterrupt`, logs ``"interrupted"`` at WARNING level and exits with code 1.
+    On any other exception, logs *log_event* at ERROR level with ``error=str(exc)``,
+    ``exc_info=True``, and any additional *log_kwargs*, then exits with code 1.
+
+    :param fn: Zero-argument callable that performs the subcommand's work (use a lambda or
+        :func:`functools.partial` to pre-bind arguments).  The return value is discarded.
+    :param log_event: The structlog event key passed to ``log.error()``.
+    :param log_kwargs: Additional keyword arguments forwarded to ``log.error()`` alongside
+        ``error`` and ``exc_info``.
+    :raises SystemExit: With code 1 on any exception or keyboard interrupt.
+    """
+    log = structlog.get_logger(__name__)
+    try:
+        fn()
+    except KeyboardInterrupt:
+        log.warning("interrupted")
+        sys.exit(1)
+    except Exception as exc:  # noqa: BLE001
+        log.error(log_event, error=str(exc), exc_info=True, **log_kwargs)
+        sys.exit(1)
 
 
 class _Formatter(
@@ -236,7 +265,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ``origin-time`` migrates rip/download origin-time from the journal into authoritative sidecar YAML files
     (idempotent); accepts ``--dry-run``.
     ``rebuild`` walks the library and reconstructs the journal from embedded tags and sidecars; default is
-    ``--dry-run`` (no write); pass ``--write`` to replace the on-disk journal.
+    dry-run (no write); pass ``--apply`` to replace the on-disk journal.
     ``unify`` scans the library for releases fragmented across ≥2 top_dirs (by ``MUSICBRAINZ_ALBUMID`` tag),
     computes the canonical top_dir for each, and moves the fragments.  Supports ``--dry-run`` and ``-y``/``--yes``.
 
@@ -636,17 +665,17 @@ def _build_parser() -> argparse.ArgumentParser:
             Walks the library at <dest_dir>, reads embedded tags and sidecar YAML files per
             FLAC/MP3 file, and emits a new music_annotator_journal.json in the existing format.
 
-            Default is --dry-run: the rebuilt journal is computed and logged but the on-disk
-            journal is NOT replaced.  Pass --write to replace the journal.
+            Default is dry-run: the rebuilt journal is computed and logged but the on-disk
+            journal is NOT replaced.  Pass --apply to replace the journal.
 
-            Use rebuild --dry-run to prove the database-as-infrastructure claim: run it, diff
-            against the existing journal.  Any unexplained non-match is a candidate authority
+            Use rebuild (without --apply) to prove the database-as-infrastructure claim: run it,
+            diff against the existing journal.  Any unexplained non-match is a candidate authority
             leak or expected staleness (repathed/regrouped entries not yet re-scanned).
 
             Examples:
               music-annotator rebuild /tmp/music_library
               music-annotator rebuild /tmp/music_library --dry-run
-              music-annotator rebuild /tmp/music_library --write
+              music-annotator rebuild /tmp/music_library --apply
             """),
     )
     rebuild_parser.add_argument(
@@ -663,7 +692,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Compute the rebuilt journal without writing it to disk (default).",
     )
     _rebuild_mode.add_argument(
-        "--write",
+        "--apply",
         action="store_true",
         help="Replace music_annotator_journal.json with the rebuilt journal.",
     )
@@ -730,11 +759,13 @@ def main() -> None:
     :func:`~music_annotator.diff_journal`.  The ``origin-time`` subcommand dispatches to
     :func:`~music_annotator.enrich_origin_time` with ``dry_run`` forwarded.  The ``rebuild``
     subcommand dispatches to :func:`~music_annotator.rebuild_journal` with ``dry_run=True``
-    (default) or ``dry_run=False`` when ``--write`` is passed.  The ``unify`` subcommand
+    (default) or ``dry_run=False`` when ``--apply`` is passed.  The ``unify`` subcommand
     dispatches to :func:`~music_annotator.unify`.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
-    before delegating and converts any unhandled exception or keyboard interrupt into a logged error with exit code 1.
+    before delegating.  All subcommands except ``prune`` use :func:`_dispatch` to convert any unhandled exception or keyboard
+    interrupt into a logged error with exit code 1.  ``prune`` handles errors per-file (continue-on-error) and only exits 1 on
+    :class:`KeyboardInterrupt`.
 
     :raises SystemExit: With code 0 on success, code 1 on unrecoverable error.
     """
@@ -751,8 +782,8 @@ def main() -> None:
                 log.error("src_dir_not_found", path=str(args.src_dir))
                 sys.exit(1)
             user_agent = f"{args.user_agent_app} {args.user_agent_email}"
-            try:
-                music_annotator.run(
+            _dispatch(
+                lambda: music_annotator.run(
                     release_id=args.release_id,
                     src_dir=args.src_dir,
                     dest_root=args.dest_dir,
@@ -762,13 +793,9 @@ def main() -> None:
                     no_cache=args.no_cache,
                     disc_override=args.disc,
                     acoustid_key=args.acoustid_key,
-                )
-            except KeyboardInterrupt:
-                log.warning("interrupted")
-                sys.exit(1)
-            except Exception as exc:  # noqa: BLE001
-                log.error("fatal_error", error=str(exc), exc_info=True)
-                sys.exit(1)
+                ),
+                "fatal_error",
+            )
             if args.delete and not args.dry_run:
                 music_annotator.prompt_delete_src(args.src_dir)
 
@@ -778,8 +805,8 @@ def main() -> None:
                     log.error("src_dir_not_found", path=str(src))
                     sys.exit(1)
             user_agent = f"{args.user_agent_app} {args.user_agent_email}"
-            try:
-                music_annotator.discover(
+            _dispatch(
+                lambda: music_annotator.discover(
                     src_dirs=args.src_dirs,
                     dest_root=args.dest_dir,
                     user_agent=user_agent,
@@ -789,15 +816,12 @@ def main() -> None:
                     delete=args.delete,
                     no_cache=args.no_cache,
                     acoustid_key=args.acoustid_key,
-                )
-            except KeyboardInterrupt:
-                log.warning("interrupted")
-                sys.exit(1)
-            except Exception as exc:  # noqa: BLE001
-                log.error("fatal_error", error=str(exc), exc_info=True)
-                sys.exit(1)
+                ),
+                "fatal_error",
+            )
 
         case "prune":
+            # prune is per-file: KeyboardInterrupt aborts, but other exceptions log and continue.
             for src in args.src_dirs:
                 try:
                     music_annotator.prune_sources(
@@ -812,95 +836,71 @@ def main() -> None:
                     log.error("prune_error", src_dir=str(src), error=str(exc), exc_info=True)
 
         case "repath":
-            try:
-                music_annotator.repath(dest_root=args.dest_dir, dry_run=args.dry_run, yes=args.yes)
-            except KeyboardInterrupt:
-                log.warning("interrupted")
-                sys.exit(1)
-            except Exception as exc:  # noqa: BLE001
-                log.error("repath_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
-                sys.exit(1)
+            _dispatch(
+                lambda: music_annotator.repath(dest_root=args.dest_dir, dry_run=args.dry_run, yes=args.yes),
+                "repath_error",
+                dest_root=str(args.dest_dir),
+            )
 
         case "regroup":
-            try:
-                music_annotator.regroup(dest_root=args.dest_dir, yes=args.yes, dry_run=args.dry_run)
-            except KeyboardInterrupt:
-                log.warning("interrupted")
-                sys.exit(1)
-            except Exception as exc:  # noqa: BLE001
-                log.error("regroup_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
-                sys.exit(1)
+            _dispatch(
+                lambda: music_annotator.regroup(dest_root=args.dest_dir, yes=args.yes, dry_run=args.dry_run),
+                "regroup_error",
+                dest_root=str(args.dest_dir),
+            )
 
         case "audit":
-            try:
-                music_annotator.audit(dest_root=args.dest_dir)
-            except KeyboardInterrupt:
-                log.warning("interrupted")
-                sys.exit(1)
-            except Exception as exc:  # noqa: BLE001
-                log.error("audit_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
-                sys.exit(1)
+            _dispatch(
+                lambda: music_annotator.audit(dest_root=args.dest_dir),
+                "audit_error",
+                dest_root=str(args.dest_dir),
+            )
 
         case "enrich":
-            try:
-                music_annotator.enrich(
+            _dispatch(
+                lambda: music_annotator.enrich(
                     dest_root=args.dest_dir,
                     re_resolve=args.re_resolve,
                     dry_run=args.dry_run,
                     acoustid_key=args.acoustid_key,
-                )
-            except KeyboardInterrupt:
-                log.warning("interrupted")
-                sys.exit(1)
-            except Exception as exc:  # noqa: BLE001
-                log.error("enrich_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
-                sys.exit(1)
+                ),
+                "enrich_error",
+                dest_root=str(args.dest_dir),
+            )
 
         case "diff":
-            try:
-                music_annotator.diff_journal(dest_root=args.dest_dir)
-            except KeyboardInterrupt:
-                log.warning("interrupted")
-                sys.exit(1)
-            except Exception as exc:  # noqa: BLE001
-                log.error("diff_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
-                sys.exit(1)
+            _dispatch(
+                lambda: music_annotator.diff_journal(dest_root=args.dest_dir),
+                "diff_error",
+                dest_root=str(args.dest_dir),
+            )
 
         case "origin-time":
-            try:
-                music_annotator.enrich_origin_time(
+            _dispatch(
+                lambda: music_annotator.enrich_origin_time(
                     dest_root=args.dest_dir,
                     dry_run=args.dry_run,
-                )
-            except KeyboardInterrupt:
-                log.warning("interrupted")
-                sys.exit(1)
-            except Exception as exc:  # noqa: BLE001
-                log.error("origin_time_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
-                sys.exit(1)
+                ),
+                "origin_time_error",
+                dest_root=str(args.dest_dir),
+            )
 
         case "rebuild":
-            try:
-                music_annotator.rebuild_journal(
+            _dispatch(
+                lambda: music_annotator.rebuild_journal(
                     dest_root=args.dest_dir,
-                    dry_run=not args.write,
-                )
-            except KeyboardInterrupt:
-                log.warning("interrupted")
-                sys.exit(1)
-            except Exception as exc:  # noqa: BLE001
-                log.error("rebuild_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
-                sys.exit(1)
+                    dry_run=not args.apply,
+                ),
+                "rebuild_error",
+                dest_root=str(args.dest_dir),
+            )
 
         case "unify":
-            try:
-                music_annotator.unify(dest_root=args.dest_dir, yes=args.yes, dry_run=args.dry_run)
-            except KeyboardInterrupt:
-                log.warning("interrupted")
-                sys.exit(1)
-            except Exception as exc:  # noqa: BLE001
-                log.error("unify_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
-                sys.exit(1)
+            _dispatch(
+                lambda: music_annotator.unify(dest_root=args.dest_dir, yes=args.yes, dry_run=args.dry_run),
+                "unify_error",
+                dest_root=str(args.dest_dir),
+            )
 
         case _:  # pragma: no cover
             parser.print_help()

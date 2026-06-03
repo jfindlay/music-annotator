@@ -3696,15 +3696,15 @@ class TestAuditOriginTimeCLI:
         mock_rebuild.assert_called_once_with(dest_root=Path("/d"), dry_run=True)
 
     # pylint: disable-next=unused-argument
-    def test_rebuild_write_flag_passes_dry_run_false(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """main() rebuild --write passes dry_run=False to rebuild_journal().
+    def test_rebuild_apply_flag_passes_dry_run_false(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() rebuild --apply passes dry_run=False to rebuild_journal().
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
         """
         self._patch_common(mocker)
         mock_rebuild = mocker.patch("music_annotator.rebuild_journal")
-        mocker.patch.object(sys, "argv", new=[*self._REBUILD_ARGV, "--write"])
+        mocker.patch.object(sys, "argv", new=[*self._REBUILD_ARGV, "--apply"])
         main()
         _, kwargs = mock_rebuild.call_args
         assert kwargs["dry_run"] is False
@@ -3745,16 +3745,16 @@ class TestAuditOriginTimeCLI:
         parser = _build_parser()
         ns = parser.parse_args(["rebuild", "/dest"])
         assert ns.dry_run is True
-        assert ns.write is False
+        assert ns.apply is False
 
-    def test_rebuild_parser_write_flag(self) -> None:
-        """rebuild parser accepts --write flag and sets write=True.
+    def test_rebuild_parser_apply_flag(self) -> None:
+        """rebuild parser accepts --apply flag and sets apply=True.
 
         :param mocker: Not used — pure parser test.
         """
         parser = _build_parser()
-        ns = parser.parse_args(["rebuild", "/dest", "--write"])
-        assert ns.write is True
+        ns = parser.parse_args(["rebuild", "/dest", "--apply"])
+        assert ns.apply is True
 
 
 # ---------------------------------------------------------------------------
