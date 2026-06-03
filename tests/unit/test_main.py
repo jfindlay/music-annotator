@@ -27,6 +27,7 @@ from music_annotator.__main__ import (
     _resolve_path,
     main,
 )
+from music_annotator._pipeline import _unify_classical_composer_groups
 from music_annotator._pipeline_io import (
     AudioCompareResult,
     _audio_hash,
@@ -7845,3 +7846,264 @@ class TestUnify:
         unified_after_second = [e for e in journal_after_second.entries if e.action == "unified"]
         # No new "unified" entries from the second run
         assert len(unified_after_second) == first_count
+
+    # ------------------------------------------------------------------
+    # W2c: Classical arranger/finisher work-level path credit
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_classical_arranger_tags(
+        composer_lastnames: str,
+        work_id: str = "work-k626",
+        movt_num: str = "1",
+        title: str = "Mvt 1",
+    ) -> TrackTags:
+        """Build TrackTags for a classical movement with the given composer credit.
+
+        Sets CWP_WORKID_TOP so :func:`_unify_classical_composer_groups` groups movements by work.
+        Sets CWP_WORK_TOP and CWP_WORKTYPE_GENRES_TOP="Classical" so the W2b scope gate does not
+        fire (classical releases route through W2c, not W2b).
+
+        :param composer_lastnames: The CEA_COMPOSER_LASTNAMES value to embed.
+        :param work_id: The CWP_WORKID_TOP value (shared across movements of the same work).
+        :param movt_num: The CWP_MOVT_NUM value (1-based movement index).
+        :param title: The track title.
+        :returns: A :class:`TrackTags` instance.
+        """
+        tags = TrackTags(
+            cea_composer_lastnames=composer_lastnames,
+            cwp_composer_lastnames=composer_lastnames,
+            cwp_workid_top=work_id,
+            cwp_work_top="Requiem K. 626",
+            cwp_worktype_genres_top="Classical",
+            cwp_movt_num=movt_num,
+            movementtotal="2",
+            cwp_part_levels="1",
+            title=title,
+            artist="Karajan",
+            recording_date="1962",
+            musicbrainz_albumid="classical-arranger-rel-1",
+        )
+        return tags
+
+    def test_w2c_kat_arranger_only_movement_same_top_dir(self, fs: FakeFilesystem) -> None:
+        """KAT (W2c): arranger-only movement produces the same top_dir as composer-credited movement.
+
+        Constructs a classical release where two movements of the same CWP_WORKID_TOP group have
+        different CEA_COMPOSER_LASTNAMES: movement 1 has "Mozart" (the majority/primary composer)
+        and movement 2 has "Mozart; Süßmayr" (the arranger-credited minority value, as produced
+        when an arranger is credited as "composer" with the "additional" attribute on only some
+        movements).
+
+        After unify(), the W2c pass propagates the plurality value ("Mozart") to movement 2,
+        so both movements land in the same top_dir.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Movement 1: primary composer "Mozart" (majority value — 1 occurrence)
+        tags_mvt1 = self._make_classical_arranger_tags("Mozart", movt_num="1", title="Introitus")
+
+        # Movement 2: arranger-credited "Mozart; Süßmayr" (minority value — 1 occurrence)
+        # In a real library this would be the only movement with the arranger in the path.
+        # We give Mozart 2 occurrences by adding a third movement so Mozart is the plurality.
+        tags_mvt3 = self._make_classical_arranger_tags("Mozart", movt_num="3", title="Lacrimosa")
+        tags_mvt2 = self._make_classical_arranger_tags("Mozart; Süßmayr", movt_num="2", title="Kyrie")
+
+        # Place files under different top_dirs (fragmentation: two distinct top_dirs for same albumid)
+        path_mvt1 = _make_library_flac(dest_root, "Mozart - Karajan/Requiem K. 626 [rec 1962]/01 - Introitus.flac", tags_mvt1)
+        path_mvt2 = _make_library_flac(
+            dest_root, "Mozart; Süßmayr - Karajan/Requiem K. 626 [rec 1962]/02 - Kyrie.flac", tags_mvt2
+        )
+        path_mvt3 = _make_library_flac(dest_root, "Mozart - Karajan/Requiem K. 626 [rec 1962]/03 - Lacrimosa.flac", tags_mvt3)
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # After W2c unification, movement 2 should have moved to the "Mozart" top_dir
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) >= 1
+
+        # The moved file (mvt2) should now be under the "Mozart" top_dir
+        moved_dests = {e.destination for e in unified}
+        for dest_str in moved_dests:
+            dest_path = Path(dest_str)
+            top_dir = dest_path.relative_to(dest_root).parts[0]
+            assert top_dir.startswith("Mozart"), (
+                f"W2c KAT failed: arranger-only movement landed in top_dir={top_dir!r}, expected top_dir starting with 'Mozart'"
+            )
+
+        # The "Mozart; Süßmayr" top_dir should no longer contain the movement 2 file
+        assert not path_mvt2.exists()
+
+        # Movements 1 and 3 (already at canonical path) should be untouched
+        assert path_mvt1.exists()
+        assert path_mvt3.exists()
+
+    def test_w2c_classical_uniform_composer_is_noop(self, fs: FakeFilesystem) -> None:
+        """W2c: classical release where all movements agree on CEA_COMPOSER_LASTNAMES is a no-op.
+
+        When all movements of a work group have the same non-empty CEA_COMPOSER_LASTNAMES,
+        ``_unify_classical_composer_groups`` finds ``len(composer_counts) < 2`` and skips the
+        group.  No files are moved.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Both movements have the same CEA_COMPOSER_LASTNAMES — no variation to unify
+        tags_mvt1 = self._make_classical_arranger_tags("Mozart", movt_num="1", title="Introitus")
+        tags_mvt2 = self._make_classical_arranger_tags("Mozart", movt_num="2", title="Kyrie")
+
+        # Place both files under the same top_dir (not fragmented — only one top_dir)
+        canonical_path_1 = self._canonical_path(dest_root, tags_mvt1)
+        canonical_path_2 = self._canonical_path(dest_root, tags_mvt2)
+        _make_library_flac(dest_root, str(canonical_path_1.relative_to(dest_root)), tags_mvt1)
+        _make_library_flac(dest_root, str(canonical_path_2.relative_to(dest_root)), tags_mvt2)
+
+        # Not fragmented (same top_dir) → unify() returns immediately with nothing to do
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # No "unified" entries — nothing was moved
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 0
+
+    def test_w2c_unify_classical_composer_groups_skips_no_work_id(self) -> None:
+        """_unify_classical_composer_groups skips tracks with no CWP_WORKID_TOP or MUSICBRAINZ_WORKID.
+
+        Exercises the ``if not work_id: continue`` branch: a track with both fields empty is
+        grouped under ``""`` and skipped, so its CEA_COMPOSER_LASTNAMES is never patched.
+
+        :returns: None.
+        """
+        # Build a group_tags list with one track that has no work ID
+        tags_no_work = TrackTags(
+            cea_composer_lastnames="Mozart; Süßmayr",
+            cwp_workid_top="",
+            musicbrainz_workid="",
+        )
+        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = [
+            (Path("/lib/Mozart; Süßmayr - Karajan/Requiem/01 - Introitus.flac"), tags_no_work, {}),
+        ]
+
+        _unify_classical_composer_groups(group_tags)
+
+        # The track with no work ID must not be patched
+        assert tags_no_work.cea_composer_lastnames == "Mozart; Süßmayr"
+
+    def test_w2c_unify_classical_composer_groups_skips_uniform_group(self) -> None:
+        """_unify_classical_composer_groups skips a work group where all movements agree.
+
+        Exercises the ``if len(composer_counts) < 2: continue`` branch: when all movements of a
+        work group carry the same non-empty ``cea_composer_lastnames``, the function finds only one
+        distinct value and skips the group without patching anything.
+
+        :returns: None.
+        """
+        work_id = "work-k626"
+
+        tags_a = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
+        tags_b = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
+
+        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = [
+            (Path("/lib/Mozart - Karajan/Requiem/01 - Introitus.flac"), tags_a, {}),
+            (Path("/lib/Mozart - Karajan/Requiem/02 - Kyrie.flac"), tags_b, {}),
+        ]
+
+        _unify_classical_composer_groups(group_tags)
+
+        # Both tracks already agree — no patching needed
+        assert tags_a.cea_composer_lastnames == "Mozart"
+        assert tags_b.cea_composer_lastnames == "Mozart"
+
+    def test_w2c_unify_classical_composer_groups_empty_composer_not_counted(self) -> None:
+        """_unify_classical_composer_groups ignores tracks with empty CEA_COMPOSER_LASTNAMES.
+
+        Exercises the ``if val:`` False branch: a track with an empty ``cea_composer_lastnames``
+        contributes nothing to the count, so the plurality is determined by the non-empty values
+        only.  The empty-composer track is still patched to the canonical value.
+
+        :returns: None.
+        """
+        work_id = "work-k626"
+
+        tags_a = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
+        tags_b = TrackTags(cea_composer_lastnames="Mozart; Süßmayr", cwp_workid_top=work_id)
+        # tags_c has empty cea_composer_lastnames — should not be counted but should be patched
+        tags_c = TrackTags(cea_composer_lastnames="", cwp_workid_top=work_id)
+
+        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = [
+            (Path("/lib/Mozart - Karajan/Requiem/01 - Introitus.flac"), tags_a, {}),
+            (Path("/lib/Mozart; Süßmayr - Karajan/Requiem/02 - Kyrie.flac"), tags_b, {}),
+            (Path("/lib/Mozart - Karajan/Requiem/03 - Lacrimosa.flac"), tags_c, {}),
+        ]
+
+        _unify_classical_composer_groups(group_tags)
+
+        # "Mozart" and "Mozart; Süßmayr" are both counted (1 each); tie broken by first appearance
+        # → canonical is "Mozart" (appears first in dict insertion order)
+        assert tags_a.cea_composer_lastnames == "Mozart"
+        assert tags_b.cea_composer_lastnames == "Mozart"
+        # tags_c had empty composer — empty values are not counted but the track is still patched
+        # to the canonical value (the condition ``tags.cea_composer_lastnames != canonical`` fires
+        # because ``"" != "Mozart"``).
+        assert tags_c.cea_composer_lastnames == "Mozart"
+
+    def test_w2c_unify_classical_composer_groups_patches_minority_value(self) -> None:
+        """_unify_classical_composer_groups patches the minority CEA_COMPOSER_LASTNAMES to the plurality.
+
+        Directly exercises the function with a group where "Mozart" appears twice and
+        "Mozart; Süßmayr" appears once.  The minority value should be patched to "Mozart".
+
+        :returns: None.
+        """
+        work_id = "work-k626"
+
+        tags_a = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
+        tags_b = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
+        tags_c = TrackTags(cea_composer_lastnames="Mozart; Süßmayr", cwp_workid_top=work_id)
+
+        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = [
+            (Path("/lib/Mozart - Karajan/Requiem/01 - Introitus.flac"), tags_a, {}),
+            (Path("/lib/Mozart - Karajan/Requiem/02 - Kyrie.flac"), tags_b, {}),
+            (Path("/lib/Mozart; Süßmayr - Karajan/Requiem/03 - Lacrimosa.flac"), tags_c, {}),
+        ]
+
+        _unify_classical_composer_groups(group_tags)
+
+        # Plurality is "Mozart" (2 occurrences); minority "Mozart; Süßmayr" must be patched
+        assert tags_a.cea_composer_lastnames == "Mozart"
+        assert tags_b.cea_composer_lastnames == "Mozart"
+        assert tags_c.cea_composer_lastnames == "Mozart"
+
+    def test_w2c_unify_classical_composer_groups_already_canonical_not_patched(self) -> None:
+        """_unify_classical_composer_groups does not re-patch tracks already at the canonical value.
+
+        Exercises the ``if tags.cea_composer_lastnames != canonical`` branch: tracks that already
+        carry the plurality value are not mutated.
+
+        :returns: None.
+        """
+        work_id = "work-k626"
+
+        tags_a = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
+        tags_b = TrackTags(cea_composer_lastnames="Mozart; Süßmayr", cwp_workid_top=work_id)
+
+        original_a_id = id(tags_a)
+
+        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = [
+            (Path("/lib/Mozart - Karajan/Requiem/01 - Introitus.flac"), tags_a, {}),
+            (Path("/lib/Mozart; Süßmayr - Karajan/Requiem/02 - Kyrie.flac"), tags_b, {}),
+        ]
+
+        _unify_classical_composer_groups(group_tags)
+
+        # tags_a already had the canonical value; its identity (object id) is unchanged
+        assert id(tags_a) == original_a_id
+        assert tags_a.cea_composer_lastnames == "Mozart"
+        # tags_b was patched to the canonical value
+        assert tags_b.cea_composer_lastnames == "Mozart"

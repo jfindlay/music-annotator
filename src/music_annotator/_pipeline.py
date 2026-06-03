@@ -2090,6 +2090,82 @@ def _canonical_composer_component(group_tags: list[tuple[Path, TrackTags, dict[s
     return last_name(album_artist_sort)
 
 
+def _unify_classical_composer_groups(group_tags: list[tuple[Path, TrackTags, dict[str, str]]]) -> None:
+    """Propagate the plurality ``cea_composer_lastnames`` within each top-work group for classical releases.
+
+    Implements the W2c arranger/finisher retroactive fix for already-annotated libraries.  When a
+    classical release has movements where an arranger or finisher was credited as ``"composer"``
+    with the ``"additional"`` attribute on only some movements, those movements may have a different
+    ``CEA_COMPOSER_LASTNAMES`` embedded in their tags than the movements with a plain primary-composer
+    relation (the Mozart K.626 Süßmayr shape).
+
+    Because ``cwp_composers_is_fallback`` is never written to audio files (it is an in-memory
+    pipeline flag only), the retroactive pass cannot distinguish primary from fallback credits
+    directly.  Instead, it uses the **plurality value** within each top-work group: the most
+    frequently occurring non-empty ``cea_composer_lastnames`` value across all movements of the
+    same ``cwp_workid_top`` is taken as the canonical composer, and all movements that differ are
+    patched to match.
+
+    This mirrors the cross-medium composer pass in :func:`run` (which propagates the primary
+    composer from movements that have one to movements that used the fallback), but operates on
+    already-embedded tags rather than in-memory :class:`~music_annotator.models.TrackTags` objects
+    built during annotation.
+
+    Mutates ``group_tags`` in-place (patches both ``tags.cea_composer_lastnames`` and
+    ``tags.cwp_composer_lastnames`` on affected entries, since :func:`~music_annotator._tags.build_dest_path`
+    prefers ``CWP_COMPOSER_LASTNAMES`` over ``CEA_COMPOSER_LASTNAMES`` when both are present).
+    Only called for classical releases (scope gate is in :func:`unify`).
+
+    :param group_tags: List of ``(file_path, tags, file_dict)`` triples for all files in the
+        release group, as built by :func:`unify`.
+    """
+    # Group tracks by top-work MBID (cwp_workid_top, falling back to musicbrainz_workid).
+    # Tracks without any work ID are grouped under "" and skipped (no work context to unify).
+    work_groups: dict[str, list[int]] = {}
+    for i, (_, tags, _) in enumerate(group_tags):
+        work_id = tags.cwp_workid_top or tags.musicbrainz_workid
+        work_groups.setdefault(work_id, []).append(i)
+
+    for work_id, idxs in work_groups.items():
+        if not work_id:
+            continue  # no work context — skip
+
+        # Count occurrences of each non-empty cea_composer_lastnames value in this work group.
+        composer_counts: dict[str, int] = {}
+        for i in idxs:
+            _, tags, _ = group_tags[i]
+            val = tags.cea_composer_lastnames
+            if val:
+                composer_counts[val] = composer_counts.get(val, 0) + 1
+
+        if len(composer_counts) < 2:  # noqa: PLR2004 — 2 is the multi-value threshold
+            continue  # all movements agree — nothing to unify
+
+        # Plurality value: most common non-empty cea_composer_lastnames in this work group.
+        # Ties are broken by first-appearance order (stable: dict preserves insertion order in
+        # Python 3.7+, and we iterate group_tags in file-path order).
+        # Use __getitem__ directly to avoid the cell-var-from-loop pylint warning that would
+        # arise from a lambda capturing composer_counts by reference inside the loop.
+        canonical = max(composer_counts, key=composer_counts.__getitem__)
+
+        log.info(
+            "unify_classical_composer_group",
+            work_id=work_id,
+            canonical=canonical,
+            counts=composer_counts,
+        )
+
+        for i in idxs:
+            _, tags, _ = group_tags[i]
+            # Patch both CEA_COMPOSER_LASTNAMES and CWP_COMPOSER_LASTNAMES so that
+            # build_dest_path (which prefers CWP_COMPOSER_LASTNAMES) produces the
+            # canonical path for all movements.
+            if tags.cea_composer_lastnames != canonical:
+                tags.cea_composer_lastnames = canonical
+            if tags.cwp_composer_lastnames != canonical:
+                tags.cwp_composer_lastnames = canonical
+
+
 def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
     """Consolidate performer-split and composer-split fragmented releases into their canonical top_dirs.
 
@@ -2116,6 +2192,16 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
     ``ALBUMARTISTSORT`` (falling back to ``"Various"``).  Every track's ``cea_composer_lastnames``
     is patched to this canonical value before :func:`~music_annotator._tags.build_dest_path` is
     called.  ``build_dest_path`` itself is unchanged.
+
+    **Classical arranger/finisher unification (W2c):** for classical releases where
+    ``CEA_COMPOSER_LASTNAMES`` varies across movements of the same top work (the Mozart K.626
+    Süßmayr shape — an arranger/finisher credited as ``"composer"`` with the ``"additional"``
+    attribute on only some movements), :func:`_unify_classical_composer_groups` propagates the
+    plurality composer value within each ``CWP_WORKID_TOP`` group.  This is the retroactive
+    counterpart to the cross-medium composer pass in :func:`run`: files annotated before that pass
+    was implemented may have an arranger/finisher's name embedded as the composer for some
+    movements.  The W2c pass runs only when W2b does not apply (i.e. the release is classical or
+    has uniform ``CEA_COMPOSER_LASTNAMES``).
 
     **Move semantics (provenance-chain invariant preserved):** for each file that needs moving:
 
@@ -2194,6 +2280,21 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
             )
             for _, tags, _ in group_tags:
                 tags.cea_composer_lastnames = canonical_composer
+
+        # --- Classical arranger/finisher unification (W2c) ---
+        # For classical releases where CEA_COMPOSER_LASTNAMES varies across movements of the
+        # same top work, propagate the plurality composer value within each work group.  This
+        # is the retroactive counterpart to the cross-medium composer pass in run(): files
+        # annotated before that pass was implemented may have an arranger/finisher's name
+        # embedded as the composer for some movements (the Mozart K.626 Süßmayr shape).
+        # _is_composer_split_release() returns False for classical releases, so this pass
+        # runs independently of W2b and handles the classical case only.
+        # The scope gate (classical release) is enforced inside _unify_classical_composer_groups
+        # by checking that at least one track has cwp_work_top set and cwp_worktype_genres_top
+        # contains "Classical".  We pre-check here to avoid the function call overhead when
+        # the release is clearly non-classical (already handled by W2b above).
+        else:
+            _unify_classical_composer_groups(group_tags)
 
         # Compute canonical destinations for every file in the group.
         # build_dest_path uses the unified path fields (cea_album_soloists_unified, etc.) that
