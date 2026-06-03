@@ -3,7 +3,8 @@
 Provides :func:`run`, the main entry point that copies and tags a classical music album using
 MusicBrainz metadata.  Also provides :class:`CollisionPolicy`, :func:`_select_medium`,
 :func:`_prompt_collision_policy`, :func:`_prompt_duration_warnings`, :func:`_apply_collision_suffix`,
-and :func:`_collision_suffix` as extracted helpers.
+:func:`_collision_suffix`, :func:`_apply_workgroup_unification`, and
+:func:`_copy_tag_verify_journal_pass` as extracted helpers.
 
 Maintenance-mode commands (:func:`~music_annotator._pipeline_maint.repath`,
 :func:`~music_annotator._pipeline_maint.regroup`,
@@ -746,6 +747,475 @@ def _resolve_long_names(plan: list[CopyPlanEntry], dest_root: Path, ui: DiscUI |
     return new_plan
 
 
+def _apply_workgroup_unification(
+    tags_map: dict[int, TrackTags],
+    release: MBRelease,
+    top_work_groups: dict[str, list[int]],
+) -> None:
+    """Apply all cross-movement unification passes to ``tags_map`` for every top-work group.
+
+    Iterates over ``top_work_groups`` and applies six sequential passes to the tracks in each
+    group:
+
+    1. **Movement numbers**: assigns ``movementnumber`` / ``movementtotal`` / ``cwp_movt_num`` /
+       ``cwp_movt_tot`` / ``cwp_single_work_album`` based on position within the group.
+    2. **Intermediate sibling index** (C-L1): for each intermediate hierarchy level ``i >= 1``,
+       ranks distinct sibling nodes by ascending ``cwp_ordering_key_{i}`` and writes a gap-free
+       1-based ``cwp_inter_index_{i}`` to every track belonging to each node.
+    3. **Composer unification**: propagates primary-composer values from any movement that has a
+       plain (non-additional) composer relation to all movements that fell back to
+       ``additional_composers`` (``cwp_composers_is_fallback="1"``).
+    4. **Recording-date unification**: computes the minimum-begin / maximum-end span across all
+       movements and writes it to ``recording_date_work`` so every movement lands in the same
+       destination directory.
+    5. **First-release-date normalisation**: when no session date exists in the group (``_begins``
+       is empty), normalises every movement's ``recording_first_release_date`` to the release year
+       so the ``[rel YYYY]`` fallback is uniform.
+    6. **Soloist union**: accumulates the union of ``cea_album_soloists`` (falling back to
+       ``cea_soloists``) across all movements and writes it to ``cea_album_soloists_unified`` as a
+       path-only helper field.
+
+    Mutates ``tags_map`` in-place.  Does not return a value.
+
+    :param tags_map: Global-index → :class:`~music_annotator.models.TrackTags` mapping over all
+        media of the release.  Mutated in-place.
+    :param release: The :class:`~music_annotator.models.MBRelease` being processed; used to derive
+        the normalising release year for the first-release-date pass.
+    :param top_work_groups: Mapping from top-work MBID to the list of global indices (into
+        ``tags_map``) that belong to that work group.
+    """
+    for _twid, group_idxs in top_work_groups.items():
+        total = len(group_idxs)
+        single = len(top_work_groups) == 1
+        for movt_idx, grp_idx in enumerate(group_idxs, start=1):
+            tags_obj = tags_map[grp_idx]
+            tags_obj.movementnumber = str(movt_idx)
+            tags_obj.movementtotal = str(total)
+            tags_obj.cwp_movt_num = str(movt_idx)
+            tags_obj.cwp_movt_tot = str(total)
+            tags_obj.cwp_single_work_album = "1" if single else "0"
+
+        # Enumerate intermediate sibling nodes at each hierarchy level i >= 1
+        # (C-L1 contract).  This mirrors the leaf cwp_movt_num pass above but ranks
+        # distinct sibling NODES (identified by cwp_workid_{i}) rather than tracks.
+        # Siblings are nodes that share the same parent (cwp_workid_{i+1}).
+        # Within each parent, nodes are ranked by ascending integer cwp_ordering_key_{i}
+        # (non-digit values map to 0; ties broken by first-appearance order across
+        # group_idxs).  The resulting gap-free, 1-based index is written to every track
+        # belonging to that node as model_extra cwp_inter_index_{i}.
+        # build_dest_path consumes CWP_INTER_INDEX_{i} for the intermediate directory
+        # nn prefix, falling back to the raw ordering-key only when the index is absent
+        # (no-group / no-hierarchy escape hatch).
+        #
+        # Collect the maximum intermediate level present in this group.
+        max_inter_level = 0
+        for grp_idx in group_idxs:
+            extras = tags_map[grp_idx].model_extra or {}
+            i = 1
+            while f"cwp_workid_{i}" in extras:
+                max_inter_level = max(max_inter_level, i)
+                i += 1
+
+        for i in range(1, max_inter_level + 1):
+            # Collect distinct node ids at level i with their ordering-key and first
+            # appearance order (for stable tie-breaking when ordering-keys collide).
+            # node_id → (ordering_key_int, first_appearance_order)
+            node_order: dict[str, tuple[int, int]] = {}
+            # node_id → parent_id (cwp_workid_{i+1}, or "" when no parent level exists)
+            node_parent: dict[str, str] = {}
+            for appear_idx, grp_idx in enumerate(group_idxs):
+                extras = tags_map[grp_idx].model_extra or {}
+                node_id = extras.get(f"cwp_workid_{i}", "")
+                if not node_id:
+                    continue
+                if node_id not in node_order:
+                    ok_str = extras.get(f"cwp_ordering_key_{i}", "0")
+                    ok_int = int(ok_str) if ok_str.isdigit() else 0
+                    node_order[node_id] = (ok_int, appear_idx)
+                    parent_id = extras.get(f"cwp_workid_{i + 1}", "")
+                    node_parent[node_id] = parent_id
+
+            if not node_order:  # pragma: no cover — guard for empty-workid data anomaly
+                continue
+
+            # Group sibling node ids by parent; rank within each parent.
+            # parents_nodes: parent_id → list of (ordering_key_int, appear_idx, node_id)
+            parents_nodes: dict[str, list[tuple[int, int, str]]] = {}
+            for node_id, (ok_int, appear_idx) in node_order.items():
+                parent_id = node_parent[node_id]
+                parents_nodes.setdefault(parent_id, []).append((ok_int, appear_idx, node_id))
+
+            # Assign gap-free 1-based sibling index within each parent.
+            node_sibling_index: dict[str, str] = {}
+            for siblings in parents_nodes.values():
+                siblings.sort()  # ascending (ok_int, appear_idx) — stable tie-break
+                for rank, (_, _, node_id) in enumerate(siblings, start=1):
+                    node_sibling_index[node_id] = str(rank)
+
+            # Write the index back to every track belonging to each node.
+            # Any non-empty node_id here was necessarily collected in node_order above, so
+            # node_id in node_sibling_index is always true — just check node_id is non-empty.
+            for grp_idx in group_idxs:
+                extras = tags_map[grp_idx].model_extra or {}
+                node_id = extras.get(f"cwp_workid_{i}", "")
+                if node_id:
+                    extras[f"cwp_inter_index_{i}"] = node_sibling_index[node_id]
+
+        # Unify cwp_composer_lastnames / cwp_composers across all movements of this
+        # work.  When MB credits a completion or arranger as "composer" with the
+        # "additional" attribute on only some movements, those movements have an empty
+        # role_buckets.composers and fall back to additional_composers.
+        # build_track_tags marks this case with cwp_composers_is_fallback="1".  The
+        # result is a different CWP_COMPOSER_LASTNAMES — and therefore a different
+        # top_dir — than the movements that carry a plain primary-composer relation.
+        # Fix: propagate the primary-composer values from any movement that has them
+        # (cwp_composers_is_fallback empty) to all movements that used the fallback,
+        # so every movement in the group lands in the same top-level directory.
+        #
+        # group_idxs are global indices over all_media_pairs so this pass spans all
+        # media of the release (C-S0 contract).
+        _primary_cwp_composers = ""
+        _primary_cwp_composers_sort = ""
+        _primary_cwp_composer_lastnames = ""
+        for grp_idx in group_idxs:
+            t = tags_map[grp_idx]
+            if t.cwp_composers and not t.cwp_composers_is_fallback:
+                _primary_cwp_composers = t.cwp_composers
+                _primary_cwp_composers_sort = t.cwp_composers_sort
+                _primary_cwp_composer_lastnames = t.cwp_composer_lastnames
+                break
+        if _primary_cwp_composers:
+            for grp_idx in group_idxs:
+                t = tags_map[grp_idx]
+                if t.cwp_composers_is_fallback:
+                    t.cwp_composers = _primary_cwp_composers
+                    t.cwp_composers_sort = _primary_cwp_composers_sort
+                    t.cwp_composer_lastnames = _primary_cwp_composer_lastnames
+                    t.cwp_composers_is_fallback = ""
+                    t.composer = t.composer or _primary_cwp_composers
+                    t.composersort = t.composersort or _primary_cwp_composers_sort
+                    t.cea_composers = t.cea_composers or _primary_cwp_composers
+                    t.cea_composer_lastnames = t.cea_composer_lastnames or _primary_cwp_composer_lastnames
+
+        # Compute recording_date_work: the minimum interval spanning all movements of
+        # this work across all media.  All tracks in the group use this unified value for
+        # the destination directory label so movements recorded in different sessions land
+        # in the same dir.  The per-track RECORDING_DATE tag is NOT modified — only this
+        # path-construction helper is set.
+        #
+        # For each per-track RECORDING_DATE:
+        #   - ISO interval "begin/end": contribute begin to _begins, end to _ends.
+        #   - Single date "begin":      contribute begin to both _begins and _ends so that
+        #     the max-end calculation captures the latest point-in-time session date.
+        #
+        # Result: _unified = min(_begins)/max(_ends) when the years differ, else min(_begins).
+        _begins: list[str] = []
+        _ends: list[str] = []
+        for grp_idx in group_idxs:
+            rd = tags_map[grp_idx].recording_date
+            if not rd:
+                continue
+            if "/" in rd:
+                b, _, e = rd.partition("/")
+                if b:  # pragma: no branch — begin is always non-empty for valid ISO intervals
+                    _begins.append(b)
+                    _ends.append(b)  # use begin as a floor for the end-side span
+                if e:  # pragma: no branch — end is always non-empty for valid ISO intervals
+                    _ends.append(e)
+            else:
+                _begins.append(rd)
+                _ends.append(rd)
+        if _begins:
+            _min_begin = min(_begins)
+            _max_end = max(_ends)
+            _unified = f"{_min_begin}/{_max_end}" if _max_end != _min_begin else _min_begin
+            for grp_idx in group_idxs:
+                tags_map[grp_idx].recording_date_work = _unified
+
+        # Normalize recording_first_release_date across all movements so the [rel YYYY]
+        # fallback in build_dest_path is uniform when no session date is available.
+        # This normalization only applies when recording_date_work is empty (i.e. no
+        # movement in the group has a session date); if any movement has a session date
+        # then recording_date_work is set and build_dest_path uses [rec …] for all
+        # movements, bypassing the [rel] fallback entirely.
+        #
+        # recording_first_release_date is per-recording and can vary across movements
+        # (e.g. a movement that first appeared on a different pressing year).  The release
+        # date (release.date) is attached to the release itself and is therefore identical
+        # for every track, making it the correct normalising source.  We use 4-digit year
+        # precision only (matching [rel YYYY] output) and fall back to the release group's
+        # first-release-date when release.date is absent.
+        #
+        # group_idxs are global indices over all_media_pairs so this pass spans all
+        # media of the release (C-S0 contract).
+        if not _begins:
+            _rel_year = (release.date[:4] if len(release.date) >= 4 and release.date[:4].isdigit() else "") or (
+                release.release_group.first_release_date[:4]
+                if len(release.release_group.first_release_date) >= 4 and release.release_group.first_release_date[:4].isdigit()
+                else ""
+            )
+            if _rel_year:
+                for grp_idx in group_idxs:
+                    if tags_map[grp_idx].recording_first_release_date:
+                        tags_map[grp_idx].recording_first_release_date = _rel_year
+
+        # Compute cea_album_soloists_unified: the cross-medium UNION of soloists for this
+        # top work, written to every track in the group as a PATH-ONLY helper field (never
+        # written to audio files — excluded in TrackTags.to_file_dict).
+        #
+        # Editorial rule: unified path components ACCUMULATE per work across media.  A
+        # concerto whose movements feature different soloists on different discs should
+        # collect ALL of them into the path so every movement lands in the same directory.
+        # The per-track tag worldview is NOT changed — only this path helper accumulates.
+        #
+        # Source priority per track:
+        #   1. cea_album_soloists (release-level soloist credit, most stable)
+        #   2. cea_soloists       (per-track fallback when album-level is empty)
+        #
+        # Dedup is order-preserving (first-appearance order); "; " join, preserving any
+        # instrument-in-parens suffix already present in the individual strings.
+        #
+        # group_idxs are global indices over all_media_pairs so this pass spans all
+        # media of the release (C-S0 contract).
+        _seen_soloists: set[str] = set()
+        _union_soloists: list[str] = []
+        for grp_idx in group_idxs:
+            t = tags_map[grp_idx]
+            source = t.cea_album_soloists or t.cea_soloists
+            if source:
+                for _soloist_entry in source.split("; "):
+                    _soloist_entry = _soloist_entry.strip()
+                    if _soloist_entry and _soloist_entry not in _seen_soloists:
+                        _seen_soloists.add(_soloist_entry)
+                        _union_soloists.append(_soloist_entry)
+        if _union_soloists:
+            _unified_soloists = "; ".join(_union_soloists)
+            for grp_idx in group_idxs:
+                tags_map[grp_idx].cea_album_soloists_unified = _unified_soloists
+
+
+def _copy_tag_verify_journal_pass(
+    plan: list[CopyPlanEntry],
+    tags_map: dict[int, TrackTags],
+    cover: CoverArt,
+    src_dir: Path,
+    dest_root: Path,
+    release_id: str,
+    medium_pos: int,
+    skip_dest: set[Path],
+    dry_run: bool,
+    acoustid_key: str,
+) -> list[TransactionEntry]:
+    """Execute the copy / tag / verify / journal loop for the selected medium's tracks.
+
+    This is the C-PROV chain.  For each entry in ``plan`` the ordering is strictly:
+
+    1. Capture source SHA-256 and timestamps.
+    2. ``shutil.copy2`` the file to the destination.
+    3. Verify destination SHA-256 equals source SHA-256 — raise :exc:`RuntimeError` on mismatch.
+    4. Compute ``audio_hash`` and ``chromaprint_fp`` from the source.
+    5. Optionally confirm the AcoustID identity (read-only diagnostic; never raises).
+    6. Set cover-art sidecar reference tags on ``final_tags``.
+    7. Apply tags via :func:`~music_annotator._tagger.apply_tags_flac` or
+       :func:`~music_annotator._tagger.apply_tags_mp3`.
+    8. Restore source timestamps via ``os.utime``.
+    9. Verify the copy via :func:`~music_annotator._pipeline_io._verify_copy` — raise
+       :exc:`RuntimeError` on any mismatch.
+    10. Write sidecar cover-art files and the FreeDB YAML (once per work directory).
+    11. Append a ``"tagged"`` :class:`~music_annotator.models.TransactionEntry` to the result list.
+
+    Dry-run and skip-dest entries are handled before step 1 and produce ``"dry_run"`` or
+    ``"skipped"`` journal entries respectively.
+
+    :param plan: The list of :class:`~music_annotator.models.CopyPlanEntry` objects for the
+        selected medium.
+    :param tags_map: Global-index → :class:`~music_annotator.models.TrackTags` mapping over all
+        media of the release.
+    :param cover: The :class:`~music_annotator.models.CoverArt` instance for this release.
+    :param src_dir: Source directory; used to locate the FreeDB disc-info YAML sidecar.
+    :param dest_root: Root directory of the destination library; used to derive the work top
+        directory for sidecar writes.
+    :param release_id: MusicBrainz release MBID; written into every journal entry.
+    :param medium_pos: 1-based disc position of the selected medium; used to name the FreeDB YAML
+        sidecar (``freedb_disc_{medium_pos}.yaml``).
+    :param skip_dest: Set of destination paths that should be skipped (collision-skip policy).
+    :param dry_run: When ``True``, log planned operations without copying or writing any files.
+    :param acoustid_key: AcoustID application API key.  When set and a fingerprint is available,
+        performs a keyed lookup and logs whether the selected recording MBID is confirmed or
+        contradicted.  Never alters the copy/tag/verify path.
+    :returns: List of :class:`~music_annotator.models.TransactionEntry` objects produced during
+        this pass (one per plan entry, plus sidecar entries).
+    :raises RuntimeError: If copy integrity fails, tag write fails, or ``_verify_copy`` fails.
+    :raises OSError: If source files cannot be read or destination files cannot be written.
+    """
+    journal_entries: list[TransactionEntry] = []
+    sidecars_written: set[Path] = set()
+    freedb_written: set[Path] = set()
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+
+    for entry in plan:
+        idx, src_file, dest_file = entry.idx, entry.src_file, entry.dest_file
+        final_tags = tags_map[idx]
+
+        if dry_run:
+            log.info(
+                "dry_run_track",
+                composer=final_tags.composer,
+                conductor=final_tags.conductor,
+                work=final_tags.work,
+                period=final_tags.period,
+            )
+            journal_entries.append(
+                TransactionEntry(
+                    timestamp=now,
+                    release_id=release_id,
+                    source=str(src_file),
+                    destination=str(dest_file),
+                    action="dry_run",
+                )
+            )
+            continue
+
+        if dest_file in skip_dest:
+            log.info("skip_existing", dest=str(dest_file.relative_to(dest_root)))
+            journal_entries.append(
+                TransactionEntry(
+                    timestamp=now,
+                    release_id=release_id,
+                    source=str(src_file),
+                    destination=str(dest_file),
+                    action="skipped",
+                )
+            )
+            continue
+
+        dest_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Capture source timestamps and hash before copying; mutagen's .save() bumps mtime.
+        # On Linux, ctime (inode-change time) cannot be set by userspace.
+        src_stat = src_file.stat()
+        src_times = (src_stat.st_atime, src_stat.st_mtime)
+        src_hash = _sha256_file(src_file)
+
+        shutil.copy2(src_file, dest_file)
+
+        # Verify raw copy integrity before tagging mutates the destination.
+        dest_copy_hash = _sha256_file(dest_file)
+        if dest_copy_hash != src_hash:
+            raise RuntimeError(
+                f"copy integrity failure for '{dest_file.name}': "
+                f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_copy_hash[:12]}…"
+            )
+
+        # Compute the tagging-invariant audio hash from the source file before tagging mutates
+        # the destination.  The source and destination bytes are identical at this point (the raw
+        # copy integrity check above has already passed), so hashing the source is equivalent to
+        # hashing the pre-tag destination while avoiding any timing dependency on the copy.
+        final_tags.audio_hash = _audio_hash(src_file)
+
+        # Compute the Chromaprint fingerprint from the source file before tagging.  Returns ""
+        # when fpcalc is not available; the empty string is stored as-is (no special-casing).
+        # Mirrors the F1 pattern for audio_hash: computed on the source before apply_tags_*.
+        final_tags.chromaprint_fp = _run_fpcalc(src_file)
+
+        # AcoustID identity-confirm: when an API key is supplied and a fingerprint is available,
+        # look up the recording MBIDs for this file and check whether the selected recording MBID
+        # is among them.  This is a read-only diagnostic step — it never alters the copy/tag/verify
+        # path, never raises, and never blocks on empty results.
+        if acoustid_key and final_tags.chromaprint_fp:
+            _confirm_dur_s = _read_duration_ms(src_file) // 1000
+            _confirm_mbids = fetch_acoustid_lookup(final_tags.chromaprint_fp, _confirm_dur_s, acoustid_key)
+            _selected_rec_id = final_tags.musicbrainz_recordingid
+            if _confirm_mbids and _selected_rec_id:
+                if _selected_rec_id in _confirm_mbids:
+                    log.info(
+                        "acoustid_confirm_ok",
+                        recording_id=_selected_rec_id,
+                        src=src_file.name,
+                    )
+                else:
+                    log.warning(
+                        "acoustid_confirm_mismatch",
+                        recording_id=_selected_rec_id,
+                        src=src_file.name,
+                        acoustid_top=_confirm_mbids[0] if _confirm_mbids else "",
+                    )
+
+        # Set cover art sidecar reference tags so they are embedded in the audio file.
+        def _filenames(images: list[CoverImage]) -> str:
+            """Return unique semicolon-joined filenames from a list of CoverImages.
+
+            Deduplicates filenames so multi-type images shared between buckets appear only once.
+
+            :param images: List of :class:`~music_annotator.models.CoverImage` instances.
+            :returns: Semicolon-joined unique non-empty filename strings.
+            """
+            seen: set[str] = set()
+            parts: list[str] = []
+            for img in images:
+                if img.filename and img.filename not in seen:
+                    seen.add(img.filename)
+                    parts.append(img.filename)
+            return "; ".join(parts)
+
+        final_tags.coverart_front_file = cover.front_full[0].filename if cover.front_full else ""
+        final_tags.coverart_back_file = _filenames(cover.back)
+        final_tags.coverart_booklet_files = _filenames(cover.booklet)
+        final_tags.coverart_medium_files = _filenames(cover.medium)
+        final_tags.coverart_tray_files = _filenames(cover.tray)
+        final_tags.coverart_obi_files = _filenames(cover.obi)
+        final_tags.coverart_spine_files = _filenames(cover.spine)
+        final_tags.coverart_track_files = _filenames(cover.track)
+        final_tags.coverart_liner_files = _filenames(cover.liner)
+        final_tags.coverart_sticker_files = _filenames(cover.sticker)
+        final_tags.coverart_poster_files = _filenames(cover.poster)
+        final_tags.coverart_matrix_files = _filenames(cover.matrix)
+        final_tags.coverart_top_files = _filenames(cover.top)
+        final_tags.coverart_bottom_files = _filenames(cover.bottom)
+        final_tags.coverart_panel_files = _filenames(cover.panel)
+        final_tags.coverart_watermark_files = _filenames(cover.watermark)
+        final_tags.coverart_raw_files = _filenames(cover.raw)
+        final_tags.coverart_other_files = _filenames(cover.other)
+        final_tags.coverart_unknown_files = _filenames(cover.unknown)
+
+        ext = src_file.suffix.lower()
+        try:
+            match ext:
+                case ".flac":
+                    apply_tags_flac(dest_file, final_tags, cover)
+                case ".mp3":
+                    apply_tags_mp3(dest_file, final_tags, cover)
+                case _:  # pragma: no cover
+                    log.warning("unsupported_format", ext=ext, file=dest_file.name)
+        except MutagenError as exc:
+            raise RuntimeError(f"tag write failure for '{dest_file.name}': {exc}") from exc
+
+        os.utime(dest_file, src_times)
+
+        _verify_copy(src_file, dest_file, final_tags, cover, src_stat.st_mtime)
+
+        # Derive the work top directory (dest_root / composer-dir / work-dir) and write
+        # sidecar cover art files exactly once per work directory across all tracks.
+        rel_parts = dest_file.relative_to(dest_root).parts
+        work_top_dir = dest_root / rel_parts[0] / rel_parts[1]
+        _write_sidecars(cover, work_top_dir, sidecars_written, journal_entries, now, release_id)
+        _write_freedb_yaml(src_dir, work_top_dir, medium_pos, freedb_written, journal_entries, now, release_id)
+
+        journal_entries.append(
+            TransactionEntry(
+                timestamp=now,
+                release_id=release_id,
+                source=str(src_file),
+                destination=str(dest_file),
+                action="tagged",
+                audio_hash=final_tags.audio_hash,
+                chromaprint_fp=final_tags.chromaprint_fp,
+            )
+        )
+
+    return journal_entries
+
+
 def run(
     release_id: str,
     src_dir: Path,
@@ -960,215 +1430,7 @@ def run(
             twid = t.cwp_workid_top or t.musicbrainz_workid
             top_work_groups[twid].append(global_idx)
 
-        for _twid, group_idxs in top_work_groups.items():
-            total = len(group_idxs)
-            single = len(top_work_groups) == 1
-            for movt_idx, grp_idx in enumerate(group_idxs, start=1):
-                tags_obj = tags_map[grp_idx]
-                tags_obj.movementnumber = str(movt_idx)
-                tags_obj.movementtotal = str(total)
-                tags_obj.cwp_movt_num = str(movt_idx)
-                tags_obj.cwp_movt_tot = str(total)
-                tags_obj.cwp_single_work_album = "1" if single else "0"
-
-            # Enumerate intermediate sibling nodes at each hierarchy level i >= 1
-            # (C-L1 contract).  This mirrors the leaf cwp_movt_num pass above but ranks
-            # distinct sibling NODES (identified by cwp_workid_{i}) rather than tracks.
-            # Siblings are nodes that share the same parent (cwp_workid_{i+1}).
-            # Within each parent, nodes are ranked by ascending integer cwp_ordering_key_{i}
-            # (non-digit values map to 0; ties broken by first-appearance order across
-            # group_idxs).  The resulting gap-free, 1-based index is written to every track
-            # belonging to that node as model_extra cwp_inter_index_{i}.
-            # build_dest_path consumes CWP_INTER_INDEX_{i} for the intermediate directory
-            # nn prefix, falling back to the raw ordering-key only when the index is absent
-            # (no-group / no-hierarchy escape hatch).
-            #
-            # Collect the maximum intermediate level present in this group.
-            max_inter_level = 0
-            for grp_idx in group_idxs:
-                extras = tags_map[grp_idx].model_extra or {}
-                i = 1
-                while f"cwp_workid_{i}" in extras:
-                    max_inter_level = max(max_inter_level, i)
-                    i += 1
-
-            for i in range(1, max_inter_level + 1):
-                # Collect distinct node ids at level i with their ordering-key and first
-                # appearance order (for stable tie-breaking when ordering-keys collide).
-                # node_id → (ordering_key_int, first_appearance_order)
-                node_order: dict[str, tuple[int, int]] = {}
-                # node_id → parent_id (cwp_workid_{i+1}, or "" when no parent level exists)
-                node_parent: dict[str, str] = {}
-                for appear_idx, grp_idx in enumerate(group_idxs):
-                    extras = tags_map[grp_idx].model_extra or {}
-                    node_id = extras.get(f"cwp_workid_{i}", "")
-                    if not node_id:
-                        continue
-                    if node_id not in node_order:
-                        ok_str = extras.get(f"cwp_ordering_key_{i}", "0")
-                        ok_int = int(ok_str) if ok_str.isdigit() else 0
-                        node_order[node_id] = (ok_int, appear_idx)
-                        parent_id = extras.get(f"cwp_workid_{i + 1}", "")
-                        node_parent[node_id] = parent_id
-
-                if not node_order:  # pragma: no cover — guard for empty-workid data anomaly
-                    continue
-
-                # Group sibling node ids by parent; rank within each parent.
-                # parents_nodes: parent_id → list of (ordering_key_int, appear_idx, node_id)
-                parents_nodes: dict[str, list[tuple[int, int, str]]] = {}
-                for node_id, (ok_int, appear_idx) in node_order.items():
-                    parent_id = node_parent[node_id]
-                    parents_nodes.setdefault(parent_id, []).append((ok_int, appear_idx, node_id))
-
-                # Assign gap-free 1-based sibling index within each parent.
-                node_sibling_index: dict[str, str] = {}
-                for siblings in parents_nodes.values():
-                    siblings.sort()  # ascending (ok_int, appear_idx) — stable tie-break
-                    for rank, (_, _, node_id) in enumerate(siblings, start=1):
-                        node_sibling_index[node_id] = str(rank)
-
-                # Write the index back to every track belonging to each node.
-                # Any non-empty node_id here was necessarily collected in node_order above, so
-                # node_id in node_sibling_index is always true — just check node_id is non-empty.
-                for grp_idx in group_idxs:
-                    extras = tags_map[grp_idx].model_extra or {}
-                    node_id = extras.get(f"cwp_workid_{i}", "")
-                    if node_id:
-                        extras[f"cwp_inter_index_{i}"] = node_sibling_index[node_id]
-
-            # Unify cwp_composer_lastnames / cwp_composers across all movements of this
-            # work.  When MB credits a completion or arranger as "composer" with the
-            # "additional" attribute on only some movements, those movements have an empty
-            # role_buckets.composers and fall back to additional_composers.
-            # build_track_tags marks this case with cwp_composers_is_fallback="1".  The
-            # result is a different CWP_COMPOSER_LASTNAMES — and therefore a different
-            # top_dir — than the movements that carry a plain primary-composer relation.
-            # Fix: propagate the primary-composer values from any movement that has them
-            # (cwp_composers_is_fallback empty) to all movements that used the fallback,
-            # so every movement in the group lands in the same top-level directory.
-            #
-            # group_idxs are global indices over all_media_pairs so this pass spans all
-            # media of the release (C-S0 contract).
-            _primary_cwp_composers = ""
-            _primary_cwp_composers_sort = ""
-            _primary_cwp_composer_lastnames = ""
-            for grp_idx in group_idxs:
-                t = tags_map[grp_idx]
-                if t.cwp_composers and not t.cwp_composers_is_fallback:
-                    _primary_cwp_composers = t.cwp_composers
-                    _primary_cwp_composers_sort = t.cwp_composers_sort
-                    _primary_cwp_composer_lastnames = t.cwp_composer_lastnames
-                    break
-            if _primary_cwp_composers:
-                for grp_idx in group_idxs:
-                    t = tags_map[grp_idx]
-                    if t.cwp_composers_is_fallback:
-                        t.cwp_composers = _primary_cwp_composers
-                        t.cwp_composers_sort = _primary_cwp_composers_sort
-                        t.cwp_composer_lastnames = _primary_cwp_composer_lastnames
-                        t.cwp_composers_is_fallback = ""
-                        t.composer = t.composer or _primary_cwp_composers
-                        t.composersort = t.composersort or _primary_cwp_composers_sort
-                        t.cea_composers = t.cea_composers or _primary_cwp_composers
-                        t.cea_composer_lastnames = t.cea_composer_lastnames or _primary_cwp_composer_lastnames
-
-            # Compute recording_date_work: the minimum interval spanning all movements of
-            # this work across all media.  All tracks in the group use this unified value for
-            # the destination directory label so movements recorded in different sessions land
-            # in the same dir.  The per-track RECORDING_DATE tag is NOT modified — only this
-            # path-construction helper is set.
-            #
-            # For each per-track RECORDING_DATE:
-            #   - ISO interval "begin/end": contribute begin to _begins, end to _ends.
-            #   - Single date "begin":      contribute begin to both _begins and _ends so that
-            #     the max-end calculation captures the latest point-in-time session date.
-            #
-            # Result: _unified = min(_begins)/max(_ends) when the years differ, else min(_begins).
-            _begins: list[str] = []
-            _ends: list[str] = []
-            for grp_idx in group_idxs:
-                rd = tags_map[grp_idx].recording_date
-                if not rd:
-                    continue
-                if "/" in rd:
-                    b, _, e = rd.partition("/")
-                    if b:  # pragma: no branch — begin is always non-empty for valid ISO intervals
-                        _begins.append(b)
-                        _ends.append(b)  # use begin as a floor for the end-side span
-                    if e:  # pragma: no branch — end is always non-empty for valid ISO intervals
-                        _ends.append(e)
-                else:
-                    _begins.append(rd)
-                    _ends.append(rd)
-            if _begins:
-                _min_begin = min(_begins)
-                _max_end = max(_ends)
-                _unified = f"{_min_begin}/{_max_end}" if _max_end != _min_begin else _min_begin
-                for grp_idx in group_idxs:
-                    tags_map[grp_idx].recording_date_work = _unified
-
-            # Normalize recording_first_release_date across all movements so the [rel YYYY]
-            # fallback in build_dest_path is uniform when no session date is available.
-            # This normalization only applies when recording_date_work is empty (i.e. no
-            # movement in the group has a session date); if any movement has a session date
-            # then recording_date_work is set and build_dest_path uses [rec …] for all
-            # movements, bypassing the [rel] fallback entirely.
-            #
-            # recording_first_release_date is per-recording and can vary across movements
-            # (e.g. a movement that first appeared on a different pressing year).  The release
-            # date (release.date) is attached to the release itself and is therefore identical
-            # for every track, making it the correct normalising source.  We use 4-digit year
-            # precision only (matching [rel YYYY] output) and fall back to the release group's
-            # first-release-date when release.date is absent.
-            #
-            # group_idxs are global indices over all_media_pairs so this pass spans all
-            # media of the release (C-S0 contract).
-            if not _begins:
-                _rel_year = (release.date[:4] if len(release.date) >= 4 and release.date[:4].isdigit() else "") or (
-                    release.release_group.first_release_date[:4]
-                    if len(release.release_group.first_release_date) >= 4
-                    and release.release_group.first_release_date[:4].isdigit()
-                    else ""
-                )
-                if _rel_year:
-                    for grp_idx in group_idxs:
-                        if tags_map[grp_idx].recording_first_release_date:
-                            tags_map[grp_idx].recording_first_release_date = _rel_year
-
-            # Compute cea_album_soloists_unified: the cross-medium UNION of soloists for this
-            # top work, written to every track in the group as a PATH-ONLY helper field (never
-            # written to audio files — excluded in TrackTags.to_file_dict).
-            #
-            # Editorial rule: unified path components ACCUMULATE per work across media.  A
-            # concerto whose movements feature different soloists on different discs should
-            # collect ALL of them into the path so every movement lands in the same directory.
-            # The per-track tag worldview is NOT changed — only this path helper accumulates.
-            #
-            # Source priority per track:
-            #   1. cea_album_soloists (release-level soloist credit, most stable)
-            #   2. cea_soloists       (per-track fallback when album-level is empty)
-            #
-            # Dedup is order-preserving (first-appearance order); "; " join, preserving any
-            # instrument-in-parens suffix already present in the individual strings.
-            #
-            # group_idxs are global indices over all_media_pairs so this pass spans all
-            # media of the release (C-S0 contract).
-            _seen_soloists: set[str] = set()
-            _union_soloists: list[str] = []
-            for grp_idx in group_idxs:
-                t = tags_map[grp_idx]
-                source = t.cea_album_soloists or t.cea_soloists
-                if source:
-                    for _soloist_entry in source.split("; "):
-                        _soloist_entry = _soloist_entry.strip()
-                        if _soloist_entry and _soloist_entry not in _seen_soloists:
-                            _seen_soloists.add(_soloist_entry)
-                            _union_soloists.append(_soloist_entry)
-            if _union_soloists:
-                _unified_soloists = "; ".join(_union_soloists)
-                for grp_idx in group_idxs:
-                    tags_map[grp_idx].cea_album_soloists_unified = _unified_soloists
+        _apply_workgroup_unification(tags_map, release, top_work_groups)
 
     else:
         # Minimal tags for every track on every medium (uniform map shape regardless of branch).
@@ -1261,170 +1523,18 @@ def run(
                         pass
 
     # --- Copy, tag, and journal ---
-    journal_entries: list[TransactionEntry] = []
-    sidecars_written: set[Path] = set()
-    freedb_written: set[Path] = set()
-    now = datetime.datetime.now(datetime.UTC).isoformat()
-
-    for entry in plan:
-        idx, src_file, dest_file = entry.idx, entry.src_file, entry.dest_file
-        final_tags = tags_map[idx]
-
-        if dry_run:
-            log.info(
-                "dry_run_track",
-                composer=final_tags.composer,
-                conductor=final_tags.conductor,
-                work=final_tags.work,
-                period=final_tags.period,
-            )
-            journal_entries.append(
-                TransactionEntry(
-                    timestamp=now,
-                    release_id=release_id,
-                    source=str(src_file),
-                    destination=str(dest_file),
-                    action="dry_run",
-                )
-            )
-            continue
-
-        if dest_file in skip_dest:
-            log.info("skip_existing", dest=str(dest_file.relative_to(dest_root)))
-            journal_entries.append(
-                TransactionEntry(
-                    timestamp=now,
-                    release_id=release_id,
-                    source=str(src_file),
-                    destination=str(dest_file),
-                    action="skipped",
-                )
-            )
-            continue
-
-        dest_file.parent.mkdir(parents=True, exist_ok=True)
-
-        # Capture source timestamps and hash before copying; mutagen's .save() bumps mtime.
-        # On Linux, ctime (inode-change time) cannot be set by userspace.
-        src_stat = src_file.stat()
-        src_times = (src_stat.st_atime, src_stat.st_mtime)
-        src_hash = _sha256_file(src_file)
-
-        shutil.copy2(src_file, dest_file)
-
-        # Verify raw copy integrity before tagging mutates the destination.
-        dest_copy_hash = _sha256_file(dest_file)
-        if dest_copy_hash != src_hash:
-            raise RuntimeError(
-                f"copy integrity failure for '{dest_file.name}': "
-                f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_copy_hash[:12]}…"
-            )
-
-        # Compute the tagging-invariant audio hash from the source file before tagging mutates
-        # the destination.  The source and destination bytes are identical at this point (the raw
-        # copy integrity check above has already passed), so hashing the source is equivalent to
-        # hashing the pre-tag destination while avoiding any timing dependency on the copy.
-        final_tags.audio_hash = _audio_hash(src_file)
-
-        # Compute the Chromaprint fingerprint from the source file before tagging.  Returns ""
-        # when fpcalc is not available; the empty string is stored as-is (no special-casing).
-        # Mirrors the F1 pattern for audio_hash: computed on the source before apply_tags_*.
-        final_tags.chromaprint_fp = _run_fpcalc(src_file)
-
-        # AcoustID identity-confirm: when an API key is supplied and a fingerprint is available,
-        # look up the recording MBIDs for this file and check whether the selected recording MBID
-        # is among them.  This is a read-only diagnostic step — it never alters the copy/tag/verify
-        # path, never raises, and never blocks on empty results.
-        if acoustid_key and final_tags.chromaprint_fp:
-            _confirm_dur_s = _read_duration_ms(src_file) // 1000
-            _confirm_mbids = fetch_acoustid_lookup(final_tags.chromaprint_fp, _confirm_dur_s, acoustid_key)
-            _selected_rec_id = final_tags.musicbrainz_recordingid
-            if _confirm_mbids and _selected_rec_id:
-                if _selected_rec_id in _confirm_mbids:
-                    log.info(
-                        "acoustid_confirm_ok",
-                        recording_id=_selected_rec_id,
-                        src=src_file.name,
-                    )
-                else:
-                    log.warning(
-                        "acoustid_confirm_mismatch",
-                        recording_id=_selected_rec_id,
-                        src=src_file.name,
-                        acoustid_top=_confirm_mbids[0] if _confirm_mbids else "",
-                    )
-
-        # Set cover art sidecar reference tags so they are embedded in the audio file.
-        def _filenames(images: list[CoverImage]) -> str:
-            """Return unique semicolon-joined filenames from a list of CoverImages.
-
-            Deduplicates filenames so multi-type images shared between buckets appear only once.
-
-            :param images: List of :class:`~music_annotator.models.CoverImage` instances.
-            :returns: Semicolon-joined unique non-empty filename strings.
-            """
-            seen: set[str] = set()
-            parts: list[str] = []
-            for img in images:
-                if img.filename and img.filename not in seen:
-                    seen.add(img.filename)
-                    parts.append(img.filename)
-            return "; ".join(parts)
-
-        final_tags.coverart_front_file = cover.front_full[0].filename if cover.front_full else ""
-        final_tags.coverart_back_file = _filenames(cover.back)
-        final_tags.coverart_booklet_files = _filenames(cover.booklet)
-        final_tags.coverart_medium_files = _filenames(cover.medium)
-        final_tags.coverart_tray_files = _filenames(cover.tray)
-        final_tags.coverart_obi_files = _filenames(cover.obi)
-        final_tags.coverart_spine_files = _filenames(cover.spine)
-        final_tags.coverart_track_files = _filenames(cover.track)
-        final_tags.coverart_liner_files = _filenames(cover.liner)
-        final_tags.coverart_sticker_files = _filenames(cover.sticker)
-        final_tags.coverart_poster_files = _filenames(cover.poster)
-        final_tags.coverart_matrix_files = _filenames(cover.matrix)
-        final_tags.coverart_top_files = _filenames(cover.top)
-        final_tags.coverart_bottom_files = _filenames(cover.bottom)
-        final_tags.coverart_panel_files = _filenames(cover.panel)
-        final_tags.coverart_watermark_files = _filenames(cover.watermark)
-        final_tags.coverart_raw_files = _filenames(cover.raw)
-        final_tags.coverart_other_files = _filenames(cover.other)
-        final_tags.coverart_unknown_files = _filenames(cover.unknown)
-
-        ext = src_file.suffix.lower()
-        try:
-            match ext:
-                case ".flac":
-                    apply_tags_flac(dest_file, final_tags, cover)
-                case ".mp3":
-                    apply_tags_mp3(dest_file, final_tags, cover)
-                case _:  # pragma: no cover
-                    log.warning("unsupported_format", ext=ext, file=dest_file.name)
-        except MutagenError as exc:
-            raise RuntimeError(f"tag write failure for '{dest_file.name}': {exc}") from exc
-
-        os.utime(dest_file, src_times)
-
-        _verify_copy(src_file, dest_file, final_tags, cover, src_stat.st_mtime)
-
-        # Derive the work top directory (dest_root / composer-dir / work-dir) and write
-        # sidecar cover art files exactly once per work directory across all tracks.
-        rel_parts = dest_file.relative_to(dest_root).parts
-        work_top_dir = dest_root / rel_parts[0] / rel_parts[1]
-        _write_sidecars(cover, work_top_dir, sidecars_written, journal_entries, now, release_id)
-        _write_freedb_yaml(src_dir, work_top_dir, medium_pos, freedb_written, journal_entries, now, release_id)
-
-        journal_entries.append(
-            TransactionEntry(
-                timestamp=now,
-                release_id=release_id,
-                source=str(src_file),
-                destination=str(dest_file),
-                action="tagged",
-                audio_hash=final_tags.audio_hash,
-                chromaprint_fp=final_tags.chromaprint_fp,
-            )
-        )
+    journal_entries = _copy_tag_verify_journal_pass(
+        plan=plan,
+        tags_map=tags_map,
+        cover=cover,
+        src_dir=src_dir,
+        dest_root=dest_root,
+        release_id=release_id,
+        medium_pos=medium_pos,
+        skip_dest=skip_dest,
+        dry_run=dry_run,
+        acoustid_key=acoustid_key,
+    )
 
     if not dry_run:
         write_transaction_log(dest_root / JOURNAL_FILENAME, journal_entries)
