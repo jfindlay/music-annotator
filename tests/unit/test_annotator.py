@@ -38,71 +38,17 @@ from music_annotator.models import (
     JSON,
     ArtistEntry,
     MBAlias,
-    MBArtistCredit,
     MBArtistRelation,
     MBLabelRelation,
     MBPlaceRelation,
-    MBRecording,
     MBRelease,
-    MBTrack,
     MBUrlRelation,
     MBWork,
     MBWorkRelation,
     RoleBuckets,
     TrackTags,
 )
-
-
-def _w(d: dict[str, JSON]) -> MBWork:
-    """Validate a raw work dict into an MBWork model.
-
-    :param d: Raw dict matching the musicbrainzngs work response shape.
-    :returns: An :class:`~music_annotator.models.MBWork` instance.
-    """
-    return MBWork.model_validate(d)
-
-
-def _rec(d: dict[str, JSON]) -> MBRecording:
-    """Validate a raw recording dict into an MBRecording model.
-
-    :param d: Raw dict matching the musicbrainzngs recording response shape.
-    :returns: An :class:`~music_annotator.models.MBRecording` instance.
-    """
-    return MBRecording.model_validate(d)
-
-
-def _rel(d: dict[str, JSON]) -> MBRelease:
-    """Validate a raw release dict into an MBRelease model.
-
-    :param d: Raw dict matching the musicbrainzngs release response shape.
-    :returns: An :class:`~music_annotator.models.MBRelease` instance.
-    """
-    return MBRelease.model_validate(d)
-
-
-def _trk(d: dict[str, JSON]) -> MBTrack:
-    """Validate a raw track dict into an MBTrack model.
-
-    :param d: Raw dict matching the musicbrainzngs track response shape.
-    :returns: An :class:`~music_annotator.models.MBTrack` instance.
-    """
-    return MBTrack.model_validate(d)
-
-
-def _ac(items: list[JSON]) -> list[MBArtistCredit | str]:
-    """Validate a raw artist-credit list into typed items.
-
-    :param items: Raw artist-credit list from musicbrainzngs response.
-    :returns: A list of :class:`~music_annotator.models.MBArtistCredit` or ``str`` items.
-    """
-    result: list[MBArtistCredit | str] = []
-    for item in items:
-        if isinstance(item, str):
-            result.append(item)
-        elif isinstance(item, dict):
-            result.append(MBArtistCredit.model_validate(item))
-    return result
-
+from tests.conftest import _ac, _rec, _rel, _trk, _w
 
 # ---------------------------------------------------------------------------
 # configure_color
