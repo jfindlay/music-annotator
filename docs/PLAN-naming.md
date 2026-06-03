@@ -113,36 +113,16 @@ rule).
 
 ### C-W3b — Depth-normalisation rule in `build_dest_path`
 
-Defined by W3b.  Frozen when W3b lands.
-
-- **Uniform-ceiling / ragged-floor**: render each leaf at `min(its own tree depth, the group's modal
-  tree depth)` (NOTES "Tree-to-path rendering: two durable rules").  Clamp over-resolution *down*;
-  never pad shallow branches *up*.
-- **Two sub-shape routing**: a genuinely-shallower node (ragged-floor, e.g. a standalone overture
-  with no `part-of` link) is left at its own depth.  A sub-part deeper than the modal depth
-  (over-resolution, e.g. Handel IIIa/IIIb) is clamped down to the modal depth.
-- **Distinguishing the two**: a node whose shallowness is caused by a *missing* `part-of` link
-  (data-quality gap) is kept shallow and visible; the defect must be surfaced upstream.  A node that
-  is faithfully more granular than its siblings is clamped.  The distinction is `CWP_PART_LEVELS`
-  vs expected depth from the group's modal `CWP_PART_LEVELS`.
-- **Backward-compatible**: `build_dest_path` gains a `depth_clamp` parameter defaulting to `None`
-  (current behaviour) until W3b's `repath` pass completes; then the default flips to the modal
-  depth.  Existing callers (`run`, `repath`, `regroup`) pass the group context needed to compute the
-  modal depth.
-
-**`@plan` juncture required before W3b is sharded**: the depth-clamp implementation in `build_dest_path`
-is an architectural boundary decision with library-wide consequences.  Confirm the rule, its two
-sub-shapes, and the backward-compat approach before W3b's implementation session begins.
-
-**Downstream consumers:** W3a (repath uses the updated `build_dest_path`), all future `run()`
-annotations.
+**Deferred to `docs/BACKLOG.md`** (W3b session moved out of this plan; see BACKLOG "L2 depth
+normalisation" entry for the full design and reopen criteria).  C-W3b is not frozen by this plan.
+W3a targets only stale path-fossils whose fix does not depend on the new depth logic.
 
 ---
 
 ## Session list
 
-Sessions are in dependency order.  W2 and W3 are independent of each other (both depend on W1);
-within W3, W3a precedes W3b.
+Sessions are in dependency order.  W2 and W3a are independent of each other (both depend on W1).
+W3b is deferred to `docs/BACKLOG.md` (dedicated multisession).
 
 ### W1a — Origin-time rescue  `[substrate]`
 
@@ -352,37 +332,6 @@ fix does not depend on the new depth logic).
 
 ---
 
-### W3b — L2 depth normalisation  `[substrate — @plan juncture; freezes C-W3b]`
-
-**`@plan` juncture required before this session is sharded.**  The depth-normalisation implementation in
-`build_dest_path` is an architectural boundary decision — it changes the path output for 35 work_dirs
-(~3% of the library) and becomes the permanent policy for all future `run()` annotations.  The
-`@plan` review must confirm:
-- The exact rule (uniform-ceiling / ragged-floor per NOTES) and how it is expressed in
-  `build_dest_path`'s interface.
-- The backward-compat approach (`depth_clamp` parameter vs. always-on vs. opt-in).
-- Whether the two sub-shapes (ragged-floor faithful vs. over-resolution clamp) can be distinguished
-  from available tag data alone (`CWP_PART_LEVELS`, group modal depth) or require a MB network call.
-
-**Provisional scope (subject to juncture)**:
-- Add modal-depth computation over a `top_work_groups` group to `_pipeline.py`'s work-group loop.
-- Extend `build_dest_path` to accept (or compute internally) the group modal depth and apply the
-  uniform-ceiling clamp.
-- Extend `repath` to pass the group context so the clamp is applied during retroactive re-pathing.
-- `repath` the 35 affected work_dirs.
-- Freezes **C-W3b**.
-- Tests: 100% branch coverage.  Ragged-floor case (preserve); over-resolution case (clamp); the
-  W3b change does not affect the W3a-corrected files (no regression on leaf-collision / `dd.dd`
-  paths).
-
-**Contracts frozen**: C-W3b.
-
-**Files expected**: `src/music_annotator/_tags.py` (`build_dest_path`),
-`src/music_annotator/_pipeline.py` (work-group loop + repath group context),
-`tests/unit/test_pipeline.py`, `tests/unit/test_annotator.py`.
-
----
-
 ### Codebase-audit sessions  `[cross-cutting; schedule after W1b]`
 
 The multimedium plan surfaced four codebase-audit handoff items (NOTES "Codebase audit — handoff
@@ -423,14 +372,20 @@ W1b ──► W2a (performer-split unify)  ── freezes C-W2 (performer)
 
 W1b ──► W3a (mechanical repath)      ── consumes C-W1 only
          │
-         └──► [@plan juncture] ──► W3b (depth normalisation)   ── freezes C-W3b
+         └──► [W3b deferred to BACKLOG — depth normalisation; separate multisession]
 ```
 
-W2 and W3 are independent of each other and can be scheduled in parallel after W1b.
+W2 and W3a are independent of each other and can be scheduled in parallel after W1b.
 
 ---
 
 ## Progress ledger
+
+**Preflight bindings** (resolved 2026-06-02):
+- PLAN: `docs/PLAN-naming.md`
+- VERIFY: `~/.local/bin/tox -m analyze` (combined gate — satisfies tests + types + lint + format + coverage in one run)
+- Juncture tier: T1 (recalibrated; `@general` subagent for adjudication, not `@plan-deep`)
+- W3b: deferred to `docs/BACKLOG.md`; dedicated multisession planned
 
 | Session | Status  | Commit | Notes |
 |---------|---------|--------|-------|
@@ -442,7 +397,7 @@ W2 and W3 are independent of each other and can be scheduled in parallel after W
 | W2c     | pending | —      |       |
 | W2d     | pending | —      |       |
 | W3a     | pending | —      |       |
-| W3b     | blocked (`@plan` juncture) | — | Depth-normalisation implementation in `build_dest_path` needs `@plan` review before sharding |
+| W3b     | deferred | — | Moved to `docs/BACKLOG.md`; dedicated multisession planned |
 
 ---
 

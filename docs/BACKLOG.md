@@ -29,6 +29,53 @@ MB via the `/ws/2/discid` endpoint, permanently enriching the database and enabl
 selection for all users.  Requires an authenticated MB session; defer until a login/credential flow
 is designed.
 
+## Hierarchy-depth normalisation — W3b (deferred from PLAN-naming.md)
+
+**Deferred from `docs/PLAN-naming.md` W3b** (2026-06-02).  Dedicated multisession planned.
+
+**Session scope (from PLAN-naming.md W3b)**:
+- Add modal-depth computation over a `top_work_groups` group to `_pipeline.py`'s work-group loop.
+- Extend `build_dest_path` to accept (or compute internally) the group modal depth and apply the
+  uniform-ceiling clamp.
+- Extend `repath` to pass the group context so the clamp is applied during retroactive re-pathing.
+- `repath` the 35 affected work_dirs.
+- Freezes **C-W3b** (the depth-normalisation rule in `build_dest_path`).
+- Tests: 100% branch coverage.  Ragged-floor case (preserve); over-resolution case (clamp); the
+  W3b change does not affect the W3a-corrected files (no regression on leaf-collision / `dd.dd`
+  paths).
+
+**Files expected**: `src/music_annotator/_tags.py` (`build_dest_path`),
+`src/music_annotator/_pipeline.py` (work-group loop + repath group context),
+`tests/unit/test_pipeline.py`, `tests/unit/test_annotator.py`.
+
+**Juncture required before sharding**: the depth-clamp implementation in `build_dest_path` is an
+architectural boundary decision — it changes the path output for 35 work_dirs (~3% of the library)
+and becomes the permanent policy for all future `run()` annotations.  The juncture review must
+confirm:
+- The exact rule (uniform-ceiling / ragged-floor per NOTES) and how it is expressed in
+  `build_dest_path`'s interface.
+- The backward-compat approach (`depth_clamp` parameter vs. always-on vs. opt-in).
+- Whether the two sub-shapes (ragged-floor faithful vs. over-resolution clamp) can be distinguished
+  from available tag data alone (`CWP_PART_LEVELS`, group modal depth) or require a MB network call.
+
+**C-W3b contract (provisional)**:
+- **Uniform-ceiling / ragged-floor**: render each leaf at `min(its own tree depth, the group's modal
+  tree depth)` (NOTES "Tree-to-path rendering: two durable rules").  Clamp over-resolution *down*;
+  never pad shallow branches *up*.
+- **Two sub-shape routing**: a genuinely-shallower node (ragged-floor, e.g. a standalone overture
+  with no `part-of` link) is left at its own depth.  A sub-part deeper than the modal depth
+  (over-resolution, e.g. Handel IIIa/IIIb) is clamped down to the modal depth.
+- **Distinguishing the two**: a node whose shallowness is caused by a *missing* `part-of` link
+  (data-quality gap) is kept shallow and visible; the defect must be surfaced upstream.  A node that
+  is faithfully more granular than its siblings is clamped.  The distinction is `CWP_PART_LEVELS`
+  vs expected depth from the group's modal `CWP_PART_LEVELS`.
+- **Backward-compatible**: `build_dest_path` gains a `depth_clamp` parameter defaulting to `None`
+  (current behaviour) until W3b's `repath` pass completes; then the default flips to the modal
+  depth.  Existing callers (`run`, `repath`, `regroup`) pass the group context needed to compute the
+  modal depth.
+
+---
+
 ## Hierarchy-depth normalisation (deferred L2 of the leaf-numbering plan)
 
 The leaf/intermediate numbering fix (L0/L1 of the now-complete `PLAN-leafnumber.md`) shipped; the
