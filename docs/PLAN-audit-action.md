@@ -181,7 +181,7 @@ C-PROV, C-MOVE).
 | S4 | S | S2, S3 | done | 9412836 |
 | S5 | S | — (indep) | done | 3644914 |
 | S6 | S | — (indep) | done | 92438c6 |
-| C1 | C | Q2 (`__main__.py`) | pending | |
+| C1 | C | Q2 (`__main__.py`) | done | ee330fd |
 | C2 | C | Q2, C1 | pending | |
 
 ## Action-frame digest (append discoveries here during `/run-plan`)
