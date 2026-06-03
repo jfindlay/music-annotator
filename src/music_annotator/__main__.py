@@ -1,6 +1,6 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes seven subcommands:
+Configures structlog for human-friendly console output and exposes eight subcommands:
 
 * ``apply``   — copy and tag a directory of tracks for a known MusicBrainz release MBID.
 * ``search``  — search MusicBrainz for a release matching a source directory, prompt for
@@ -9,13 +9,15 @@ Configures structlog for human-friendly console output and exposes seven subcomm
   delete the source directory.
 * ``repath``  — re-path all verified library files to their corrected destinations under
   the current path-construction policy, using only embedded tags (no network calls).
+* ``regroup`` — consolidate confirmed split-release files into their canonical destinations
+  (acts on case-(b) fragmentation detected by ``audit``).
 * ``audit``   — read the journal and report release-fragmentation anomalies (no network calls,
   no filesystem writes).  With ``--diff``: diff the on-disk journal against a freshly-rebuilt
   in-memory cache and report matches, stale, and leaked entries.
 * ``rebuild`` — walk the library, read tags and sidecars per file, and emit a new journal
   (dry-run by default; use ``--write`` to replace the on-disk journal).
 * ``unify``   — consolidate performer-split fragmented releases into their canonical top_dirs
-  (detects releases with ≥2 top_dirs sharing the same ``MUSICBRAINZ_ALBUMID``).
+  (detects releases with ≥2 top_dirs sharing the same ``MUSICBRAINZ_ALBUMID`` tag).
 
 Usage::
 
@@ -38,7 +40,11 @@ Usage::
 
     music-annotator repath \\
         <dest_dir> \\
-        [--dry-run]
+        [--dry-run] [-y/--yes]
+
+    music-annotator regroup \\
+        <dest_dir> \\
+        [--dry-run] [-y/--yes]
 
     music-annotator audit \\
         <dest_dir>
@@ -133,12 +139,28 @@ class _Formatter(
     """Combined formatter that shows argument defaults and preserves raw epilog/description formatting."""
 
 
+def _add_acoustid_arg(parser: argparse.ArgumentParser) -> None:
+    """Add the ``--acoustid-key`` argument to a parser.
+
+    Extracted so the argument can be registered on both the ``apply``/``search`` common-args
+    group (via :func:`_add_common_args`) and the ``audit`` subcommand parser independently.
+
+    :param parser: The parser or argument group to which the argument is added.
+    """
+    parser.add_argument(
+        "--acoustid-key",
+        metavar="KEY",
+        default="",
+        help="AcoustID API key for keyed fingerprint lookup (rung 5).",
+    )
+
+
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
     """Add arguments shared by the ``apply`` and ``search`` subcommands.
 
     Shared arguments are: ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``,
-    ``--no-fetch-rels``, and ``-d``/``--delete``.  ``-v``/``--verbose`` lives on the top-level
-    parser so it must appear before the subcommand token.
+    ``--no-fetch-rels``, ``-d``/``--delete``, ``--no-cache``, and ``--acoustid-key``.
+    ``-v``/``--verbose`` lives on the top-level parser so it must appear before the subcommand token.
 
     :param parser: The subcommand parser to which the arguments are added.
     """
@@ -178,12 +200,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Bypass the cover art download cache; always fetch images from the network.",
     )
-    parser.add_argument(
-        "--acoustid-key",
-        metavar="KEY",
-        default="",
-        help="AcoustID API key for keyed fingerprint lookup (rung 5).",
-    )
+    _add_acoustid_arg(parser)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -408,6 +425,12 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Log planned moves without performing any filesystem operations or writing journal entries.",
     )
+    repath_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt and move files immediately.",
+    )
 
     # ------------------------------------------------------------------
     # regroup subcommand
@@ -498,12 +521,32 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_resolve_path,
         help="Root of the annotated music library (contains music_annotator_journal.json).",
     )
-    audit_parser.add_argument(
+    _audit_mode = audit_parser.add_mutually_exclusive_group()
+    _audit_mode.add_argument(
         "--enrich",
         action="store_true",
         help=(
             "Retroactively backfill fingerprint fields (audio_hash, chromaprint_fp, acoustid_id) "
             "into library files that are missing them.  Idempotent."
+        ),
+    )
+    _audit_mode.add_argument(
+        "--origin-time",
+        action="store_true",
+        dest="origin_time",
+        help=(
+            "Migrate rip/download origin-time from the journal into authoritative sidecar YAML files "
+            "(freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent."
+        ),
+    )
+    _audit_mode.add_argument(
+        "--diff",
+        action="store_true",
+        dest="diff",
+        help=(
+            "Diff the on-disk journal against a freshly-rebuilt in-memory cache, field by field per "
+            "destination path.  Reports matches, stale (expected after repath/regroup), and leaked "
+            "(authority leak — not expected) entries."
         ),
     )
     audit_parser.add_argument(
@@ -518,33 +561,9 @@ def _build_parser() -> argparse.ArgumentParser:
     audit_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="When used with --enrich, log planned backfills without writing any tags or journal entries.",
+        help="When used with --enrich or --origin-time, log planned changes without writing any files.",
     )
-    audit_parser.add_argument(
-        "--acoustid-key",
-        metavar="KEY",
-        default="",
-        help="AcoustID API key; when set with --enrich --re-resolve, backfills acoustid_id via keyed lookup.",
-    )
-    audit_parser.add_argument(
-        "--origin-time",
-        action="store_true",
-        dest="origin_time",
-        help=(
-            "Migrate rip/download origin-time from the journal into authoritative sidecar YAML files "
-            "(freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent."
-        ),
-    )
-    audit_parser.add_argument(
-        "--diff",
-        action="store_true",
-        dest="diff",
-        help=(
-            "Diff the on-disk journal against a freshly-rebuilt in-memory cache, field by field per "
-            "destination path.  Reports matches, stale (expected after repath/regroup), and leaked "
-            "(authority leak — not expected) entries."
-        ),
-    )
+    _add_acoustid_arg(audit_parser)
 
     # ------------------------------------------------------------------
     # rebuild subcommand
@@ -640,10 +659,14 @@ def main() -> None:
     """Parse CLI arguments, configure logging, and dispatch to subcommands.
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
-    ``rebuild``, ``unify``.  The ``audit`` subcommand dispatches to :func:`~music_annotator.audit`,
-    :func:`~music_annotator.enrich`, :func:`~music_annotator.enrich_origin_time`, or
-    :func:`~music_annotator.diff_journal` depending on the flags provided (``--enrich``,
-    ``--origin-time``, ``--diff``).  The ``rebuild`` subcommand dispatches to
+    ``rebuild``, ``unify``.  The ``repath`` subcommand dispatches to
+    :func:`~music_annotator.repath` with ``dry_run`` and ``yes`` forwarded from the parsed
+    arguments.  The ``regroup`` subcommand dispatches to :func:`~music_annotator.regroup` with
+    ``yes`` and ``dry_run`` forwarded.  The ``audit`` subcommand dispatches to
+    :func:`~music_annotator.audit`, :func:`~music_annotator.enrich`,
+    :func:`~music_annotator.enrich_origin_time`, or :func:`~music_annotator.diff_journal`
+    depending on the flags provided (``--enrich``, ``--origin-time``, ``--diff``; mutually
+    exclusive).  The ``rebuild`` subcommand dispatches to
     :func:`~music_annotator.rebuild_journal` with ``dry_run=True`` (default) or ``dry_run=False``
     when ``--write`` is passed.  The ``unify`` subcommand dispatches to
     :func:`~music_annotator.unify`.
@@ -728,7 +751,7 @@ def main() -> None:
 
         case "repath":
             try:
-                music_annotator.repath(dest_root=args.dest_dir, dry_run=args.dry_run)
+                music_annotator.repath(dest_root=args.dest_dir, dry_run=args.dry_run, yes=args.yes)
             except KeyboardInterrupt:
                 log.warning("interrupted")
                 sys.exit(1)

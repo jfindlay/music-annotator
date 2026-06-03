@@ -496,6 +496,24 @@ class TestBuildParser:
             parser.parse_args(["repath"])
         assert exc.value.code == 2
 
+    def test_repath_yes_long_flag(self) -> None:
+        """repath --yes sets yes=True."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._REPATH_BASE, "--yes"])
+        assert ns.yes
+
+    def test_repath_yes_short_flag(self) -> None:
+        """repath -y sets yes=True."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._REPATH_BASE, "-y"])
+        assert ns.yes
+
+    def test_repath_yes_defaults_false(self) -> None:
+        """repath without --yes defaults yes=False."""
+        parser = _build_parser()
+        ns = parser.parse_args(self._REPATH_BASE)
+        assert not ns.yes
+
     # ------------------------------------------------------------------
     # regroup parser tests
     # ------------------------------------------------------------------
@@ -1130,7 +1148,7 @@ class TestMain:
 
     # pylint: disable-next=unused-argument
     def test_repath_dispatches_to_repath(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """main() repath calls music_annotator.repath with dest_root and dry_run=False.
+        """main() repath calls music_annotator.repath with dest_root, dry_run=False, yes=False.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -1139,7 +1157,7 @@ class TestMain:
         mock_repath = mocker.patch("music_annotator.repath")
         mocker.patch.object(sys, "argv", new=self._REPATH_ARGV)
         main()
-        mock_repath.assert_called_once_with(dest_root=Path("/d"), dry_run=False)
+        mock_repath.assert_called_once_with(dest_root=Path("/d"), dry_run=False, yes=False)
 
     # pylint: disable-next=unused-argument
     def test_repath_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -1154,6 +1172,20 @@ class TestMain:
         main()
         _, kwargs = mock_repath.call_args
         assert kwargs["dry_run"] is True
+
+    # pylint: disable-next=unused-argument
+    def test_repath_yes_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() repath --yes passes yes=True to repath().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_repath = mocker.patch("music_annotator.repath")
+        mocker.patch.object(sys, "argv", new=[*self._REPATH_ARGV, "--yes"])
+        main()
+        _, kwargs = mock_repath.call_args
+        assert kwargs["yes"] is True
 
     # pylint: disable-next=unused-argument
     def test_repath_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -2037,7 +2069,7 @@ class TestRepath:
         )
 
         # Act: repath without dry_run
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # (a) Files are at new paths, not at old paths
         assert new_path1.exists()
@@ -2139,7 +2171,7 @@ class TestRepath:
         journal_before = dest_root / "music_annotator_journal.json"
         contents_before = journal_before.read_text(encoding="utf-8")
 
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # File still exists at the same path
         assert new_path1.exists()
@@ -2160,7 +2192,7 @@ class TestRepath:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
         _write_library_journal(dest_root, [])
-        music_annotator.repath(dest_root=dest_root, dry_run=False)  # should not raise
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)  # should not raise
 
     def test_repath_skips_journalled_file_not_on_disk(self, fs: FakeFilesystem) -> None:
         """repath() silently skips journal destinations that no longer exist on disk.
@@ -2186,7 +2218,7 @@ class TestRepath:
                 },
             ],
         )
-        music_annotator.repath(dest_root=dest_root, dry_run=False)  # should not raise
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)  # should not raise
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
         repathed = [e for e in journal.entries if e.action == "repathed"]
         assert len(repathed) == 0
@@ -2237,7 +2269,7 @@ class TestRepath:
             ],
         )
 
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         assert new_path.exists()
         assert not intermediate_path.exists()
@@ -2307,7 +2339,7 @@ class TestRepath:
 
         # Repath: old_path's recomputed dest (new_path_raw) is occupied with a different
         # AcoustID → confirmed non-match → suffix appended to disambiguate.
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # old_path was moved (not still at legacy location)
         assert not old_path.exists()
@@ -2354,7 +2386,7 @@ class TestRepath:
 
         mocker.patch("music_annotator._pipeline.os.replace", side_effect=_failing_replace)
 
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # (a) File exists at new path
         assert new_path1.exists()
@@ -2401,7 +2433,7 @@ class TestRepath:
         )
 
         with pytest.raises(OSError) as exc_info:
-            music_annotator.repath(dest_root=dest_root, dry_run=False)
+            music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
         assert exc_info.value.errno == errno.EPERM
 
     def test_repath_exdev_copy_integrity_failure_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -2446,7 +2478,7 @@ class TestRepath:
         mocker.patch("music_annotator._pipeline.shutil.copy2", side_effect=_corrupt_copy)
 
         with pytest.raises(RuntimeError, match="cross-fs copy integrity failure"):
-            music_annotator.repath(dest_root=dest_root, dry_run=False)
+            music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # No journal entry was added (integrity failure before journal write)
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
@@ -2497,7 +2529,7 @@ class TestRepath:
         mocker.patch("music_annotator._pipeline.os.replace", side_effect=_replace_then_corrupt)
 
         with pytest.raises(RuntimeError, match="repath integrity failure"):
-            music_annotator.repath(dest_root=dest_root, dry_run=False)
+            music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # No journal entry was added (hash mismatch before journal write)
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
@@ -2538,7 +2570,7 @@ class TestRepath:
         # Patch _read_tags_flac to raise an error (simulates corrupted tag block)
         mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=Exception("corrupt tags"))
 
-        music_annotator.repath(dest_root=dest_root, dry_run=False)  # should not raise
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)  # should not raise
 
         # File was not moved (read error caused skip)
         assert old_path1.exists()
@@ -2585,7 +2617,7 @@ class TestRepath:
         )
 
         # repath should succeed; the invalid LENGTH is silently treated as 0
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         assert new_path1.exists()
         assert not old_path1.exists()
@@ -2635,7 +2667,7 @@ class TestRepath:
             ],
         )
 
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # The "tagged" file was moved; skipped/downloaded entries did not cause errors
         assert new_path1.exists()
@@ -2682,7 +2714,7 @@ class TestRepath:
             ],
         )
 
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         assert new_path.exists()
         assert not old_path.exists()
@@ -2734,7 +2766,7 @@ class TestRepath:
         mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=_read_tags_side_effect)
 
         with pytest.raises(RuntimeError, match="repath tag re-read failure"):
-            music_annotator.repath(dest_root=dest_root, dry_run=False)
+            music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
     def test_repath_cleans_up_empty_dirs_to_root(self, fs: FakeFilesystem) -> None:
         """repath() removes empty parent directories all the way to dest_root.
@@ -2773,7 +2805,7 @@ class TestRepath:
             ],
         )
 
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         assert new_path.exists()
         assert not old_path.exists()
@@ -2857,7 +2889,7 @@ class TestRepath:
             ],
         )
 
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # Both files must still exist — neither was overwritten.
         assert path_a.exists(), "File A (CAT-001 suffix) was lost after repath"
@@ -2965,7 +2997,7 @@ class TestRepath:
             ],
         )
 
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # Colliding files A and B must still exist at their original paths.
         assert path_a.exists(), "File A (collision) was lost"
@@ -3032,7 +3064,7 @@ class TestRepath:
             ],
         )
 
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # File must be at the clean path (stale suffix removed).
         assert clean_path.exists(), f"File was not moved to clean path {clean_path}"
@@ -3105,7 +3137,7 @@ class TestRepath:
             ],
         )
 
-        music_annotator.repath(dest_root=dest_root, dry_run=False)
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
         # File must be at the correct 3-level path (intermediate directory added).
         assert correct_path.exists(), f"File was not moved to correct path {correct_path.relative_to(dest_root)}"
@@ -3511,6 +3543,35 @@ class TestAudit:
         mocker.patch.object(sys, "argv", new=["music-annotator", "audit", "/d", "--diff"])
         main()
         mock_diff.assert_called_once_with(dest_root=Path("/d"))
+
+    def test_audit_mode_flags_are_mutually_exclusive(self) -> None:
+        """audit --enrich and --diff together exit with code 2 (mutually exclusive group).
+
+        :param mocker: Not used — pure parser test.
+        """
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["audit", "/dest", "--enrich", "--diff"])
+        assert exc.value.code == 2
+
+    def test_audit_enrich_and_origin_time_are_mutually_exclusive(self) -> None:
+        """audit --enrich and --origin-time together exit with code 2 (mutually exclusive group).
+
+        :param mocker: Not used — pure parser test.
+        """
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["audit", "/dest", "--enrich", "--origin-time"])
+        assert exc.value.code == 2
+
+    def test_audit_acoustid_key_accepted(self) -> None:
+        """audit --acoustid-key is accepted and stored on the namespace.
+
+        :param mocker: Not used — pure parser test.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["audit", "/dest", "--acoustid-key", "MY_KEY"])
+        assert ns.acoustid_key == "MY_KEY"
 
 
 # ---------------------------------------------------------------------------

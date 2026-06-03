@@ -1502,7 +1502,7 @@ def _tags_from_file_dict(file_dict: dict[str, str]) -> TrackTags:
     return tags
 
 
-def repath(dest_root: Path, *, dry_run: bool = False) -> None:
+def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None:
     """Re-path all verified library files under ``dest_root`` to their corrected destinations.
 
     Walks the already-annotated library at ``dest_root``, reads the transaction journal to
@@ -1536,6 +1536,10 @@ def repath(dest_root: Path, *, dry_run: bool = False) -> None:
     In ``dry_run`` mode: all planned moves and collisions are logged but **no files are moved
     and no journal entries are written**.
 
+    When ``yes`` is ``False`` (the default), a confirmation prompt listing all planned moves is
+    shown before any files are moved.  Pass ``yes=True`` (or ``-y``/``--yes`` on the CLI) to
+    skip the prompt and proceed immediately.
+
     .. warning::
         A bare ``repath <dest>`` invocation **mass-relocates the entire library**.  The
         ``action="repathed"`` journal entries are the complete recovery record — if something goes
@@ -1546,6 +1550,7 @@ def repath(dest_root: Path, *, dry_run: bool = False) -> None:
         ``music_annotator_journal.json``).
     :param dry_run: When ``True``, log planned moves without performing any filesystem
         operations or writing journal entries.
+    :param yes: When ``True``, skip the confirmation prompt and move files immediately.
     """
     journal_path = dest_root / JOURNAL_FILENAME
     journal = read_journal(journal_path)
@@ -1710,6 +1715,21 @@ def repath(dest_root: Path, *, dry_run: bool = False) -> None:
                 new=str(new_dest.relative_to(dest_root)),
             )
         return
+
+    # --- Confirmation prompt ---
+    if not yes:
+        _console.print("\n[bold yellow]repath[/] will move the following files:\n")
+        for current_path, new_dest, _, _ in plan_pairs:
+            _console.print(
+                f"  [dim]{_markup_escape(str(current_path.relative_to(dest_root)))}[/]\n"
+                f"    → [green]{_markup_escape(str(new_dest.relative_to(dest_root)))}[/]"
+            )
+        _console.print(f"\n[bold]{len(plan_pairs)} file(s) will be moved.[/]  Proceed? [dim](y/n)[/]")
+        _console.print("\n[bold cyan]>[/] ", end="")
+        answer = input("").strip().lower()
+        if answer not in {"y", "yes"}:
+            log.info("repath_aborted", dest_root=str(dest_root))
+            return
 
     # --- Perform moves, verify, journal ---
     now = datetime.datetime.now(datetime.UTC).isoformat()

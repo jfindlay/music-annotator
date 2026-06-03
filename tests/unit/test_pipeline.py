@@ -36,9 +36,12 @@ from music_annotator import (
     apply_tags_flac,
     apply_tags_mp3,
     build_cea_performers,
+    build_dest_path,
     build_track_tags,
     fetch_acoustid_id,
     find_source_files,
+    read_journal,
+    repath,
 )
 from music_annotator._pipeline import (
     SelectionMethod,
@@ -10338,6 +10341,164 @@ class TestDiffJournal:
         assert result.matches == []
         assert result.stale == []
         assert result.leaked == []
+
+
+# ---------------------------------------------------------------------------
+# repath() confirmation prompt
+# ---------------------------------------------------------------------------
+
+
+def _write_repath_journal(dest_root: Path, entries: list[dict[str, str]]) -> None:
+    """Write a journal JSON file to ``dest_root / music_annotator_journal.json``.
+
+    :param dest_root: Destination root directory (must already exist).
+    :param entries: List of raw entry dicts to serialise.
+    """
+    journal_path = dest_root / "music_annotator_journal.json"
+    journal_path.write_text(json.dumps(entries), encoding="utf-8")
+
+
+def _make_repath_flac(dest_root: Path, rel_path: str, tags: TrackTags) -> Path:
+    """Create a FLAC file at ``dest_root / rel_path`` with the given tags applied.
+
+    Creates parent directories as needed, writes the minimal FLAC byte sequence, applies tags
+    via :func:`apply_tags_flac`, and returns the full path.
+
+    :param dest_root: Library root directory.
+    :param rel_path: Relative path within the library.
+    :param tags: Tags to embed in the FLAC file.
+    :returns: The full absolute path of the created FLAC file.
+    """
+    full_path = dest_root / rel_path
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    full_path.write_bytes(_MINIMAL_FLAC)
+    apply_tags_flac(full_path, tags)
+    return full_path
+
+
+class TestRepathConfirmation:
+    """Tests for the ``repath()`` confirmation prompt (``yes`` parameter).
+
+    Covers the three new branches introduced by Q2:
+
+    * ``yes=True`` — prompt is skipped entirely (``input()`` never called).
+    * ``yes=False``, user answers ``"y"`` — move proceeds.
+    * ``yes=False``, user answers ``"n"`` — move is aborted; no files moved, no journal entry.
+
+    Uses real FLAC bytes and :func:`apply_tags_flac` so that :func:`_read_tags_flac` executes
+    the real mutagen round-trip.  The filesystem is fake via pyfakefs.
+    """
+
+    # Tags that produce a deterministic canonical path different from the legacy path.
+    # build_dest_path produces:
+    #   <dest_root>/Beethoven - Karajan/Symphony No. 5 [rec 2020]/01 - Allegro con brio.flac
+    _TAGS = TrackTags(
+        cwp_composer_lastnames="Beethoven",
+        cwp_work_top="Symphony No. 5",
+        recording_date="2020",
+        cwp_movt_num="1",
+        movementtotal="1",
+        cwp_part_levels="1",
+        title="Allegro con brio",
+        artist="Karajan",
+    )
+    _OLD_REL = "Beethoven - Karajan/OldSymphony [rec 2020]/01 - Allegro con brio.flac"
+
+    @staticmethod
+    def _canonical_path(dest_root: Path) -> Path:
+        """Compute the canonical destination path for the shared test tags.
+
+        :param dest_root: Library root.
+        :returns: Full absolute canonical path after repathing.
+        """
+        base = build_dest_path(dest_root, MBRelease(), MBTrack(), TestRepathConfirmation._TAGS, global_track_idx=0)
+        return base.with_suffix(".flac")
+
+    def _build_repath_scenario(self, dest_root: Path) -> tuple[Path, Path]:
+        """Create a single-file repath scenario under ``dest_root``.
+
+        Places a FLAC file at the legacy path with embedded tags that recompute to a different
+        canonical path, and writes a journal entry so ``repath()`` picks it up.
+
+        :param dest_root: Library root (must already exist).
+        :returns: Tuple of (old_path, new_path).
+        """
+        old_path = _make_repath_flac(dest_root, self._OLD_REL, self._TAGS)
+        new_path = self._canonical_path(dest_root)
+        assert old_path != new_path, "test setup error: old and canonical paths must differ"
+        _write_repath_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                }
+            ],
+        )
+        return old_path, new_path
+
+    def test_repath_yes_skips_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """repath(yes=True) does not call input() at all.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._build_repath_scenario(dest_root)
+
+        mock_input = mocker.patch("music_annotator._pipeline.input")
+
+        repath(dest_root=dest_root, yes=True)
+
+        mock_input.assert_not_called()
+
+    def test_repath_prompt_accepted_moves_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """repath(yes=False) prompts; answering 'y' proceeds with the move and journals it.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        old_path, new_path = self._build_repath_scenario(dest_root)
+
+        mocker.patch("music_annotator._pipeline.input", return_value="y")
+
+        repath(dest_root=dest_root, yes=False)
+
+        assert new_path.exists()
+        assert not old_path.exists()
+
+        journal = read_journal(dest_root / "music_annotator_journal.json")
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 1
+        assert repathed[0].source == str(old_path)
+        assert repathed[0].destination == str(new_path)
+
+    def test_repath_prompt_declined_no_move(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """repath(yes=False) prompts; answering 'n' aborts with no move and no journal entry.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        old_path, new_path = self._build_repath_scenario(dest_root)
+
+        mocker.patch("music_annotator._pipeline.input", return_value="n")
+
+        repath(dest_root=dest_root, yes=False)
+
+        assert old_path.exists()
+        assert not new_path.exists()
+
+        journal = read_journal(dest_root / "music_annotator_journal.json")
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 0
 
     def test_non_tagged_entries_skipped(self, fs: FakeFilesystem) -> None:
         """diff_journal ignores non-tagged entries in both the journal and the rebuild.
