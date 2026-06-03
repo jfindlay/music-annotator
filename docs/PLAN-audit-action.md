@@ -178,7 +178,7 @@ C-PROV, C-MOVE).
 | S1 | S | — (substrate) | done | cc6ae67 | C-PROV frozen, C-MOVE frozen |
 | S2 | S | S1 | done | 4938cba |
 | S3 | S | S1 | done | 5e4a3fb |
-| S4 | S | S2, S3 | pending | |
+| S4 | S | S2, S3 | done | 9412836 |
 | S5 | S | — (indep) | pending | |
 | S6 | S | — (indep) | pending | |
 | C1 | C | Q2 (`__main__.py`) | pending | |
