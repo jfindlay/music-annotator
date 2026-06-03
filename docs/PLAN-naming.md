@@ -99,11 +99,41 @@ Defined by W2a (performer-split).  Frozen when W2a lands.
   per-top_dir fragment — and recompute the unified path.  Concretely: collect all files for a
   `MUSICBRAINZ_ALBUMID`, pass them as a synthetic single-medium group to the existing work-level
   passes, derive the unified top_dir, then `regroup`-style move the fragments to it.
-- **Multi-composer compilation exception (W2b juncture)**: when `CEA_COMPOSER_LASTNAMES` varies
+- **Multi-composer compilation exception (W2b — resolved)**: when `CEA_COMPOSER_LASTNAMES` varies
   across tracks of a single non-classical release (the Benny Goodman shape), the canonical top_dir
-  is determined by the **album-artist tag** (`ALBUMARTIST`), not by the per-track composer field.
-  This is an editorial decision (`@plan` juncture before W2b is sharded); the contract will be extended
-  with the agreed rule when the juncture resolves.
+  uses the **album-artist sort-name** as the composer component, not the per-track composer field.
+  Rationale: the path is a handle, not a manifest (CE anchor).  For a non-classical compilation the
+  release's canonical identity is its curator/performer (`ALBUMARTIST`), not the per-track
+  songwriter.  `ALBUMARTIST` is already the release-level primary attribution — the curator's
+  resolution of "whose release is this" — and using it as the path prefix produces a stable,
+  user-meaningful handle (`Goodman, Benny - The Benny Goodman Story/…`) that does not fork per
+  track.
+
+  **Concrete rule (for W2b implementor):**
+
+  1. *Detection trigger*: a release group is a multi-composer compilation when `CEA_COMPOSER_LASTNAMES`
+     is non-empty and takes ≥2 distinct values across the tracks of one `MUSICBRAINZ_ALBUMID`.
+  2. *Canonical composer component*: read `ALBUMARTISTSORT` from any track in the group (it is
+     uniform across a release; the annotation pipeline embeds it from `release.artist_credit`
+     sort-names).  Apply `last_name()` to produce the sort-name last-name form (e.g.
+     `"Goodman, Benny"` → `"Goodman, Benny"` — already in sort-name form; `last_name()` strips
+     only the given-name suffix when the sort-name is already inverted).  Use this value as the
+     uniform `CEA_COMPOSER_LASTNAMES` substitute when calling `build_dest_path` for every track in
+     the group.
+  3. *Fallback*: if `ALBUMARTISTSORT` is empty or `"Various Artists"`, use `"Various"` as the
+     composer component — the CE convention for multi-artist compilations with no single canonical
+     identity.  Do **not** fall back to plurality-composer counting: it is fragile, non-stable
+     across MB data updates, and misleading for compilations where the dominant songwriter is not
+     the release's identity.
+  4. *Implementation site*: this normalisation is a **pre-processing step in `unify()`**, not a
+     change to `build_dest_path`.  `unify()` constructs a synthetic `TrackTags` (or patches the
+     `file_dict`) with the uniform composer value before calling `build_dest_path` for each track
+     in the group.  `build_dest_path` itself is unchanged.
+  5. *Scope gate*: apply this rule only when the release is confirmed non-classical.  The signal is
+     the absence of `CWP_WORK_TOP` (no MB work link → non-classical) or `CWP_WORKTYPE_GENRES_TOP`
+     not containing `"Classical"`.  A classical release with a varying `CEA_COMPOSER_LASTNAMES`
+     (e.g. a multi-composer anthology) routes through the existing cross-medium composer-pass
+     unification (W2c), not this rule.
 - **Arranger/finisher credit** (W2c): the group-wide aggregated composer value (already computed by
   the cross-medium composer pass) is the canonical value; per-track variations are not visible in
   the path.
