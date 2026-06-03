@@ -53,10 +53,8 @@ from music_annotator._pipeline import (
     _collision_suffix,
     _match_medium_by_title,
     _match_medium_by_toc,
-    _move_verify_journal,
     _prompt_collision_policy,
     _prompt_duration_warnings,
-    _resolve_current_lib,
     _resolve_long_names,
     _score_medium_title,
     _select_medium_with_reason,
@@ -91,6 +89,10 @@ from music_annotator._pipeline_io import (
     diff_journal,
     enrich_origin_time,
     rebuild_journal,
+)
+from music_annotator._pipeline_maint import (
+    _move_verify_journal,
+    _resolve_current_lib,
 )
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
@@ -10593,7 +10595,7 @@ class TestMoveVerifyJournal:
         journal_path.write_text("[]", encoding="utf-8")
 
         # Force _verify_copy to raise RuntimeError after the move succeeds.
-        mocker.patch("music_annotator._pipeline._verify_copy", side_effect=RuntimeError("verify failed"))
+        mocker.patch("music_annotator._pipeline_maint._verify_copy", side_effect=RuntimeError("verify failed"))
 
         now = datetime.datetime.now(datetime.UTC)
         with pytest.raises(RuntimeError, match="verify failed"):
@@ -10672,7 +10674,7 @@ class TestMoveVerifyJournal:
 
         # Patch os.replace to raise EXDEV so the cross-fs fallback is exercised.
         exdev_error = OSError(errno.EXDEV, "Cross-device link")
-        mocker.patch("music_annotator._pipeline.os.replace", side_effect=exdev_error)
+        mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=exdev_error)
 
         now = datetime.datetime.now(datetime.UTC)
         moved = _move_verify_journal(
@@ -10713,7 +10715,7 @@ class TestMoveVerifyJournal:
 
         # Patch os.replace to raise a non-EXDEV OSError (e.g. EPERM).
         perm_error = OSError(errno.EPERM, "Operation not permitted")
-        mocker.patch("music_annotator._pipeline.os.replace", side_effect=perm_error)
+        mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=perm_error)
 
         now = datetime.datetime.now(datetime.UTC)
         with pytest.raises(OSError, match="Operation not permitted"):
@@ -10922,7 +10924,7 @@ class TestRepathConfirmation:
         fs.create_dir(str(dest_root))
         self._build_repath_scenario(dest_root)
 
-        mock_input = mocker.patch("music_annotator._pipeline.input")
+        mock_input = mocker.patch("music_annotator._pipeline_maint.input")
 
         repath(dest_root=dest_root, yes=True)
 
@@ -10938,7 +10940,7 @@ class TestRepathConfirmation:
         fs.create_dir(str(dest_root))
         old_path, new_path = self._build_repath_scenario(dest_root)
 
-        mocker.patch("music_annotator._pipeline.input", return_value="y")
+        mocker.patch("music_annotator._pipeline_maint.input", return_value="y")
 
         repath(dest_root=dest_root, yes=False)
 
@@ -10961,7 +10963,7 @@ class TestRepathConfirmation:
         fs.create_dir(str(dest_root))
         old_path, new_path = self._build_repath_scenario(dest_root)
 
-        mocker.patch("music_annotator._pipeline.input", return_value="n")
+        mocker.patch("music_annotator._pipeline_maint.input", return_value="n")
 
         repath(dest_root=dest_root, yes=False)
 

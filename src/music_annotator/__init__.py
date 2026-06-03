@@ -146,11 +146,7 @@ from music_annotator._pipeline import (
     _select_medium_with_reason,
     _write_freedb_yaml,
     _write_sidecars,
-    enrich,
-    regroup,
-    repath,
     run,
-    unify,
 )
 from music_annotator._pipeline_io import (
     _DISC_INFO_FILENAME,
@@ -196,6 +192,15 @@ from music_annotator._pipeline_io import (
     read_journal,
     rebuild_journal,
     write_transaction_log,
+)
+from music_annotator._pipeline_maint import (
+    _move_verify_journal,
+    _resolve_current_lib,
+    _tags_from_file_dict,
+    enrich,
+    regroup,
+    repath,
+    unify,
 )
 from music_annotator._tagger import (
     _FLAC_MAX_PICTURE_BYTES,
@@ -374,5 +379,8 @@ _reexports = (
     DiscUI,
     SelectionMethod,
     _match_medium_by_title,
+    _move_verify_journal,
+    _resolve_current_lib,
+    _tags_from_file_dict,
     parse_disc_title,
 )

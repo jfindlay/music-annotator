@@ -26,7 +26,6 @@ from music_annotator.__main__ import (
     _resolve_path,
     main,
 )
-from music_annotator._pipeline import _unify_classical_composer_groups
 from music_annotator._pipeline_io import (
     AudioCompareResult,
     _audio_hash,
@@ -41,6 +40,7 @@ from music_annotator._pipeline_io import (
     _read_tags_flac,
     _sha256_file,
 )
+from music_annotator._pipeline_maint import _unify_classical_composer_groups
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path
 from music_annotator.models import MBRelease, MBTrack, TrackTags, TransactionEntry
@@ -2384,7 +2384,7 @@ class TestRepath:
         def _failing_replace(src: str, dst: str) -> None:
             raise OSError(errno.EXDEV, "cross-device link", src)
 
-        mocker.patch("music_annotator._pipeline.os.replace", side_effect=_failing_replace)
+        mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=_failing_replace)
 
         music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
 
@@ -2428,7 +2428,7 @@ class TestRepath:
         )
 
         mocker.patch(
-            "music_annotator._pipeline.os.replace",
+            "music_annotator._pipeline_maint.os.replace",
             side_effect=OSError(errno.EPERM, "operation not permitted", str(old_path1)),
         )
 
@@ -2474,8 +2474,8 @@ class TestRepath:
             Path(dst).parent.mkdir(parents=True, exist_ok=True)
             Path(dst).write_bytes(b"\x00" * 100)  # write garbage
 
-        mocker.patch("music_annotator._pipeline.os.replace", side_effect=_failing_replace)
-        mocker.patch("music_annotator._pipeline.shutil.copy2", side_effect=_corrupt_copy)
+        mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=_failing_replace)
+        mocker.patch("music_annotator._pipeline_maint.shutil.copy2", side_effect=_corrupt_copy)
 
         with pytest.raises(RuntimeError, match="cross-fs copy integrity failure"):
             music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
@@ -2526,7 +2526,7 @@ class TestRepath:
             real_replace(src, dst)
             Path(dst).write_bytes(b"\x00" * 100)  # corrupt after move
 
-        mocker.patch("music_annotator._pipeline.os.replace", side_effect=_replace_then_corrupt)
+        mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=_replace_then_corrupt)
 
         with pytest.raises(RuntimeError, match="repathed integrity failure"):
             music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
@@ -2568,7 +2568,7 @@ class TestRepath:
         )
 
         # Patch _read_tags_flac to raise an error (simulates corrupted tag block)
-        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=Exception("corrupt tags"))
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=Exception("corrupt tags"))
 
         music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)  # should not raise
 
@@ -2763,7 +2763,7 @@ class TestRepath:
                 return _read_tags_flac(path)
             raise OSError("tag read failed after move")
 
-        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=_read_tags_side_effect)
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=_read_tags_side_effect)
 
         with pytest.raises(RuntimeError, match="repathed tag re-read failure"):
             music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
@@ -4783,7 +4783,7 @@ class TestRegroup:
 
         old_path, new_path = self._build_split_scenario(dest_root)
 
-        mocker.patch("music_annotator._pipeline.input", return_value="y")
+        mocker.patch("music_annotator._pipeline_maint.input", return_value="y")
 
         music_annotator.regroup(dest_root=dest_root, yes=False)
 
@@ -4809,7 +4809,7 @@ class TestRegroup:
 
         old_path, new_path = self._build_split_scenario(dest_root)
 
-        mocker.patch("music_annotator._pipeline.input", return_value="n")
+        mocker.patch("music_annotator._pipeline_maint.input", return_value="n")
 
         music_annotator.regroup(dest_root=dest_root, yes=False)
 
@@ -4837,7 +4837,7 @@ class TestRegroup:
 
         self._build_split_scenario(dest_root)
 
-        mock_input = mocker.patch("music_annotator._pipeline.input")
+        mock_input = mocker.patch("music_annotator._pipeline_maint.input")
 
         music_annotator.regroup(dest_root=dest_root, yes=True)
 
@@ -4974,7 +4974,7 @@ class TestRegroup:
                 return "b" * 64  # dest hash ≠ src → triggers RuntimeError
             return _sha256_file(path)  # subsequent calls use real implementation
 
-        mocker.patch("music_annotator._pipeline._sha256_file", side_effect=_fake_sha256)
+        mocker.patch("music_annotator._pipeline_maint._sha256_file", side_effect=_fake_sha256)
 
         with pytest.raises(RuntimeError, match="regrouped integrity failure"):
             music_annotator.regroup(dest_root=dest_root, yes=True)
@@ -5011,7 +5011,7 @@ class TestRegroup:
                 raise OSError(errno.EXDEV, "cross-device link not permitted", str(src))
             real_replace(src, dst)
 
-        mocker.patch("music_annotator._pipeline.os.replace", side_effect=_fake_replace)
+        mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=_fake_replace)
 
         music_annotator.regroup(dest_root=dest_root, yes=True)
 
@@ -5045,7 +5045,7 @@ class TestRegroup:
                 exdev_raised["done"] = True
                 raise OSError(errno.EXDEV, "cross-device link", str(src))
 
-        mocker.patch("music_annotator._pipeline.os.replace", side_effect=_fake_replace)
+        mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=_fake_replace)
 
         # After the EXDEV copy, the cross-hash check will compare real hashes (which match).
         # To force a failure we additionally patch _sha256_file to return mismatched values on the
@@ -5058,7 +5058,7 @@ class TestRegroup:
                 return "x" * 64 if sha_calls["n"] == 2 else "a" * 64  # mismatch on second call
             return "a" * 64
 
-        mocker.patch("music_annotator._pipeline._sha256_file", side_effect=_fake_sha)
+        mocker.patch("music_annotator._pipeline_maint._sha256_file", side_effect=_fake_sha)
 
         with pytest.raises(RuntimeError, match="cross-fs copy integrity failure"):
             music_annotator.regroup(dest_root=dest_root, yes=True)
@@ -5082,7 +5082,7 @@ class TestRegroup:
 
         self._build_split_scenario(dest_root)
 
-        mocker.patch("music_annotator._pipeline.os.replace", side_effect=OSError(errno.EPERM, "permission denied"))
+        mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=OSError(errno.EPERM, "permission denied"))
 
         with pytest.raises(OSError):
             music_annotator.regroup(dest_root=dest_root, yes=True)
@@ -5196,7 +5196,7 @@ class TestRegroup:
 
         # Patch _confirm_fragmentation to report "split-rel-1" as confirmed case-(b)
         mocker.patch(
-            "music_annotator._pipeline._confirm_fragmentation",
+            "music_annotator._pipeline_maint._confirm_fragmentation",
             return_value=(
                 {},  # case_a: empty
                 {"split-rel-1": (["WorkA [2021]", "WorkB [2021]"], True)},  # case_b: confirmed
@@ -5318,7 +5318,7 @@ class TestRegroup:
 
         self._build_split_scenario(dest_root)
 
-        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=OSError("unreadable"))
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=OSError("unreadable"))
 
         # The only file's tags can't be read → plan is empty → nothing to regroup
         music_annotator.regroup(dest_root=dest_root, yes=True)
@@ -5412,7 +5412,7 @@ class TestRegroup:
                 raise OSError("simulated post-move tag read failure")
             return _read_tags_flac(path)
 
-        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=_fake_read)
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=_fake_read)
 
         with pytest.raises(RuntimeError, match="regrouped tag re-read failure"):
             music_annotator.regroup(dest_root=dest_root, yes=True)
@@ -6086,7 +6086,7 @@ class TestEnrich:
         )
 
         mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
-        mock_log = mocker.patch("music_annotator._pipeline.log")
+        mock_log = mocker.patch("music_annotator._pipeline_maint.log")
 
         music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=True)
 
@@ -6170,7 +6170,7 @@ class TestEnrich:
         fs.create_dir(str(dest_root))
         _write_library_journal(dest_root, [])
 
-        mock_log = mocker.patch("music_annotator._pipeline.log")
+        mock_log = mocker.patch("music_annotator._pipeline_maint.log")
 
         music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
 
@@ -6204,7 +6204,7 @@ class TestEnrich:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline.log")
+        mock_log = mocker.patch("music_annotator._pipeline_maint.log")
 
         music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
 
@@ -6302,7 +6302,7 @@ class TestEnrich:
             ],
         )
 
-        mock_log = mocker.patch("music_annotator._pipeline.log")
+        mock_log = mocker.patch("music_annotator._pipeline_maint.log")
 
         music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
 
@@ -6421,8 +6421,8 @@ class TestEnrich:
         )
 
         mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
-        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=OSError("corrupt"))
-        mock_log = mocker.patch("music_annotator._pipeline.log")
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=OSError("corrupt"))
+        mock_log = mocker.patch("music_annotator._pipeline_maint.log")
 
         music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
 
@@ -6910,7 +6910,7 @@ class TestEnrichTagWriteError:
         )
 
         mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
-        mocker.patch("music_annotator._pipeline.apply_tags_flac", side_effect=MutagenError("write failed"))
+        mocker.patch("music_annotator._pipeline_maint.apply_tags_flac", side_effect=MutagenError("write failed"))
 
         with pytest.raises(RuntimeError, match="enrich tag write failure"):
             music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
@@ -6961,10 +6961,10 @@ class TestEnrichAcoustidReResolve:
 
         mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="NewFingerprint")
         mocker.patch(
-            "music_annotator._pipeline._fetch_acoustid_lookup_raw",
+            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
             return_value=(["rec-mbid"], "new-acoustid-uuid"),
         )
-        mocker.patch("music_annotator._pipeline._read_duration_ms", return_value=180000)
+        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=180000)
 
         music_annotator.enrich(dest_root=dest_root, re_resolve=True, dry_run=False, acoustid_key="my-api-key")
 
@@ -7010,7 +7010,7 @@ class TestEnrichAcoustidReResolve:
         )
 
         mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="NewFingerprint")
-        mock_lookup = mocker.patch("music_annotator._pipeline._fetch_acoustid_lookup_raw")
+        mock_lookup = mocker.patch("music_annotator._pipeline_maint._fetch_acoustid_lookup_raw")
 
         music_annotator.enrich(dest_root=dest_root, re_resolve=True, dry_run=False, acoustid_key="")
 
@@ -7049,10 +7049,10 @@ class TestEnrichAcoustidReResolve:
 
         mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="NewFingerprint")
         mocker.patch(
-            "music_annotator._pipeline._fetch_acoustid_lookup_raw",
+            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
             return_value=([], ""),
         )
-        mocker.patch("music_annotator._pipeline._read_duration_ms", return_value=180000)
+        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=180000)
 
         music_annotator.enrich(dest_root=dest_root, re_resolve=True, dry_run=False, acoustid_key="my-api-key")
 
@@ -7427,7 +7427,7 @@ class TestUnify:
 
         old_path, new_path = self._build_frag_scenario(dest_root)
 
-        mocker.patch("music_annotator._pipeline.input", return_value="y")
+        mocker.patch("music_annotator._pipeline_maint.input", return_value="y")
 
         music_annotator.unify(dest_root=dest_root, yes=False)
 
@@ -7453,7 +7453,7 @@ class TestUnify:
 
         old_path, _new_path = self._build_frag_scenario(dest_root)
 
-        mocker.patch("music_annotator._pipeline.input", return_value="n")
+        mocker.patch("music_annotator._pipeline_maint.input", return_value="n")
 
         music_annotator.unify(dest_root=dest_root, yes=False)
 
@@ -7480,7 +7480,7 @@ class TestUnify:
 
         self._build_frag_scenario(dest_root)
 
-        mock_input = mocker.patch("music_annotator._pipeline.input")
+        mock_input = mocker.patch("music_annotator._pipeline_maint.input")
 
         music_annotator.unify(dest_root=dest_root, yes=True)
 
@@ -7594,7 +7594,7 @@ class TestUnify:
                 return "b" * 64  # dest hash ≠ src → triggers RuntimeError
             return _sha256_file(path)  # subsequent calls use real implementation
 
-        mocker.patch("music_annotator._pipeline._sha256_file", side_effect=_fake_sha256)
+        mocker.patch("music_annotator._pipeline_maint._sha256_file", side_effect=_fake_sha256)
 
         with pytest.raises(RuntimeError, match="unified integrity failure"):
             music_annotator.unify(dest_root=dest_root, yes=True)
@@ -7639,7 +7639,7 @@ class TestUnify:
                 raise OSError(errno.EXDEV, "Cross-device link")
             original_replace(src, dst)
 
-        mocker.patch("music_annotator._pipeline.os.replace", side_effect=_fake_replace)
+        mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=_fake_replace)
 
         music_annotator.unify(dest_root=dest_root, yes=True)
 
@@ -7780,7 +7780,7 @@ class TestUnify:
 
         self._build_frag_scenario(dest_root)
 
-        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=RuntimeError("unreadable"))
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=RuntimeError("unreadable"))
 
         # Should not raise; just skips the release
         music_annotator.unify(dest_root=dest_root, yes=True)
@@ -7848,7 +7848,7 @@ class TestUnify:
 
         # Simulate a confirmed non-match collision at the destination
         mocker.patch(
-            "music_annotator._pipeline._assess_collisions",
+            "music_annotator._pipeline_maint._assess_collisions",
             return_value=[AudioCompareResult(src=old_path, dest=new_path, match=False, method="sha256", detail="different")],
         )
 
@@ -7877,7 +7877,7 @@ class TestUnify:
 
         self._build_frag_scenario(dest_root)
 
-        mocker.patch("music_annotator._pipeline.os.replace", side_effect=OSError(errno.EACCES, "Permission denied"))
+        mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=OSError(errno.EACCES, "Permission denied"))
 
         with pytest.raises(OSError):
             music_annotator.unify(dest_root=dest_root, yes=True)
@@ -7897,7 +7897,7 @@ class TestUnify:
         self._build_frag_scenario(dest_root)
 
         # Patch os.replace to always raise EXDEV
-        mocker.patch("music_annotator._pipeline.os.replace", side_effect=OSError(errno.EXDEV, "Cross-device link"))
+        mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=OSError(errno.EXDEV, "Cross-device link"))
 
         # Patch _sha256_file: first call (src) returns "aaa...", second call (cross-fs dest) returns "bbb..."
         call_count = {"n": 0}
@@ -7913,7 +7913,7 @@ class TestUnify:
                 return "a" * 64  # src hash
             return "b" * 64  # cross-fs dest hash ≠ src → triggers RuntimeError
 
-        mocker.patch("music_annotator._pipeline._sha256_file", side_effect=_fake_sha256)
+        mocker.patch("music_annotator._pipeline_maint._sha256_file", side_effect=_fake_sha256)
 
         with pytest.raises(RuntimeError, match="cross-fs copy integrity failure"):
             music_annotator.unify(dest_root=dest_root, yes=True)
@@ -7955,7 +7955,7 @@ class TestUnify:
                 raise RuntimeError("tag read failed")
             return original_read(path)
 
-        mocker.patch("music_annotator._pipeline._read_tags_flac", side_effect=_fake_read)
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=_fake_read)
 
         with pytest.raises(RuntimeError, match="unified tag re-read failure"):
             music_annotator.unify(dest_root=dest_root, yes=True)
