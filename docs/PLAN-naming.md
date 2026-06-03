@@ -437,7 +437,7 @@ W2 and W3a are independent of each other and can be scheduled in parallel after 
 | W2b     | done    | 678acbf | Composer-split pre-processing in `unify()`; ALBUMARTISTSORT canonical; C-W2 fully frozen |
 | W2c     | done    | 44409a2 | `_unify_classical_composer_groups()` in `unify()`; patches both `cea_` and `cwp_composer_lastnames` |
 | W2d     | done    | —      | Zero code: `" [rel YYYY]"` is correct per NOTES Rule 1; fix is MB work-link submissions upstream |
-| W3a     | pending | —      |       |
+| W3a     | done    | 627b268 | Intra-plan collision guard in `repath()`; 4 fossil-shape tests (leaf-collision, mixed, dd.dd, inter-index) |
 | W3b     | deferred | — | Moved to `docs/BACKLOG.md`; dedicated multisession planned |
 
 ---
@@ -445,6 +445,13 @@ W2 and W3a are independent of each other and can be scheduled in parallel after 
 ## Action-frame digest
 
 *Append-only.  Updated at non-trivial iterations (discoveries, contract flexes, notable texture).*
+
+### W3a — 2026-06-03
+Discovery: The existing `repath()` had a gap for the legitimate partial-performance-collision case: two files at paths with distinct collision suffixes both recompute to the same clean destination, and `_assess_collisions` only checks existing on-disk files — so neither collision is detected before the move loop, and `os.replace` silently overwrites the first file with the second.
+Fix: Added an intra-plan collision guard that groups plan entries by recomputed destination before any moves begin.  Entries that share a destination are skipped entirely (logged as `repath_intra_plan_collision_skipped`); they are already at valid collision-suffixed locations.  The `dd.dd` over-application case (single file at a stale-suffix path) is unaffected — it has no intra-plan collision and is moved to the clean path as before.
+Affected: `_pipeline.py` (new guard block in `repath()`); `tests/unit/test_main.py` (4 new tests).
+Deferred: no.
+Texture: The intra-plan collision gap is invisible to the existing `_assess_collisions` machinery because that function only checks whether the destination already exists on disk — it cannot see that two entries in the same plan want the same destination.
 
 ### W2c — 2026-06-03
 Discovery/flex: Partial implementation (aborted subagent) only patched `cea_composer_lastnames`; `build_dest_path` prefers `cwp_composer_lastnames` — both fields must be patched for the canonical path to be computed correctly.
