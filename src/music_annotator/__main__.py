@@ -1,22 +1,27 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes eight subcommands:
+Configures structlog for human-friendly console output and exposes eleven subcommands:
 
-* ``apply``   — copy and tag a directory of tracks for a known MusicBrainz release MBID.
-* ``search``  — search MusicBrainz for a release matching a source directory, prompt for
+* ``apply``       — copy and tag a directory of tracks for a known MusicBrainz release MBID.
+* ``search``      — search MusicBrainz for a release matching a source directory, prompt for
   confirmation, then apply tags.
-* ``prune``   — read the journal, verify source and destination file presence, and prompt to
+* ``prune``       — read the journal, verify source and destination file presence, and prompt to
   delete the source directory.
-* ``repath``  — re-path all verified library files to their corrected destinations under
+* ``repath``      — re-path all verified library files to their corrected destinations under
   the current path-construction policy, using only embedded tags (no network calls).
-* ``regroup`` — consolidate confirmed split-release files into their canonical destinations
+* ``regroup``     — consolidate confirmed split-release files into their canonical destinations
   (acts on case-(b) fragmentation detected by ``audit``).
-* ``audit``   — read the journal and report release-fragmentation anomalies (no network calls,
-  no filesystem writes).  With ``--diff``: diff the on-disk journal against a freshly-rebuilt
-  in-memory cache and report matches, stale, and leaked entries.
-* ``rebuild`` — walk the library, read tags and sidecars per file, and emit a new journal
+* ``audit``       — read the journal and report release-fragmentation anomalies (no network calls,
+  no filesystem writes).  Read-only.
+* ``enrich``      — retroactively backfill fingerprint fields (audio_hash, chromaprint_fp,
+  acoustid_id) into library files that are missing them.  Idempotent.
+* ``diff``        — diff the on-disk journal against a freshly-rebuilt in-memory cache and report
+  matches, stale, and leaked entries.
+* ``origin-time`` — migrate rip/download origin-time from the journal into authoritative sidecar
+  YAML files (freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent.
+* ``rebuild``     — walk the library, read tags and sidecars per file, and emit a new journal
   (dry-run by default; use ``--write`` to replace the on-disk journal).
-* ``unify``   — consolidate performer-split fragmented releases into their canonical top_dirs
+* ``unify``       — consolidate performer-split fragmented releases into their canonical top_dirs
   (detects releases with ≥2 top_dirs sharing the same ``MUSICBRAINZ_ALBUMID`` tag).
 
 Usage::
@@ -48,7 +53,17 @@ Usage::
 
     music-annotator audit \\
         <dest_dir>
-        [--enrich] [--origin-time] [--diff] [--dry-run]
+
+    music-annotator enrich \\
+        <dest_dir> \\
+        [--dry-run] [--re-resolve] [--acoustid-key KEY]
+
+    music-annotator diff \\
+        <dest_dir>
+
+    music-annotator origin-time \\
+        <dest_dir> \\
+        [--dry-run]
 
     music-annotator rebuild \\
         <dest_dir> \\
@@ -212,11 +227,14 @@ def _build_parser() -> argparse.ArgumentParser:
     processed in a single invocation.  ``dest_dir`` is always singular — all sources share the same library
     root.  ``apply`` and ``search`` share ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``,
     ``--no-fetch-rels``, and ``--delete`` via :func:`_add_common_args`.  ``prune`` only adds ``-y``/``--yes``.
-    ``repath`` takes only ``dest_dir`` and an optional ``--dry-run`` flag.      ``audit`` takes only ``dest_dir``
-    and requires no network credentials (read-only journal analysis).  ``audit --origin-time`` migrates
-    rip/download origin-time from the journal into authoritative sidecar YAML files (idempotent).
-    ``audit --diff`` diffs the on-disk journal against a freshly-rebuilt in-memory cache and reports
-    matches, stale, and leaked entries.
+    ``repath`` takes only ``dest_dir`` and an optional ``--dry-run`` flag.
+    ``audit`` takes only ``dest_dir`` and requires no network credentials (read-only journal analysis).
+    ``enrich`` retroactively backfills fingerprint fields; accepts ``--dry-run``, ``--re-resolve``, and
+    ``--acoustid-key`` (via :func:`_add_acoustid_arg`).
+    ``diff`` diffs the on-disk journal against a freshly-rebuilt in-memory cache and reports matches, stale,
+    and leaked entries.
+    ``origin-time`` migrates rip/download origin-time from the journal into authoritative sidecar YAML files
+    (idempotent); accepts ``--dry-run``.
     ``rebuild`` walks the library and reconstructs the journal from embedded tags and sidecars; default is
     ``--dry-run`` (no write); pass ``--write`` to replace the on-disk journal.
     ``unify`` scans the library for releases fragmented across ≥2 top_dirs (by ``MUSICBRAINZ_ALBUMID`` tag),
@@ -476,7 +494,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # ------------------------------------------------------------------
-    # audit subcommand
+    # audit subcommand (read-only)
     # ------------------------------------------------------------------
     audit_parser = subparsers.add_parser(
         "audit",
@@ -492,27 +510,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
             No network calls are made.  No files are moved.  No journal entries are written.
 
-            With --enrich: retroactively backfill fingerprint fields (audio_hash, chromaprint_fp,
-            acoustid_id) into library files that are missing them.  Idempotent: re-running on an
-            already-enriched library is a no-op.
-
-            With --origin-time: migrate rip/download origin-time from the journal into authoritative
-            sidecar YAML files (freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent:
-            re-running on a library where all sidecars already carry the provenance fields is a no-op.
-
-            With --diff: diff the on-disk journal against a freshly-rebuilt in-memory cache, field
-            by field per destination path.  Reports three buckets: matches (all fields agree),
-            stale (journal path absent from rebuild — expected after repath/regroup), and leaked
-            (journal has a field value not reproducible by rebuild — not expected; authority leak).
+            To backfill fingerprint fields, use: music-annotator enrich <dest_dir>
+            To diff the journal against a rebuild, use: music-annotator diff <dest_dir>
+            To migrate origin-time provenance, use: music-annotator origin-time <dest_dir>
 
             Examples:
               music-annotator audit /tmp/music_library
-              music-annotator audit /tmp/music_library --enrich
-              music-annotator audit /tmp/music_library --enrich --dry-run
-              music-annotator audit /tmp/music_library --enrich --re-resolve
-              music-annotator audit /tmp/music_library --origin-time
-              music-annotator audit /tmp/music_library --origin-time --dry-run
-              music-annotator audit /tmp/music_library --diff
             """),
     )
     audit_parser.add_argument(
@@ -521,49 +524,106 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_resolve_path,
         help="Root of the annotated music library (contains music_annotator_journal.json).",
     )
-    _audit_mode = audit_parser.add_mutually_exclusive_group()
-    _audit_mode.add_argument(
-        "--enrich",
-        action="store_true",
-        help=(
-            "Retroactively backfill fingerprint fields (audio_hash, chromaprint_fp, acoustid_id) "
-            "into library files that are missing them.  Idempotent."
-        ),
+
+    # ------------------------------------------------------------------
+    # enrich subcommand
+    # ------------------------------------------------------------------
+    enrich_parser = subparsers.add_parser(
+        "enrich",
+        help="Retroactively backfill fingerprint fields into library files that are missing them.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Retroactively backfills fingerprint fields (audio_hash, chromaprint_fp, acoustid_id)
+            into library files that are missing them.  Idempotent: re-running on an already-enriched
+            library is a no-op.
+
+            Use --re-resolve to recompute chromaprint_fp even when already present.
+            audio_hash is never recomputed (anchor rule).
+
+            Use --acoustid-key to enable keyed AcoustID fingerprint lookup (rung 5).
+
+            Examples:
+              music-annotator enrich /tmp/music_library
+              music-annotator enrich /tmp/music_library --dry-run
+              music-annotator enrich /tmp/music_library --re-resolve
+              music-annotator enrich /tmp/music_library --acoustid-key MY_KEY
+            """),
     )
-    _audit_mode.add_argument(
-        "--origin-time",
-        action="store_true",
-        dest="origin_time",
-        help=(
-            "Migrate rip/download origin-time from the journal into authoritative sidecar YAML files "
-            "(freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent."
-        ),
+    enrich_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
     )
-    _audit_mode.add_argument(
-        "--diff",
-        action="store_true",
-        dest="diff",
-        help=(
-            "Diff the on-disk journal against a freshly-rebuilt in-memory cache, field by field per "
-            "destination path.  Reports matches, stale (expected after repath/regroup), and leaked "
-            "(authority leak — not expected) entries."
-        ),
-    )
-    audit_parser.add_argument(
+    enrich_parser.add_argument(
         "--re-resolve",
         action="store_true",
         dest="re_resolve",
-        help=(
-            "When used with --enrich, recompute chromaprint_fp even when already present.  "
-            "audio_hash is never recomputed (anchor rule)."
-        ),
+        help=("Recompute chromaprint_fp even when already present.  audio_hash is never recomputed (anchor rule)."),
     )
-    audit_parser.add_argument(
+    enrich_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="When used with --enrich or --origin-time, log planned changes without writing any files.",
+        help="Log planned changes without writing any files.",
     )
-    _add_acoustid_arg(audit_parser)
+    _add_acoustid_arg(enrich_parser)
+
+    # ------------------------------------------------------------------
+    # diff subcommand
+    # ------------------------------------------------------------------
+    diff_parser = subparsers.add_parser(
+        "diff",
+        help="Diff the on-disk journal against a freshly-rebuilt in-memory cache.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Diffs the on-disk journal against a freshly-rebuilt in-memory cache, field by field
+            per destination path.  Reports three buckets:
+
+              matches — all fields agree between journal and rebuild.
+              stale   — journal path absent from rebuild (expected after repath/regroup).
+              leaked  — journal has a field value not reproducible by rebuild (authority leak).
+
+            No files are written.
+
+            Examples:
+              music-annotator diff /tmp/music_library
+            """),
+    )
+    diff_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+
+    # ------------------------------------------------------------------
+    # origin-time subcommand
+    # ------------------------------------------------------------------
+    origin_time_parser = subparsers.add_parser(
+        "origin-time",
+        help="Migrate rip/download origin-time from the journal into authoritative sidecar YAML files.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Migrates rip/download origin-time from the journal into authoritative sidecar YAML files
+            (freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent: re-running on a
+            library where all sidecars already carry the provenance fields is a no-op.
+
+            Examples:
+              music-annotator origin-time /tmp/music_library
+              music-annotator origin-time /tmp/music_library --dry-run
+            """),
+    )
+    origin_time_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    origin_time_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log planned changes without writing any files.",
+    )
 
     # ------------------------------------------------------------------
     # rebuild subcommand
@@ -659,17 +719,19 @@ def main() -> None:
     """Parse CLI arguments, configure logging, and dispatch to subcommands.
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
-    ``rebuild``, ``unify``.  The ``repath`` subcommand dispatches to
-    :func:`~music_annotator.repath` with ``dry_run`` and ``yes`` forwarded from the parsed
-    arguments.  The ``regroup`` subcommand dispatches to :func:`~music_annotator.regroup` with
-    ``yes`` and ``dry_run`` forwarded.  The ``audit`` subcommand dispatches to
-    :func:`~music_annotator.audit`, :func:`~music_annotator.enrich`,
-    :func:`~music_annotator.enrich_origin_time`, or :func:`~music_annotator.diff_journal`
-    depending on the flags provided (``--enrich``, ``--origin-time``, ``--diff``; mutually
-    exclusive).  The ``rebuild`` subcommand dispatches to
-    :func:`~music_annotator.rebuild_journal` with ``dry_run=True`` (default) or ``dry_run=False``
-    when ``--write`` is passed.  The ``unify`` subcommand dispatches to
-    :func:`~music_annotator.unify`.
+    ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``.
+
+    The ``repath`` subcommand dispatches to :func:`~music_annotator.repath` with ``dry_run`` and
+    ``yes`` forwarded from the parsed arguments.  The ``regroup`` subcommand dispatches to
+    :func:`~music_annotator.regroup` with ``yes`` and ``dry_run`` forwarded.  The ``audit``
+    subcommand dispatches to :func:`~music_annotator.audit` (read-only).  The ``enrich``
+    subcommand dispatches to :func:`~music_annotator.enrich` with ``re_resolve``, ``dry_run``,
+    and ``acoustid_key`` forwarded.  The ``diff`` subcommand dispatches to
+    :func:`~music_annotator.diff_journal`.  The ``origin-time`` subcommand dispatches to
+    :func:`~music_annotator.enrich_origin_time` with ``dry_run`` forwarded.  The ``rebuild``
+    subcommand dispatches to :func:`~music_annotator.rebuild_journal` with ``dry_run=True``
+    (default) or ``dry_run=False`` when ``--write`` is passed.  The ``unify`` subcommand
+    dispatches to :func:`~music_annotator.unify`.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating and converts any unhandled exception or keyboard interrupt into a logged error with exit code 1.
@@ -771,27 +833,50 @@ def main() -> None:
 
         case "audit":
             try:
-                if args.origin_time:
-                    music_annotator.enrich_origin_time(
-                        dest_root=args.dest_dir,
-                        dry_run=args.dry_run,
-                    )
-                elif args.enrich:
-                    music_annotator.enrich(
-                        dest_root=args.dest_dir,
-                        re_resolve=args.re_resolve,
-                        dry_run=args.dry_run,
-                        acoustid_key=args.acoustid_key,
-                    )
-                elif args.diff:
-                    music_annotator.diff_journal(dest_root=args.dest_dir)
-                else:
-                    music_annotator.audit(dest_root=args.dest_dir)
+                music_annotator.audit(dest_root=args.dest_dir)
             except KeyboardInterrupt:
                 log.warning("interrupted")
                 sys.exit(1)
             except Exception as exc:  # noqa: BLE001
                 log.error("audit_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
+                sys.exit(1)
+
+        case "enrich":
+            try:
+                music_annotator.enrich(
+                    dest_root=args.dest_dir,
+                    re_resolve=args.re_resolve,
+                    dry_run=args.dry_run,
+                    acoustid_key=args.acoustid_key,
+                )
+            except KeyboardInterrupt:
+                log.warning("interrupted")
+                sys.exit(1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("enrich_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
+                sys.exit(1)
+
+        case "diff":
+            try:
+                music_annotator.diff_journal(dest_root=args.dest_dir)
+            except KeyboardInterrupt:
+                log.warning("interrupted")
+                sys.exit(1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("diff_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
+                sys.exit(1)
+
+        case "origin-time":
+            try:
+                music_annotator.enrich_origin_time(
+                    dest_root=args.dest_dir,
+                    dry_run=args.dry_run,
+                )
+            except KeyboardInterrupt:
+                log.warning("interrupted")
+                sys.exit(1)
+            except Exception as exc:  # noqa: BLE001
+                log.error("origin_time_error", dest_root=str(args.dest_dir), error=str(exc), exc_info=True)
                 sys.exit(1)
 
         case "rebuild":

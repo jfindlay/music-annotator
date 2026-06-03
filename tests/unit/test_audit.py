@@ -429,49 +429,303 @@ class TestAudit:
         assert ns.subcommand == "audit"
         assert ns.dest_dir == Path("/dest")
 
-    # pylint: disable-next=unused-argument
-    def test_audit_diff_dispatches_from_main(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """main() audit --diff dispatches to music_annotator.diff_journal with dest_root.
+    def test_audit_is_read_only_no_extra_flags(self) -> None:
+        """audit parser accepts only dest_dir; mutating flags are no longer present.
+
+        Verifies that ``--enrich``, ``--diff``, and ``--origin-time`` are not recognised by the
+        ``audit`` subcommand (they are now top-level subcommands).
+        """
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["audit", "/dest", "--enrich"])
+        assert exc.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# TestEnrichDispatch — enrich top-level subcommand
+# ---------------------------------------------------------------------------
+
+
+class TestEnrichDispatch:
+    """Tests for the ``enrich`` top-level subcommand dispatch in :func:`main`."""
+
+    def _patch_common(self, mocker: MockerFixture) -> None:
+        """Patch logging and structlog so tests don't reconfigure the process logger.
 
         :param mocker: pytest-mock fixture.
-        :param fs: pyfakefs fixture.
         """
         mocker.patch("music_annotator.__main__.logging.basicConfig")
         mocker.patch("music_annotator.__main__.structlog.configure")
         mocker.patch("music_annotator.__main__.structlog.get_logger")
+
+    _ENRICH_ARGV = ["music-annotator", "enrich", "/d"]
+
+    # pylint: disable-next=unused-argument
+    def test_enrich_dispatches_to_enrich(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() enrich subcommand dispatches to music_annotator.enrich with dest_root.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_enrich = mocker.patch("music_annotator.enrich")
+        mocker.patch.object(sys, "argv", new=self._ENRICH_ARGV)
+        main()
+        mock_enrich.assert_called_once_with(
+            dest_root=Path("/d"),
+            re_resolve=False,
+            dry_run=False,
+            acoustid_key="",
+        )
+
+    # pylint: disable-next=unused-argument
+    def test_enrich_acoustid_key_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() enrich --acoustid-key passes acoustid_key to enrich().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_enrich = mocker.patch("music_annotator.enrich")
+        mocker.patch.object(sys, "argv", new=[*self._ENRICH_ARGV, "--acoustid-key", "MY_KEY"])
+        main()
+        _, kwargs = mock_enrich.call_args
+        assert kwargs["acoustid_key"] == "MY_KEY"
+
+    # pylint: disable-next=unused-argument
+    def test_enrich_re_resolve_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() enrich --re-resolve passes re_resolve=True to enrich().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_enrich = mocker.patch("music_annotator.enrich")
+        mocker.patch.object(sys, "argv", new=[*self._ENRICH_ARGV, "--re-resolve"])
+        main()
+        _, kwargs = mock_enrich.call_args
+        assert kwargs["re_resolve"] is True
+
+    # pylint: disable-next=unused-argument
+    def test_enrich_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() enrich --dry-run passes dry_run=True to enrich().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_enrich = mocker.patch("music_annotator.enrich")
+        mocker.patch.object(sys, "argv", new=[*self._ENRICH_ARGV, "--dry-run"])
+        main()
+        _, kwargs = mock_enrich.call_args
+        assert kwargs["dry_run"] is True
+
+    # pylint: disable-next=unused-argument
+    def test_enrich_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() enrich exits with code 1 when enrich() raises an unexpected exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.enrich", side_effect=RuntimeError("boom"))
+        mocker.patch.object(sys, "argv", new=self._ENRICH_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    # pylint: disable-next=unused-argument
+    def test_enrich_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() enrich exits with code 1 on KeyboardInterrupt.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.enrich", side_effect=KeyboardInterrupt)
+        mocker.patch.object(sys, "argv", new=self._ENRICH_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    def test_enrich_parser_parses_dest_dir(self) -> None:
+        """enrich parser accepts dest_dir as a positional argument and defaults to no flags.
+
+        Pure parser test — no mocker needed.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["enrich", "/dest"])
+        assert ns.subcommand == "enrich"
+        assert ns.dest_dir == Path("/dest")
+        assert not ns.dry_run
+        assert not ns.re_resolve
+        assert ns.acoustid_key == ""
+
+    def test_enrich_acoustid_key_accepted_by_parser(self) -> None:
+        """enrich --acoustid-key is accepted and stored on the namespace.
+
+        Pure parser test — no mocker needed.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["enrich", "/dest", "--acoustid-key", "MY_KEY"])
+        assert ns.acoustid_key == "MY_KEY"
+
+
+# ---------------------------------------------------------------------------
+# TestDiffDispatch — diff top-level subcommand
+# ---------------------------------------------------------------------------
+
+
+class TestDiffDispatch:
+    """Tests for the ``diff`` top-level subcommand dispatch in :func:`main`."""
+
+    def _patch_common(self, mocker: MockerFixture) -> None:
+        """Patch logging and structlog so tests don't reconfigure the process logger.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mocker.patch("music_annotator.__main__.structlog.get_logger")
+
+    _DIFF_ARGV = ["music-annotator", "diff", "/d"]
+
+    # pylint: disable-next=unused-argument
+    def test_diff_dispatches_to_diff_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() diff subcommand dispatches to music_annotator.diff_journal with dest_root.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
         mock_diff = mocker.patch("music_annotator.diff_journal")
-        mocker.patch.object(sys, "argv", new=["music-annotator", "audit", "/d", "--diff"])
+        mocker.patch.object(sys, "argv", new=self._DIFF_ARGV)
         main()
         mock_diff.assert_called_once_with(dest_root=Path("/d"))
 
-    def test_audit_mode_flags_are_mutually_exclusive(self) -> None:
-        """audit --enrich and --diff together exit with code 2 (mutually exclusive group).
+    # pylint: disable-next=unused-argument
+    def test_diff_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() diff exits with code 1 when diff_journal() raises an unexpected exception.
 
-        :param mocker: Not used — pure parser test.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
-        parser = _build_parser()
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.diff_journal", side_effect=RuntimeError("boom"))
+        mocker.patch.object(sys, "argv", new=self._DIFF_ARGV)
         with pytest.raises(SystemExit) as exc:
-            parser.parse_args(["audit", "/dest", "--enrich", "--diff"])
-        assert exc.value.code == 2
+            main()
+        assert exc.value.code == 1
 
-    def test_audit_enrich_and_origin_time_are_mutually_exclusive(self) -> None:
-        """audit --enrich and --origin-time together exit with code 2 (mutually exclusive group).
+    # pylint: disable-next=unused-argument
+    def test_diff_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() diff exits with code 1 on KeyboardInterrupt.
 
-        :param mocker: Not used — pure parser test.
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
         """
-        parser = _build_parser()
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.diff_journal", side_effect=KeyboardInterrupt)
+        mocker.patch.object(sys, "argv", new=self._DIFF_ARGV)
         with pytest.raises(SystemExit) as exc:
-            parser.parse_args(["audit", "/dest", "--enrich", "--origin-time"])
-        assert exc.value.code == 2
+            main()
+        assert exc.value.code == 1
 
-    def test_audit_acoustid_key_accepted(self) -> None:
-        """audit --acoustid-key is accepted and stored on the namespace.
+    def test_diff_parser_parses_dest_dir(self) -> None:
+        """diff parser accepts dest_dir as a positional argument.
 
-        :param mocker: Not used — pure parser test.
+        Pure parser test — no mocker needed.
         """
         parser = _build_parser()
-        ns = parser.parse_args(["audit", "/dest", "--acoustid-key", "MY_KEY"])
-        assert ns.acoustid_key == "MY_KEY"
+        ns = parser.parse_args(["diff", "/dest"])
+        assert ns.subcommand == "diff"
+        assert ns.dest_dir == Path("/dest")
+
+
+# ---------------------------------------------------------------------------
+# TestOriginTimeDispatch — origin-time top-level subcommand
+# ---------------------------------------------------------------------------
+
+
+class TestOriginTimeDispatch:
+    """Tests for the ``origin-time`` top-level subcommand dispatch in :func:`main`."""
+
+    def _patch_common(self, mocker: MockerFixture) -> None:
+        """Patch logging and structlog so tests don't reconfigure the process logger.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mocker.patch("music_annotator.__main__.structlog.get_logger")
+
+    _ORIGIN_TIME_ARGV = ["music-annotator", "origin-time", "/d"]
+
+    # pylint: disable-next=unused-argument
+    def test_origin_time_dispatches_to_enrich_origin_time(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() origin-time subcommand dispatches to music_annotator.enrich_origin_time with dest_root.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_ot = mocker.patch("music_annotator.enrich_origin_time")
+        mocker.patch.object(sys, "argv", new=self._ORIGIN_TIME_ARGV)
+        main()
+        mock_ot.assert_called_once_with(dest_root=Path("/d"), dry_run=False)
+
+    # pylint: disable-next=unused-argument
+    def test_origin_time_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() origin-time --dry-run passes dry_run=True to enrich_origin_time().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_ot = mocker.patch("music_annotator.enrich_origin_time")
+        mocker.patch.object(sys, "argv", new=[*self._ORIGIN_TIME_ARGV, "--dry-run"])
+        main()
+        _, kwargs = mock_ot.call_args
+        assert kwargs["dry_run"] is True
+
+    # pylint: disable-next=unused-argument
+    def test_origin_time_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() origin-time exits with code 1 when enrich_origin_time() raises an unexpected exception.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.enrich_origin_time", side_effect=RuntimeError("boom"))
+        mocker.patch.object(sys, "argv", new=self._ORIGIN_TIME_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    # pylint: disable-next=unused-argument
+    def test_origin_time_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() origin-time exits with code 1 on KeyboardInterrupt.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.enrich_origin_time", side_effect=KeyboardInterrupt)
+        mocker.patch.object(sys, "argv", new=self._ORIGIN_TIME_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    def test_origin_time_parser_parses_dest_dir(self) -> None:
+        """origin-time parser accepts dest_dir as a positional argument and defaults dry_run=False.
+
+        Pure parser test — no mocker needed.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(["origin-time", "/dest"])
+        assert ns.subcommand == "origin-time"
+        assert ns.dest_dir == Path("/dest")
+        assert not ns.dry_run
 
 
 # ---------------------------------------------------------------------------
