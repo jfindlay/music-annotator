@@ -2024,3 +2024,119 @@ def rebuild_journal(dest_root: Path, *, dry_run: bool = True) -> TransactionLog:
         log.info("rebuild_journal_written", path=str(journal_path), total=len(entries))
 
     return rebuilt
+
+
+#: Fields on :class:`~music_annotator.models.TransactionEntry` that ``diff_journal`` compares
+#: field-by-field between the on-disk journal and the in-memory rebuild.  ``source`` is excluded
+#: because rebuild sets ``source == destination`` (offline from the original rip path) and the
+#: journal's ``source`` is the original rip path — a provenance difference, not an authority leak.
+#: ``timestamp`` is excluded because mtime drifts on filesystem operations and is not an authority
+#: field.  ``action`` is excluded because rebuild always emits ``"tagged"`` or ``"sidecar"``
+#: regardless of the original action.
+_DIFF_FIELDS: tuple[str, ...] = ("release_id", "audio_hash", "chromaprint_fp", "acoustid_id", "origin_time")
+
+
+@dataclass
+class JournalDiffResult:
+    """Result of :func:`diff_journal`: three buckets of destination paths.
+
+    Produced by :func:`diff_journal` and consumed by the ``audit --diff`` CLI mode.
+
+    :ivar matches: Destination paths present in both the on-disk journal and the in-memory rebuild
+        with all :data:`_DIFF_FIELDS` matching.
+    :ivar stale: Destination paths present in the on-disk journal but absent from the in-memory
+        rebuild.  Expected after a ``repath`` or ``regroup`` operation moves files to new paths;
+        the journal retains the old path until the next ``rebuild --write`` run.
+    :ivar leaked: Destination paths present in both the on-disk journal and the in-memory rebuild
+        but with at least one :data:`_DIFF_FIELDS` value differing.  Not expected in a healthy
+        library; indicates a real authority leak (a field value in the journal that cannot be
+        reproduced from the tracks and sidecars alone).
+    """
+
+    matches: list[str]
+    stale: list[str]
+    leaked: list[tuple[str, dict[str, tuple[str, str]]]]
+    """Each entry is ``(destination, {field: (journal_value, rebuild_value)})``."""
+
+
+def diff_journal(dest_root: Path) -> JournalDiffResult:
+    """Diff the on-disk journal against a freshly-rebuilt in-memory cache, field by field per destination path.
+
+    Calls :func:`rebuild_journal` with ``dry_run=True`` to produce an in-memory rebuild, then reads
+    the on-disk journal via :func:`read_journal`.  For each ``action == "tagged"`` entry in the
+    on-disk journal, the destination path is looked up in the rebuild and the :data:`_DIFF_FIELDS`
+    are compared.
+
+    Three buckets are returned:
+
+    * **matches** — destination path present in both, all :data:`_DIFF_FIELDS` match.
+    * **stale** — destination path present in the on-disk journal but absent from the rebuild.
+      Expected after a ``repath``/``regroup`` operation; the journal retains the old path until
+      the next ``rebuild --write`` run.
+    * **leaked** — destination path present in both but at least one :data:`_DIFF_FIELDS` value
+      differs.  Not expected in a healthy library; surfaces a real authority leak.
+
+    A summary line is logged at INFO level: ``"N matches, N stale (expected after repath/regroup), N leaked"``.
+    Any ``leaked`` entries are also logged individually at WARNING level.
+
+    This function is **read-only**: it does not move files or write any journal entries.
+
+    :param dest_root: Root of the annotated music library (contains ``music_annotator_journal.json``).
+    :returns: A :class:`JournalDiffResult` with the three buckets populated.
+    """
+    journal = read_journal(dest_root / JOURNAL_FILENAME)
+    rebuilt = rebuild_journal(dest_root, dry_run=True)
+
+    # Build a lookup: destination path → most-recent "tagged" entry from the rebuild.
+    # rebuild_journal always emits action="tagged" for audio files; use the last entry per dest.
+    rebuild_map: dict[str, TransactionEntry] = {}
+    for entry in rebuilt.entries:
+        if entry.action == "tagged":
+            rebuild_map[entry.destination] = entry
+
+    # Iterate the on-disk journal: latest "tagged" entry per destination path wins.
+    journal_latest: dict[str, TransactionEntry] = {}
+    for entry in journal.entries:
+        if entry.action == "tagged":
+            journal_latest[entry.destination] = entry
+
+    matches: list[str] = []
+    stale: list[str] = []
+    leaked: list[tuple[str, dict[str, tuple[str, str]]]] = []
+
+    for dest, j_entry in sorted(journal_latest.items()):
+        r_entry = rebuild_map.get(dest)
+        if r_entry is None:
+            stale.append(dest)
+            continue
+
+        diffs: dict[str, tuple[str, str]] = {}
+        for field in _DIFF_FIELDS:
+            j_val: str = getattr(j_entry, field)
+            r_val: str = getattr(r_entry, field)
+            # Only flag as leaked when the journal carries a non-empty value that rebuild cannot
+            # reproduce.  An empty journal field means the entry predates enrichment — not a leak.
+            if j_val and j_val != r_val:
+                diffs[field] = (j_val, r_val)
+
+        if diffs:
+            leaked.append((dest, diffs))
+            log.warning(
+                "audit_diff_leaked",
+                destination=dest,
+                diffs={f: {"journal": jv, "rebuild": rv} for f, (jv, rv) in diffs.items()},
+                message="journal has field value not reproducible by rebuild — authority leak",
+            )
+        else:
+            matches.append(dest)
+
+    log.info(
+        "audit_diff_summary",
+        dest_root=str(dest_root),
+        matches=len(matches),
+        stale=len(stale),
+        leaked=len(leaked),
+        message=f"{len(matches)} matches, {len(stale)} stale (expected after repath/regroup), {len(leaked)} leaked",
+    )
+
+    return JournalDiffResult(matches=matches, stale=stale, leaked=leaked)

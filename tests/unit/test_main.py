@@ -3124,6 +3124,20 @@ class TestAudit:
         assert ns.subcommand == "audit"
         assert ns.dest_dir == Path("/dest")
 
+    def test_audit_diff_dispatches_from_main(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """main() audit --diff dispatches to music_annotator.diff_journal with dest_root.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        mocker.patch("music_annotator.__main__.logging.basicConfig")
+        mocker.patch("music_annotator.__main__.structlog.configure")
+        mocker.patch("music_annotator.__main__.structlog.get_logger")
+        mock_diff = mocker.patch("music_annotator.diff_journal")
+        with patch.object(sys, "argv", ["music-annotator", "audit", "/d", "--diff"]):
+            main()
+        mock_diff.assert_called_once_with(dest_root=Path("/d"))
+
 
 # ---------------------------------------------------------------------------
 # TestAuditIdentityPasses — F7 identity-integrity passes

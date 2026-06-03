@@ -10,7 +10,8 @@ Configures structlog for human-friendly console output and exposes six subcomman
 * ``repath``  — re-path all verified library files to their corrected destinations under
   the current path-construction policy, using only embedded tags (no network calls).
 * ``audit``   — read the journal and report release-fragmentation anomalies (no network calls,
-  no filesystem writes).
+  no filesystem writes).  With ``--diff``: diff the on-disk journal against a freshly-rebuilt
+  in-memory cache and report matches, stale, and leaked entries.
 * ``rebuild`` — walk the library, read tags and sidecars per file, and emit a new journal
   (dry-run by default; use ``--write`` to replace the on-disk journal).
 
@@ -39,7 +40,7 @@ Usage::
 
     music-annotator audit \\
         <dest_dir>
-        [--enrich] [--origin-time] [--dry-run]
+        [--enrich] [--origin-time] [--diff] [--dry-run]
 
     music-annotator rebuild \\
         <dest_dir> \\
@@ -188,9 +189,11 @@ def _build_parser() -> argparse.ArgumentParser:
     processed in a single invocation.  ``dest_dir`` is always singular — all sources share the same library
     root.  ``apply`` and ``search`` share ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``,
     ``--no-fetch-rels``, and ``--delete`` via :func:`_add_common_args`.  ``prune`` only adds ``-y``/``--yes``.
-    ``repath`` takes only ``dest_dir`` and an optional ``--dry-run`` flag.  ``audit`` takes only ``dest_dir``
+    ``repath`` takes only ``dest_dir`` and an optional ``--dry-run`` flag.      ``audit`` takes only ``dest_dir``
     and requires no network credentials (read-only journal analysis).  ``audit --origin-time`` migrates
     rip/download origin-time from the journal into authoritative sidecar YAML files (idempotent).
+    ``audit --diff`` diffs the on-disk journal against a freshly-rebuilt in-memory cache and reports
+    matches, stale, and leaked entries.
     ``rebuild`` walks the library and reconstructs the journal from embedded tags and sidecars; default is
     ``--dry-run`` (no write); pass ``--write`` to replace the on-disk journal.
 
@@ -466,6 +469,11 @@ def _build_parser() -> argparse.ArgumentParser:
             sidecar YAML files (freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent:
             re-running on a library where all sidecars already carry the provenance fields is a no-op.
 
+            With --diff: diff the on-disk journal against a freshly-rebuilt in-memory cache, field
+            by field per destination path.  Reports three buckets: matches (all fields agree),
+            stale (journal path absent from rebuild — expected after repath/regroup), and leaked
+            (journal has a field value not reproducible by rebuild — not expected; authority leak).
+
             Examples:
               music-annotator audit /tmp/music_library
               music-annotator audit /tmp/music_library --enrich
@@ -473,6 +481,7 @@ def _build_parser() -> argparse.ArgumentParser:
               music-annotator audit /tmp/music_library --enrich --re-resolve
               music-annotator audit /tmp/music_library --origin-time
               music-annotator audit /tmp/music_library --origin-time --dry-run
+              music-annotator audit /tmp/music_library --diff
             """),
     )
     audit_parser.add_argument(
@@ -516,6 +525,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Migrate rip/download origin-time from the journal into authoritative sidecar YAML files "
             "(freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent."
+        ),
+    )
+    audit_parser.add_argument(
+        "--diff",
+        action="store_true",
+        dest="diff",
+        help=(
+            "Diff the on-disk journal against a freshly-rebuilt in-memory cache, field by field per "
+            "destination path.  Reports matches, stale (expected after repath/regroup), and leaked "
+            "(authority leak — not expected) entries."
         ),
     )
 
@@ -570,8 +589,9 @@ def main() -> None:
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
     ``rebuild``.  The ``audit`` subcommand dispatches to :func:`~music_annotator.audit`,
-    :func:`~music_annotator.enrich`, or :func:`~music_annotator.enrich_origin_time` depending on
-    the flags provided (``--enrich``, ``--origin-time``).  The ``rebuild`` subcommand dispatches to
+    :func:`~music_annotator.enrich`, :func:`~music_annotator.enrich_origin_time`, or
+    :func:`~music_annotator.diff_journal` depending on the flags provided (``--enrich``,
+    ``--origin-time``, ``--diff``).  The ``rebuild`` subcommand dispatches to
     :func:`~music_annotator.rebuild_journal` with ``dry_run=True`` (default) or ``dry_run=False``
     when ``--write`` is passed.
 
@@ -687,6 +707,8 @@ def main() -> None:
                         dry_run=args.dry_run,
                         acoustid_key=args.acoustid_key,
                     )
+                elif args.diff:
+                    music_annotator.diff_journal(dest_root=args.dest_dir)
                 else:
                     music_annotator.audit(dest_root=args.dest_dir)
             except KeyboardInterrupt:

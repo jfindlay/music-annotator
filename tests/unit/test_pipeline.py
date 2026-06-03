@@ -61,6 +61,7 @@ from music_annotator._pipeline_io import (
     _DISC_TOC_FILENAME,
     PROVENANCE_FILENAME,
     AudioCompareResult,
+    JournalDiffResult,
     _assess_collisions,
     _audio_hash,
     _chromaprint_similarity,
@@ -77,6 +78,7 @@ from music_annotator._pipeline_io import (
     _write_provenance_fields,
     check_duration_preflight,
     compare_audio_collision,
+    diff_journal,
     enrich_origin_time,
     rebuild_journal,
 )
@@ -10159,3 +10161,212 @@ class TestRebuildJournal:
         mocker.patch("music_annotator._pipeline_io._read_tags_flac", side_effect=RuntimeError("corrupt"))
         result = _read_albumid_from_tags(flac_path)
         assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# diff_journal
+# ---------------------------------------------------------------------------
+
+
+class TestDiffJournal:
+    """Tests for :func:`diff_journal` — the audit --diff mode.
+
+    Covers the three output buckets: matches (journal and rebuild agree), stale (journal path
+    absent from rebuild — expected after repath/regroup), and leaked (journal has a field value
+    not reproducible by rebuild — authority leak).
+    """
+
+    def test_matches_only(self, fs: FakeFilesystem) -> None:
+        """diff_journal returns all entries in matches when journal and rebuild agree on all fields.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        # Write a journal that matches what rebuild would produce: same release_id, empty
+        # identity fields (rebuild reads them from tags; journal entry also has empty fields).
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "timestamp": "2024-01-01T00:00:00+00:00",
+                        "release_id": "rel-1",
+                        "source": str(flac_path),
+                        "destination": str(flac_path),
+                        "action": "tagged",
+                        "audio_hash": "",
+                        "chromaprint_fp": "",
+                        "acoustid_id": "",
+                        "origin_time": "",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = diff_journal(dest_root)
+
+        assert str(flac_path) in result.matches
+        assert result.stale == []
+        assert result.leaked == []
+
+    def test_stale_path_not_in_rebuild(self, fs: FakeFilesystem) -> None:
+        """diff_journal puts a journal path in stale when rebuild has no entry for that path.
+
+        This simulates the post-repath/regroup state: the journal still references the old path
+        but the file has been moved, so rebuild (which walks current disk state) finds it at the
+        new path only.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        # The file now lives at the new path (after repath).
+        new_work_dir = dest_root / "Composer" / "Work [2025]"
+        fs.create_dir(str(new_work_dir))
+        new_flac_path = new_work_dir / "01 - Movement.flac"
+        fs.create_file(str(new_flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(new_flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        # The journal still references the old path (pre-repath).
+        old_flac_path = dest_root / "Composer" / "Work [2024]" / "01 - Movement.flac"
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "timestamp": "2024-01-01T00:00:00+00:00",
+                        "release_id": "rel-1",
+                        "source": "/rip/source/01.flac",
+                        "destination": str(old_flac_path),
+                        "action": "tagged",
+                        "audio_hash": "",
+                        "chromaprint_fp": "",
+                        "acoustid_id": "",
+                        "origin_time": "",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = diff_journal(dest_root)
+
+        assert str(old_flac_path) in result.stale
+        assert result.matches == []
+        assert result.leaked == []
+
+    def test_leaked_field_mismatch(self, fs: FakeFilesystem) -> None:
+        """diff_journal puts an entry in leaked when the journal has a field value rebuild cannot reproduce.
+
+        This exercises the authority-leak bucket: the journal carries a release_id that differs
+        from what rebuild reads from the embedded MUSICBRAINZ_ALBUMID tag.  This is the shape of
+        a real authority leak — a journal value that cannot be reconstructed from the track alone.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        # Tag the file with release_id "rel-actual" — this is what rebuild will read.
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-actual"))
+
+        # The journal claims a different release_id — not reproducible from the tag.
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "timestamp": "2024-01-01T00:00:00+00:00",
+                        "release_id": "rel-leaked",
+                        "source": str(flac_path),
+                        "destination": str(flac_path),
+                        "action": "tagged",
+                        "audio_hash": "",
+                        "chromaprint_fp": "",
+                        "acoustid_id": "",
+                        "origin_time": "",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = diff_journal(dest_root)
+
+        assert result.matches == []
+        assert result.stale == []
+        assert len(result.leaked) == 1
+        leaked_dest, leaked_diffs = result.leaked[0]
+        assert leaked_dest == str(flac_path)
+        assert "release_id" in leaked_diffs
+        journal_val, rebuild_val = leaked_diffs["release_id"]
+        assert journal_val == "rel-leaked"
+        assert rebuild_val == "rel-actual"
+
+    def test_result_type(self, fs: FakeFilesystem) -> None:
+        """diff_journal returns a JournalDiffResult instance.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        result = diff_journal(dest_root)
+
+        assert isinstance(result, JournalDiffResult)
+        assert result.matches == []
+        assert result.stale == []
+        assert result.leaked == []
+
+    def test_non_tagged_entries_skipped(self, fs: FakeFilesystem) -> None:
+        """diff_journal ignores non-tagged entries in both the journal and the rebuild.
+
+        A sidecar entry in the journal and a sidecar file on disk (producing a sidecar entry in
+        the rebuild) must not appear in any bucket.  This exercises the action-filter branches in
+        both the rebuild-map construction loop and the journal-latest construction loop.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        # A sidecar file on disk — rebuild will emit action="sidecar" for it.
+        cover_path = work_dir / "cover.jpg"
+        fs.create_file(str(cover_path), contents=b"\xff\xd8\xff\xe0")
+
+        # Journal has only a sidecar entry (action != "tagged") — must be ignored.
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "timestamp": "2024-01-01T00:00:00+00:00",
+                        "release_id": "",
+                        "source": str(cover_path),
+                        "destination": str(cover_path),
+                        "action": "sidecar",
+                        "audio_hash": "",
+                        "chromaprint_fp": "",
+                        "acoustid_id": "",
+                        "origin_time": "",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = diff_journal(dest_root)
+
+        assert result.matches == []
+        assert result.stale == []
+        assert result.leaked == []
