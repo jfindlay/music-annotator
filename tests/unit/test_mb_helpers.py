@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
+import tempfile
 import xml.etree.ElementTree as ET
 from http.client import BadStatusLine, HTTPException, HTTPMessage
 from pathlib import Path
@@ -30,9 +32,11 @@ from music_annotator._mb_api import (
     _cover_art_cache_dir,
     _cover_art_cache_key,
     _fetch_acoustid_lookup_raw,
+    _get_bottom_work,
     _infer_mime,
     _mb_call,
     _mb_retry,
+    _metadata_cache_dir,
     _patched_parse_recording,
     _patched_safe_read,
     _sidecar_filename,
@@ -40,7 +44,7 @@ from music_annotator._mb_api import (
     fetch_acoustid_lookup,
 )
 from music_annotator._pipeline_io import _check_collisions
-from music_annotator.models import JSON, MBRecording, TransactionEntry
+from music_annotator.models import JSON, MBAttribute, MBRecording, MBWork, TransactionEntry
 
 # ---------------------------------------------------------------------------
 # _mb_retry
@@ -684,6 +688,20 @@ class TestFetchRelease:
 class TestFetchRecordingDetail:
     """Tests for fetch_recording_detail."""
 
+    def setup_method(self) -> None:
+        """Redirect XDG_CACHE_HOME to a temporary directory so tests do not touch the real disk cache."""
+        self._cache_tmpdir = tempfile.mkdtemp()  # pylint: disable=attribute-defined-outside-init
+        self._orig_xdg = os.environ.get("XDG_CACHE_HOME")  # pylint: disable=attribute-defined-outside-init
+        os.environ["XDG_CACHE_HOME"] = self._cache_tmpdir
+
+    def teardown_method(self) -> None:
+        """Restore XDG_CACHE_HOME and remove the temporary cache directory."""
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_CACHE_HOME", None)
+        else:
+            os.environ["XDG_CACHE_HOME"] = self._orig_xdg
+        shutil.rmtree(self._cache_tmpdir, ignore_errors=True)
+
     def test_returns_mbrecording(self, mocker: MockerFixture) -> None:
         """Returns an MBRecording populated from the 'recording' key of the MB response.
 
@@ -1170,8 +1188,19 @@ class TestFetchWorkDetail:
     """Tests for fetch_work_detail and its cache."""
 
     def setup_method(self) -> None:
-        """Clear the module-level work cache before each test."""
+        """Clear the module-level work cache and redirect XDG_CACHE_HOME to an isolated temp dir."""
         music_annotator._mb_api._WORK_CACHE.clear()  # pylint: disable=protected-access
+        self._cache_tmpdir = tempfile.mkdtemp()  # pylint: disable=attribute-defined-outside-init
+        self._orig_xdg = os.environ.get("XDG_CACHE_HOME")  # pylint: disable=attribute-defined-outside-init
+        os.environ["XDG_CACHE_HOME"] = self._cache_tmpdir
+
+    def teardown_method(self) -> None:
+        """Restore XDG_CACHE_HOME and remove the temporary cache directory."""
+        if self._orig_xdg is None:
+            os.environ.pop("XDG_CACHE_HOME", None)
+        else:
+            os.environ["XDG_CACHE_HOME"] = self._orig_xdg
+        shutil.rmtree(self._cache_tmpdir, ignore_errors=True)
 
     def test_fetches_and_returns_work(self, mocker: MockerFixture) -> None:
         """Fetches work from API and returns an MBWork instance.
@@ -2090,3 +2119,483 @@ class TestFetchCoverArtCacheMissAndHit:
         assert (cache_dir / "rel-B_99_500.bin").read_bytes() == jpeg_b
         # Release A's cache entry must be untouched.
         assert (cache_dir / "rel-A_99_500.bin").read_bytes() == jpeg_a
+
+
+# ---------------------------------------------------------------------------
+# _metadata_cache_dir
+# ---------------------------------------------------------------------------
+
+
+class TestMetadataCacheDir:
+    """Tests for _metadata_cache_dir()."""
+
+    def test_creates_subdir_under_xdg_cache_home(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Cache dir is created under $XDG_CACHE_HOME/<subdir> when XDG_CACHE_HOME is set.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        fs.create_dir("/custom/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/custom/cache"})
+        result = _metadata_cache_dir("recording")
+        assert result == Path("/custom/cache/music-annotator/recording")
+        assert result.is_dir()
+
+    # pylint: disable-next=unused-argument
+    def test_falls_back_to_home_cache_when_xdg_unset(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Falls back to ~/.cache when XDG_CACHE_HOME is not set.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch.dict(os.environ, {}, clear=True)
+        mocker.patch("music_annotator._mb_api.Path.home", return_value=Path("/home/user"))
+        result = _metadata_cache_dir("work")
+        assert result == Path("/home/user/.cache/music-annotator/work")
+
+    def test_cover_art_cache_dir_delegates_correctly(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """_cover_art_cache_dir() returns the cover-art subdir via the shared helper.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        fs.create_dir("/xdg")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/xdg"})
+        result = _cover_art_cache_dir()
+        assert result == Path("/xdg/music-annotator/cover-art")
+        assert result.is_dir()
+
+
+# ---------------------------------------------------------------------------
+# Metadata round-trip fidelity
+# ---------------------------------------------------------------------------
+
+
+class TestMetadataRoundTrip:
+    """Verify that model_dump_json(by_alias=True) round-trips correctly through model_validate_json."""
+
+    def test_mbrecording_round_trip(self) -> None:
+        """MBRecording with aliased fields, coerced ints, and mixed artist-credit round-trips cleanly.
+
+        Exercises: ``first-release-date`` alias, ``length`` int coercion, ``artist-credit`` mixed list,
+        ``artist-relation-list`` with ``attribute-list`` entries (``MBAttribute | str`` union).
+        """
+        original = MBRecording.model_validate(
+            {
+                "id": "rec-uuid-1",
+                "title": "Allegro ma non troppo",
+                "first-release-date": "1964-05-01",
+                "length": "215000",
+                "artist-credit": [
+                    {
+                        "name": "Karajan",
+                        "artist": {"id": "a1", "name": "Herbert von Karajan", "sort-name": "Karajan, Herbert von"},
+                    },
+                    " & ",
+                    {
+                        "name": "BPO",
+                        "artist": {"id": "a2", "name": "Berliner Philharmoniker", "sort-name": "Berliner Philharmoniker"},
+                    },
+                ],
+                "artist-relation-list": [
+                    {
+                        "type": "conductor",
+                        "direction": "backward",
+                        "begin": "1964-04-28",
+                        "end": "1964-04-30",
+                        "ended": "true",
+                        "target-credit": "Karajan",
+                        "artist": {"id": "a1", "name": "Herbert von Karajan", "sort-name": "Karajan, Herbert von"},
+                        "attribute-list": [{"type": "guest", "value": ""}, "additional"],
+                    }
+                ],
+            }
+        )
+        assert original.length == 215000
+        assert original.first_release_date == "1964-05-01"
+        assert isinstance(original.artist_relation_list[0].attribute_list[0], MBAttribute)
+        assert original.artist_relation_list[0].attribute_list[1] == "additional"
+
+        json_str = original.model_dump_json(by_alias=True)
+        restored = MBRecording.model_validate_json(json_str)
+        assert restored == original
+
+    def test_mbwork_round_trip(self) -> None:
+        """MBWork with aliased fields, attribute_list MBAttribute entries, and coerced ordering-key round-trips cleanly.
+
+        Exercises: ``artist-relation-list``, ``work-relation-list`` with ``ordering-key`` coercion,
+        ``attribute-list`` with ``MBAttribute | str`` union, ``life-span`` alias.
+        """
+        original = MBWork.model_validate(
+            {
+                "id": "work-uuid-1",
+                "title": "Symphony No. 9",
+                "type": "Symphony",
+                "language": "deu",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "direction": "backward",
+                        "artist": {"id": "bv1", "name": "Beethoven", "sort-name": "Beethoven, Ludwig van"},
+                        "attribute-list": [{"type": "Key", "value": "D minor"}],
+                    }
+                ],
+                "attribute-list": [{"type": "Key", "value": "D minor"}, "historical"],
+                "work-relation-list": [
+                    {
+                        "type": "parts",
+                        "direction": "forward",
+                        "ordering-key": "1",
+                        "work": {"id": "mvt-1", "title": "I. Allegro ma non troppo"},
+                    }
+                ],
+                "life-span": {"begin": "1817", "end": "1824", "ended": "true"},
+            }
+        )
+        assert original.work_relation_list[0].ordering_key == 1
+        assert isinstance(original.attribute_list[0], MBAttribute)
+        assert original.attribute_list[1] == "historical"
+        assert original.life_span.begin == "1817"
+
+        json_str = original.model_dump_json(by_alias=True)
+        restored = MBWork.model_validate_json(json_str)
+        assert restored == original
+
+
+# ---------------------------------------------------------------------------
+# fetch_recording_detail disk cache
+# ---------------------------------------------------------------------------
+
+
+class TestFetchRecordingDetailCache:
+    """Tests for the on-disk cache in fetch_recording_detail()."""
+
+    def setup_method(self) -> None:
+        """Clear the module-level work cache before each test."""
+        music_annotator._mb_api._WORK_CACHE.clear()  # pylint: disable=protected-access
+
+    def _raw_recording_dict(self) -> dict[str, object]:
+        """Return a minimal recording API response dict.
+
+        :returns: Dict suitable for ``mb.get_recording_by_id`` mock return value.
+        """
+        return {"recording": {"id": "rec-1", "title": "Allegro"}}
+
+    def test_cache_miss_fetches_network_and_writes_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """On a cache miss the recording is fetched from the network and the JSON file is written.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_recording_by_id", return_value=self._raw_recording_dict())
+
+        result = fetch_recording_detail("rec-1")
+
+        mock_get.assert_called_once()
+        assert result.id == "rec-1"
+        cache_file = Path("/cache/music-annotator/recording/rec-1.json")
+        assert cache_file.exists()
+        # File must contain valid JSON that round-trips back to the same model.
+        restored = MBRecording.model_validate_json(cache_file.read_text(encoding="utf-8"))
+        assert restored == result
+
+    def test_cache_hit_skips_network(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """On a cache hit the recording is returned from disk without a network call.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        cache_dir = Path("/cache/music-annotator/recording")
+        fs.create_dir(str(cache_dir))
+        recording = MBRecording.model_validate({"id": "rec-2", "title": "Adagio"})
+        (cache_dir / "rec-2.json").write_text(recording.model_dump_json(by_alias=True), encoding="utf-8")
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_recording_by_id")
+
+        result = fetch_recording_detail("rec-2")
+
+        mock_get.assert_not_called()
+        assert result.id == "rec-2"
+        assert result.title == "Adagio"
+
+    def test_no_cache_always_fetches_and_skips_write(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When no_cache=True the cache file is never read or written even if it exists.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        cache_dir = Path("/cache/music-annotator/recording")
+        fs.create_dir(str(cache_dir))
+        stale = MBRecording.model_validate({"id": "rec-3", "title": "STALE"})
+        (cache_dir / "rec-3.json").write_text(stale.model_dump_json(by_alias=True), encoding="utf-8")
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_get = mocker.patch(
+            "music_annotator._mb_api.mb.get_recording_by_id",
+            return_value={"recording": {"id": "rec-3", "title": "Fresh"}},
+        )
+
+        result = fetch_recording_detail("rec-3", no_cache=True)
+
+        mock_get.assert_called_once()
+        assert result.title == "Fresh"
+        # Cache file must be unchanged (stale title still on disk).
+        assert MBRecording.model_validate_json((cache_dir / "rec-3.json").read_text(encoding="utf-8")).title == "STALE"
+
+    def test_atomic_write_produces_valid_cache_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """The atomic temp-file + os.replace write path produces a valid, complete JSON file.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_recording_by_id",
+            return_value={"recording": {"id": "rec-4", "title": "Presto"}},
+        )
+
+        fetch_recording_detail("rec-4")
+
+        cache_file = Path("/cache/music-annotator/recording/rec-4.json")
+        assert cache_file.exists()
+        # Temp file must be gone (replaced atomically).
+        assert not cache_file.with_suffix(".tmp").exists()
+        # Content must be valid JSON parseable as MBRecording.
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+        assert isinstance(data, dict)
+        assert MBRecording.model_validate_json(cache_file.read_text(encoding="utf-8")).id == "rec-4"
+
+
+# ---------------------------------------------------------------------------
+# fetch_work_detail disk cache (L1 + L2)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchWorkDetailCache:
+    """Tests for the two-level cache in fetch_work_detail() and _get_bottom_work()."""
+
+    def setup_method(self) -> None:
+        """Clear the module-level work cache before each test."""
+        music_annotator._mb_api._WORK_CACHE.clear()  # pylint: disable=protected-access
+
+    def _raw_work_dict(self, work_id: str, title: str) -> dict[str, object]:
+        """Return a minimal work API response dict.
+
+        :param work_id: Work MBID.
+        :param title: Work title.
+        :returns: Dict suitable for ``mb.get_work_by_id`` mock return value.
+        """
+        return {"work": {"id": work_id, "title": title}}
+
+    def test_cache_miss_fetches_network_and_writes_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """On a cache miss the work is fetched from the network and the JSON file is written.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_work_by_id", return_value=self._raw_work_dict("w-1", "Eroica"))
+
+        result = fetch_work_detail("w-1")
+
+        mock_get.assert_called_once()
+        assert result.title == "Eroica"
+        cache_file = Path("/cache/music-annotator/work/w-1.json")
+        assert cache_file.exists()
+        restored = MBWork.model_validate_json(cache_file.read_text(encoding="utf-8"))
+        assert restored == result
+
+    def test_l2_cache_hit_skips_network(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """On an L2 (disk) cache hit the work is returned from disk without a network call.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        cache_dir = Path("/cache/music-annotator/work")
+        fs.create_dir(str(cache_dir))
+        work = MBWork.model_validate({"id": "w-2", "title": "Pastoral"})
+        (cache_dir / "w-2.json").write_text(work.model_dump_json(by_alias=True), encoding="utf-8")
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_work_by_id")
+
+        result = fetch_work_detail("w-2")
+
+        mock_get.assert_not_called()
+        assert result.title == "Pastoral"
+
+    def test_l1_cache_short_circuits_before_disk(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When the work is already in _WORK_CACHE (L1), neither the disk nor the network is accessed.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_work_by_id")
+        # Pre-populate L1 cache.
+        cached_work = MBWork.model_validate({"id": "w-3", "title": "Moonlight"})
+        music_annotator._mb_api._WORK_CACHE["w-3"] = cached_work  # pylint: disable=protected-access
+
+        result = fetch_work_detail("w-3")
+
+        mock_get.assert_not_called()
+        assert result is cached_work
+
+    def test_no_cache_always_fetches_skips_both_layers(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When no_cache=True both L1 and L2 are bypassed; a fresh network fetch is made.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        cache_dir = Path("/cache/music-annotator/work")
+        fs.create_dir(str(cache_dir))
+        stale = MBWork.model_validate({"id": "w-4", "title": "STALE"})
+        (cache_dir / "w-4.json").write_text(stale.model_dump_json(by_alias=True), encoding="utf-8")
+        music_annotator._mb_api._WORK_CACHE["w-4"] = stale  # pylint: disable=protected-access
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_get = mocker.patch(
+            "music_annotator._mb_api.mb.get_work_by_id",
+            return_value=self._raw_work_dict("w-4", "Fresh"),
+        )
+
+        result = fetch_work_detail("w-4", no_cache=True)
+
+        mock_get.assert_called_once()
+        assert result.title == "Fresh"
+        # Cache file must be unchanged (stale still on disk, not overwritten).
+        assert MBWork.model_validate_json((cache_dir / "w-4.json").read_text(encoding="utf-8")).title == "STALE"
+
+    def test_atomic_write_produces_valid_cache_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """The atomic temp-file + os.replace write path produces a valid, complete JSON file.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_work_by_id",
+            return_value=self._raw_work_dict("w-5", "Hammerklavier"),
+        )
+
+        fetch_work_detail("w-5")
+
+        cache_file = Path("/cache/music-annotator/work/w-5.json")
+        assert cache_file.exists()
+        assert not cache_file.with_suffix(".tmp").exists()
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+        assert isinstance(data, dict)
+        assert MBWork.model_validate_json(cache_file.read_text(encoding="utf-8")).id == "w-5"
+
+    def test_l2_hit_populates_l1(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """After an L2 disk hit the work is stored in _WORK_CACHE for subsequent L1 hits.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        cache_dir = Path("/cache/music-annotator/work")
+        fs.create_dir(str(cache_dir))
+        work = MBWork.model_validate({"id": "w-6", "title": "Emperor"})
+        (cache_dir / "w-6.json").write_text(work.model_dump_json(by_alias=True), encoding="utf-8")
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_work_by_id")
+
+        first_result = fetch_work_detail("w-6")
+        # After the disk hit, L1 must be populated.
+        assert "w-6" in music_annotator._mb_api._WORK_CACHE  # pylint: disable=protected-access
+        # Second call must not hit disk or network.
+        second_result = fetch_work_detail("w-6")
+        mock_get.assert_not_called()
+        assert first_result == second_result
+
+
+# ---------------------------------------------------------------------------
+# _get_bottom_work no_cache forwarding
+# ---------------------------------------------------------------------------
+
+
+class TestGetBottomWorkNoCache:
+    """Tests that _get_bottom_work() forwards no_cache to fetch_work_detail()."""
+
+    def setup_method(self) -> None:
+        """Clear the module-level work cache before each test."""
+        music_annotator._mb_api._WORK_CACHE.clear()  # pylint: disable=protected-access
+
+    def test_inlined_work_returned_directly(self) -> None:
+        """When the embedded work has relation data, it is returned without any fetch.
+
+        _get_bottom_work must not call fetch_work_detail when the embedded work is already
+        populated (artist_relation_list or work_relation_list is non-empty).
+        """
+        embedded = MBWork.model_validate(
+            {
+                "id": "w-inlined",
+                "title": "Inlined",
+                "artist-relation-list": [{"type": "composer", "artist": {"id": "a1", "name": "Bach"}}],
+            }
+        )
+        result = _get_bottom_work(embedded)
+        assert result is embedded
+
+    def test_stub_work_falls_back_to_fetch(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When the embedded work has empty relation lists, fetch_work_detail is called.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_work_by_id",
+            return_value={"work": {"id": "w-stub", "title": "Full"}},
+        )
+        stub = MBWork.model_validate({"id": "w-stub", "title": "Stub"})
+
+        result = _get_bottom_work(stub)
+
+        assert result.title == "Full"
+
+    def test_no_cache_forwarded_to_fetch_work_detail(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When no_cache=True and work is a stub, fetch_work_detail is called with no_cache=True.
+
+        This test populates the on-disk cache with stale data; with no_cache=True the network
+        fetch must occur and return the fresh value rather than the cached one.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        cache_dir = Path("/cache/music-annotator/work")
+        fs.create_dir(str(cache_dir))
+        stale = MBWork.model_validate({"id": "w-nc", "title": "STALE"})
+        (cache_dir / "w-nc.json").write_text(stale.model_dump_json(by_alias=True), encoding="utf-8")
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_work_by_id",
+            return_value={"work": {"id": "w-nc", "title": "Fresh"}},
+        )
+        stub = MBWork.model_validate({"id": "w-nc", "title": "Stub"})
+
+        result = _get_bottom_work(stub, no_cache=True)
+
+        assert result.title == "Fresh"

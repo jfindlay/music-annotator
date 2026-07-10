@@ -1406,13 +1406,15 @@ def run(
             rec_id = track.recording.id
             log.info("fetch_recording", position=track.position, title=track.recording.title)
 
-            rec_detail = fetch_recording_detail(rec_id)
+            rec_detail = fetch_recording_detail(rec_id, no_cache=no_cache)
 
             work_hierarchy: list[MBWork] = []
             # Inflate each performance-linked work stub to a full work before scoring.
             # _get_bottom_work fetches from MB only when the embedded work lacks relation data.
             performance_works = [
-                _get_bottom_work(rel.work) for rel in rec_detail.work_relation_list if rel.type == "performance" and rel.work.id
+                _get_bottom_work(rel.work, no_cache=no_cache)
+                for rel in rec_detail.work_relation_list
+                if rel.type == "performance" and rel.work.id
             ]
             if performance_works:
                 primary_work = select_primary_performance_work(performance_works)

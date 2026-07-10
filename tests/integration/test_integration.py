@@ -226,7 +226,7 @@ def _patch_mb(mocker: MockerFixture, release: MBRelease) -> None:
     mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
     mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-    def _rec_detail(rec_id: str) -> MBRecording:
+    def _rec_detail(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
         titles = {
             "rec1": "Fontane di Roma: I. La fontana di Valle Giulia all'alba",
             "rec2": "Fontane di Roma: II. La fontana del Tritone",
@@ -1270,7 +1270,7 @@ class TestRunCoverArtFlac:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=cover)
         mocker.patch(
             "music_annotator._pipeline.fetch_recording_detail",
-            side_effect=lambda rec_id: _make_recording_detail(
+            side_effect=lambda rec_id, no_cache=False: _make_recording_detail(
                 rec_id,
                 {
                     "rec1": "Fontane di Roma: I. La fontana di Valle Giulia all'alba",
@@ -1329,7 +1329,7 @@ class TestRunCoverArtMp3:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=cover)
         mocker.patch(
             "music_annotator._pipeline.fetch_recording_detail",
-            side_effect=lambda rec_id: _make_recording_detail(
+            side_effect=lambda rec_id, no_cache=False: _make_recording_detail(
                 rec_id,
                 {
                     "rec1": "Fontane di Roma: I. La fontana di Valle Giulia all'alba",

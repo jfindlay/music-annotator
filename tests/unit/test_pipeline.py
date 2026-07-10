@@ -1308,7 +1308,7 @@ class TestRunWritesFreedBYaml:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=2))
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
             )
@@ -1482,7 +1482,7 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {
                     "id": rec_id,
@@ -1667,7 +1667,7 @@ class TestRunFullPipeline:
         # movement 2: date range 1981-01-27/1984-01-27
         call_count = [0]
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             call_count[0] += 1
             return _rec(
                 {
@@ -1727,7 +1727,7 @@ class TestRunFullPipeline:
         release = _make_release(n_tracks=2)
         self._patch_mb(mocker, release)
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {
                     "id": rec_id,
@@ -1782,7 +1782,7 @@ class TestRunFullPipeline:
         release = _make_release(n_tracks=1)
         self._patch_mb(mocker, release)
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             r = _rec({"id": rec_id, "title": "T", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []})
             return r
 
@@ -1829,7 +1829,7 @@ class TestRunFullPipeline:
 
         call_count = [0]
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             call_count[0] += 1
             # movement 1: session 1981, movement 2: session 1984 — different years
             begin = "1981-03-01" if call_count[0] == 1 else "1984-05-10"
@@ -1942,7 +1942,7 @@ class TestRunFullPipeline:
 
         call_count = [0]
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             call_count[0] += 1
             # No session dates; differing first-release-date: rec-1 says 1963, rec-2 says 1965
             frd = "1963" if call_count[0] == 1 else "1965"
@@ -2036,7 +2036,7 @@ class TestRunFullPipeline:
 
         call_count = [0]
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             call_count[0] += 1
             frd = "1963" if call_count[0] == 1 else "1965"
             return MBRecording.model_validate(
@@ -2356,7 +2356,7 @@ class TestRunFullPipeline:
 
         call_count = [0]
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             call_count[0] += 1
             work_id = "w-mvt1" if call_count[0] == 1 else "w-mvt2"
             return _rec(
@@ -2369,7 +2369,7 @@ class TestRunFullPipeline:
                 }
             )
 
-        def _fetch_work(work_id: str) -> MBWork:
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
             return {"w-mvt1": work_mvt1, "w-mvt2": work_mvt2, top_work_id: work_root}[work_id]
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
@@ -2475,7 +2475,7 @@ class TestRunFullPipeline:
 
         call_count = [0]
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             call_count[0] += 1
             work_id = "w-mvt1" if call_count[0] == 1 else "w-mvt2"
             return _rec(
@@ -2488,7 +2488,7 @@ class TestRunFullPipeline:
                 }
             )
 
-        def _fetch_work(work_id: str) -> MBWork:
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
             return {"w-mvt1": work_mvt1, "w-mvt2": work_mvt2, top_work_id: work_root}[work_id]
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
@@ -2604,7 +2604,7 @@ class TestRunFullPipeline:
 
         call_count = [0]
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             call_count[0] += 1
             work_id = "w-mvt1" if call_count[0] == 1 else "w-mvt2"
             return _rec(
@@ -2617,7 +2617,7 @@ class TestRunFullPipeline:
                 }
             )
 
-        def _fetch_work(work_id: str) -> MBWork:
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
             return {"w-mvt1": work_mvt1, "w-mvt2": work_mvt2, top_work_id: work_root}[work_id]
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
@@ -2771,7 +2771,7 @@ class TestRunFullPipeline:
             "rec-d2-1": "1984-12-31",
         }
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             """Return a recording with a performance relation to the appropriate movement work.
 
             :param rec_id: Recording MBID.
@@ -2797,7 +2797,7 @@ class TestRunFullPipeline:
                 }
             )
 
-        def _fetch_work(work_id: str) -> MBWork:
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
             """Return the work model for the given MBID.
 
             :param work_id: Work MBID.
@@ -2878,7 +2878,7 @@ class TestRunFullPipeline:
         self._patch_mb(mocker, release)
         mock_fetch_rec = mocker.patch(
             "music_annotator._pipeline.fetch_recording_detail",
-            side_effect=lambda rec_id: _rec(
+            side_effect=lambda rec_id, no_cache=False: _rec(
                 {"id": rec_id, "title": "T", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
             ),
         )
@@ -3007,7 +3007,7 @@ class TestRunFullPipeline:
             top_work_id: work_root,
         }
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             """Return a recording with a performance relation to the appropriate movement work.
 
             :param rec_id: Recording MBID.
@@ -3024,7 +3024,7 @@ class TestRunFullPipeline:
                 }
             )
 
-        def _fetch_work(work_id: str) -> MBWork:
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
             """Return the work model for the given MBID.
 
             :param work_id: Work MBID.
@@ -3198,7 +3198,7 @@ class TestRunFullPipeline:
             top_work_id: work_root,
         }
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             """Return a recording with no session date and a per-recording first-release-date.
 
             :param rec_id: Recording MBID.
@@ -3216,7 +3216,7 @@ class TestRunFullPipeline:
                 }
             )
 
-        def _fetch_work(work_id: str) -> MBWork:
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
             """Return the work model for the given MBID.
 
             :param work_id: Work MBID.
@@ -3317,7 +3317,7 @@ class TestRunFullPipeline:
             }
         )
 
-        def _fetch_work(work_id: str) -> MBWork:
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
             """Return the work model for the given MBID.
 
             :param work_id: Work MBID.
@@ -3535,7 +3535,7 @@ class TestRunFullPipeline:
             top_work_id: work_root,
         }
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             """Return a recording with soloist relation based on disc/track.
 
             Disc-1 tracks both credit Soloist A (album artist) → cea_album_soloists populated.
@@ -3578,7 +3578,7 @@ class TestRunFullPipeline:
                 }
             )
 
-        def _fetch_work(work_id: str) -> MBWork:
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
             """Return the work model for the given MBID.
 
             :param work_id: Work MBID.
@@ -3789,7 +3789,7 @@ class TestIntermediateSiblingIndexSubstrate:
             opera_id: opera_work,
         }
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             """Return a recording with a performance relation to the appropriate aria work.
 
             :param rec_id: Recording MBID.
@@ -3806,7 +3806,7 @@ class TestIntermediateSiblingIndexSubstrate:
                 }
             )
 
-        def _fetch_work(work_id: str) -> MBWork:
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
             """Return the work model for the given MBID.
 
             :param work_id: Work MBID.
@@ -3961,7 +3961,7 @@ class TestIntermediateSiblingIndexSubstrate:
             opera_id: opera_work,
         }
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             """Return a recording with a performance relation to the appropriate work.
 
             :param rec_id: Recording MBID.
@@ -3978,7 +3978,7 @@ class TestIntermediateSiblingIndexSubstrate:
                 }
             )
 
-        def _fetch_work(work_id: str) -> MBWork:
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
             """Return the work model for the given MBID.
 
             :param work_id: Work MBID.
@@ -4398,7 +4398,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         # Recording with a performance → work relation
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {
                     "id": rec_id,
@@ -4437,7 +4437,7 @@ class TestRunWithWorkHierarchy:
             dry_run=False,
             fetch_rels=True,
         )
-        mock_work.assert_called_once_with("w1")
+        mock_work.assert_called_once_with("w1", no_cache=False)
 
     def test_non_performance_work_rel_skipped(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Non-performance work relation is skipped (covers 1590->1589 branch).
@@ -4455,7 +4455,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {
                     "id": rec_id,
@@ -4501,7 +4501,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {
                     "id": rec_id,
@@ -4552,7 +4552,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         # Work with an inlined artist relation (simulates work-level-rels response)
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {
                     "id": rec_id,
@@ -4611,7 +4611,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         # Work with no inlined relations (stub shape — both lists empty)
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {
                     "id": rec_id,
@@ -4641,7 +4641,7 @@ class TestRunWithWorkHierarchy:
             fetch_rels=True,
         )
         # fetch_work_detail MUST be called — work had no inlined relation data
-        mock_work.assert_called_once_with("w1")
+        mock_work.assert_called_once_with("w1", no_cache=False)
 
     def test_multiple_performance_rels_selects_primary(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """When a recording has two performance relations, select_primary_performance_work is called.
@@ -4663,7 +4663,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
         # Recording with two performance relations: cadenza (w-cad) and concerto movement (w-mvt)
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {
                     "id": rec_id,
@@ -4716,7 +4716,7 @@ class TestRunWithWorkHierarchy:
             }
         )
 
-        def _fetch_work(work_id: str) -> MBWork:
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
             return {"w-cad": cadenza_work, "w-mvt": concerto_mvt, "w-conc": concerto_root}[work_id]
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
@@ -4760,7 +4760,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {
                     "id": rec_id,
@@ -4816,7 +4816,7 @@ def _setup_single_track_run(mocker: MockerFixture, fs: FakeFilesystem, src: Path
     mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=1))
     mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-    def _fetch_rec(rec_id: str) -> MBRecording:
+    def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
         return _rec(
             {
                 "id": rec_id,
@@ -5230,7 +5230,7 @@ class TestRunCollisionAndJournal:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_tracks=2))
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
             )
@@ -5959,7 +5959,7 @@ class TestRunMultiDisc:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
             )
@@ -6089,7 +6089,7 @@ class TestRunDiscOverride:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
             )
@@ -6673,7 +6673,7 @@ class TestRunTitleMediumSelection:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_rel())
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
             )
@@ -7791,7 +7791,7 @@ class TestRunNameTooLong:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec({"id": rec_id, "title": "T", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []})
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
@@ -8075,7 +8075,7 @@ class TestRunTocMediumSelection:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {"id": rec_id, "title": "Track", "artist-credit": [], "artist-relation-list": [], "work-relation-list": []}
             )
@@ -9067,7 +9067,7 @@ class TestRunAcoustidIdentityConfirm:
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
 
-        def _fetch_rec(rec_id: str) -> MBRecording:
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
             return _rec(
                 {
                     "id": rec_id,

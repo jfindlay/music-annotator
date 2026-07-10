@@ -354,20 +354,40 @@ def _get_recording_by_id(recording_id: str) -> dict[str, JSON]:
     return result
 
 
-def fetch_recording_detail(recording_id: str) -> MBRecording:
+def fetch_recording_detail(recording_id: str, no_cache: bool = False) -> MBRecording:
     """Fetch a recording with its artist and work relationships.
 
-    Calls :func:`_get_recording_by_id` (retried on rate-limit errors), waits one second, then validates the
-    ``"recording"`` key into an :class:`~music_annotator.models.MBRecording` model.
+    On a cache hit (``~/.cache/music-annotator/recording/<recording_id>.json`` exists and
+    ``no_cache`` is ``False``) the stored JSON is deserialised and returned without any network
+    call.  On a miss the recording is fetched via :func:`_get_recording_by_id`, written atomically
+    to the cache via a temp-file + :meth:`~pathlib.Path.replace`, and returned.  Pass ``no_cache=True`` to
+    always fetch from the network and skip both reading and writing the cache.
 
     :param recording_id: The MusicBrainz recording MBID.
-    :returns: An :class:`~music_annotator.models.MBRecording` instance populated from the ``musicbrainzngs`` response.
+    :param no_cache: When ``True``, bypass the on-disk cache entirely.  Defaults to ``False``.
+    :returns: An :class:`~music_annotator.models.MBRecording` instance populated from the
+        ``musicbrainzngs`` response or the on-disk cache.
     :raises mb.ResponseError: On a non-retryable API error.
     :raises RuntimeError: If all retry attempts are exhausted.
     """
+    if not no_cache:
+        cache_path = _metadata_cache_dir("recording") / f"{recording_id}.json"
+        if cache_path.is_file():
+            log.debug("recording_cache_hit", recording_id=recording_id)
+            return MBRecording.model_validate_json(cache_path.read_text(encoding="utf-8"))
+
     log.debug("fetch_recording", recording_id=recording_id)
     result = _mb_call(lambda: _get_recording_by_id(recording_id))
-    return MBRecording.model_validate(result.get("recording", {}))
+    recording = MBRecording.model_validate(result.get("recording", {}))
+
+    if not no_cache:
+        cache_path = _metadata_cache_dir("recording") / f"{recording_id}.json"
+        tmp_path = cache_path.with_suffix(".tmp")
+        tmp_path.write_text(recording.model_dump_json(by_alias=True), encoding="utf-8")
+        tmp_path.replace(cache_path)
+        log.debug("recording_cache_written", recording_id=recording_id)
+
+    return recording
 
 
 def _infer_mime(data: bytes) -> str:
@@ -523,20 +543,35 @@ def _fetch_rg_image(
         imgs.append(img)
 
 
-def _cover_art_cache_dir() -> Path:
-    """Return the cover art cache directory, creating it if necessary.
+def _metadata_cache_dir(subdir: str) -> Path:
+    """Return a metadata cache subdirectory under the XDG cache root, creating it if necessary.
 
-    Resolves ``$XDG_CACHE_HOME/music-annotator/cover-art/`` (falling back to
-    ``~/.cache/music-annotator/cover-art/`` when ``XDG_CACHE_HOME`` is unset or empty).
+    Resolves ``$XDG_CACHE_HOME/music-annotator/<subdir>/`` (falling back to
+    ``~/.cache/music-annotator/<subdir>/`` when ``XDG_CACHE_HOME`` is unset or empty).
     The directory is created with ``parents=True, exist_ok=True`` on every call.
 
-    :returns: A :class:`~pathlib.Path` for the cache directory.
+    Used by :func:`_cover_art_cache_dir`, :func:`fetch_recording_detail`, and
+    :func:`fetch_work_detail` to locate their respective on-disk cache trees.
+
+    :param subdir: The subdirectory name within ``music-annotator/`` (e.g. ``"cover-art"``,
+        ``"recording"``, ``"work"``).
+    :returns: A :class:`~pathlib.Path` for the cache subdirectory.
     """
     xdg = os.environ.get("XDG_CACHE_HOME", "")
     base = Path(xdg) if xdg else Path.home() / ".cache"
-    cache = base / "music-annotator" / "cover-art"
+    cache = base / "music-annotator" / subdir
     cache.mkdir(parents=True, exist_ok=True)
     return cache
+
+
+def _cover_art_cache_dir() -> Path:
+    """Return the cover art cache directory, creating it if necessary.
+
+    Delegates to :func:`_metadata_cache_dir` with ``subdir="cover-art"``.
+
+    :returns: A :class:`~pathlib.Path` for ``$XDG_CACHE_HOME/music-annotator/cover-art/``.
+    """
+    return _metadata_cache_dir("cover-art")
 
 
 def _cover_art_cache_key(coverid: str, size: str) -> str:
@@ -790,23 +825,48 @@ def _get_work_by_id(work_id: str) -> dict[str, JSON]:
     return result
 
 
-def fetch_work_detail(work_id: str) -> MBWork:
+def fetch_work_detail(work_id: str, no_cache: bool = False) -> MBWork:
     """Fetch a work with artist relationships, parent work links, tags, and aliases.
 
-    Results are cached in the module-level :data:`_WORK_CACHE` dict so that shared parent works (e.g. a symphonic poem
-    that is the parent of four movements) are only fetched once per process.
+    Uses a two-level cache.  The in-process :data:`_WORK_CACHE` dict (L1) is checked first; it
+    avoids even a disk read for shared parent works that appear multiple times within a single run.
+    The on-disk cache (L2) at ``~/.cache/music-annotator/work/<work_id>.json`` is checked next when
+    ``no_cache`` is ``False``; a hit avoids the network entirely.  On a miss the work is fetched via
+    :func:`_get_work_by_id`, written atomically to the disk cache via a temp-file + :meth:`~pathlib.Path.replace`,
+    stored in :data:`_WORK_CACHE`, and returned.  Pass ``no_cache=True`` to bypass both cache layers
+    and always fetch from the network.
 
     :param work_id: The MusicBrainz work MBID.
-    :returns: An :class:`~music_annotator.models.MBWork` instance populated from the ``musicbrainzngs`` response.
+    :param no_cache: When ``True``, bypass both the in-process and on-disk caches.  Defaults to
+        ``False``.
+    :returns: An :class:`~music_annotator.models.MBWork` instance populated from the
+        ``musicbrainzngs`` response or a cache layer.
     :raises mb.ResponseError: On a non-retryable API error.
     :raises RuntimeError: If all retry attempts are exhausted.
     """
-    if work_id in _WORK_CACHE:
-        log.debug("fetch_work_cache_hit", work_id=work_id)
+    if not no_cache and work_id in _WORK_CACHE:
+        log.debug("fetch_work_l1_cache_hit", work_id=work_id)
         return _WORK_CACHE[work_id]
+
+    if not no_cache:
+        cache_path = _metadata_cache_dir("work") / f"{work_id}.json"
+        if cache_path.is_file():
+            log.debug("fetch_work_l2_cache_hit", work_id=work_id)
+            work = MBWork.model_validate_json(cache_path.read_text(encoding="utf-8"))
+            _WORK_CACHE[work_id] = work
+            return work
+
     log.debug("fetch_work", work_id=work_id)
     result = _mb_call(lambda: _get_work_by_id(work_id))
     work = MBWork.model_validate(result.get("work", {}))
+
+    if not no_cache:
+        cache_path = _metadata_cache_dir("work") / f"{work_id}.json"
+        tmp_path = cache_path.with_suffix(".tmp")
+        tmp_path.write_text(work.model_dump_json(by_alias=True), encoding="utf-8")
+        tmp_path.replace(cache_path)
+        log.debug("work_cache_written", work_id=work_id)
+
     _WORK_CACHE[work_id] = work
     return work
 
@@ -971,7 +1031,7 @@ def fetch_acoustid_lookup(fingerprint: str, duration_s: int, api_key: str) -> li
     return recording_mbids
 
 
-def _get_bottom_work(embedded: MBWork) -> MBWork:
+def _get_bottom_work(embedded: MBWork, no_cache: bool = False) -> MBWork:
     """Return the bottom work for a performance relation, using inlined data when available.
 
     When ``musicbrainzngs`` is called with the ``work-level-rels`` include, the MB API inlines the full work detail (including
@@ -983,10 +1043,12 @@ def _get_bottom_work(embedded: MBWork) -> MBWork:
 
     :param embedded: The :class:`~music_annotator.models.MBWork` extracted from the recording's
         performance ``work-relation-list`` entry.
+    :param no_cache: Forwarded to :func:`fetch_work_detail` when a network fetch is needed.
+        When ``True``, the on-disk work cache is bypassed.  Defaults to ``False``.
     :returns: A fully populated :class:`~music_annotator.models.MBWork`.
     """
     if embedded.artist_relation_list or embedded.work_relation_list:
         log.debug("bottom_work_inlined", work_id=embedded.id)
         return embedded
     log.debug("fetch_bottom_work", work_id=embedded.id)
-    return fetch_work_detail(embedded.id)
+    return fetch_work_detail(embedded.id, no_cache=no_cache)
