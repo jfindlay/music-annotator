@@ -29,6 +29,52 @@ MB via the `/ws/2/discid` endpoint, permanently enriching the database and enabl
 selection for all users.  Requires an authenticated MB session; defer until a login/credential flow
 is designed.
 
+## Catalogue-colon part-label retro-fix + library-revision reconciliation
+
+**Heuristic fix shipped** (`strip_common_prefix` in `_works.py`); this item is the **deferred retro-fix**
+of already-annotated releases, folded into the general library-revision phase.
+
+**Root cause (fixed forward).**  `strip_common_prefix`'s colon-fallback split on the *first bare
+`":"`* to separate a `Title: Movement` label.  MusicBrainz work titles embed a colon *inside*
+catalogue numbers — Haydn Hoboken (`"…, Hob. III:31"`), Bach chorale subtitles
+(`'"Fantasia super: Komm heiliger Geist…"'`), Handel double-colon (`"HWV 350: 16: (Minuet)"`).  When
+such a title reached the colon-fallback (child does **not** share the parent-work prefix) and the
+catalogue colon was the *only* colon, the split produced a bare number as the part label.  Confirmed
+symptom in the library: `Haydn - The Angeles String Quartet/String Quartets, op. 20 [rel 2000]/`
+minted intermediate directories `01 - 31`, `02 - 32`, `03 - 33` (the Hoboken numbers III:31/32/33),
+and the same corruption in `CWP_GROUPHEADING` (`"String Quartets, op. 20 :: 31 :: I. Allegro moderato"`).
+
+**The forward fix** (already applied): the colon-fallback now keys on `": "` (colon **followed by
+whitespace**), not a bare `":"`.  The discriminator is structural, not per-composer: the CE
+`Title: Movement` separator is always written with a trailing space; a catalogue colon is flanked by
+non-space characters.  This is *more* general than the old code, not more convoluted — it correctly
+handles Hoboken/BWV/HWV without any catalogue table.  Tests added in `test_annotator.py`
+(`TestStripCommonPrefix`): catalogue-colon-no-split, colon-space-still-splits, first-`": "`-wins.
+
+**Deferred: retro-fix of already-processed releases.**  The forward fix stops *new* `NN - NN`
+directories during ongoing annotation but does **not** touch releases already on disk.  A `repath`
+pass (re-derive all paths + re-patch `CWP_PART_*` / `CWP_GROUPHEADING` tags under the final
+heuristic) is deferred to the **library-revision phase** — do not disrupt an in-progress library with
+piecemeal renames.
+
+**Fold in the "fractured library" concern (user, 2026-07-10).**  Progressive versions of
+music-annotator apply progressively-different naming heuristics, so releases annotated under
+different versions diverge.  The user explicitly deferred *cross-version consistency* to the same
+library-revision phase rather than chasing backward-compat incrementally (which would be its own
+edge-case accretion).  The revision phase should therefore be one pass that re-derives the **whole**
+library under the final heuristic — making the library "more like itself" — absorbing:
+- this catalogue-colon retro-fix (the confirmed Angeles Op. 20 release + any others that surface),
+- the W3b / L2 hierarchy-depth normalisation deferrals (below),
+- any other accumulated cross-version naming drift.
+
+**Scope when reopened**: survey the full library for `NN - NN` intermediate dirs and for any
+`CWP_PART_*` value that is a bare catalogue fragment; `repath` the affected releases; re-patch tags.
+Survey at fix time found the bug had *fired* on 1 release, but the latent catalogue-colon pattern is
+present in ~16 Haydn releases and in Bach/Handel titles — the census must be re-run against the
+then-current library, not assumed to be the single Angeles release.
+
+---
+
 ## Hierarchy-depth normalisation — W3b (deferred from PLAN-naming.md)
 
 **Deferred from `docs/PLAN-naming.md` W3b** (2026-06-02).  Dedicated multisession planned.

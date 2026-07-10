@@ -301,6 +301,30 @@ class TestStripCommonPrefix:
         result = strip_common_prefix(child, parent)
         assert result == "I. First"
 
+    def test_catalogue_colon_not_a_separator(self) -> None:
+        """A colon inside a catalogue number (no trailing space) does not trigger a split.
+
+        Regression for the Haydn Hoboken case: ``"…, Hob. III:31"`` with a non-matching parent must
+        return the full child title, not the spurious bare label ``"31"`` produced by a bare-colon split.
+        """
+        child = "String Quartet in E-flat major, op. 20 no. 1, Hob. III:31"
+        parent = "String Quartets, op. 20"
+        result = strip_common_prefix(child, parent)
+        assert result == child
+
+    def test_colon_space_separator_still_splits(self) -> None:
+        """A genuine ``": "`` title-vs-movement separator still splits when the prefix does not match."""
+        assert strip_common_prefix("RV 249: I. Allegro", "Some Parent") == "I. Allegro"
+
+    def test_first_colon_space_wins_over_later_catalogue_colon(self) -> None:
+        """When both a ``": "`` separator and a later catalogue colon are present, split on the separator.
+
+        Handel ``"HWV 350: 16: (Minuet)"`` (with a non-matching parent) splits on the first ``": "``,
+        yielding the movement label rather than mangling on the trailing catalogue colon.
+        """
+        result = strip_common_prefix("Suite in G major, HWV 350: 16: (Minuet)", "Nonmatching")
+        assert result == "16: (Minuet)"
+
 
 # ---------------------------------------------------------------------------
 # period_for_year

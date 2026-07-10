@@ -186,22 +186,33 @@ def strip_common_prefix(child: str, parent: str) -> str:
     Implements the CE ``cwp_part_N`` stripping logic:
 
     1. If ``child`` starts with ``parent`` (case-insensitive), strip that prefix and any leading punctuation or whitespace.
-    2. Otherwise, if ``child`` contains a colon, return the portion after the first colon.
+    2. Otherwise, if ``child`` contains a ``": "`` (colon *followed by whitespace*), return the portion after the first
+       such separator.
     3. Otherwise return ``child`` unchanged.
+
+    The colon-fallback deliberately keys on ``": "`` (colon-space), not a bare ``":"``.  MusicBrainz work titles routinely
+    embed a colon *inside* a catalogue number — Haydn Hoboken (``"Hob. III:31"``), and analogous constructions in other
+    catalogue systems — where the colon is flanked by non-space characters and is part of the title, not a
+    title-vs-movement separator.  The CE ``Title: Movement`` separator is always written with a trailing space
+    (``"Symphony No. 1: I. Allegro"``, ``"RV 249: I. Allegro"``), so requiring the space distinguishes a genuine
+    separator from a catalogue colon without any per-composer special-casing.  A bare-colon split would reduce
+    ``"String Quartet …, Hob. III:31"`` to the spurious label ``"31"``.  (Titles with a genuine separator *and* a later
+    catalogue colon, e.g. Handel ``"HWV 350: 16: (Minuet)"``, split on the first ``": "`` — the correct separator.)
 
     :param child: The full work name at the lower hierarchy level
         (e.g. ``"Fontane di Roma, P 106: I. La fontana di Valle Giulia all'alba"``).
     :param parent: The work name at the parent level (e.g. ``"Fontane di Roma, P 106"``).
     :returns: The stripped part label (e.g. ``"I. La fontana di Valle Giulia all'alba"``),
-        or ``child`` unchanged when no prefix is found.
+        or ``child`` unchanged when no prefix and no ``": "`` separator is found.
     """
     if not parent or not child:
         return child
     if child.lower().startswith(parent.lower()):
         stripped = child[len(parent) :].lstrip(" :.-–—,")
         return stripped if stripped else child
-    if ":" in child:
-        after_colon = child.split(":", 1)[1].strip()
+    sep_idx = child.find(": ")
+    if sep_idx != -1:
+        after_colon = child[sep_idx + 2 :].strip()
         return after_colon if after_colon else child
     return child
 
