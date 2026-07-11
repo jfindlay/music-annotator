@@ -376,7 +376,7 @@ def fetch_recording_detail(recording_id: str, no_cache: bool = False) -> MBRecor
             log.debug("recording_cache_hit", recording_id=recording_id)
             return MBRecording.model_validate_json(cache_path.read_text(encoding="utf-8"))
 
-    log.debug("fetch_recording", recording_id=recording_id)
+    log.info("recording_network_fetch", recording_id=recording_id)
     result = _mb_call(lambda: _get_recording_by_id(recording_id))
     recording = MBRecording.model_validate(result.get("recording", {}))
 

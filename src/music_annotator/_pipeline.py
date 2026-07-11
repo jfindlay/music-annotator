@@ -1404,7 +1404,7 @@ def run(
         log.info("fetch_recording_rels_start")
         for global_idx, (track, _med_pos) in enumerate(all_media_pairs):
             rec_id = track.recording.id
-            log.info("fetch_recording", position=track.position, title=track.recording.title)
+            log.info("process_recording", position=track.position, title=track.recording.title)
 
             rec_detail = fetch_recording_detail(rec_id, no_cache=no_cache)
 
