@@ -1278,8 +1278,8 @@ def run(
         ``None`` and a title-match heuristic is used, the selection proceeds without confirmation.  When ``None`` and a
         path component exceeds :data:`~music_annotator._tags._NAME_MAX` bytes, the shortened name is accepted
         automatically and a ``name_too_long`` warning is logged.
-    :param no_cache: When ``True``, bypass the cover art on-disk cache and always fetch from the network.  Defaults to
-        ``False``.
+    :param no_cache: When ``True``, bypass all on-disk metadata and image caches and always fetch from the network.
+        Defaults to ``False``.
     :param disc_override: When set, bypass all automatic medium-selection heuristics and use the medium at this
         1-based disc position.  Applies to both single-medium and multi-medium releases.  The downstream track-count
         validation still runs, so a mismatch between source file count and the selected medium's track count raises
@@ -1421,7 +1421,7 @@ def run(
                 work_hierarchy = build_work_hierarchy(primary_work)
 
             tags_map[global_idx] = build_track_tags(release, track, _med_pos, rec_detail, work_hierarchy)
-            tags_map[global_idx].acoustid_id = fetch_acoustid_id(rec_id)
+            tags_map[global_idx].acoustid_id = fetch_acoustid_id(rec_id, no_cache=no_cache)
 
         # Compute movement numbers grouped by top work MBID.
         # Iterates the full tags_map (all media) so movements of one work that straddle a disc

@@ -323,7 +323,7 @@ class TestFetchAcoustidId:
             "music_annotator._mb_api.urllib.request.urlopen",
             side_effect=http_exc,
         )
-        result = fetch_acoustid_id("rec-1")
+        result = fetch_acoustid_id("rec-1", no_cache=True)
         assert result == ""
         # Only one attempt — no retry on 4xx.
         mock_urlopen.assert_called_once()
@@ -342,10 +342,183 @@ class TestFetchAcoustidId:
             "music_annotator._mb_api.urllib.request.urlopen",
             side_effect=http_exc,
         )
-        result = fetch_acoustid_id("rec-1")
+        result = fetch_acoustid_id("rec-1", no_cache=True)
         assert result == ""
         # All three attempts were made before giving up.
         assert mock_urlopen.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# fetch_acoustid_id — on-disk cache
+# ---------------------------------------------------------------------------
+
+
+class TestFetchAcoustidIdCache:
+    """Tests for the fetch_acoustid_id on-disk cache layer."""
+
+    def _make_resp(self, mocker: MockerFixture, body: bytes) -> MagicMock:
+        """Build a mock urlopen context manager that yields ``body`` from ``.read()``.
+
+        :param mocker: pytest-mock fixture.
+        :param body: Raw bytes to return from resp.read().
+        :returns: A configured MagicMock usable as a context manager.
+        """
+        ctx: MagicMock = mocker.MagicMock()
+        ctx.__enter__ = mocker.MagicMock(return_value=ctx)
+        ctx.__exit__ = mocker.MagicMock(return_value=False)
+        ctx.read = mocker.MagicMock(return_value=body)
+        return ctx
+
+    def test_cache_hit_skips_network(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """A cache hit returns the cached UUID without calling urlopen or sleeping.
+
+        The structural guarantee mirrors the recording/work caches: a hit returns before any
+        network call so the 1-second polite delay is never incurred.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        cache_dir = _metadata_cache_dir("acoustid")
+        (cache_dir / "rec-cached.txt").write_text("cached-uuid-123", encoding="utf-8")
+
+        mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen")
+        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+
+        result = fetch_acoustid_id("rec-cached")
+        assert result == "cached-uuid-123"
+        mock_urlopen.assert_not_called()
+        mock_sleep.assert_not_called()
+
+    def test_cache_miss_writes_then_hit(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """A cache miss fetches the network, writes the cache, then a second call hits the cache.
+
+        Verifies that urlopen is called exactly once across two invocations of fetch_acoustid_id
+        for the same recording MBID.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        ctx = self._make_resp(mocker, b'{"tracks": [{"id": "uuid-from-network"}]}')
+        mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen", return_value=ctx)
+        mocker.patch("music_annotator._mb_api.time.sleep")
+
+        first = fetch_acoustid_id("rec-miss")
+        assert first == "uuid-from-network"
+        assert mock_urlopen.call_count == 1
+
+        # Second call: cache file must exist now.
+        second = fetch_acoustid_id("rec-miss")
+        assert second == "uuid-from-network"
+        # urlopen still called only once — second call was a cache hit.
+        assert mock_urlopen.call_count == 1
+
+    def test_definitive_empty_is_cached(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """A genuine empty result (no tracks in response) is cached as an empty string.
+
+        A real "no AcoustID exists" answer is worth caching so that recordings with no AcoustID
+        (common for obscure classical tracks) never re-pay the 1-second polite delay.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        ctx = self._make_resp(mocker, b'{"tracks": []}')
+        mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen", return_value=ctx)
+        mocker.patch("music_annotator._mb_api.time.sleep")
+
+        result = fetch_acoustid_id("rec-empty")
+        assert result == ""
+        assert mock_urlopen.call_count == 1
+
+        # Second call must hit cache (urlopen not called again).
+        result2 = fetch_acoustid_id("rec-empty")
+        assert result2 == ""
+        assert mock_urlopen.call_count == 1
+
+    def test_4xx_empty_is_cached(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """A 4xx permanent error result is cached as an empty string and not retried.
+
+        A 4xx is a permanent client error; the empty result is safe to cache so subsequent runs
+        for the same recording do not re-issue a doomed network request.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        http_exc = HTTPError("https://acoustid.org/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=http_exc)
+        mocker.patch("music_annotator._mb_api.time.sleep")
+
+        result = fetch_acoustid_id("rec-4xx")
+        assert result == ""
+        assert mock_urlopen.call_count == 1
+
+        # Second call must hit cache.
+        result2 = fetch_acoustid_id("rec-4xx")
+        assert result2 == ""
+        assert mock_urlopen.call_count == 1
+
+    def test_json_decode_error_not_cached(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """A JSONDecodeError (malformed response) is not cached.
+
+        A malformed payload is a transient condition — the response may change on a future
+        request, so caching an empty result here could permanently suppress a valid AcoustID.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        ctx = self._make_resp(mocker, b"not valid json {{{")
+        mocker.patch("music_annotator._mb_api.urllib.request.urlopen", return_value=ctx)
+        mocker.patch("music_annotator._mb_api.time.sleep")
+
+        result = fetch_acoustid_id("rec-json-err")
+        assert result == ""
+
+        # No cache file must exist.
+        cache_dir = _metadata_cache_dir("acoustid")
+        assert not (cache_dir / "rec-json-err.txt").exists()
+
+    def test_5xx_retries_exhausted_not_cached(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """Retries-exhausted (5xx) result is not cached.
+
+        A transient server failure must not permanently cache an empty AcoustID for a recording
+        that actually has one.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        http_exc = HTTPError("https://acoustid.org/", 503, "Service Unavailable", {}, None)  # type: ignore[arg-type]
+        mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=http_exc)
+        mocker.patch("music_annotator._mb_api.time.sleep")
+
+        result = fetch_acoustid_id("rec-5xx")
+        assert result == ""
+
+        # No cache file must exist.
+        cache_dir = _metadata_cache_dir("acoustid")
+        assert not (cache_dir / "rec-5xx.txt").exists()
+
+    def test_no_cache_bypasses_read_and_write(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """no_cache=True bypasses both cache read and cache write.
+
+        Even when a cache file exists, no_cache=True ignores it and fetches from the network.
+        The result is not written to the cache so the existing file is also left unchanged.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        cache_dir = _metadata_cache_dir("acoustid")
+        cache_file = cache_dir / "rec-nocache.txt"
+        cache_file.write_text("stale-uuid", encoding="utf-8")
+
+        ctx = self._make_resp(mocker, b'{"tracks": [{"id": "fresh-uuid"}]}')
+        mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen", return_value=ctx)
+        mocker.patch("music_annotator._mb_api.time.sleep")
+
+        result = fetch_acoustid_id("rec-nocache", no_cache=True)
+        assert result == "fresh-uuid"
+        # Network was called despite cache file existing.
+        mock_urlopen.assert_called_once()
+        # Cache file must be unchanged (no write).
+        assert cache_file.read_text(encoding="utf-8") == "stale-uuid"
 
 
 # ---------------------------------------------------------------------------

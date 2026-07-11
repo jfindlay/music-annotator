@@ -871,13 +871,19 @@ def fetch_work_detail(work_id: str, no_cache: bool = False) -> MBWork:
     return work
 
 
-def fetch_acoustid_id(recording_mbid: str) -> str:
+def fetch_acoustid_id(recording_mbid: str, no_cache: bool = False) -> str:
     """Look up the AcoustID track ID (UUID) for a MusicBrainz recording MBID.
 
     Calls ``https://api.acoustid.org/v2/track/list_by_mbid`` with the recording MBID and returns the first AcoustID track ID
     UUID from the response.  The AcoustID track ID is a cluster identifier that groups all crowd-sourced Chromaprint fingerprint
     submissions for the same track.  It is stored in the ``ACOUSTID_ID`` tag (Vorbis Comment) / TXXX ``"Acoustid Id"`` frame
     (ID3), matching the convention used by MusicBrainz Picard.
+
+    On a cache hit (``~/.cache/music-annotator/acoustid/<recording_mbid>.txt`` exists and ``no_cache`` is ``False``) the cached
+    value is returned immediately without any network call or polite delay.  On a miss, the endpoint is queried.  Definitive
+    results (successful UUID, genuine empty from the endpoint, or a permanent 4xx error) are written atomically to the cache via
+    a temp-file + :meth:`~pathlib.Path.replace`.  Transient failures (``JSONDecodeError``, 5xx/OSError retries exhausted) are
+    **not** cached so that a brief outage does not permanently cache an empty AcoustID for a recording that actually has one.
 
     No API key is required for this endpoint.  The call uses a 10-second socket timeout.  Up to three attempts are made on
     transient network errors (``OSError``) and 5xx HTTP errors, sleeping ``2 ** attempt`` seconds between retries.  4xx HTTP
@@ -887,8 +893,32 @@ def fetch_acoustid_id(recording_mbid: str) -> str:
     unavailable.  On success a 1-second polite delay is observed before returning.
 
     :param recording_mbid: The MusicBrainz recording MBID (UUID string).
+    :param no_cache: When ``True``, bypass the on-disk cache entirely — always fetch from the network and do not write new
+        cache entries.  Defaults to ``False``.
     :returns: The first AcoustID track ID UUID string, or ``""`` when none is found or the request fails.
     """
+    if not no_cache:
+        cache_path = _metadata_cache_dir("acoustid") / f"{recording_mbid}.txt"
+        if cache_path.is_file():
+            log.debug("acoustid_cache_hit", recording_mbid=recording_mbid)
+            return cache_path.read_text(encoding="utf-8")
+
+    def _write_cache(value: str) -> None:
+        """Write ``value`` atomically to the AcoustID on-disk cache for ``recording_mbid``.
+
+        Uses a temp-file + :meth:`~pathlib.Path.replace` so readers never see a partial write.
+        A no-op when ``no_cache`` is ``True``.
+
+        :param value: The AcoustID UUID string to cache, or ``""`` for a definitive no-result.
+        """
+        if no_cache:
+            return  # pragma: no cover — no_cache=True callers never call _write_cache
+        wc_path = _metadata_cache_dir("acoustid") / f"{recording_mbid}.txt"
+        tmp_path = wc_path.with_suffix(".tmp")
+        tmp_path.write_text(value, encoding="utf-8")
+        tmp_path.replace(wc_path)
+        log.debug("acoustid_cache_written", recording_mbid=recording_mbid)
+
     log.debug("fetch_acoustid_id", recording_mbid=recording_mbid)
     url = f"https://api.acoustid.org/v2/track/list_by_mbid?mbid={recording_mbid}&format=json"
     for attempt in range(3):
@@ -903,15 +933,21 @@ def fetch_acoustid_id(recording_mbid: str) -> str:
                     first = tracks[0]
                     if isinstance(first, dict):
                         track_id = first.get("id", "")
-                        return str(track_id) if track_id else ""
+                        result = str(track_id) if track_id else ""
+                        _write_cache(result)
+                        return result
+            # Definitive empty: endpoint returned data but no usable track id.
+            _write_cache("")
             return ""
         except json.JSONDecodeError:
+            # Transient: malformed response — do not cache.
             log.warning("acoustid_parse_failed", recording_mbid=recording_mbid)
             return ""
         except urllib.error.HTTPError as exc:
             if exc.code < 500:
-                # 4xx: permanent client error — do not retry.
+                # 4xx: permanent client error — cache the empty result and do not retry.
                 log.warning("acoustid_http_error", recording_mbid=recording_mbid, code=exc.code, error=str(exc))
+                _write_cache("")
                 return ""
             wait = 2**attempt
             log.warning("acoustid_lookup_failed", recording_mbid=recording_mbid, attempt=attempt, wait_s=wait, error=str(exc))
@@ -920,6 +956,7 @@ def fetch_acoustid_id(recording_mbid: str) -> str:
             wait = 2**attempt
             log.warning("acoustid_lookup_failed", recording_mbid=recording_mbid, attempt=attempt, wait_s=wait, error=str(exc))
             time.sleep(wait)
+    # Transient: all retries exhausted (5xx / OSError) — do not cache.
     return ""
 
 

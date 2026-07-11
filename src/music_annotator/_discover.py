@@ -895,7 +895,7 @@ def discover(
     :param collision_policy: Policy for handling destination file collisions; forwarded to :func:`run`.
     :param delete: When ``True`` and not ``dry_run``, prompt the user to delete each successfully copied source directory.
     :param ui: A :class:`DiscoverUI` instance for user interaction.  Defaults to :class:`TerminalDiscoverUI`.
-    :param no_cache: When ``True``, bypass the cover art download cache; forwarded to :func:`run`.
+    :param no_cache: When ``True``, bypass all on-disk metadata and image caches; forwarded to :func:`run`.
     :param acoustid_key: AcoustID application API key.  When set, fingerprints source files and boosts candidates
         whose recordings are confirmed by AcoustID.  Forwarded to :func:`run`.
     """

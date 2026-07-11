@@ -242,7 +242,7 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Bypass the cover art download cache; always fetch images from the network.",
+        help="Bypass all on-disk metadata and image caches; always fetch from the network.",
     )
     _add_acoustid_arg(parser)
 

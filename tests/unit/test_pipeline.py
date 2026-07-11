@@ -5844,7 +5844,7 @@ class TestFetchAcoustidId:
         """
         self._make_resp(mocker, b'{"tracks": [{"id": "acoustid-uuid-123"}]}')
         mocker.patch("music_annotator._mb_api.time.sleep")
-        assert fetch_acoustid_id("rec-mbid") == "acoustid-uuid-123"
+        assert fetch_acoustid_id("rec-mbid", no_cache=True) == "acoustid-uuid-123"
 
     def test_non_dict_response_returns_empty(self, mocker: MockerFixture) -> None:
         """A non-dict JSON response (e.g. a list) returns an empty string.
@@ -5853,7 +5853,7 @@ class TestFetchAcoustidId:
         """
         self._make_resp(mocker, b'["unexpected"]')
         mocker.patch("music_annotator._mb_api.time.sleep")
-        assert fetch_acoustid_id("rec-mbid") == ""
+        assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
 
     def test_missing_tracks_key_returns_empty(self, mocker: MockerFixture) -> None:
         """A response dict with no 'tracks' key returns an empty string.
@@ -5862,7 +5862,7 @@ class TestFetchAcoustidId:
         """
         self._make_resp(mocker, b'{"status": "ok"}')
         mocker.patch("music_annotator._mb_api.time.sleep")
-        assert fetch_acoustid_id("rec-mbid") == ""
+        assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
 
     def test_empty_tracks_list_returns_empty(self, mocker: MockerFixture) -> None:
         """A response with an empty 'tracks' list returns an empty string.
@@ -5871,7 +5871,7 @@ class TestFetchAcoustidId:
         """
         self._make_resp(mocker, b'{"tracks": []}')
         mocker.patch("music_annotator._mb_api.time.sleep")
-        assert fetch_acoustid_id("rec-mbid") == ""
+        assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
 
     def test_non_dict_first_track_returns_empty(self, mocker: MockerFixture) -> None:
         """A response where the first track element is not a dict returns an empty string.
@@ -5880,7 +5880,7 @@ class TestFetchAcoustidId:
         """
         self._make_resp(mocker, b'{"tracks": ["not-a-dict"]}')
         mocker.patch("music_annotator._mb_api.time.sleep")
-        assert fetch_acoustid_id("rec-mbid") == ""
+        assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
 
     def test_empty_track_id_returns_empty(self, mocker: MockerFixture) -> None:
         """A response where the first track has an empty 'id' value returns an empty string.
@@ -5889,7 +5889,7 @@ class TestFetchAcoustidId:
         """
         self._make_resp(mocker, b'{"tracks": [{"id": ""}]}')
         mocker.patch("music_annotator._mb_api.time.sleep")
-        assert fetch_acoustid_id("rec-mbid") == ""
+        assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
 
     def test_network_error_returns_empty(self, mocker: MockerFixture) -> None:
         """All three retry attempts fail with OSError; returns empty string.
@@ -5898,7 +5898,7 @@ class TestFetchAcoustidId:
         """
         mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=OSError("network failure"))
         mocker.patch("music_annotator._mb_api.time.sleep")
-        assert fetch_acoustid_id("rec-mbid") == ""
+        assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
 
     def test_network_error_retried_succeeds(self, mocker: MockerFixture) -> None:
         """OSError on first attempt is retried; succeeds on the second attempt.
@@ -5914,7 +5914,7 @@ class TestFetchAcoustidId:
             side_effect=[OSError("timeout"), ctx],
         )
         mocker.patch("music_annotator._mb_api.time.sleep")
-        assert fetch_acoustid_id("rec-mbid") == "acoustid-uuid-456"
+        assert fetch_acoustid_id("rec-mbid", no_cache=True) == "acoustid-uuid-456"
 
     def test_json_decode_error_not_retried(self, mocker: MockerFixture) -> None:
         """A JSONDecodeError causes immediate return without retrying.
@@ -5927,7 +5927,7 @@ class TestFetchAcoustidId:
         ctx.read = MagicMock(return_value=b"not valid json {{{")
         mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen", return_value=ctx)
         mocker.patch("music_annotator._mb_api.time.sleep")
-        assert fetch_acoustid_id("rec-mbid") == ""
+        assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
         assert mock_urlopen.call_count == 1  # not retried
 
     def test_success_sleeps_one_second(self, mocker: MockerFixture) -> None:
@@ -5937,7 +5937,7 @@ class TestFetchAcoustidId:
         """
         self._make_resp(mocker, b'{"tracks": [{"id": "acoustid-uuid-789"}]}')
         mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
-        fetch_acoustid_id("rec-mbid")
+        fetch_acoustid_id("rec-mbid", no_cache=True)
         mock_sleep.assert_called_once_with(1)
 
 
