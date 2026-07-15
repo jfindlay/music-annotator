@@ -263,6 +263,145 @@ triple answers "what is this / is the audio stable"; AccurateRip answers "was th
 a crowd consensus of the same pressing).  See `docs/BACKLOG.md` "Source-adapter support" (whipper item) for the ingest-mode
 dependency.
 
+## Unified network-retrieval subpackage (`_net`) — lossless-archival retrieval policy
+
+**Motivation.**  music-annotator's scholarly-archival policy is *lossless*: never lose a remote
+resource that might exist, by accident or by design.  A retrieval that *might* have succeeded but
+failed to complete is an **error**, never a silent empty.  Today that principle is enforced
+inconsistently because there are two structurally different network paths.
+
+**Current state (as-audited 2026-07-14).**  Two retrieval mechanisms:
+1. **MB + CAA** — go through `musicbrainzngs` (`mb.get_release_by_id`, `mb.get_recording_by_id`,
+   `mb.get_work_by_id`, and — critically — `mb.get_image_list` / `mb.get_image`).  Wrapped by the
+   two-layer `_mb_retry` (exponential backoff, 6 attempts) + `_mb_call` (1 req/s) pattern.  On
+   exhausted retries `_mb_retry` **raises** `RuntimeError`; non-retryable `ResponseError`
+   re-raises.  All failures propagate to `_discover.py:966` `log.error("discover_run_error",
+   exc_info=True)`.  **This path already satisfies the lossless principle** (fails loud, logs
+   error at the boundary).
+2. **AcoustID** — the *sole* raw-`urllib` path (`fetch_acoustid_id`,
+   `_fetch_acoustid_lookup_raw`).  Its own hand-rolled 3-attempt loop; on failure **returns empty**
+   (`""` / `([], "")`) instead of raising.  **Retries-exhausted logs NOTHING** (silent give-up at
+   `_mb_api.py:959-960` and `1046-1047`); malformed-response and per-attempt cases log only
+   `warning`.  The caller (`_pipeline.py:1424`) stores the empty result with no log — a persisted
+   "no AcoustID" that may actually mean "fetch failed."  **This is the lossless-principle
+   violation.**
+
+**Two confirmed structural facts (why unification is possible and correct).**
+- `_mb_call` is already fully generic (call + sleep; no MB coupling).  `_mb_retry` is ~95% generic —
+  its *only* MB coupling is catching `mb.ResponseError` and classifying transient-vs-permanent by
+  **substring-matching the stringified exception** (`"503" in str(exc)`).  That string-scrape is a
+  workaround forced by musicbrainzngs; the AcoustID path already does it *correctly* with typed
+  `HTTPError.code` (`exc.code < 500`).
+- **musicbrainzngs's CAA module is a bare `urllib` URL-builder with ZERO CAA-specific logic**
+  (`caa.py` `_caa_request`: builds a `coverartarchive.org` URL, plain opener, calls `_safe_read`,
+  `json.loads`).  The `_safe_read` it calls is *already monkeypatched* by `_patched_safe_read`.  So
+  **CAA needs nothing from musicbrainzngs that the app can't do itself** — the canonical CAA URLs are
+  already captured in `_mb_api.py:726`.  musicbrainzngs's only irreplaceable value is `mbxml.py`
+  (XML→dict parsing for the three MB *data* calls).
+
+**Target design (converged, user-approved 2026-07-14).**  One general-purpose `_net` retrieval
+subpackage owning the app's *retrieval business policy*, not MusicBrainz specifics:
+- **One retry/backoff core**, parameterized by caller-supplied policy: retryable-classifier
+  (structured status codes / exception types — **never string-scraping**), terminal-action
+  (raise vs. return-sentinel), event name / logging context.
+- **The `_mb_*` names go away** (the coupling they imply is a transport accident).
+- **CAA and AcoustID both use `_net` directly** — CAA leaves musicbrainzngs entirely (reimplement
+  its two trivial URL templates; the app already has the URLs).
+- **The three MB *data* calls keep musicbrainzngs for `mbxml` parsing** but are wrapped by the
+  **same** retry core, with the classifier reading `exc.cause.code` (structured — `ResponseError`
+  stores the original `HTTPError` as `self.cause`) instead of `"503" in str(exc)`.  This kills the
+  string-scrape everywhere.
+- **`_patched_safe_read` shrinks** to the MB-data path only (CAA no longer routes through it).
+- **Terminal error logging**: one shared choke point in the core logs every terminal retrieval
+  failure as `log.error` (fixes the silent give-up gap).  Per-attempt `warning`s with rich fields
+  (`recording_mbid`, `coverid`, `duration_s`, …) stay at the call sites.
+
+**Failure-vs-no-data discrimination (the crux of "lossless").**  The distinction the code must
+preserve: a *working server returning no data* (no track id / no results / 4xx "unknown MBID/bad
+fingerprint") is legitimate **no-data** → return empty, no error.  A *retries-exhausted / malformed*
+response is **failure to retrieve something that might exist** → the lossless case → log error.
+- **MB + CAA**: retrieval failure → raise (data-integrity-critical; unchanged contract).
+- **AcoustID persisted-tag path** (`fetch_acoustid_id` → written to `acoustid_id` tag): retrieval
+  failure is a data-integrity loss for archived data.  **Open policy sub-decision** (deferred): raise
+  and abort the release like MB/CAA, vs. log ERROR + record an explicit re-runnable gap and proceed.
+  Both honor losslessness; they differ on whether a flaky AcoustID endpoint blocks an
+  otherwise-complete annotation.  Resolve when this graduates to a PLAN.
+- **AcoustID diagnostic path** (`fetch_acoustid_lookup` identity-confirm at `_pipeline.py:1127`;
+  candidate-seed at `_discover.py:704`): read-only, alters nothing archival.  Keep its never-raise
+  contract but its retrieval failure must log **error** (not silent, not confused with no-data).
+
+**AcoustID function collapse (safe simplification).**  `fetch_acoustid_id` (recording-MBID →
+UUID via `/v2/track/list_by_mbid`) and `fetch_acoustid_lookup` (fingerprint → recording-MBIDs via
+`/v2/lookup`) are **inverse endpoints** — both genuinely used (the fingerprint→MBID direction drives
+discovery candidate-seeding) and **cannot merge**.  But `fetch_acoustid_lookup` is just a thin
+wrapper that calls `_fetch_acoustid_lookup_raw` and discards the top cluster UUID; those two can
+collapse into one function returning the tuple, callers slicing what they need.  Also note:
+`_fetch_acoustid_lookup_raw` currently has **no cache** whereas `fetch_acoustid_id` does — the
+`_net` migration should give both the same caching posture.
+
+**Interactions / dependencies.**
+- **`mbngs2-1`** (below, musicbrainzngs2 track) is the upstream version of the `_patched_safe_read`
+  fix.  The `_net` refactor and the eventual musicbrainzngs2 migration must be sequenced together —
+  once CAA leaves musicbrainzngs, `_patched_safe_read`'s surface (and mbngs2-1's relevance to CAA)
+  shrinks to MB-data only.
+- The **line-273 "This should have already been fixed?"** item (an `acoustid_lookup_failed` timeout)
+  is a symptom of exactly this gap — it graduates into this work: the timeout is a retrieval
+  failure that currently degrades silently.
+- Depends on the **100% branch-coverage gate**: the retry-exhausted, per-exception, and
+  classify-transient-vs-permanent branches all need explicit tests.  **Verify** the CAA listing/image
+  decode against a real CAA response when CAA moves off musicbrainzngs (content-type quirk noted at
+  `caa.py:81-84`; the app infers MIME from bytes via `_infer_mime`, so this is likely a non-issue —
+  confirm).
+
+**Graduation note**: when this acquires a PLAN, resolve the deferred AcoustID persisted-path
+failure policy (raise-vs-gap) and sequence against the musicbrainzngs2 migration.
+
+## AcoustID tag naming + semantics — Picard alignment (transient library-maintenance task)
+
+**Deferred by user (2026-07-14)** until library annotation is (mostly) complete; treat as a
+transient library-maintenance pass (a persisted-tag migration — do not churn the convention
+mid-flight).
+
+**The confirmed inconsistency.**  The `ACOUSTID_ID` tag is written with **two semantically
+different UUIDs** depending on which path touches the file:
+- **Main pipeline** (`_pipeline.py:1424` → `fetch_acoustid_id`): the AcoustID **track UUID** from
+  `/v2/track/list_by_mbid` (recording-MBID keyed).
+- **`enrich(re_resolve=True)`** (`_pipeline_maint.py:1120-1122` → `_fetch_acoustid_lookup_raw`): the
+  AcoustID **cluster UUID** from `/v2/lookup` `results[0].id` (fingerprint keyed).
+These can be different UUIDs for the same file; the audit pass (`_audit.py:177`, journal-vs-tag
+`acoustid_id` compare) could flag spurious mismatches on a file touched by both.
+
+**Authoritative reference (Picard, per AGENTS.md tag-convention anchor).**  Confirmed against the
+MetaBrainz community thread with Picard's lead dev (Philipp Wolfer / `outsidecontext`,
+`community.metabrainz.org/t/acoustid-id-vs-acoustid-fingerprint/676749`).  Picard defines exactly two
+AcoustID tags:
+- **`acoustid_id`** = *"the ID returned as a result for the fingerprint lookup on acoustid.org"* —
+  i.e. the **cluster UUID from `/v2/lookup`**.  This is what `enrich` writes; the **main pipeline's
+  `list_by_mbid` track UUID is the divergent-from-Picard value.**  (Correction to an earlier
+  session framing that called the enrich write "the bug" — against Picard it is the pipeline that
+  diverges.)
+- **`acoustid_fingerprint`** = the raw **Chromaprint fingerprint string** (not a UUID; recomputable
+  from audio; Picard does not write it by default).  music-annotator already stores this value but
+  **under the key `CHROMAPRINT_FP`** ("Chromaprint Fingerprint"), not Picard's `ACOUSTID_FINGERPRINT`.
+
+**User intent**: keep **both** AcoustID values in the tags — the AcoustID UUID and the fingerprint.
+Both are already stored; the work is making them *consistent* and *Picard-conformant*.
+
+**Scope when reopened** (decide the two sub-questions at that time):
+1. **`ACOUSTID_ID` value**: make it the `/v2/lookup` cluster UUID **everywhere** (Picard-aligned;
+   both writer paths source it identically; the main pipeline switches from `list_by_mbid` — note
+   this adds an fpcalc + lookup dependency to the pipeline for a value it currently gets cheaply from
+   the recording MBID).  *Alternative*: keep both UUIDs as distinct tags (`ACOUSTID_ID`=cluster +
+   a new `ACOUSTID_TRACKID`=track UUID) — nothing lost, no new fpcalc dependency, but a non-Picard
+   tag extension.
+2. **`CHROMAPRINT_FP` → `ACOUSTID_FINGERPRINT` rename** for full Picard conformance — a persisted-key
+   migration (existing files carry `CHROMAPRINT_FP`; audit/enrich must read both old and new keys
+   during transition).  May not be worth it if `CHROMAPRINT_FP` is an intentional project choice.
+
+**Fold into** the general library-revision phase (same phase as the catalogue-colon retro-fix and
+W3b/L2 depth normalisation) — one pass that re-derives/re-patches the whole library under the final
+conventions rather than piecemeal.
+
 ## Other unsharded backlog
 
 - Playlist generation for collection/cycle groupings (Ring cycle, symphony cycles, etc.).
@@ -270,7 +409,9 @@ dependency.
 - Add cover art type: sleeve front/back.
 - When an MBID does not have DiscIDs and comprises multiple media, music-annotator usually selects
   the wrong medium.  Can this be improved?
-- This should have already been fixed?
+- This should have already been fixed? → **graduated into "Unified network-retrieval subpackage
+  (`_net`)"** above (2026-07-14).  This timeout is a retrieval failure that currently degrades
+  silently (returns empty, no error log) — exactly the lossless-principle gap the `_net` work fixes.
   ```
   acoustid_lookup_failed [music_annotator._mb_api] attempt=0 error='The read operation timed out' recording_mbid=93200fdb-9f20-4eb0-8cc1-0aed9d97508c wait_s=1
   ```
