@@ -1738,6 +1738,63 @@ class TestBuildDestPathEdgeCases:
         assert "Karajan" in top_dir
         assert "BPO" in top_dir
 
+    def test_album_tag_used_as_work_dir_when_no_work(self, fs: FakeFilesystem) -> None:
+        """build_dest_path uses ALBUM as the work directory when CWP_WORK_TOP and WORK are absent.
+
+        Non-classical releases have no CWP work hierarchy and no WORK tag.  Without this fallback,
+        work_dir would be ``""`` and Path would collapse it, reducing the relative path to two
+        components and corrupting work_top_dir derivation in the copy pipeline.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = TrackTags(
+            title="Summer Love",
+            album="Liz Rhodes",
+            movementnumber="1",
+            movementtotal="10",
+            artist="Rhodes, Liz",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        result = music_annotator.build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "Liz Rhodes", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Summer Love"}}),
+            tags,
+        )
+        # Must have at least 4 parts: /, lib, top_dir, work_dir, leaf
+        assert len(result.parts) >= 4, "work_dir must not collapse when ALBUM is the only work tag"
+        assert "Liz Rhodes" in result.parts[3]
+
+    def test_unknown_album_fallback_when_all_work_tags_absent(self, fs: FakeFilesystem) -> None:
+        """build_dest_path uses 'Unknown Album' when CWP_WORK_TOP, WORK, and ALBUM are all absent.
+
+        Ensures the path always has a non-empty work-dir component even for the most bare-bones
+        tags, preventing the two-component path collapse that causes ENOTDIR in the copy pipeline.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = TrackTags(
+            title="Track One",
+            movementnumber="1",
+            movementtotal="1",
+            artist="Some Artist",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        result = music_annotator.build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "Album", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Track One"}}),
+            tags,
+        )
+        assert len(result.parts) >= 4, "work_dir must not collapse when all work tags are absent"
+        assert "Unknown Album" in result.parts[3]
+
 
 # ---------------------------------------------------------------------------
 # build_dest_path — concerto-soloist path injection (KAT S5)

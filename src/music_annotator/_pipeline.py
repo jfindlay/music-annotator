@@ -644,6 +644,7 @@ def _write_freedb_yaml(
     freedb_written.add(dest_yaml)
     src_data = yaml_src.read_bytes()
     src_hash = hashlib.sha256(src_data).hexdigest()
+    work_top_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(yaml_src, dest_yaml)
     dest_hash = hashlib.sha256(dest_yaml.read_bytes()).hexdigest()
     if dest_hash != src_hash:

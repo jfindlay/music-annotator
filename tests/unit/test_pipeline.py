@@ -1280,6 +1280,26 @@ class TestWriteFreedBYaml:
         with pytest.raises(RuntimeError, match="freedb yaml copy integrity failure"):
             _write_freedb_yaml(src, work_top, 1, set(), journal, "now", "rel-1")  # pylint: disable=protected-access
 
+    def test_creates_work_top_dir_when_absent(self, fs: FakeFilesystem) -> None:
+        """_write_freedb_yaml creates work_top_dir if it does not yet exist.
+
+        When all tracks are skipped (pre-existing), the copy loop never calls mkdir for the work
+        directory, so _write_freedb_yaml must create it itself before writing the sidecar.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        work_top = Path("/dest/Artist/Work")
+        fs.create_dir(str(src))
+        # Deliberately do NOT create work_top — it must be created by _write_freedb_yaml itself.
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=self._YAML_CONTENT)
+        journal: list[TransactionEntry] = []
+        written: set[Path] = set()
+        _write_freedb_yaml(src, work_top, 1, written, journal, "now", "rel-1")  # pylint: disable=protected-access
+        assert work_top.is_dir()
+        assert (work_top / "freedb_disc_1.yaml").exists()
+        assert len(journal) == 1
+
 
 # ---------------------------------------------------------------------------
 # run() — freedb yaml written end-to-end

@@ -1004,8 +1004,11 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     #   RECORDING_FIRST_RELEASE_DATE  — year this specific audio first appeared on any release
     #   ORIGINALDATE                  — year the album (release group) was first published
     #   DATE                          — year of this specific pressing
-    work_title = file_dict.get("CWP_WORK_TOP") or file_dict.get("WORK", "")
-    work_dir = safe_name(work_title)
+    # Fall back through ALBUM so that non-classical releases (no CWP work hierarchy, no WORK tag)
+    # still produce a non-empty work_dir.  An empty work_dir causes Path to collapse the component,
+    # reducing the relative path to two parts and corrupting work_top_dir derivation downstream.
+    work_title = file_dict.get("CWP_WORK_TOP") or file_dict.get("WORK") or file_dict.get("ALBUM", "")
+    work_dir = safe_name(work_title) if work_title else "Unknown Album"
 
     def _extract_year(raw: str) -> str:
         """Return the 4-digit year prefix of ``raw``, or ``""`` if absent or non-numeric.
