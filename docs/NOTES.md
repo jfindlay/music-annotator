@@ -1,5 +1,37 @@
 # music-annotator — design notes and learnings
 
+## Two lenses: filesystem is the catalog, playlists are the reading room
+
+The library has two complementary access structures (user, 2026-07-17).  The **filesystem taxonomy**
+is a Library-of-Congress-style catalog: storage organised by musical work structure, admitting
+everything — irrespective of context, scope, age, or style, every medium either has or will be given
+a taxonomic path.  The **playlist library** is the main valuable, intuitive access lens: it
+reconstitutes the intentional wholes the taxonomy deliberately decomposes — "albums" in the
+legitimate sense (a track sequence that, though perhaps heterogeneous and of separate works,
+comprises an intentional whole, or whose progression is itself an artistic statement); entire
+multi-movement works freed from the antiquated partitions of storage media; cycles; box-set
+collections (a composer's complete works, a performer's complete recordings).
+
+The structural consequence: **album/sequence identity migrates from directory structure to playlist
+objects.**  This is the counterpart of "path is a handle, not a manifest" (below) — the path gives up
+being the album; the playlist layer is where release/sequence identity is re-expressed.  Because
+release membership and track order are tag-held (`MUSICBRAINZ_ALBUMID` + positions), derived
+playlists are regenerable artifacts under database-as-infrastructure; only human-curated sequences
+are authored data.
+
+## Coverage before quality (provisional inclusion)
+
+"Library complete" means **nothing left outside**, not everything perfectly annotated.  Every source
+dir is integrated at the best rung currently achievable (full MB → MB-partial → alternate-source →
+source-tags-only), with the rung explicitly persisted in the track+sidecars unit.  This converts the
+ingest backlog into a maintenance workload — the shape the idempotent machinery (`audit --enrich`,
+`repath`, `regroup`) is built for — and gives every future census, revision pass, and audit one
+complete corpus instead of a moving in/out boundary.  Two invariant touch-points: explicit rung
+marking is what keeps deliberate degradation consistent with the lossless principle ("never
+*silently* degrade" — the failure-vs-no-data discrimination, persisted); and provisional paths will
+churn on upgrade, which is acceptable because journalled `repath` (C-PROV/C-MOVE) already owns
+exactly that.
+
 ## Path is a handle, not a manifest
 
 The destination directory and filename are *handles* — short, stable identifiers a user
