@@ -19,7 +19,7 @@ import structlog
 from rich.markup import escape as _markup_escape
 
 from music_annotator._console import _console
-from music_annotator._mb_api import _mb_call, _mb_retry, fetch_acoustid_lookup, fetch_release, init_mb
+from music_annotator._mb_api import _fetch_acoustid_lookup_raw, _mb_call, _mb_retry, fetch_release, init_mb
 from music_annotator._pipeline import CollisionPolicy, run
 from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
@@ -672,7 +672,7 @@ def _enrich_candidates_with_acoustid_seed(
 
     For each source file, computes a Chromaprint fingerprint via :func:`~music_annotator._pipeline_io._run_fpcalc`
     and reads the audio duration via :func:`~music_annotator._pipeline_io._read_duration_ms`, then calls
-    :func:`~music_annotator._mb_api.fetch_acoustid_lookup` to retrieve the ordered list of recording MBIDs
+    :func:`~music_annotator._mb_api._fetch_acoustid_lookup_raw` to retrieve the ordered list of recording MBIDs
     that AcoustID associates with that fingerprint.  The union of all recording MBIDs across all source files
     is collected.
 
@@ -701,7 +701,7 @@ def _enrich_candidates_with_acoustid_seed(
         fp = _run_fpcalc(path)
         dur_ms = _read_duration_ms(path)
         dur_s = dur_ms // 1000
-        mbids = fetch_acoustid_lookup(fp, dur_s, acoustid_key)
+        mbids, _ = _fetch_acoustid_lookup_raw(fp, dur_s, acoustid_key)
         acoustid_recording_ids.update(mbids)
 
     if not acoustid_recording_ids:
@@ -937,7 +937,11 @@ def discover(
         # sequence corroboration without restructuring the discovery flow.
         source_files = find_source_files(src_dir)
         candidates = _enrich_candidates_with_sequence_corroboration(source_files, candidates, {})
-        candidates = _enrich_candidates_with_acoustid_seed(source_files, candidates, acoustid_key)
+        try:
+            candidates = _enrich_candidates_with_acoustid_seed(source_files, candidates, acoustid_key)
+        except (ValueError, mb.WebServiceError, RuntimeError, OSError) as exc:
+            log.error("discover_acoustid_seed_error", path=str(src_dir), error=str(exc), exc_info=True)
+            continue
 
         if not candidates:
             _console.print("  [bold yellow]No candidates found.[/]")

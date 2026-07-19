@@ -1114,10 +1114,20 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
         # audio_hash and chromaprint_fp.  Only attempted when chromaprint_fp was (re)computed
         # (i.e. it is present in write_fields), so that the lookup uses a fresh fingerprint.
         # When the lookup returns no results, acoustid_id is left unchanged (inconclusive).
+        # Cannot-determine failures (5xx exhaustion, malformed JSON) are logged and skipped so
+        # that a transient AcoustID outage does not abort the entire enrich run.
         if re_resolve and acoustid_key and "chromaprint_fp" in write_fields:
             _enrich_fp = write_fields["chromaprint_fp"]
             _enrich_dur_s = _read_duration_ms(current_path) // 1000
-            _, _enrich_top_uuid = _fetch_acoustid_lookup_raw(_enrich_fp, _enrich_dur_s, acoustid_key)
+            try:
+                _, _enrich_top_uuid = _fetch_acoustid_lookup_raw(_enrich_fp, _enrich_dur_s, acoustid_key)
+            except (OSError, RuntimeError, ValueError) as _exc:
+                log.warning(
+                    "enrich_acoustid_lookup_failed",
+                    path=str(current_path.relative_to(dest_root)),
+                    error=str(_exc),
+                )
+                _enrich_top_uuid = ""
             if _enrich_top_uuid:
                 write_fields["acoustid_id"] = _enrich_top_uuid
 

@@ -8,6 +8,7 @@ The module-level :data:`_WORK_CACHE` avoids redundant round-trips for shared par
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import os
 import socket
@@ -311,6 +312,48 @@ def _mb_data_classify(exc: Exception) -> RetryDecision:
     # OSError covers URLError and plain transport failures (no HTTP code available).
     # This check comes AFTER the ResponseError check to honour the ordering rule: HTTPError
     # is a subclass of OSError, and ResponseError wraps it — the typed code must be extracted first.
+    if isinstance(exc, OSError):
+        return RetryDecision.RETRY
+    return RetryDecision.FATAL
+
+
+def _acoustid_classify(exc: Exception) -> RetryDecision:
+    """Structured classifier for AcoustID HTTP fetches — maps an exception to a :class:`~music_annotator._net.RetryDecision`.
+
+    Reads typed attributes of the exception — never ``str(exc)``.  The ordering rule (C-NET-CORE) is
+    observed: ``urllib.error.HTTPError`` is a subclass of ``OSError``; the HTTP status code is extracted
+    from ``exc.code`` *before* any broad ``OSError`` check.
+
+    Classification rules:
+
+    - ``urllib.error.HTTPError``:
+      - 4xx (400, 404, etc.) → :attr:`~music_annotator._net.RetryDecision.NO_DATA` (bad fingerprint / unknown MBID —
+        authoritative no-data from the AcoustID server)
+      - 307 → :attr:`~music_annotator._net.RetryDecision.RETRY` (transient redirect-loop condition)
+      - 5xx (500, 503, etc.) → :attr:`~music_annotator._net.RetryDecision.RETRY` (transient server error)
+      - any other code → :attr:`~music_annotator._net.RetryDecision.FATAL`
+    - ``json.JSONDecodeError`` → :attr:`~music_annotator._net.RetryDecision.FATAL` (cannot-determine: bytes received
+      but unparseable — the lossless principle requires a raise, not a silent empty)
+    - ``OSError`` (transport failure without HTTP code) → :attr:`~music_annotator._net.RetryDecision.RETRY`
+    - Any other exception → :attr:`~music_annotator._net.RetryDecision.FATAL`
+
+    :param exc: The exception raised by the fetch callable.
+    :returns: A :class:`~music_annotator._net.RetryDecision` verdict.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        code = exc.code
+        if code == 307 or code >= 500:
+            return RetryDecision.RETRY
+        if 400 <= code < 500:
+            return RetryDecision.NO_DATA
+        return RetryDecision.FATAL
+    # json.JSONDecodeError is a ValueError subclass; check it before the broad OSError check.
+    # A malformed response is cannot-determine (bytes received but unparseable) → FATAL.
+    if isinstance(exc, json.JSONDecodeError):
+        return RetryDecision.FATAL
+    # OSError covers URLError and plain transport failures (no HTTP code available).
+    # This check comes AFTER the HTTPError check to honour the ordering rule: HTTPError
+    # is a subclass of OSError — the typed code must be extracted first.
     if isinstance(exc, OSError):
         return RetryDecision.RETRY
     return RetryDecision.FATAL
@@ -1019,22 +1062,28 @@ def fetch_acoustid_id(recording_mbid: str, no_cache: bool = False) -> str:
     (ID3), matching the convention used by MusicBrainz Picard.
 
     On a cache hit (``~/.cache/music-annotator/acoustid/<recording_mbid>.txt`` exists and ``no_cache`` is ``False``) the cached
-    value is returned immediately without any network call or polite delay.  On a miss, the endpoint is queried.  Definitive
-    results (successful UUID, genuine empty from the endpoint, or a permanent 4xx error) are written atomically to the cache via
-    a temp-file + :meth:`~pathlib.Path.replace`.  Transient failures (``JSONDecodeError``, 5xx/OSError retries exhausted) are
-    **not** cached so that a brief outage does not permanently cache an empty AcoustID for a recording that actually has one.
+    value is returned immediately without any network call or polite delay.  On a miss, the endpoint is queried via
+    :func:`~music_annotator._net.retrieve` with :func:`_acoustid_classify` as the structured classifier.
+
+    Definitive results (successful UUID, genuine empty from the endpoint, or an authoritative 4xx) are written atomically to
+    the cache via a temp-file + :meth:`~pathlib.Path.replace`.  Cannot-determine failures (5xx/OSError retries exhausted,
+    malformed JSON) are **not** cached and **raise** so that a brief outage does not permanently cache an empty AcoustID for a
+    recording that actually has one.  The raise propagates to the per-release error boundary in
+    :func:`~music_annotator._discover.discover`.
 
     No API key is required for this endpoint.  The call uses a 10-second socket timeout.  Up to three attempts are made on
     transient network errors (``OSError``) and 5xx HTTP errors, sleeping ``2 ** attempt`` seconds between retries.  4xx HTTP
-    errors (client errors, including 404) are treated as permanent failures and return ``""`` immediately without retrying.  A
-    ``JSONDecodeError`` (malformed response) is also not retried because the response content is unlikely to change.  The
-    function always returns ``""`` on failure so that the rest of the annotation pipeline is never blocked by AcoustID being
-    unavailable.  On success a 1-second polite delay is observed before returning.
+    errors (client errors, including 404) are treated as authoritative no-data and return ``""`` after caching.  A
+    ``JSONDecodeError`` (malformed response) is a cannot-determine failure and raises.  On success a 1-second polite delay is
+    observed before returning.
 
     :param recording_mbid: The MusicBrainz recording MBID (UUID string).
     :param no_cache: When ``True``, bypass the on-disk cache entirely — always fetch from the network and do not write new
         cache entries.  Defaults to ``False``.
-    :returns: The first AcoustID track ID UUID string, or ``""`` when none is found or the request fails.
+    :returns: The first AcoustID track ID UUID string, or ``""`` when none is found or the server authoritatively answered
+        no-data (4xx).
+    :raises Exception: Re-raises the last exception on RETRY exhaustion (5xx / OSError) or on a FATAL classification
+        (malformed JSON).  The raise propagates to the per-release error boundary in discover().
     """
     if not no_cache:
         cache_path = _metadata_cache_dir("acoustid") / f"{recording_mbid}.txt"
@@ -1060,46 +1109,50 @@ def fetch_acoustid_id(recording_mbid: str, no_cache: bool = False) -> str:
 
     log.debug("fetch_acoustid_id", recording_mbid=recording_mbid)
     url = f"https://api.acoustid.org/v2/track/list_by_mbid?mbid={recording_mbid}&format=json"
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                raw = resp.read()
-            time.sleep(1)
-            data: JSON = json.loads(raw)
-            if isinstance(data, dict):
-                tracks = data.get("tracks")
-                if isinstance(tracks, list) and tracks:
-                    first = tracks[0]
-                    if isinstance(first, dict):
-                        track_id = first.get("id", "")
-                        result = str(track_id) if track_id else ""
-                        _write_cache(result)
-                        return result
-            # Definitive empty: endpoint returned data but no usable track id.
-            _write_cache("")
-            return ""
-        except json.JSONDecodeError:
-            # Transient: malformed response — do not cache.
-            log.warning("acoustid_parse_failed", recording_mbid=recording_mbid)
-            return ""
-        except urllib.error.HTTPError as exc:
-            if exc.code < 500:
-                # 4xx: permanent client error — cache the empty result and do not retry.
-                log.warning("acoustid_http_error", recording_mbid=recording_mbid, code=exc.code, error=str(exc))
-                _write_cache("")
-                return ""
-            wait = 2**attempt
-            log.warning("acoustid_lookup_failed", recording_mbid=recording_mbid, attempt=attempt, wait_s=wait, error=str(exc))
-            time.sleep(wait)
-        except OSError as exc:
-            wait = 2**attempt
-            log.warning("acoustid_lookup_failed", recording_mbid=recording_mbid, attempt=attempt, wait_s=wait, error=str(exc))
-            time.sleep(wait)
-    # Transient: all retries exhausted (5xx / OSError) — do not cache.
-    return ""
+
+    def _fetch() -> str:
+        """Perform one AcoustID track-list request and return the first track UUID or ``""``.
+
+        Raises :class:`urllib.error.HTTPError`, :class:`OSError`, or :class:`json.JSONDecodeError`
+        on failure; all are classified by :func:`_acoustid_classify`.
+
+        :returns: The first AcoustID track UUID string, or ``""`` for a genuine empty result.
+        :raises urllib.error.HTTPError: On any HTTP error response.
+        :raises OSError: On transport-level failures.
+        :raises json.JSONDecodeError: When the response body is not valid JSON.
+        """
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            raw = resp.read()
+        data: JSON = json.loads(raw)
+        if isinstance(data, dict):
+            tracks = data.get("tracks")
+            if isinstance(tracks, list) and tracks:
+                first = tracks[0]
+                if isinstance(first, dict):
+                    track_id = first.get("id", "")
+                    return str(track_id) if track_id else ""
+        # Genuine empty: endpoint returned data but no usable track id.
+        return ""
+
+    policy = NetPolicy(
+        classify=_acoustid_classify,
+        event="acoustid_id",
+        log_fields={"recording_mbid": recording_mbid},
+        max_attempts=3,
+    )
+    raw_result = retrieve(_fetch, policy)
+    if raw_result is None:
+        # NO_DATA: authoritative 4xx — cache the empty result.
+        _write_cache("")
+        return ""
+    # Success: cache the definitive result (UUID or genuine empty) and return.
+    _write_cache(raw_result)
+    return raw_result
 
 
-def _fetch_acoustid_lookup_raw(fingerprint: str, duration_s: int, api_key: str) -> tuple[list[str], str]:
+def _fetch_acoustid_lookup_raw(
+    fingerprint: str, duration_s: int, api_key: str, no_cache: bool = False
+) -> tuple[list[str], str]:
     """Call the AcoustID ``/v2/lookup`` endpoint and return recording MBIDs plus the top cluster UUID.
 
     Hits ``https://api.acoustid.org/v2/lookup`` with the supplied Chromaprint fingerprint, duration,
@@ -1111,100 +1164,129 @@ def _fetch_acoustid_lookup_raw(fingerprint: str, duration_s: int, api_key: str) 
     **Early return** ``([], "")`` without any network call when ``api_key == ""``, ``fingerprint == ""``,
     or ``duration_s <= 0``.
 
-    **Retry posture** mirrors :func:`fetch_acoustid_id`: up to three attempts with a 10-second socket
-    timeout.  4xx HTTP errors are treated as permanent failures and return ``([], "")`` immediately.
-    5xx errors and :exc:`OSError` trigger an exponential back-off sleep (``2 ** attempt`` seconds) and
-    a retry.  :exc:`json.JSONDecodeError` returns ``([], "")`` without retrying.  On success a 1-second
-    polite delay is observed before returning.  The function never raises.
+    Routes through :func:`~music_annotator._net.retrieve` with :func:`_acoustid_classify` as the
+    structured classifier.  The disk-cache posture mirrors :func:`fetch_acoustid_id`: definitive results
+    (successful lookup or authoritative 4xx) are written atomically to the cache; cannot-determine
+    failures (5xx/OSError retries exhausted, malformed JSON) are **not** cached and **raise**.
+
+    **Retry posture**: up to three attempts with a 10-second socket timeout.  4xx HTTP errors are
+    treated as authoritative no-data and return ``([], "")`` after caching.  5xx errors and
+    :exc:`OSError` trigger exponential back-off and a retry; exhaustion raises.  :exc:`json.JSONDecodeError`
+    is a cannot-determine failure and raises.  On success a 1-second polite delay is observed before
+    returning.
 
     :param fingerprint: Chromaprint fingerprint string produced by ``fpcalc``.
     :param duration_s: Audio duration in whole seconds (``duration_ms // 1000``).
     :param api_key: AcoustID application API key.
-    :returns: A 2-tuple ``(recording_mbids, top_acoustid_uuid)``.  Both elements are ``""`` / ``[]``
-        on any failure or when the lookup returns no results.
+    :param no_cache: When ``True``, bypass the on-disk cache entirely.  Defaults to ``False``.
+    :returns: A 2-tuple ``(recording_mbids, top_acoustid_uuid)``.  Both elements are ``[]`` / ``""``
+        when the server authoritatively answered no-data or when the lookup returns no results.
+    :raises Exception: Re-raises the last exception on RETRY exhaustion (5xx / OSError) or on a FATAL
+        classification (malformed JSON).  The raise propagates to the per-release error boundary in
+        discover().
     """
     if not api_key or not fingerprint or duration_s <= 0:
         return [], ""
+
+    # Cache key: fingerprint is too long to use directly; hash it to a fixed-length key.
+    _fp_hash = hashlib.sha256(fingerprint.encode()).hexdigest()[:16]
+    _cache_key = f"{_fp_hash}_{duration_s}"
+
+    if not no_cache:
+        cache_path = _metadata_cache_dir("acoustid-lookup") / f"{_cache_key}.json"
+        if cache_path.is_file():
+            log.debug("acoustid_lookup_cache_hit", cache_key=_cache_key)
+            cached_raw: JSON = json.loads(cache_path.read_text(encoding="utf-8"))
+            if isinstance(cached_raw, dict):
+                mbids_raw = cached_raw.get("mbids", [])
+                uuid_raw = cached_raw.get("uuid", "")
+                mbids = [str(m) for m in mbids_raw if isinstance(m, str)] if isinstance(mbids_raw, list) else []
+                uuid = str(uuid_raw) if isinstance(uuid_raw, str) else ""
+                return mbids, uuid
+
+    def _write_lookup_cache(mbids: list[str], uuid: str) -> None:
+        """Write lookup result atomically to the on-disk cache.
+
+        A no-op when ``no_cache`` is ``True``.
+
+        :param mbids: The recording MBID list to cache.
+        :param uuid: The top AcoustID UUID to cache.
+        """
+        if no_cache:
+            return  # pragma: no cover — no_cache=True callers never call _write_lookup_cache
+        wc_path = _metadata_cache_dir("acoustid-lookup") / f"{_cache_key}.json"
+        tmp_path = wc_path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps({"mbids": mbids, "uuid": uuid}), encoding="utf-8")
+        tmp_path.replace(wc_path)
+        log.debug("acoustid_lookup_cache_written", cache_key=_cache_key)
 
     url = (
         f"https://api.acoustid.org/v2/lookup"
         f"?client={api_key}&fingerprint={fingerprint}&duration={duration_s}&meta=recordingids&format=json"
     )
     log.debug("fetch_acoustid_lookup", duration_s=duration_s)
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
-                raw = resp.read()
-            time.sleep(1)
-            data: JSON = json.loads(raw)
-            results = data.get("results") if isinstance(data, dict) else None
-            if not isinstance(results, list) or not results:
-                return [], ""
 
-            # Sort results by descending score (best first); score may be absent → treat as 0.
-            def _score(r: object) -> float:
-                if isinstance(r, dict):
-                    s = r.get("score", 0)
-                    return float(s) if isinstance(s, (int, float)) else 0.0
-                return 0.0
+    def _fetch() -> tuple[list[str], str]:
+        """Perform one AcoustID lookup request and return ``(recording_mbids, top_acoustid_uuid)``.
 
-            sorted_results = sorted(results, key=_score, reverse=True)
-            top_result = sorted_results[0]
-            top_acoustid_uuid = str(top_result.get("id", "")) if isinstance(top_result, dict) else ""
-            # Flatten recording MBIDs in score order, de-duplicating while preserving order.
-            seen: set[str] = set()
-            recording_mbids: list[str] = []
-            for result in sorted_results:
-                if not isinstance(result, dict):
-                    continue
-                recordings = result.get("recordings")
-                if not isinstance(recordings, list):
-                    continue
-                for rec in recordings:
-                    if not isinstance(rec, dict):
-                        continue
-                    rec_id = rec.get("id", "")
-                    if rec_id and isinstance(rec_id, str) and rec_id not in seen:
-                        seen.add(rec_id)
-                        recording_mbids.append(rec_id)
-            return recording_mbids, top_acoustid_uuid
-        except json.JSONDecodeError:
-            log.warning("acoustid_lookup_parse_failed", duration_s=duration_s)
+        Raises :class:`urllib.error.HTTPError`, :class:`OSError`, or :class:`json.JSONDecodeError`
+        on failure; all are classified by :func:`_acoustid_classify`.
+
+        :returns: A 2-tuple of recording MBID list and top AcoustID UUID string.
+        :raises urllib.error.HTTPError: On any HTTP error response.
+        :raises OSError: On transport-level failures.
+        :raises json.JSONDecodeError: When the response body is not valid JSON.
+        """
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            raw = resp.read()
+        data: JSON = json.loads(raw)
+        results = data.get("results") if isinstance(data, dict) else None
+        if not isinstance(results, list) or not results:
             return [], ""
-        except urllib.error.HTTPError as exc:
-            if exc.code < 500:
-                # 4xx: permanent client error — do not retry.
-                log.warning("acoustid_lookup_http_error", duration_s=duration_s, code=exc.code, error=str(exc))
-                return [], ""
-            wait = 2**attempt
-            log.warning("acoustid_lookup_failed", duration_s=duration_s, attempt=attempt, wait_s=wait, error=str(exc))
-            time.sleep(wait)
-        except OSError as exc:
-            wait = 2**attempt
-            log.warning("acoustid_lookup_failed", duration_s=duration_s, attempt=attempt, wait_s=wait, error=str(exc))
-            time.sleep(wait)
-    return [], ""
 
+        # Sort results by descending score (best first); score may be absent → treat as 0.
+        def _score(r: object) -> float:
+            if isinstance(r, dict):
+                s = r.get("score", 0)
+                return float(s) if isinstance(s, (int, float)) else 0.0
+            return 0.0
 
-def fetch_acoustid_lookup(fingerprint: str, duration_s: int, api_key: str) -> list[str]:
-    """Look up recording MBIDs for a Chromaprint fingerprint via the AcoustID ``/v2/lookup`` endpoint.
+        sorted_results = sorted(results, key=_score, reverse=True)
+        top_result = sorted_results[0]
+        top_acoustid_uuid = str(top_result.get("id", "")) if isinstance(top_result, dict) else ""
+        # Flatten recording MBIDs in score order, de-duplicating while preserving order.
+        seen: set[str] = set()
+        recording_mbids: list[str] = []
+        for result in sorted_results:
+            if not isinstance(result, dict):
+                continue
+            recordings = result.get("recordings")
+            if not isinstance(recordings, list):
+                continue
+            for rec in recordings:
+                if not isinstance(rec, dict):
+                    continue
+                rec_id = rec.get("id", "")
+                if rec_id and isinstance(rec_id, str) and rec_id not in seen:
+                    seen.add(rec_id)
+                    recording_mbids.append(rec_id)
+        return recording_mbids, top_acoustid_uuid
 
-    Calls :func:`_fetch_acoustid_lookup_raw` and returns only the ordered, de-duplicated list of
-    MusicBrainz recording UUIDs ranked by descending AcoustID match score (best first).  The top
-    AcoustID cluster UUID is discarded; use :func:`_fetch_acoustid_lookup_raw` directly when both
-    values are needed (e.g. in :func:`~music_annotator._pipeline.enrich`).
-
-    Returns ``[]`` on any failure, when the lookup returns no results, or when any of the early-exit
-    conditions apply (``api_key == ""``, ``fingerprint == ""``, ``duration_s <= 0``).  Never raises.
-
-    :param fingerprint: Chromaprint fingerprint string produced by ``fpcalc``.
-    :param duration_s: Audio duration in whole seconds (``duration_ms // 1000``).
-    :param api_key: AcoustID application API key.
-    :returns: Ordered, de-duplicated list of MusicBrainz recording MBID strings, best match first.
-        Returns ``[]`` on failure or when no results are found.
-    """
-    recording_mbids, _top_uuid = _fetch_acoustid_lookup_raw(fingerprint, duration_s, api_key)
-    return recording_mbids
+    policy = NetPolicy(
+        classify=_acoustid_classify,
+        event="acoustid_lookup",
+        log_fields={"duration_s": duration_s},
+        max_attempts=3,
+    )
+    raw_result = retrieve(_fetch, policy)
+    if raw_result is None:
+        # NO_DATA: authoritative 4xx — cache the empty result.
+        _write_lookup_cache([], "")
+        return [], ""
+    # Success: cache the definitive result and return.
+    mbids, uuid = raw_result
+    _write_lookup_cache(mbids, uuid)
+    return mbids, uuid
 
 
 def _get_bottom_work(embedded: MBWork, no_cache: bool = False) -> MBWork:

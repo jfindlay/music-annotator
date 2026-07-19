@@ -32,9 +32,9 @@ from rich.markup import escape as _markup_escape
 from music_annotator._artists import artist_credit_phrase
 from music_annotator._console import _console
 from music_annotator._mb_api import (
+    _fetch_acoustid_lookup_raw,
     _get_bottom_work,
     fetch_acoustid_id,
-    fetch_acoustid_lookup,
     fetch_cover_art,
     fetch_recording_detail,
     fetch_release,
@@ -1122,10 +1122,11 @@ def _copy_tag_verify_journal_pass(
         # AcoustID identity-confirm: when an API key is supplied and a fingerprint is available,
         # look up the recording MBIDs for this file and check whether the selected recording MBID
         # is among them.  This is a read-only diagnostic step — it never alters the copy/tag/verify
-        # path, never raises, and never blocks on empty results.
+        # path, but may raise on cannot-determine failures (5xx exhaustion, malformed JSON); the
+        # per-release error boundary in discover() catches and logs such failures.
         if acoustid_key and final_tags.chromaprint_fp:
             _confirm_dur_s = _read_duration_ms(src_file) // 1000
-            _confirm_mbids = fetch_acoustid_lookup(final_tags.chromaprint_fp, _confirm_dur_s, acoustid_key)
+            _confirm_mbids, _ = _fetch_acoustid_lookup_raw(final_tags.chromaprint_fp, _confirm_dur_s, acoustid_key)
             _selected_rec_id = final_tags.musicbrainz_recordingid
             if _confirm_mbids and _selected_rec_id:
                 if _selected_rec_id in _confirm_mbids:

@@ -3581,6 +3581,53 @@ class TestEnrichAcoustidReResolve:
         acoustid_vals = audio.get("acoustid_id") or []
         assert acoustid_vals and acoustid_vals[0] == "old-acoustid-uuid"
 
+    def test_re_resolve_acoustid_lookup_failure_is_logged_and_skipped(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When _fetch_acoustid_lookup_raw raises, the error is logged and acoustid_id is left unchanged.
+
+        Covers the ``except (OSError, RuntimeError, ValueError)`` branch in enrich() that handles
+        cannot-determine AcoustID failures (5xx exhaustion, malformed JSON) without aborting the run.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            audio_hash="flac-md5:existing",
+            chromaprint_fp="OldFingerprint",
+            acoustid_id="old-acoustid-uuid",
+        )
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="NewFingerprint")
+        mocker.patch(
+            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
+            side_effect=OSError("acoustid network failure"),
+        )
+        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=180000)
+
+        # Should not raise — the error is caught and logged.
+        music_annotator.enrich(dest_root=dest_root, re_resolve=True, dry_run=False, acoustid_key="my-api-key")
+
+        # acoustid_id should remain unchanged (lookup failed, not overwritten).
+        audio = MutagenFLAC(str(path))
+        acoustid_vals = audio.get("acoustid_id") or []
+        assert acoustid_vals and acoustid_vals[0] == "old-acoustid-uuid"
+
 
 # ---------------------------------------------------------------------------
 class TestAuditOriginTimeCLI:

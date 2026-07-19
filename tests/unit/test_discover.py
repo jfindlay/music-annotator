@@ -1371,6 +1371,38 @@ class TestDiscover:
         music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0", ui=stub)
         mock_run.assert_called_once()
 
+    def test_acoustid_seed_error_skips_directory(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When _enrich_candidates_with_acoustid_seed raises, the directory is skipped and run() is not called.
+
+        Covers the ``except (ValueError, mb.WebServiceError, RuntimeError, OSError)`` branch at
+        the acoustid seed error boundary in discover().  A cannot-determine AcoustID failure
+        (e.g. 5xx exhaustion) degrades to "directory skipped, logged, next directory" rather
+        than a crash.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[_candidate()])
+        mocker.patch(
+            "music_annotator._discover._enrich_candidates_with_acoustid_seed",
+            side_effect=OSError("acoustid network failure"),
+        )
+        mock_run = mocker.patch("music_annotator._discover.run")
+
+        music_annotator.discover(
+            src_dirs=[src],
+            dest_root=Path("/dest"),
+            user_agent="Test/1.0",
+            acoustid_key="my-api-key",
+        )
+        # run() must not be called — directory was skipped due to acoustid seed error.
+        mock_run.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # parse_disc_toc
@@ -3065,7 +3097,7 @@ class TestEnrichCandidatesWithAcoustidSeed:
         src = Path("/music/01.flac")
         fs.create_file(str(src), contents=_MINIMAL_FLAC)
         mock_fpcalc = mocker.patch("music_annotator._discover._run_fpcalc")
-        mock_lookup = mocker.patch("music_annotator._discover.fetch_acoustid_lookup")
+        mock_lookup = mocker.patch("music_annotator._discover._fetch_acoustid_lookup_raw")
         candidates = [_candidate(release_id="rel-1", score=90)]
         result = _enrich_candidates_with_acoustid_seed([src], candidates, "")
         assert result == candidates
@@ -3082,7 +3114,7 @@ class TestEnrichCandidatesWithAcoustidSeed:
         fs.create_file(str(src), contents=_MINIMAL_FLAC)
         mocker.patch("music_annotator._discover._run_fpcalc", return_value="AQADtMmybckm")
         mocker.patch("music_annotator._discover._read_duration_ms", return_value=180000)
-        mocker.patch("music_annotator._discover.fetch_acoustid_lookup", return_value=["rec-mbid-match"])
+        mocker.patch("music_annotator._discover._fetch_acoustid_lookup_raw", return_value=(["rec-mbid-match"], "uuid-1"))
 
         # Build a release with a track whose recording id matches the AcoustID result
         release = _make_single_track_release("rel-1", "rec-mbid-match")
@@ -3102,7 +3134,7 @@ class TestEnrichCandidatesWithAcoustidSeed:
         fs.create_file(str(src), contents=_MINIMAL_FLAC)
         mocker.patch("music_annotator._discover._run_fpcalc", return_value="AQADtMmybckm")
         mocker.patch("music_annotator._discover._read_duration_ms", return_value=180000)
-        mocker.patch("music_annotator._discover.fetch_acoustid_lookup", return_value=["rec-mbid-other"])
+        mocker.patch("music_annotator._discover._fetch_acoustid_lookup_raw", return_value=(["rec-mbid-other"], "uuid-1"))
 
         release = _make_single_track_release("rel-1", "rec-mbid-different")
         mocker.patch("music_annotator._discover.fetch_release", return_value=release)
@@ -3112,9 +3144,9 @@ class TestEnrichCandidatesWithAcoustidSeed:
         assert result[0].score == 90
 
     def test_empty_fingerprint_candidates_unchanged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """When fpcalc returns '' (unavailable), fetch_acoustid_lookup returns [] and candidates unchanged.
+        """When fpcalc returns '' (unavailable), _fetch_acoustid_lookup_raw returns ([], '') and candidates unchanged.
 
-        fetch_acoustid_lookup is called with an empty fingerprint but returns [] immediately
+        _fetch_acoustid_lookup_raw is called with an empty fingerprint but returns ([], '') immediately
         (early-exit inside the function).  The empty acoustid_recording_ids set means no boost
         is applied and candidates are returned unchanged.
 
@@ -3125,8 +3157,8 @@ class TestEnrichCandidatesWithAcoustidSeed:
         fs.create_file(str(src), contents=_MINIMAL_FLAC)
         mocker.patch("music_annotator._discover._run_fpcalc", return_value="")
         mocker.patch("music_annotator._discover._read_duration_ms", return_value=180000)
-        # fetch_acoustid_lookup returns [] for empty fingerprint (early-exit inside the function)
-        mocker.patch("music_annotator._discover.fetch_acoustid_lookup", return_value=[])
+        # _fetch_acoustid_lookup_raw returns ([], '') for empty fingerprint (early-exit inside the function)
+        mocker.patch("music_annotator._discover._fetch_acoustid_lookup_raw", return_value=([], ""))
 
         candidates = [_candidate(release_id="rel-1", score=90)]
         result = _enrich_candidates_with_acoustid_seed([src], candidates, "my-api-key")
@@ -3136,7 +3168,7 @@ class TestEnrichCandidatesWithAcoustidSeed:
     def test_fetch_release_failure_leaves_candidate_unchanged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """When fetch_release raises for a candidate, that candidate is returned unchanged.
 
-        Covers the ``except Exception`` branch (lines 715-717) in _enrich_candidates_with_acoustid_seed.
+        Covers the ``except Exception`` branch in _enrich_candidates_with_acoustid_seed.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -3145,7 +3177,7 @@ class TestEnrichCandidatesWithAcoustidSeed:
         fs.create_file(str(src), contents=_MINIMAL_FLAC)
         mocker.patch("music_annotator._discover._run_fpcalc", return_value="AQADtMmybckm")
         mocker.patch("music_annotator._discover._read_duration_ms", return_value=180000)
-        mocker.patch("music_annotator._discover.fetch_acoustid_lookup", return_value=["rec-mbid-match"])
+        mocker.patch("music_annotator._discover._fetch_acoustid_lookup_raw", return_value=(["rec-mbid-match"], "uuid-1"))
         # fetch_release raises for this candidate
         mocker.patch("music_annotator._discover.fetch_release", side_effect=RuntimeError("network error"))
 

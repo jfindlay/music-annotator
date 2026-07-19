@@ -5863,7 +5863,7 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'{"tracks": [{"id": "acoustid-uuid-123"}]}')
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         assert fetch_acoustid_id("rec-mbid", no_cache=True) == "acoustid-uuid-123"
 
     def test_non_dict_response_returns_empty(self, mocker: MockerFixture) -> None:
@@ -5872,7 +5872,7 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'["unexpected"]')
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
 
     def test_missing_tracks_key_returns_empty(self, mocker: MockerFixture) -> None:
@@ -5881,7 +5881,7 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'{"status": "ok"}')
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
 
     def test_empty_tracks_list_returns_empty(self, mocker: MockerFixture) -> None:
@@ -5890,7 +5890,7 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'{"tracks": []}')
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
 
     def test_non_dict_first_track_returns_empty(self, mocker: MockerFixture) -> None:
@@ -5899,7 +5899,7 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'{"tracks": ["not-a-dict"]}')
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
 
     def test_empty_track_id_returns_empty(self, mocker: MockerFixture) -> None:
@@ -5908,17 +5908,20 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'{"tracks": [{"id": ""}]}')
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
 
-    def test_network_error_returns_empty(self, mocker: MockerFixture) -> None:
-        """All three retry attempts fail with OSError; returns empty string.
+    def test_network_error_exhausted_raises(self, mocker: MockerFixture) -> None:
+        """All three retry attempts fail with OSError; raises (cannot-determine → fatal).
+
+        Per the universal terminal rule, RETRY exhaustion raises rather than returning empty.
 
         :param mocker: pytest-mock fixture.
         """
         mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=OSError("network failure"))
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
+        mocker.patch("music_annotator._net.time.sleep")
+        with pytest.raises(OSError):
+            fetch_acoustid_id("rec-mbid", no_cache=True)
 
     def test_network_error_retried_succeeds(self, mocker: MockerFixture) -> None:
         """OSError on first attempt is retried; succeeds on the second attempt.
@@ -5933,11 +5936,11 @@ class TestFetchAcoustidId:
             "music_annotator._mb_api.urllib.request.urlopen",
             side_effect=[OSError("timeout"), ctx],
         )
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         assert fetch_acoustid_id("rec-mbid", no_cache=True) == "acoustid-uuid-456"
 
-    def test_json_decode_error_not_retried(self, mocker: MockerFixture) -> None:
-        """A JSONDecodeError causes immediate return without retrying.
+    def test_json_decode_error_raises(self, mocker: MockerFixture) -> None:
+        """A JSONDecodeError raises immediately (cannot-determine → fatal, per universal terminal rule).
 
         :param mocker: pytest-mock fixture.
         """
@@ -5946,8 +5949,9 @@ class TestFetchAcoustidId:
         ctx.__exit__ = MagicMock(return_value=False)
         ctx.read = MagicMock(return_value=b"not valid json {{{")
         mock_urlopen = mocker.patch("music_annotator._mb_api.urllib.request.urlopen", return_value=ctx)
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        assert fetch_acoustid_id("rec-mbid", no_cache=True) == ""
+        mocker.patch("music_annotator._net.time.sleep")
+        with pytest.raises(json.JSONDecodeError):
+            fetch_acoustid_id("rec-mbid", no_cache=True)
         assert mock_urlopen.call_count == 1  # not retried
 
     def test_success_sleeps_one_second(self, mocker: MockerFixture) -> None:
@@ -5956,9 +5960,9 @@ class TestFetchAcoustidId:
         :param mocker: pytest-mock fixture.
         """
         self._make_resp(mocker, b'{"tracks": [{"id": "acoustid-uuid-789"}]}')
-        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_sleep = mocker.patch("music_annotator._net.time.sleep")
         fetch_acoustid_id("rec-mbid", no_cache=True)
-        mock_sleep.assert_called_once_with(1)
+        mock_sleep.assert_called_once_with(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -9120,7 +9124,7 @@ class TestRunAcoustidIdentityConfirm:
         rec_id = release.medium_list[0].track_list[0].recording.id
         self._patch_mb(mocker, release)
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_lookup", return_value=[rec_id])
+        mocker.patch("music_annotator._pipeline._fetch_acoustid_lookup_raw", return_value=([rec_id], "uuid-1"))
         mocker.patch("music_annotator._pipeline._read_duration_ms", return_value=180000)
 
         log_events: list[dict[str, object]] = []
@@ -9157,7 +9161,7 @@ class TestRunAcoustidIdentityConfirm:
         release = _make_release(n_tracks=1)
         self._patch_mb(mocker, release)
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_lookup", return_value=["other-mbid"])
+        mocker.patch("music_annotator._pipeline._fetch_acoustid_lookup_raw", return_value=(["other-mbid"], "uuid-1"))
         mocker.patch("music_annotator._pipeline._read_duration_ms", return_value=180000)
 
         log_events: list[dict[str, object]] = []
@@ -9192,7 +9196,7 @@ class TestRunAcoustidIdentityConfirm:
         release = _make_release(n_tracks=1)
         self._patch_mb(mocker, release)
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mock_lookup = mocker.patch("music_annotator._pipeline.fetch_acoustid_lookup")
+        mock_lookup = mocker.patch("music_annotator._pipeline._fetch_acoustid_lookup_raw")
 
         music_annotator.run(
             release_id="rel-1",
@@ -9206,7 +9210,7 @@ class TestRunAcoustidIdentityConfirm:
         mock_lookup.assert_not_called()
 
     def test_noop_when_chromaprint_fp_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """fetch_acoustid_lookup is not called when chromaprint_fp == '' (fpcalc unavailable).
+        """_fetch_acoustid_lookup_raw is not called when chromaprint_fp == '' (fpcalc unavailable).
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -9222,7 +9226,7 @@ class TestRunAcoustidIdentityConfirm:
         # Override _run_fpcalc to return empty string (fpcalc unavailable)
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mock_lookup = mocker.patch("music_annotator._pipeline.fetch_acoustid_lookup")
+        mock_lookup = mocker.patch("music_annotator._pipeline._fetch_acoustid_lookup_raw")
 
         music_annotator.run(
             release_id="rel-1",
@@ -9236,7 +9240,7 @@ class TestRunAcoustidIdentityConfirm:
         mock_lookup.assert_not_called()
 
     def test_noop_when_lookup_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """No log event when fetch_acoustid_lookup returns [] (covers 1342->1358 branch).
+        """No log event when _fetch_acoustid_lookup_raw returns ([], '') (covers empty-results branch).
 
         When _confirm_mbids is empty, the ``if _confirm_mbids and _selected_rec_id:`` condition
         is False and neither acoustid_confirm_ok nor acoustid_confirm_mismatch is logged.
@@ -9253,7 +9257,7 @@ class TestRunAcoustidIdentityConfirm:
         release = _make_release(n_tracks=1)
         self._patch_mb(mocker, release)
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_lookup", return_value=[])
+        mocker.patch("music_annotator._pipeline._fetch_acoustid_lookup_raw", return_value=([], ""))
         mocker.patch("music_annotator._pipeline._read_duration_ms", return_value=180000)
 
         log_info_events: list[dict[str, object]] = []

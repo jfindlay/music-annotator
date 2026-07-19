@@ -104,7 +104,6 @@ from music_annotator._discover import (
 )
 from music_annotator._mb_api import (
     fetch_acoustid_id,
-    fetch_acoustid_lookup,
     fetch_cover_art,
     fetch_recording_detail,
     fetch_release,
@@ -163,7 +162,6 @@ __all__ = [
     "fetch_cover_art",
     "fetch_work_detail",
     "fetch_acoustid_id",
-    "fetch_acoustid_lookup",
     "is_ensemble",
     "is_choir",
     "is_orchestra",
