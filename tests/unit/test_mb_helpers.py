@@ -29,6 +29,7 @@ from music_annotator import (
     write_transaction_log,
 )
 from music_annotator._mb_api import (
+    _caa_classify,
     _cover_art_cache_dir,
     _cover_art_cache_key,
     _fetch_acoustid_lookup_raw,
@@ -46,7 +47,7 @@ from music_annotator._mb_api import (
 )
 from music_annotator._net import RetryDecision
 from music_annotator._pipeline_io import _check_collisions
-from music_annotator.models import JSON, MBAttribute, MBRecording, MBWork, TransactionEntry
+from music_annotator.models import MBAttribute, MBRecording, MBWork, TransactionEntry
 
 # ---------------------------------------------------------------------------
 # _mb_retry
@@ -171,32 +172,40 @@ class TestMbRetry:
 
 
 class TestFetchCoverArtRetry:
-    """Tests for retry behaviour in fetch_cover_art — listing, image, and release-group fetches."""
+    """Tests for retry behaviour in fetch_cover_art — listing, image, and release-group fetches.
+
+    All CAA fetches now go through ``urllib.request.urlopen`` via ``_caa_fetch_bytes`` and
+    ``_net.retrieve`` with ``_caa_classify``.  307 and 5xx → RETRY; 404 → NO_DATA; other 4xx → FATAL.
+    """
 
     def test_listing_307_retried_and_succeeds(self, mocker: MockerFixture) -> None:
         """A transient 307 on the image listing is retried; success on the second attempt returns art.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         jpeg = b"\xff\xd8" + b"\x00" * 100
-        listing = {"images": [{"types": ["Front"], "id": "1", "image": "https://caa/1"}]}
-        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=[err, listing])
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
+        listing_bytes = _make_listing(("1", "Front"))
+        err_307 = HTTPError("https://caa/", 307, "Temporary Redirect", {}, None)  # type: ignore[arg-type]
+        listing_ctx = _make_caa_ctx(mocker, listing_bytes)
+        image_ctx = _make_caa_ctx(mocker, jpeg)
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_307, listing_ctx, image_ctx, image_ctx],
+        )
         result = fetch_cover_art("rel-1", no_cache=True)
         assert result.available
         assert len(result.front) == 1
 
     def test_listing_307_exhausts_retries_raises(self, mocker: MockerFixture) -> None:
-        """Six consecutive 307 errors on the listing exhaust _mb_retry and raise RuntimeError.
+        """Six consecutive 307 errors on the listing exhaust retries and raise.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=err)
-        with pytest.raises(RuntimeError, match="MB request failed after retries"):
+        mocker.patch("music_annotator._net.time.sleep")
+        err_307 = HTTPError("https://caa/", 307, "Temporary Redirect", {}, None)  # type: ignore[arg-type]
+        mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=err_307)
+        with pytest.raises(HTTPError):
             fetch_cover_art("rel-1", no_cache=True)
 
     def test_image_fetch_307_retried_and_succeeds(self, mocker: MockerFixture) -> None:
@@ -204,25 +213,33 @@ class TestFetchCoverArtRetry:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         jpeg = b"\xff\xd8" + b"\x00" * 100
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("1", "Front")))
-        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
-        mocker.patch("music_annotator._mb_api.mb.get_image", side_effect=[err, jpeg, err, jpeg])
+        listing_ctx = _make_caa_ctx(mocker, _make_listing(("1", "Front")))
+        err_307 = HTTPError("https://caa/", 307, "Temporary Redirect", {}, None)  # type: ignore[arg-type]
+        image_ctx = _make_caa_ctx(mocker, jpeg)
+        # listing succeeds; 500px fetch: 307 then success; original fetch: 307 then success
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, err_307, image_ctx, err_307, image_ctx],
+        )
         result = fetch_cover_art("rel-1", no_cache=True)
         assert result.available
         assert len(result.front) == 1
 
     def test_image_fetch_307_exhausts_retries_raises(self, mocker: MockerFixture) -> None:
-        """Six consecutive 307 errors on an image fetch exhaust _mb_retry and raise RuntimeError.
+        """Six consecutive 307 errors on an image fetch exhaust retries and raise.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("1", "Front")))
-        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
-        mocker.patch("music_annotator._mb_api.mb.get_image", side_effect=err)
-        with pytest.raises(RuntimeError, match="MB request failed after retries"):
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_ctx = _make_caa_ctx(mocker, _make_listing(("1", "Front")))
+        err_307 = HTTPError("https://caa/", 307, "Temporary Redirect", {}, None)  # type: ignore[arg-type]
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, err_307, err_307, err_307, err_307, err_307, err_307],
+        )
+        with pytest.raises(HTTPError):
             fetch_cover_art("rel-1", no_cache=True)
 
     def test_rg_image_fetch_307_retried_and_succeeds(self, mocker: MockerFixture) -> None:
@@ -230,77 +247,81 @@ class TestFetchCoverArtRetry:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         jpeg = b"\xff\xd8" + b"\x00" * 100
+        # Listing returns 404 → NO_DATA → RG fallback triggered.
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        err_307 = HTTPError("https://caa/", 307, "Temporary Redirect", {}, None)  # type: ignore[arg-type]
+        image_ctx = _make_caa_ctx(mocker, jpeg)
+        # listing: 404; rg 500px: 307 then success; rg original: 307 then success
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_404, err_307, image_ctx, err_307, image_ctx],
         )
-        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
-        mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", side_effect=[err, jpeg, err, jpeg])
         result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
         assert result.available
         assert len(result.front) == 1
 
     def test_rg_image_fetch_307_exhausts_retries_raises(self, mocker: MockerFixture) -> None:
-        """Six consecutive 307 errors on the release-group fallback exhaust _mb_retry and raise RuntimeError.
+        """Six consecutive 307 errors on the release-group fallback exhaust retries and raise.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        err_307 = HTTPError("https://caa/", 307, "Temporary Redirect", {}, None)  # type: ignore[arg-type]
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_404, err_307, err_307, err_307, err_307, err_307, err_307],
         )
-        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
-        mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", side_effect=err)
-        with pytest.raises(RuntimeError, match="MB request failed after retries"):
+        with pytest.raises(HTTPError):
             fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
 
-    def test_image_fetch_non_retryable_non_404_raises_response_error(self, mocker: MockerFixture) -> None:
-        """A non-retryable, non-404 error on an image fetch (e.g. 400) re-raises ResponseError immediately.
+    def test_image_fetch_non_retryable_non_404_raises_http_error(self, mocker: MockerFixture) -> None:
+        """A non-retryable, non-404 error on an image fetch (e.g. 400) raises HTTPError immediately.
 
-        400 is not in the _mb_retry retry set and not a 404, so it passes straight through _mb_retry
-        and then through the ``if '404' in str(exc): ... raise`` branch in _fetch_raw.
+        400 is FATAL per _caa_classify — re-raised immediately without retry.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("1", "Front")))
-        err = mb.ResponseError(cause=Exception("400 Bad Request"))
-        mocker.patch("music_annotator._mb_api.mb.get_image", side_effect=err)
-        with pytest.raises(mb.ResponseError):
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_ctx = _make_caa_ctx(mocker, _make_listing(("1", "Front")))
+        err_400 = HTTPError("https://caa/", 400, "Bad Request", {}, None)  # type: ignore[arg-type]
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, err_400],
+        )
+        with pytest.raises(HTTPError):
             fetch_cover_art("rel-1", no_cache=True)
 
-    def test_rg_image_fetch_non_retryable_non_404_raises_response_error(self, mocker: MockerFixture) -> None:
-        """A non-retryable, non-404 error on the RG fallback (e.g. 400) re-raises ResponseError immediately.
+    def test_rg_image_fetch_non_retryable_non_404_raises_http_error(self, mocker: MockerFixture) -> None:
+        """A non-retryable, non-404 error on the RG fallback (e.g. 400) raises HTTPError immediately.
 
-        400 is not in the _mb_retry retry set and not a 404, so _fetch_rg_image re-raises it.
+        400 is FATAL per _caa_classify — re-raised immediately without retry.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        err_400 = HTTPError("https://caa/", 400, "Bad Request", {}, None)  # type: ignore[arg-type]
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_404, err_400],
         )
-        err = mb.ResponseError(cause=Exception("400 Bad Request"))
-        mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", side_effect=err)
-        with pytest.raises(mb.ResponseError):
+        with pytest.raises(HTTPError):
             fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
 
-    def test_listing_non_retryable_non_404_raises_runtime_error(self, mocker: MockerFixture) -> None:
-        """A non-retryable, non-404 listing error (e.g. 400) re-raises ResponseError wrapped as RuntimeError.
+    def test_listing_non_retryable_non_404_raises_http_error(self, mocker: MockerFixture) -> None:
+        """A non-retryable, non-404 listing error (e.g. 400) raises HTTPError immediately.
 
-        400 is not in the _mb_retry retry set and not a 404, so _mb_retry re-raises it immediately as
-        ResponseError which the ``case _:`` arm then re-raises as RuntimeError.
+        400 is FATAL per _caa_classify — re-raised immediately without retry.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        err = mb.ResponseError(cause=Exception("400 Bad Request"))
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=err)
-        with pytest.raises(RuntimeError, match="cover art listing failed"):
+        mocker.patch("music_annotator._net.time.sleep")
+        err_400 = HTTPError("https://caa/", 400, "Bad Request", {}, None)  # type: ignore[arg-type]
+        mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=err_400)
+        with pytest.raises(HTTPError):
             fetch_cover_art("rel-1", no_cache=True)
 
 
@@ -910,32 +931,77 @@ class TestFetchRecordingDetail:
 # ---------------------------------------------------------------------------
 
 
-def _make_listing(*entries: tuple[str, str]) -> JSON:
-    """Build a fake CAA image-list response dict.
+def _make_listing(*entries: tuple[str, str]) -> bytes:
+    """Build a fake CAA image-listing JSON response as bytes.
+
+    Each entry produces an image dict with an ``"image"`` key set to ``"https://caa/<id>"``
+    and a ``"thumbnails"`` dict with a ``"500"`` key set to ``"https://caa/<id>-500"``.
 
     :param entries: Pairs of (image_id, type_string), e.g. ``("111", "Front")``.
-    :returns: A dict matching the shape of ``mb.get_image_list`` JSON output.
+    :returns: UTF-8 encoded JSON bytes matching the shape of the CAA listing endpoint response.
     """
-    return {
-        "images": [
-            {"id": img_id, "types": [img_type], "front": img_type == "Front", "back": img_type == "Back"}
-            for img_id, img_type in entries
-        ]
-    }
+    return json.dumps(
+        {
+            "images": [
+                {
+                    "id": img_id,
+                    "types": [img_type],
+                    "image": f"https://caa/{img_id}",
+                    "thumbnails": {"500": f"https://caa/{img_id}-500"},
+                    "front": img_type == "Front",
+                    "back": img_type == "Back",
+                }
+                for img_id, img_type in entries
+            ]
+        }
+    ).encode()
+
+
+def _make_caa_ctx(mocker: MockerFixture, data: bytes) -> MagicMock:
+    """Build a mock ``urllib.request.urlopen`` context manager that returns ``data`` from ``.read()``.
+
+    :param mocker: pytest-mock fixture.
+    :param data: Bytes to return from the context manager's ``read()`` method.
+    :returns: A MagicMock usable as a context manager (supports ``__enter__``/``__exit__``/``read``).
+    """
+    ctx: MagicMock = mocker.MagicMock()
+    ctx.__enter__ = mocker.MagicMock(return_value=ctx)
+    ctx.__exit__ = mocker.MagicMock(return_value=False)
+    ctx.read = mocker.MagicMock(return_value=data)
+    return ctx
 
 
 class TestFetchCoverArt:
-    """Tests for fetch_cover_art."""
+    """Tests for fetch_cover_art.
+
+    All CAA fetches now go through ``urllib.request.urlopen`` via ``_caa_fetch_bytes`` and
+    ``_net.retrieve`` with ``_caa_classify``.  The listing endpoint returns JSON bytes; image
+    endpoints return image bytes.
+    """
+
+    def _mock_urlopen(self, mocker: MockerFixture, listing_bytes: bytes, image_bytes: bytes) -> MagicMock:
+        """Patch ``urllib.request.urlopen`` to serve listing JSON then image bytes for all subsequent calls.
+
+        :param mocker: pytest-mock fixture.
+        :param listing_bytes: JSON bytes to return for the listing fetch (first call).
+        :param image_bytes: Image bytes to return for all subsequent image fetches.
+        :returns: The mock object.
+        """
+        listing_ctx = _make_caa_ctx(mocker, listing_bytes)
+        image_ctx = _make_caa_ctx(mocker, image_bytes)
+        return mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, image_ctx, image_ctx, image_ctx, image_ctx, image_ctx],
+        )
 
     def test_returns_jpeg_front(self, mocker: MockerFixture) -> None:
         """Front image with JPEG magic bytes is placed in CoverArt.front with mime image/jpeg.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 100
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("111", "Front")))
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg_bytes)
+        self._mock_urlopen(mocker, _make_listing(("111", "Front")), jpeg_bytes)
         result = fetch_cover_art("rel-1", no_cache=True)
         assert result.available
         assert len(result.front) == 1
@@ -946,10 +1012,9 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         png_bytes = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("222", "Front")))
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=png_bytes)
+        self._mock_urlopen(mocker, _make_listing(("222", "Front")), png_bytes)
         result = fetch_cover_art("rel-1", no_cache=True)
         assert result.available
         assert result.mime == "image/png"
@@ -959,10 +1024,9 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         bmp_bytes = b"BM" + b"\x00" * 100
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("333", "Front")))
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=bmp_bytes)
+        self._mock_urlopen(mocker, _make_listing(("333", "Front")), bmp_bytes)
         result = fetch_cover_art("rel-1", no_cache=True)
         assert result.available
         assert result.mime == "image/jpeg"
@@ -972,13 +1036,13 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 10
-        mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            return_value=_make_listing(("1", "Front"), ("2", "Back"), ("3", "Booklet"), ("4", "Medium")),
+        self._mock_urlopen(
+            mocker,
+            _make_listing(("1", "Front"), ("2", "Back"), ("3", "Booklet"), ("4", "Medium")),
+            jpeg,
         )
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
         result = fetch_cover_art("rel-1", no_cache=True)
         assert len(result.front) == 1
         assert len(result.back) == 1
@@ -990,13 +1054,14 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 10
+        listing_ctx = _make_caa_ctx(mocker, _make_listing(("10", "Booklet"), ("11", "Booklet"), ("12", "Booklet")))
+        image_ctx = _make_caa_ctx(mocker, jpeg)
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            return_value=_make_listing(("10", "Booklet"), ("11", "Booklet"), ("12", "Booklet")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, image_ctx, image_ctx, image_ctx],
         )
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
         result = fetch_cover_art("rel-1", no_cache=True)
         assert len(result.booklet) == 3
         assert not result.front
@@ -1010,12 +1075,8 @@ class TestFetchCoverArt:
         :param mocker: pytest-mock fixture.
         """
         jpeg = b"\xff\xd8" + b"\x00" * 100
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            return_value=_make_listing(("99", "CustomUnknown")),
-        )
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
+        mocker.patch("music_annotator._net.time.sleep")
+        self._mock_urlopen(mocker, _make_listing(("99", "CustomUnknown")), jpeg)
         result = fetch_cover_art("rel-1", no_cache=True)
         assert result.available
         assert len(result.unknown) == 1
@@ -1027,12 +1088,8 @@ class TestFetchCoverArt:
         :param mocker: pytest-mock fixture.
         """
         jpeg = b"\xff\xd8" + b"\x00" * 100
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            return_value=_make_listing(("42", "Back")),
-        )
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
+        mocker.patch("music_annotator._net.time.sleep")
+        self._mock_urlopen(mocker, _make_listing(("42", "Back")), jpeg)
         log_calls: list[dict[str, object]] = []
         mocker.patch(
             "music_annotator._mb_api.log.info",
@@ -1049,9 +1106,8 @@ class TestFetchCoverArt:
         :param mocker: pytest-mock fixture.
         """
         jpeg = b"\xff\xd8" + b"\x00" * 100
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("99", "Spine")))
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
+        mocker.patch("music_annotator._net.time.sleep")
+        self._mock_urlopen(mocker, _make_listing(("99", "Spine")), jpeg)
         result = fetch_cover_art("rel-1", no_cache=True)
         assert len(result.spine) == 1
         assert result.spine[0].filename == "spine.jpg"
@@ -1062,9 +1118,8 @@ class TestFetchCoverArt:
         :param mocker: pytest-mock fixture.
         """
         jpeg = b"\xff\xd8" + b"\x00" * 100
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("100", "Tray")))
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
+        mocker.patch("music_annotator._net.time.sleep")
+        self._mock_urlopen(mocker, _make_listing(("100", "Tray")), jpeg)
         result = fetch_cover_art("rel-1", no_cache=True)
         assert len(result.tray) == 1
         assert result.tray[0].filename == "tray.jpg"
@@ -1075,17 +1130,30 @@ class TestFetchCoverArt:
         :param mocker: pytest-mock fixture.
         """
         jpeg = b"\xff\xd8" + b"\x00" * 100
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         # Listing has one image with two types
-        listing = {
-            "images": [{"types": ["Back", "Spine"], "id": "77", "image": "https://caa/77"}],
-            "release": "https://mb/release/r1",
-        }
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
-        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg)
+        listing_json = json.dumps(
+            {
+                "images": [
+                    {
+                        "types": ["Back", "Spine"],
+                        "id": "77",
+                        "image": "https://caa/77",
+                        "thumbnails": {"500": "https://caa/77-500"},
+                    }
+                ],
+                "release": "https://mb/release/r1",
+            }
+        ).encode()
+        listing_ctx = _make_caa_ctx(mocker, listing_json)
+        image_ctx = _make_caa_ctx(mocker, jpeg)
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, image_ctx],
+        )
         result = fetch_cover_art("rel-1", no_cache=True)
         # Fetched only once despite appearing in two buckets
-        assert mock_get.call_count == 1
+        assert mock_urlopen.call_count == 2  # listing + one image fetch
         # Both buckets populated, same filename
         assert len(result.back) == 1
         assert len(result.spine) == 1
@@ -1095,21 +1163,33 @@ class TestFetchCoverArt:
         assert result.back[0] is result.spine[0]
 
     def test_multi_type_primary_fetch_failure_raises(self, mocker: MockerFixture) -> None:
-        """When a multi-type image fetch fails all retries, RuntimeError propagates to the caller.
+        """When a multi-type image fetch fails all retries, the exception propagates to the caller.
 
-        The inner _call() is decorated with @_mb_retry, so a persistent 503 error exhausts all six
-        retry attempts and raises RuntimeError rather than mb.ResponseError.
+        A persistent 503 error exhausts all retry attempts and raises HTTPError.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        listing = {
-            "images": [{"types": ["Back", "Spine"], "id": "77", "image": "https://caa/77"}],
-            "release": "https://mb/release/r1",
-        }
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
-        mocker.patch("music_annotator._mb_api.mb.get_image", side_effect=mb.ResponseError(cause=Exception("503")))
-        with pytest.raises(RuntimeError, match="MB request failed after retries"):
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_json = json.dumps(
+            {
+                "images": [
+                    {
+                        "types": ["Back", "Spine"],
+                        "id": "77",
+                        "image": "https://caa/77",
+                        "thumbnails": {"500": "https://caa/77-500"},
+                    }
+                ],
+                "release": "https://mb/release/r1",
+            }
+        ).encode()
+        listing_ctx = _make_caa_ctx(mocker, listing_json)
+        err_503 = HTTPError("https://caa/", 503, "Service Unavailable", {}, None)  # type: ignore[arg-type]
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, err_503, err_503, err_503, err_503, err_503, err_503],
+        )
+        with pytest.raises(HTTPError):
             fetch_cover_art("rel-1", no_cache=True)
 
     def test_multi_type_primary_empty_bytes_skips_secondary(self, mocker: MockerFixture) -> None:
@@ -1120,48 +1200,60 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        listing = {
-            "images": [{"types": ["Back", "Spine"], "id": "77", "image": "https://caa/77"}],
-            "release": "https://mb/release/r1",
-        }
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_json = json.dumps(
+            {
+                "images": [
+                    {
+                        "types": ["Back", "Spine"],
+                        "id": "77",
+                        "image": "https://caa/77",
+                        "thumbnails": {"500": "https://caa/77-500"},
+                    }
+                ],
+                "release": "https://mb/release/r1",
+            }
+        ).encode()
+        listing_ctx = _make_caa_ctx(mocker, listing_json)
         # Return empty bytes so _fetch_raw returns None without raising
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=b"")
+        empty_ctx = _make_caa_ctx(mocker, b"")
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, empty_ctx],
+        )
         result = fetch_cover_art("rel-1", no_cache=True)
         assert result.back == []
         assert result.spine == []
 
     def test_image_fetch_error_raises(self, mocker: MockerFixture) -> None:
-        """A persistent non-404 ResponseError on an image fetch raises RuntimeError after retries.
-
-        The inner _call() in _fetch_raw is decorated with @_mb_retry, so a persistent 503 error
-        exhausts all six retry attempts and raises RuntimeError.
+        """A persistent 503 on an image fetch exhausts retries and raises HTTPError.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("55", "Front")))
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_ctx = _make_caa_ctx(mocker, _make_listing(("55", "Front")))
+        err_503 = HTTPError("https://caa/", 503, "Service Unavailable", {}, None)  # type: ignore[arg-type]
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image",
-            side_effect=mb.ResponseError(cause=Exception("503 error")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, err_503, err_503, err_503, err_503, err_503, err_503],
         )
-        with pytest.raises(RuntimeError, match="MB request failed after retries"):
+        with pytest.raises(HTTPError):
             fetch_cover_art("rel-1", no_cache=True)
 
     def test_front_image_404_returns_empty(self, mocker: MockerFixture) -> None:
         """A 404 on a front image fetch is treated as unavailable; result has no front image.
 
         This models the CAA data-integrity condition where the MB listing references an image
-        that has since been deleted from object storage.
+        that has since been deleted from object storage.  404 → NO_DATA → None → skip.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("55", "Front")))
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_ctx = _make_caa_ctx(mocker, _make_listing(("55", "Front")))
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image",
-            side_effect=mb.ResponseError(cause=Exception("HTTP Error 404: NOT FOUND")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, err_404, err_404],
         )
         result = fetch_cover_art("rel-1", no_cache=True)
         assert not result.available
@@ -1175,11 +1267,12 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("77", "Back")))
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_ctx = _make_caa_ctx(mocker, _make_listing(("77", "Back")))
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image",
-            side_effect=mb.ResponseError(cause=Exception("HTTP Error 404: NOT FOUND")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, err_404],
         )
         result = fetch_cover_art("rel-1", no_cache=True)
         assert not result.available
@@ -1188,19 +1281,16 @@ class TestFetchCoverArt:
     def test_release_group_fallback_404_returns_empty(self, mocker: MockerFixture) -> None:
         """A 404 on the release-group fallback is treated as unavailable; result has no front image.
 
-        This is the exact scenario from the error trace: listing returns 404 triggering the RG
-        fallback, then the RG front image URL also returns 404.
+        Listing returns 404 (NO_DATA → RG fallback triggered); RG front image URL also returns 404
+        (NO_DATA → skip both 500px and original fetches).
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
-        )
-        mocker.patch(
-            "music_annotator._mb_api.mb.get_release_group_image_front",
-            side_effect=mb.ResponseError(cause=Exception("HTTP Error 404: NOT FOUND")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_404, err_404, err_404],
         )
         result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
         assert not result.available
@@ -1211,9 +1301,13 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=_make_listing(("66", "Front")))
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=b"")
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_ctx = _make_caa_ctx(mocker, _make_listing(("66", "Front")))
+        empty_ctx = _make_caa_ctx(mocker, b"")
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, empty_ctx, empty_ctx],
+        )
         result = fetch_cover_art("rel-1", no_cache=True)
         assert not result.available
 
@@ -1222,13 +1316,14 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         jpeg_bytes = b"\xff\xd8\xff\xe0" + b"\x00" * 100
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        image_ctx = _make_caa_ctx(mocker, jpeg_bytes)
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_404, image_ctx, image_ctx],
         )
-        mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", return_value=jpeg_bytes)
         result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
         assert result.available
         assert len(result.front) == 1
@@ -1238,49 +1333,38 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
-        )
+        mocker.patch("music_annotator._net.time.sleep")
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=err_404)
         result = fetch_cover_art("rel-1", release_group_id="", no_cache=True)
         assert not result.available
 
     def test_listing_non_404_error_raises(self, mocker: MockerFixture) -> None:
-        """A persistent non-404 listing error raises RuntimeError after all retries are exhausted.
+        """A persistent 500 listing error exhausts retries and raises HTTPError.
 
-        The inner _get_image_list() is decorated with @_mb_retry, so a persistent 500 error exhausts
-        all six retry attempts; _mb_retry raises RuntimeError("MB request failed after retries: ...")
-        which propagates unchanged through the ResponseError handler.
+        500 → RETRY; after max_attempts exhaustion the last exception is re-raised.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            side_effect=mb.ResponseError(cause=Exception("500 Internal Server Error")),
-        )
-        with pytest.raises(RuntimeError, match="MB request failed after retries"):
+        mocker.patch("music_annotator._net.time.sleep")
+        err_500 = HTTPError("https://caa/", 500, "Internal Server Error", {}, None)  # type: ignore[arg-type]
+        mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=err_500)
+        with pytest.raises(HTTPError):
             fetch_cover_art("rel-1", no_cache=True)
 
     def test_release_group_fallback_fails_raises(self, mocker: MockerFixture) -> None:
-        """When the release-group fallback call fails all retries, RuntimeError propagates.
-
-        The inner _call() in _fetch_rg_image is decorated with @_mb_retry, so a persistent 500 error
-        exhausts all six retry attempts and raises RuntimeError.
+        """When the release-group fallback call fails all retries, the exception propagates.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        err_500 = HTTPError("https://caa/", 500, "Internal Server Error", {}, None)  # type: ignore[arg-type]
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_404, err_500, err_500, err_500, err_500, err_500, err_500],
         )
-        mocker.patch(
-            "music_annotator._mb_api.mb.get_release_group_image_front",
-            side_effect=mb.ResponseError(cause=Exception("500 error")),
-        )
-        with pytest.raises(RuntimeError, match="MB request failed after retries"):
+        with pytest.raises(HTTPError):
             fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
 
     def test_release_group_fallback_returns_empty_bytes(self, mocker: MockerFixture) -> None:
@@ -1288,12 +1372,13 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        empty_ctx = _make_caa_ctx(mocker, b"")
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_404, empty_ctx, empty_ctx],
         )
-        mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front", return_value=b"")
         result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
         assert not result.available
 
@@ -1302,12 +1387,18 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        listing = {"images": [{"types": ["Front"], "front": True, "back": False}]}
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
-        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image")
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_json = json.dumps(
+            {"images": [{"types": ["Front"], "image": "https://caa/x", "front": True, "back": False}]}
+        ).encode()
+        listing_ctx = _make_caa_ctx(mocker, listing_json)
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx],
+        )
         result = fetch_cover_art("rel-1", no_cache=True)
-        mock_get.assert_not_called()
+        # Only the listing fetch was made; no image fetch.
+        assert mock_urlopen.call_count == 1
         assert not result.available
 
     def test_listing_non_list_images_returns_empty(self, mocker: MockerFixture) -> None:
@@ -1315,8 +1406,10 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value={"images": "bad"})
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_json = json.dumps({"images": "bad"}).encode()
+        listing_ctx = _make_caa_ctx(mocker, listing_json)
+        mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=[listing_ctx])
         result = fetch_cover_art("rel-1", no_cache=True)
         assert not result.available
 
@@ -1327,12 +1420,17 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        listing = {"images": [{"id": "77", "types": "Front", "front": True}]}
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=listing)
-        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image")
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_json = json.dumps(
+            {"images": [{"id": "77", "types": "Front", "image": "https://caa/77", "front": True}]}
+        ).encode()
+        listing_ctx = _make_caa_ctx(mocker, listing_json)
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx],
+        )
         result = fetch_cover_art("rel-1", no_cache=True)
-        mock_get.assert_not_called()
+        assert mock_urlopen.call_count == 1
         assert not result.available
 
     def test_back_booklet_medium_fetch_returns_empty_skipped(self, mocker: MockerFixture) -> None:
@@ -1342,16 +1440,95 @@ class TestFetchCoverArt:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_ctx = _make_caa_ctx(mocker, _make_listing(("2", "Back"), ("3", "Booklet"), ("4", "Medium")))
+        empty_ctx = _make_caa_ctx(mocker, b"")
         mocker.patch(
-            "music_annotator._mb_api.mb.get_image_list",
-            return_value=_make_listing(("2", "Back"), ("3", "Booklet"), ("4", "Medium")),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, empty_ctx, empty_ctx, empty_ctx],
         )
-        mocker.patch("music_annotator._mb_api.mb.get_image", return_value=b"")
         result = fetch_cover_art("rel-1", no_cache=True)
         assert not result.back
         assert not result.booklet
         assert not result.medium
+
+    def test_listing_non_dict_json_treated_as_no_images(self, mocker: MockerFixture) -> None:
+        """A listing response whose JSON root is not a dict is treated as having no images.
+
+        This covers the ``if isinstance(listing_data, dict)`` False branch (line 808->812).
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._net.time.sleep")
+        # JSON root is a list, not a dict
+        listing_ctx = _make_caa_ctx(mocker, b'["not", "a", "dict"]')
+        mocker.patch("music_annotator._mb_api.urllib.request.urlopen", side_effect=[listing_ctx])
+        result = fetch_cover_art("rel-1", no_cache=True)
+        assert not result.available
+
+    def test_thumbnail_not_dict_falls_back_to_caa_url(self, mocker: MockerFixture) -> None:
+        """When the 'thumbnails' field is not a dict, the original caa_url is used for the 500px fetch.
+
+        This covers the ``if isinstance(thumbnails, dict)`` False branch (line 842->847).
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._net.time.sleep")
+        # thumbnails is a string (not a dict) — should fall back to caa_url
+        listing_json = json.dumps(
+            {
+                "images": [
+                    {
+                        "id": "55",
+                        "types": ["Front"],
+                        "image": "https://caa/55",
+                        "thumbnails": "not-a-dict",
+                    }
+                ]
+            }
+        ).encode()
+        jpeg = b"\xff\xd8" + b"\x00" * 100
+        listing_ctx = _make_caa_ctx(mocker, listing_json)
+        image_ctx = _make_caa_ctx(mocker, jpeg)
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, image_ctx, image_ctx],
+        )
+        result = fetch_cover_art("rel-1", no_cache=True)
+        assert result.available
+        assert len(result.front) == 1
+
+    def test_thumbnail_500_not_string_falls_back_to_caa_url(self, mocker: MockerFixture) -> None:
+        """When the 'thumbnails.500' value is not a string, the original caa_url is used.
+
+        This covers the ``if isinstance(t500, str) and t500`` False branch (line 844->847).
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._net.time.sleep")
+        # thumbnails["500"] is an int (not a string)
+        listing_json = json.dumps(
+            {
+                "images": [
+                    {
+                        "id": "66",
+                        "types": ["Front"],
+                        "image": "https://caa/66",
+                        "thumbnails": {"500": 12345},
+                    }
+                ]
+            }
+        ).encode()
+        jpeg = b"\xff\xd8" + b"\x00" * 100
+        listing_ctx = _make_caa_ctx(mocker, listing_json)
+        image_ctx = _make_caa_ctx(mocker, jpeg)
+        mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, image_ctx, image_ctx],
+        )
+        result = fetch_cover_art("rel-1", no_cache=True)
+        assert result.available
+        assert len(result.front) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1696,6 +1873,68 @@ class TestMbDataClassify:
     def test_unrecognised_exception_is_fatal(self) -> None:
         """An unrecognised exception type → FATAL."""
         assert _mb_data_classify(ValueError("unexpected")) == RetryDecision.FATAL
+
+
+# ---------------------------------------------------------------------------
+# _caa_classify
+# ---------------------------------------------------------------------------
+
+
+class TestCaaClassify:
+    """Tests for the _caa_classify structured classifier — covers all branches.
+
+    Each test exercises one classifier outcome to satisfy 100% branch coverage on the
+    ``_caa_classify`` function.  The ordering rule (C-NET-CORE) is verified implicitly:
+    ``HTTPError`` is checked before the broad ``OSError`` branch.
+    """
+
+    def _make_http_error(self, code: int) -> HTTPError:
+        """Build an ``HTTPError`` with the given status code.
+
+        :param code: HTTP status code.
+        :returns: An :class:`urllib.error.HTTPError` instance.
+        """
+        return HTTPError("https://caa/", code, f"Status {code}", HTTPMessage(), None)
+
+    def test_http_404_is_no_data(self) -> None:
+        """HTTPError with 404 → NO_DATA (image deleted / no release-level art)."""
+        assert _caa_classify(self._make_http_error(404)) == RetryDecision.NO_DATA
+
+    def test_http_307_is_retry(self) -> None:
+        """HTTPError with 307 → RETRY (redirect-loop condition from Internet Archive)."""
+        assert _caa_classify(self._make_http_error(307)) == RetryDecision.RETRY
+
+    def test_http_500_is_retry(self) -> None:
+        """HTTPError with 500 → RETRY (transient server error)."""
+        assert _caa_classify(self._make_http_error(500)) == RetryDecision.RETRY
+
+    def test_http_503_is_retry(self) -> None:
+        """HTTPError with 503 → RETRY (transient server error)."""
+        assert _caa_classify(self._make_http_error(503)) == RetryDecision.RETRY
+
+    def test_http_400_is_fatal(self) -> None:
+        """HTTPError with 400 → FATAL (permanent client error)."""
+        assert _caa_classify(self._make_http_error(400)) == RetryDecision.FATAL
+
+    def test_http_403_is_fatal(self) -> None:
+        """HTTPError with 403 → FATAL (permanent client error)."""
+        assert _caa_classify(self._make_http_error(403)) == RetryDecision.FATAL
+
+    def test_oserror_is_retry(self) -> None:
+        """Plain OSError (transport failure without HTTP code) → RETRY."""
+        assert _caa_classify(OSError("connection refused")) == RetryDecision.RETRY
+
+    def test_url_error_is_retry(self) -> None:
+        """URLError (subclass of OSError, transport failure) → RETRY.
+
+        Verifies the ordering rule: URLError is an OSError subclass but is NOT an HTTPError,
+        so it falls through to the OSError branch correctly.
+        """
+        assert _caa_classify(URLError("name resolution failed")) == RetryDecision.RETRY
+
+    def test_unrecognised_exception_is_fatal(self) -> None:
+        """An unrecognised exception type → FATAL."""
+        assert _caa_classify(ValueError("unexpected")) == RetryDecision.FATAL
 
 
 # ---------------------------------------------------------------------------
@@ -2072,20 +2311,11 @@ class TestSidecarFilename:
 
 
 class TestFetchCoverArtReleaseGroupFallback:
-    """Tests for the release-group fallback dual-fetch in fetch_cover_art."""
+    """Tests for the release-group fallback dual-fetch in fetch_cover_art.
 
-    def _make_jpeg_ctx(self, mocker: MockerFixture, data: bytes) -> MagicMock:
-        """Build a mock context manager that returns ``data`` from ``.read()``.
-
-        :param mocker: pytest-mock fixture.
-        :param data: Bytes to return from the context manager.
-        :returns: A mock usable as a context manager.
-        """
-        ctx: MagicMock = mocker.MagicMock()
-        ctx.__enter__ = mocker.MagicMock(return_value=ctx)
-        ctx.__exit__ = mocker.MagicMock(return_value=False)
-        ctx.read = mocker.MagicMock(return_value=data)
-        return ctx
+    The RG fallback is triggered when the listing returns 404 (NO_DATA).  Both 500px and original
+    are fetched from the same canonical RG URL via ``_net.retrieve`` with ``_caa_classify``.
+    """
 
     def test_release_group_fallback_fetches_500px_and_original(self, mocker: MockerFixture) -> None:
         """When the release has no listing, both 500px and original are fetched for front.
@@ -2094,35 +2324,36 @@ class TestFetchCoverArtReleaseGroupFallback:
         """
         jpeg_500 = b"\xff\xd8" + b"\x00" * 100
         jpeg_orig = b"\xff\xd8" + b"\x00" * 2000
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=mb.ResponseError("404 Not Found"))
-        mock_rg = mocker.patch(
-            "music_annotator._mb_api.mb.get_release_group_image_front",
-            side_effect=[jpeg_500, jpeg_orig],
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        ctx_500 = _make_caa_ctx(mocker, jpeg_500)
+        ctx_orig = _make_caa_ctx(mocker, jpeg_orig)
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_404, ctx_500, ctx_orig],
         )
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         result = fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
         assert len(result.front) == 1
         assert result.front[0].data == jpeg_500
         assert len(result.front_full) == 1
         assert result.front_full[0].data == jpeg_orig
         assert result.front_full[0].filename == "cover.jpg"
-        assert mock_rg.call_count == 2
+        # listing + 500px + original = 3 calls
+        assert mock_urlopen.call_count == 3
 
     def test_release_group_fallback_error_raises(self, mocker: MockerFixture) -> None:
-        """A persistent error from the release-group fallback raises RuntimeError after retries.
-
-        The inner _call() in _fetch_rg_image is decorated with @_mb_retry, so a persistent 503 error
-        exhausts all six retry attempts and raises RuntimeError.
+        """A persistent 503 from the release-group fallback exhausts retries and raises HTTPError.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=mb.ResponseError("404 Not Found"))
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        err_503 = HTTPError("https://caa/", 503, "Service Unavailable", {}, None)  # type: ignore[arg-type]
         mocker.patch(
-            "music_annotator._mb_api.mb.get_release_group_image_front",
-            side_effect=mb.ResponseError("503"),
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_404, err_503, err_503, err_503, err_503, err_503, err_503],
         )
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        with pytest.raises(RuntimeError, match="MB request failed after retries"):
+        mocker.patch("music_annotator._net.time.sleep")
+        with pytest.raises(HTTPError):
             fetch_cover_art("rel-1", release_group_id="rg-1", no_cache=True)
 
 
@@ -2194,17 +2425,26 @@ class TestCoverArtCacheKey:
 class TestFetchCoverArtCacheMissAndHit:
     """Tests for cache read/write paths in fetch_cover_art."""
 
-    def _make_listing(self, coverid: str, image_type: str = "Front") -> dict[str, object]:
-        """Build a minimal CAA image listing dict.
+    def _make_listing_bytes(self, coverid: str, image_type: str = "Front") -> bytes:
+        """Build a minimal CAA image listing JSON as bytes.
 
         :param coverid: CAA image identifier string.
         :param image_type: CAA type string.
-        :returns: A listing dict consumable by the image classification logic.
+        :returns: UTF-8 encoded JSON bytes consumable by the image classification logic.
         """
-        return {
-            "images": [{"types": [image_type], "id": coverid, "image": f"https://caa/{coverid}"}],
-            "release": "https://mb/release/rel-1",
-        }
+        return json.dumps(
+            {
+                "images": [
+                    {
+                        "types": [image_type],
+                        "id": coverid,
+                        "image": f"https://caa/{coverid}",
+                        "thumbnails": {"500": f"https://caa/{coverid}-500"},
+                    }
+                ],
+                "release": "https://mb/release/rel-1",
+            }
+        ).encode()
 
     def test_cache_miss_writes_file_and_fetches_network(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """On a cache miss the image is fetched from the network and written to the cache dir.
@@ -2215,14 +2455,18 @@ class TestFetchCoverArtCacheMissAndHit:
 
         fs.create_dir("/cache")
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=self._make_listing("99"))
-        mock_get_image = mocker.patch("music_annotator._mb_api.mb.get_image", return_value=_JPEG_BYTES)
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_ctx = _make_caa_ctx(mocker, self._make_listing_bytes("99"))
+        image_ctx = _make_caa_ctx(mocker, _JPEG_BYTES)
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, image_ctx, image_ctx],
+        )
 
         result = fetch_cover_art("rel-1")
 
-        # Network was called.
-        assert mock_get_image.call_count >= 1
+        # Network was called (listing + 500px + original).
+        assert mock_urlopen.call_count >= 2
         # Result contains image data.
         assert result.front[0].data == _JPEG_BYTES
         # Cache file was written under the release-scoped key.
@@ -2231,7 +2475,9 @@ class TestFetchCoverArtCacheMissAndHit:
         assert cache_file_500.read_bytes() == _JPEG_BYTES
 
     def test_cache_hit_skips_network(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """On a cache hit the image is returned from disk without calling the network.
+        """On a cache hit the image is returned from disk without calling the network for images.
+
+        The listing is still fetched from the network (no listing cache); only image bytes are cached.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -2244,14 +2490,17 @@ class TestFetchCoverArtCacheMissAndHit:
         (cache_dir / "rel-1_99_original.bin").write_bytes(_JPEG_BYTES)
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=self._make_listing("99"))
-        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image")
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_ctx = _make_caa_ctx(mocker, self._make_listing_bytes("99"))
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx],
+        )
 
         result = fetch_cover_art("rel-1")
 
-        # Network was never called.
-        mock_get.assert_not_called()
+        # Only the listing was fetched; image bytes came from cache.
+        assert mock_urlopen.call_count == 1
         assert result.front[0].data == _JPEG_BYTES
 
     def test_no_cache_flag_bypasses_cache(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -2267,17 +2516,23 @@ class TestFetchCoverArtCacheMissAndHit:
         (cache_dir / "rel-1_99_original.bin").write_bytes(_JPEG_BYTES)
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=self._make_listing("99"))
-        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image", return_value=_JPEG_BYTES)
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_ctx = _make_caa_ctx(mocker, self._make_listing_bytes("99"))
+        image_ctx = _make_caa_ctx(mocker, _JPEG_BYTES)
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, image_ctx, image_ctx],
+        )
 
         fetch_cover_art("rel-1", no_cache=True)
 
-        # Network was called despite cache files existing.
-        assert mock_get.call_count >= 1
+        # Network was called for images despite cache files existing.
+        assert mock_urlopen.call_count >= 2
 
     def test_release_group_fallback_cache_hit(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Release-group fallback images are returned from cache without network calls.
+        """Release-group fallback images are returned from cache without network calls for images.
+
+        The listing still returns 404 (network call); image bytes come from cache.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -2289,13 +2544,17 @@ class TestFetchCoverArtCacheMissAndHit:
         (cache_dir / "rg_rg-1_original.bin").write_bytes(_JPEG_BYTES)
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=mb.ResponseError("404"))
-        mock_rg = mocker.patch("music_annotator._mb_api.mb.get_release_group_image_front")
+        mocker.patch("music_annotator._net.time.sleep")
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_404],
+        )
 
         result = fetch_cover_art("rel-1", release_group_id="rg-1")
 
-        mock_rg.assert_not_called()
+        # Only the listing fetch was made; RG image bytes came from cache.
+        assert mock_urlopen.call_count == 1
         assert result.front[0].data == _JPEG_BYTES
         assert result.front_full[0].data == _JPEG_BYTES
 
@@ -2308,11 +2567,13 @@ class TestFetchCoverArtCacheMissAndHit:
 
         fs.create_dir("/cache")
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", side_effect=mb.ResponseError("404"))
+        mocker.patch("music_annotator._net.time.sleep")
+        err_404 = HTTPError("https://caa/", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+        ctx_500 = _make_caa_ctx(mocker, _JPEG_BYTES)
+        ctx_orig = _make_caa_ctx(mocker, _JPEG_BYTES)
         mocker.patch(
-            "music_annotator._mb_api.mb.get_release_group_image_front",
-            side_effect=[_JPEG_BYTES, _JPEG_BYTES],
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[err_404, ctx_500, ctx_orig],
         )
 
         result = fetch_cover_art("rel-1", release_group_id="rg-1")
@@ -2346,15 +2607,19 @@ class TestFetchCoverArtCacheMissAndHit:
         (cache_dir / "rel-A_99_original.bin").write_bytes(jpeg_a)
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        mocker.patch("music_annotator._mb_api.mb.get_image_list", return_value=self._make_listing("99"))
-        mock_get = mocker.patch("music_annotator._mb_api.mb.get_image", return_value=jpeg_b)
+        mocker.patch("music_annotator._net.time.sleep")
+        listing_ctx = _make_caa_ctx(mocker, self._make_listing_bytes("99"))
+        image_ctx = _make_caa_ctx(mocker, jpeg_b)
+        mock_urlopen = mocker.patch(
+            "music_annotator._mb_api.urllib.request.urlopen",
+            side_effect=[listing_ctx, image_ctx, image_ctx],
+        )
 
         # Fetch for release B — same CAA image ID "99", different release MBID.
         result = fetch_cover_art("rel-B")
 
         # Network must have been called: "rel-B_99_*.bin" was not in the cache.
-        assert mock_get.call_count >= 1
+        assert mock_urlopen.call_count >= 2
         # Result must contain release B's image, not release A's stale cached image.
         assert result.front[0].data == jpeg_b
         # Release B's cache entry must have been written.

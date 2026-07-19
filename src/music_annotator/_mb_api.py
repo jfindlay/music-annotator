@@ -1,6 +1,7 @@
 """MusicBrainz API helpers for music-annotator.
 
-Provides retry-decorated wrappers around ``musicbrainzngs`` functions plus the AcoustID lookup.
+Provides retry-decorated wrappers around ``musicbrainzngs`` functions, direct CAA HTTP fetches
+via :func:`~music_annotator._net.retrieve`, and the AcoustID lookup.
 The module-level :data:`_WORK_CACHE` avoids redundant round-trips for shared parent works.
 """
 
@@ -11,6 +12,7 @@ import json
 import os
 import socket
 import time
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as _ET
 from collections.abc import Callable
@@ -135,10 +137,10 @@ def _patched_safe_read(
 
     Retryable codes (503, 502, 500) and auth errors (401) are handled identically to the original.
 
-    **Surface note (S2):** After the S2 migration, this patch is exercised only by MB-data calls
+    **Surface note (S3):** After the S3 migration, this patch is exercised only by MB-data calls
     (``mb.get_release_by_id``, ``mb.get_recording_by_id``, ``mb.get_work_by_id``).  CAA image
-    fetches will move off ``musicbrainzngs`` in S3 and will no longer route through this function.
-    Do not remove this patch until S3 is complete and the remaining callers are confirmed MB-data only.
+    fetches moved off ``musicbrainzngs`` in S3 and no longer route through this function.
+    The remaining callers are confirmed MB-data only.
 
     Remove this function once musicbrainzngs2 ships the upstream fix (mbngs2-1: replace the
     ``else: retrying for now`` branch with ``raise ResponseError(cause=exc)``).
@@ -226,13 +228,12 @@ def init_mb(user_agent: str) -> None:
 
 
 def _mb_retry(fn: Callable[_P, _T]) -> Callable[_P, _T]:
-    """Decorator that wraps a callable with exponential-backoff retry on transient MB / CAA errors.
+    """Decorator that wraps a callable with exponential-backoff retry on transient MB errors.
 
     Attempts the call up to six times, sleeping ``2 ** attempt`` seconds between retries when the response error contains
-    ``"429"``, ``"503"``, ``"500"``, or ``"307"``.  ``"307"`` covers the temporary-redirect-loop condition that arises when the
-    Cover Art Archive routes through Internet Archive and the redirect target is temporarily unavailable; because the redirect
-    loop is detected and fast-failed at the transport layer (see :func:`_patched_safe_read`), the application-layer backoff here
-    is the right place to introduce patience.  Any other :class:`~musicbrainzngs.ResponseError` is re-raised immediately.
+    ``"429"``, ``"503"``, ``"500"``, or ``"307"``.  Used by ``_discover.py`` for MB search and disc-ID calls that still go
+    through ``musicbrainzngs``.  CAA image fetches moved off ``musicbrainzngs`` in S3 and no longer use this decorator.
+    Any other :class:`~musicbrainzngs.ResponseError` is re-raised immediately.
 
     :param fn: The callable to wrap.
     :returns: A wrapped version of ``fn`` with the same signature.
@@ -259,13 +260,14 @@ def _mb_retry(fn: Callable[_P, _T]) -> Callable[_P, _T]:
 
 
 def _mb_call(fn: Callable[[], _T]) -> _T:
-    """Call ``fn()`` and sleep 1 second to respect the MB / CAA 1 req/s rate limit.
+    """Call ``fn()`` and sleep 1 second to respect the MB 1 req/s rate limit.
 
     Consolidates the repeated ``result = api_call(); time.sleep(1)`` pattern that appears at every
-    non-retry MB or Cover Art Archive call site.  The backoff sleep inside :func:`_mb_retry` is
-    intentionally separate and not affected by this helper.
+    non-retry MB call site in ``_discover.py``.  CAA image fetches moved off ``musicbrainzngs`` in S3
+    and no longer use this helper.  The backoff sleep inside :func:`_mb_retry` is intentionally
+    separate and not affected by this helper.
 
-    :param fn: A zero-argument callable that performs exactly one MB or CAA network request.
+    :param fn: A zero-argument callable that performs exactly one MB network request.
     :returns: The return value of ``fn()``.
     """
     result = fn()
@@ -309,6 +311,42 @@ def _mb_data_classify(exc: Exception) -> RetryDecision:
     # OSError covers URLError and plain transport failures (no HTTP code available).
     # This check comes AFTER the ResponseError check to honour the ordering rule: HTTPError
     # is a subclass of OSError, and ResponseError wraps it — the typed code must be extracted first.
+    if isinstance(exc, OSError):
+        return RetryDecision.RETRY
+    return RetryDecision.FATAL
+
+
+def _caa_classify(exc: Exception) -> RetryDecision:
+    """Structured classifier for CAA HTTP fetches — maps an exception to a :class:`~music_annotator._net.RetryDecision`.
+
+    Reads typed attributes of the exception — never ``str(exc)``.  The ordering rule (C-NET-CORE) is
+    observed: ``urllib.error.HTTPError`` is a subclass of ``OSError``; the HTTP status code is extracted
+    from ``exc.code`` *before* any broad ``OSError`` check.
+
+    Classification rules:
+
+    - ``urllib.error.HTTPError``:
+      - 404 → :attr:`~music_annotator._net.RetryDecision.NO_DATA` (image deleted after listing / no release-level art)
+      - 307 → :attr:`~music_annotator._net.RetryDecision.RETRY` (redirect-loop condition from Internet Archive)
+      - 5xx (500, 502, 503) → :attr:`~music_annotator._net.RetryDecision.RETRY` (transient server error)
+      - any other 4xx → :attr:`~music_annotator._net.RetryDecision.FATAL` (permanent client error)
+      - any other code → :attr:`~music_annotator._net.RetryDecision.FATAL`
+    - ``OSError`` (transport failure without HTTP code) → :attr:`~music_annotator._net.RetryDecision.RETRY`
+    - Any other exception → :attr:`~music_annotator._net.RetryDecision.FATAL`
+
+    :param exc: The exception raised by the fetch callable.
+    :returns: A :class:`~music_annotator._net.RetryDecision` verdict.
+    """
+    if isinstance(exc, urllib.error.HTTPError):
+        code = exc.code
+        if code == 404:
+            return RetryDecision.NO_DATA
+        if code == 307 or code >= 500:
+            return RetryDecision.RETRY
+        return RetryDecision.FATAL
+    # OSError covers URLError and plain transport failures (no HTTP code available).
+    # This check comes AFTER the HTTPError check to honour the ordering rule: HTTPError
+    # is a subclass of OSError — the typed code must be extracted first.
     if isinstance(exc, OSError):
         return RetryDecision.RETRY
     return RetryDecision.FATAL
@@ -541,63 +579,72 @@ def _sidecar_filename(image_type: str, count: int, index: int, mime: str) -> str
     return f"{base}{ext}"
 
 
+def _caa_fetch_bytes(url: str) -> bytes:
+    """Fetch raw bytes from a CAA URL using a 30-second socket timeout.
+
+    A thin wrapper around :func:`urllib.request.urlopen` used as the ``fetch`` callable passed to
+    :func:`~music_annotator._net.retrieve`.  Raises :class:`urllib.error.HTTPError` on HTTP errors
+    (including 404 and 307) and :class:`OSError` on transport failures; both are classified by
+    :func:`_caa_classify`.
+
+    :param url: The CAA URL to fetch (listing JSON or image bytes).
+    :returns: The raw response bytes.
+    :raises urllib.error.HTTPError: On any HTTP error response.
+    :raises OSError: On transport-level failures.
+    """
+    with urllib.request.urlopen(url, timeout=30) as resp:
+        return resp.read()  # type: ignore[no-any-return]
+
+
 def _fetch_rg_image(
     release_group_id: str,
-    size: str,
     imgs: list[CoverImage],
     filename: str,
     url: str,
     cache_dir: Path | None,
+    cache_key: str,
 ) -> None:
-    """Fetch one release-group front image (either 500 px or original) and append to ``imgs``.
+    """Fetch one release-group front image and append to ``imgs``.
 
     Checks the cache directory for a pre-downloaded copy before hitting the network.  Writes the
     fetched bytes back to the cache on a miss.  A 404 from the CAA is treated as "image not
-    available" — a warning is logged and the function returns without appending anything.  This
-    handles the known CAA data-integrity condition where the MB metadata still references an image
-    that has since been deleted from object storage.
+    available" — :func:`~music_annotator._net.retrieve` returns ``None`` (NO_DATA) and the function
+    returns without appending anything.  This handles the known CAA data-integrity condition where
+    the MB metadata still references an image that has since been deleted from object storage.
 
-    :param release_group_id: MusicBrainz release-group MBID.
-    :param size: Size string for ``mb.get_release_group_image_front`` (e.g. ``"500"``); ``""`` for original.
+    Fetches directly from the canonical CAA URL via :func:`~music_annotator._net.retrieve` with
+    :func:`_caa_classify` as the structured classifier.
+
+    :param release_group_id: MusicBrainz release-group MBID (used for logging).
     :param imgs: List to append the resulting :class:`~music_annotator.models.CoverImage` to.
     :param filename: ``filename`` attribute to set on the image (empty string leaves it unset).
-    :param url: Canonical CAA URL to record on the image.
+    :param url: Canonical CAA URL to fetch and record on the image.
     :param cache_dir: Cache directory, or ``None`` when caching is disabled.
-    :raises mb.ResponseError: On any non-404 network or HTTP error from the CAA API.
+    :param cache_key: Cache filename stem (without ``.bin`` extension) for this image.
+    :raises Exception: Re-raises the last exception on a FATAL classification or RETRY exhaustion.
     """
-    key = _cover_art_cache_key(f"rg_{release_group_id}", size)
     data: bytes | None = None
     if cache_dir is not None:
-        cached = cache_dir / f"{key}.bin"
+        cached = cache_dir / f"{cache_key}.bin"
         if cached.is_file():
             data = cached.read_bytes()
-            log.debug("cover_art_cache_hit", key=key, bytes=len(data))
+            log.debug("cover_art_cache_hit", key=cache_key, bytes=len(data))
     if data is None:
-
-        @_mb_retry
-        def _call() -> bytes | None:
-            if size:
-                return mb.get_release_group_image_front(release_group_id, size=size)  # type: ignore[no-any-return]
-            return mb.get_release_group_image_front(release_group_id)  # type: ignore[no-any-return]
-
-        try:
-            raw = _mb_call(_call)
-        except mb.ResponseError as exc:
-            if "404" in str(exc):
-                log.warning(
-                    "cover_art_rg_image_not_found",
-                    release_group_id=release_group_id,
-                    size=size or "original",
-                )
-                return
-            raise
-        if raw:
-            data = bytes(raw)
-            if cache_dir is not None:
-                cache_path = cache_dir / f"{key}.bin"
-                cache_path.write_bytes(data)
-                log.debug("cover_art_cache_written", key=key, bytes=len(data))
-    if data is not None:
+        policy = NetPolicy(
+            classify=_caa_classify,
+            event="caa_rg_image",
+            log_fields={"release_group_id": release_group_id, "url": url},
+        )
+        raw = retrieve(lambda: _caa_fetch_bytes(url), policy)
+        if raw is None:
+            # NO_DATA: 404 — image not available (deleted from CAA after listing was fetched).
+            return
+        data = raw
+        if cache_dir is not None:
+            cache_path = cache_dir / f"{cache_key}.bin"
+            cache_path.write_bytes(data)
+            log.debug("cover_art_cache_written", key=cache_key, bytes=len(data))
+    if data:
         img = CoverImage(data=data, mime=_infer_mime(data), url=url)
         if filename:
             img.filename = filename
@@ -662,7 +709,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
 
     Strategy:
 
-    1. Call ``mb.get_image_list(release_id)`` to obtain the full CAA image listing.
+    1. Fetch ``https://coverartarchive.org/release/{release_id}/`` to obtain the full CAA image listing JSON.
     2. Classify each image entry by its ``types`` list into one of: ``front``, ``back``, ``booklet``,
        or ``medium``.  Images with unrecognised types are skipped.
     3. For **front** images: fetch twice — 500 px (for ``CoverArt.front``, embedded in audio files)
@@ -671,6 +718,10 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
        on each :class:`~music_annotator.models.CoverImage` for sidecar writing and journal provenance.
     5. If the release has no CAA listing (HTTP 404) and ``release_group_id`` is provided, fall back to
        the release-group front image using the same two-fetch strategy.
+
+    All network calls go through :func:`~music_annotator._net.retrieve` with :func:`_caa_classify` as
+    the structured classifier.  404 responses are NO_DATA (image deleted after listing / no release-level
+    art → warning + skip/fallback); 307 and 5xx are RETRY; other 4xx are FATAL.
 
     The ``url`` field on each image is the canonical CAA URL from the image listing's ``"image"`` key,
     which is stable and publicly accessible regardless of the Internet Archive redirect target.
@@ -681,28 +732,28 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
     :param no_cache: When ``True``, bypass the on-disk image cache entirely — always fetch from the
         network and do not write new cache entries.  Defaults to ``False``.
     :returns: A :class:`~music_annotator.models.CoverArt` instance.
-    :raises RuntimeError: If the image listing call fails with a non-404 HTTP error.
-    :raises mb.ResponseError: If any individual image fetch fails with a non-404 HTTP error.
+    :raises Exception: Re-raises the last exception on a FATAL classification or RETRY exhaustion for
+        any individual image fetch or the listing fetch.
     """
     cache_dir: Path | None = None if no_cache else _cover_art_cache_dir()
 
-    def _fetch_raw(rel_id: str, coverid: str | int, bucket: str, size: str = "") -> CoverImage | None:
+    def _fetch_raw(caa_url: str, coverid: str, bucket: str, size_label: str = "") -> CoverImage | None:
         """Fetch a single image from the cache or network; return a :class:`~music_annotator.models.CoverImage` or ``None``.
 
         Checks ``$XDG_CACHE_HOME/music-annotator/cover-art/`` for a previously downloaded copy before
-        making a network request.  On a cache miss the image is fetched and written to the cache
-        directory.  When ``no_cache`` is ``True`` the cache directory is ``None`` and both read and
-        write are skipped.  Returns ``None`` when the API returns empty bytes or a 404 (image was
-        deleted from CAA after the listing was fetched — a known CAA data-integrity condition).
-        Non-404 HTTP errors propagate to the caller.
+        making a network request.  On a cache miss the image is fetched via :func:`~music_annotator._net.retrieve`
+        and written to the cache directory.  When ``no_cache`` is ``True`` the cache directory is ``None``
+        and both read and write are skipped.  Returns ``None`` when the server returns 404 (NO_DATA — image
+        was deleted from CAA after the listing was fetched — a known CAA data-integrity condition) or when
+        the response is empty bytes.  Non-404 HTTP errors propagate to the caller.
 
-        :param rel_id: MusicBrainz release MBID.
-        :param coverid: CAA image identifier.
+        :param caa_url: The canonical CAA image URL from the listing's ``"image"`` field.
+        :param coverid: CAA image identifier string (used as part of the cache key).
         :param bucket: The destination bucket name (e.g. ``"front"``, ``"back"``), logged with the fetch.
-        :param size: Optional size string passed to ``mb.get_image`` (e.g. ``"500"``); omit for original.
-        :raises mb.ResponseError: On any non-404 network or HTTP error from the CAA API.
+        :param size_label: Size label for the cache key (e.g. ``"500"``); ``""`` for original.
+        :raises Exception: Re-raises the last exception on a FATAL classification or RETRY exhaustion.
         """
-        key = _cover_art_cache_key(f"{rel_id}_{coverid}", size)
+        key = _cover_art_cache_key(f"{release_id}_{coverid}", size_label)
         if cache_dir is not None:
             cached = cache_dir / f"{key}.bin"
             if cached.is_file():
@@ -710,22 +761,19 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
                 log.debug("cover_art_cache_hit", key=key, bytes=len(data))
                 return CoverImage(data=data, mime=_infer_mime(data))
 
-        @_mb_retry
-        def _call() -> bytes | None:
-            if size:
-                return mb.get_image(rel_id, coverid, size=size)  # type: ignore[no-any-return]
-            return mb.get_image(rel_id, coverid)  # type: ignore[no-any-return]
-
-        try:
-            raw = _mb_call(_call)
-        except mb.ResponseError as exc:
-            if "404" in str(exc):
-                log.warning("cover_art_image_not_found", coverid=str(coverid), bucket=bucket, size=size or "original")
-                return None
-            raise
+        policy = NetPolicy(
+            classify=_caa_classify,
+            event="caa_image",
+            log_fields={"coverid": coverid, "bucket": bucket, "size": size_label or "original"},
+        )
+        raw = retrieve(lambda: _caa_fetch_bytes(caa_url), policy)
+        if raw is None:
+            # NO_DATA: 404 — image deleted from CAA after listing was fetched.
+            log.warning("cover_art_image_not_found", coverid=coverid, bucket=bucket, size=size_label or "original")
+            return None
         if not raw:
             return None
-        data = bytes(raw)
+        data = raw
         if cache_dir is not None:
             cache_path = cache_dir / f"{key}.bin"
             cache_path.write_bytes(data)
@@ -733,8 +781,8 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
         img = CoverImage(data=data, mime=_infer_mime(data))
         log.info(
             "cover_art_image_fetched",
-            coverid=str(coverid),
-            size=size or "original",
+            coverid=coverid,
+            size=size_label or "original",
             mime=img.mime,
             bytes=len(data),
             bucket=bucket,
@@ -743,28 +791,27 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
 
     log.info("fetch_cover_art", release_id=release_id)
 
-    # Step 1: obtain the image listing.
-    # Use the standard two-layer pattern: @_mb_retry inner for transient-error backoff,
-    # _mb_call wrapper for the 1 req/s polite delay.
-    @_mb_retry
-    def _get_image_list() -> dict[str, object]:
-        return mb.get_image_list(release_id)  # type: ignore[no-any-return]
+    # Step 1: obtain the image listing from the CAA listing endpoint.
+    # Fetches https://coverartarchive.org/release/{release_id}/ which returns JSON with an "images" array.
+    listing_url = f"https://coverartarchive.org/release/{release_id}/"
+    listing_policy = NetPolicy(
+        classify=_caa_classify,
+        event="caa_listing",
+        log_fields={"release_id": release_id},
+    )
 
     listing: list[dict[str, JSON]] = []
     has_release_listing = False
-    try:
-        result = _mb_call(_get_image_list)
-        images = result.get("images", [])
-        if isinstance(images, list):
-            listing = [img for img in images if isinstance(img, dict)]
+    listing_raw = retrieve(lambda: _caa_fetch_bytes(listing_url), listing_policy)
+    if listing_raw is not None:
+        listing_data: JSON = json.loads(listing_raw.decode("utf-8"))
+        if isinstance(listing_data, dict):
+            images = listing_data.get("images", [])
+            if isinstance(images, list):
+                listing = [img for img in images if isinstance(img, dict)]
         has_release_listing = True
-    except mb.ResponseError as exc:
-        code = str(exc)
-        match code:
-            case s if "404" in s:
-                log.info("cover_art_no_release_listing", release_id=release_id)
-            case _:
-                raise RuntimeError(f"cover art listing failed for release {release_id!r}: {code[:80]}") from exc
+    else:
+        log.info("cover_art_no_release_listing", release_id=release_id)
 
     # Step 2: classify images by type (first pass — no fetching yet).
     # Each image may carry multiple types (e.g. ["Back", "Spine"]).  We route each image to
@@ -772,8 +819,12 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
     # order) determines the sidecar filename — secondary buckets reuse the same filename so the
     # file is written once and multiple COVERART_*_FILES tags point to it.
     # "unknown" is a synthetic bucket (not a CAA type) for images with unrecognised type strings.
+    # Each classified entry is a 3-tuple: (coverid, caa_url, thumb_500_url).
+    # caa_url is the canonical original-resolution URL from the listing's "image" key.
+    # thumb_500_url is the 500px thumbnail URL from the listing's "thumbnails" dict (or caa_url
+    # when no thumbnail is available).
     _all_buckets: list[str] = list(_CAA_TYPE_TO_BUCKET.values()) + ["unknown"]
-    _classified: dict[str, list[tuple[str, str]]] = {b: [] for b in _all_buckets}
+    _classified: dict[str, list[tuple[str, str, str]]] = {b: [] for b in _all_buckets}
     if has_release_listing:
         for entry in listing:
             types_raw = entry.get("types", [])
@@ -785,15 +836,22 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
                 continue
             # The "image" key in the listing is the canonical CAA URL for this image.
             caa_url = str(entry.get("image", ""))
+            # The "thumbnails" dict provides size-specific URLs; fall back to caa_url when absent.
+            thumbnails = entry.get("thumbnails")
+            thumb_500_url = caa_url
+            if isinstance(thumbnails, dict):
+                t500 = thumbnails.get("500")
+                if isinstance(t500, str) and t500:
+                    thumb_500_url = t500
             # Map each CAA type string to its bucket; collect all matched buckets.
             matched_buckets = [_CAA_TYPE_TO_BUCKET[t] for t in types if t in _CAA_TYPE_TO_BUCKET]
             if matched_buckets:
                 for bkt in matched_buckets:
-                    _classified[bkt].append((coverid, caa_url))
+                    _classified[bkt].append((coverid, caa_url, thumb_500_url))
             else:
                 # Type string not in _CAA_TYPE_TO_BUCKET — route to unknown bucket and warn.
                 log.warning("cover_art_unknown_types", types=types, coverid=coverid)
-                _classified["unknown"].append((coverid, caa_url))
+                _classified["unknown"].append((coverid, caa_url, thumb_500_url))
 
     # Step 3 & 4: fetch images with correct sizing and assign filenames/URLs.
     imgs_front: list[CoverImage] = []
@@ -808,12 +866,12 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
 
     # Front: fetch 500px for embedding, original for sidecar.
     front_count = len(_classified["front"])
-    for idx, (coverid, caa_url) in enumerate(_classified["front"], start=1):
-        img_500 = _fetch_raw(release_id, coverid, bucket="front", size="500")
+    for idx, (coverid, caa_url, thumb_500_url) in enumerate(_classified["front"], start=1):
+        img_500 = _fetch_raw(thumb_500_url, coverid, bucket="front", size_label="500")
         if img_500:
             img_500.url = caa_url
             imgs_front.append(img_500)
-        img_orig = _fetch_raw(release_id, coverid, bucket="front")
+        img_orig = _fetch_raw(caa_url, coverid, bucket="front")
         if img_orig:
             img_orig.filename = _sidecar_filename("front", front_count, idx, img_orig.mime)
             img_orig.url = caa_url
@@ -833,7 +891,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
         count = len(entries)
         # Determine the primary bucket for each coverid (the first bucket in priority order
         # whose _classified list contains this coverid).
-        for idx, (coverid, caa_url) in enumerate(entries, start=1):
+        for idx, (coverid, caa_url, _thumb_500_url) in enumerate(entries, start=1):
             # Check if we've already fetched this coverid (it appeared in a higher-priority bucket).
             if coverid in _fetched_originals:
                 existing = _fetched_originals[coverid]
@@ -842,7 +900,7 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
                     imgs_sidecar[bkt].append(existing)
                 continue
             # First time seeing this coverid — fetch it and assign filename from this bucket.
-            img = _fetch_raw(release_id, coverid, bucket=bkt)
+            img = _fetch_raw(caa_url, coverid, bucket=bkt)
             if img:
                 img.filename = _sidecar_filename(bkt, count, idx, img.mime)
                 img.url = caa_url
@@ -854,8 +912,22 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
     # Step 5: release-group fallback (no listing available).
     if not has_release_listing and release_group_id:
         rg_url = f"https://coverartarchive.org/release-group/{release_group_id}/front"
-        _fetch_rg_image(release_group_id, "500", imgs_front, "", rg_url, cache_dir)
-        _fetch_rg_image(release_group_id, "", imgs_front_full, "cover.jpg", rg_url, cache_dir)
+        _fetch_rg_image(
+            release_group_id,
+            imgs_front,
+            "",
+            rg_url,
+            cache_dir,
+            _cover_art_cache_key(f"rg_{release_group_id}", "500"),
+        )
+        _fetch_rg_image(
+            release_group_id,
+            imgs_front_full,
+            "cover.jpg",
+            rg_url,
+            cache_dir,
+            _cover_art_cache_key(f"rg_{release_group_id}", ""),
+        )
 
     result_art = CoverArt(
         front=imgs_front,
