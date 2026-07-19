@@ -3,8 +3,15 @@
 Cross-cutting items that are not part of any active sharded plan and have no committed substrate yet.
 Each is preserved in full so no design context is lost; when one acquires a substrate and a clear
 decomposition it graduates into its own `PLAN-*.md` (or a sub-track of an existing one) and is
-removed from here.  All prior plans are retired (2026-07); this document is currently the sole
-planning surface.
+removed from here.  All prior plans are retired (2026-07).
+
+**Roadmap partition (2026-07-18).**  The library-completion arc (Acts I + II + III-a) graduated to
+`docs/ROADMAP.md` as one sub-track DAG (nodes R0–R6, junctures J1–J3).  Graduated items below carry a
+`→ ROADMAP Rn` marker; their full design context **stays here** until the node's `PLAN-*.md` is
+derived, then tombstones.  The playlist library graduates to its own ROADMAP when Act I nears
+completion.  Everything unmarked (Act III-b, MB-upstream, editorial, mbngs2, trigger-based items)
+remains backlog-resident by design — operator-, research-, or trigger-paced rather than
+session-sequenceable.
 
 Organised by the **phase arc** (north star, then Acts I–III on the critical path, then parallel
 tracks).  Each item keeps its provenance line; graduation tombstones and execution learnings stay at
@@ -54,24 +61,24 @@ history, mistitled works, pre-MB errors (class C) → the editorial/scholarly tr
 Goal: drain `Original/` — every dir integrated into the annotated library at its best achievable
 rung.
 
-### Census of `Original/` (first step)
+### Census of `Original/` (first step)  → ROADMAP R0
 
-~218 top-level dirs remain (2026-07-17).  **Pre-step: the user manually moves out dirs that are not
-music-library material at all** (2026-07-17); run the census after that prune.  Classify each
-remaining dir into: Bach Edition remainder (existing
+~218 top-level dirs remained (2026-07-17).  **Pre-step COMPLETE (2026-07-18): the user manually
+pruned `Original/` of non-library material** — the census is unblocked and is Act I's next action.
+Classify each remaining dir into: Bach Edition remainder (existing
 pipeline handles) / PrestoMusic download / whipper rip / not-in-MB / track-mismatch /
 non-classical–other (Amazon Music, Audiobooks, Dance, Education, …).  Same census-before-policy
 pattern as the L2 depth census.  The distribution prioritises the rest of Act I: it decides whether
 the Presto adapter, the whipper adapter, or the provisional rung is the binding constraint, and it
 inventories the non-classical corpus the taxonomy must admit (feeds the Act II taxonomy design).
 
-### Bach Edition remainder (operational)
+### Bach Edition remainder (operational)  → ROADMAP R5
 
 Some Brilliant Classics Bach Edition media dirs remain and are handleable by the existing pipeline —
 run them through on hades.  No dev work; listed here only so Act I's exit condition ("`Original/`
 empty") accounts for them.
 
-### Provisional-ingest mode — the rung ladder (anchor item)
+### Provisional-ingest mode — the rung ladder (anchor item)  → ROADMAP R2
 
 New load-bearing design item (2026-07-17).  Ingest any source dir at the best achievable rung and
 record the rung so upgrades are enumerable.
@@ -92,7 +99,7 @@ record the rung so upgrades are enumerable.
   journal provenance (C-PROV/C-MOVE) already handle exactly that.
 - **Upgrade path** is Act III-b (the perpetual loop); this item builds the substrate it consumes.
 
-### Source-adapter support (new ingest provenances)
+### Source-adapter support (new ingest provenances)  → ROADMAP R3a / R3b
 
 - **PrestoMusic downloads.**  Source directories containing tracks downloaded from PrestoMusic.  These
   dirs may contain their own cover art and booklet, but music-annotator should still query
@@ -106,7 +113,7 @@ record the rung so upgrades are enumerable.
   produces/exposes it.  When sharded, this becomes a source-adapters plan that the rung-0 source-tag
   reader consumes.
 
-### Alternate metadata source: Discogs adapter
+### Alternate metadata source: Discogs adapter  → ROADMAP R3c
 
 New (2026-07-17).  Where MB coverage fails (not-in-MB releases, or MB data too wrong to use), Discogs
 or another source may provide enough tag coverage to be adequate for a mid-ladder rung.  Design
@@ -115,7 +122,7 @@ tag as the present-state key, analogous to `MUSICBRAINZ_ALBUMID`), which tag fie
 populate, and the explicit rung marking (Discogs-sourced entries are inherently provisional with
 respect to work-tree-derived paths, since Discogs lacks classical work structure).
 
-### Track-mismatch-tolerant ingest
+### Track-mismatch-tolerant ingest  → ROADMAP R3d
 
 New (2026-07-17).  Several remaining dirs mismatch MB's track records (extra/missing/reordered
 tracks, or a different edition).  Per-release adjudication: (a) the MB data is wrong → fix upstream
@@ -141,7 +148,7 @@ others are ours.  A good engineer finds adequately optimal balance among all typ
 and constraints.  Yet, as the fount of enthusiasm continues along the worldline, the work improves
 and converges further still.]
 
-### Not-in-MB routing rule
+### Not-in-MB routing rule  → ROADMAP R3e
 
 For each not-in-MB release, choose: (a) create the MB release upstream (→ MB-upstream track —
 enriches the commons; full-rung ingest afterwards); (b) Discogs-sourced rung; (c) source-tags-only
@@ -157,7 +164,7 @@ The open naming-policy questions (issue class A).  Each must close before Act II
 revision pass re-derives the whole library under the *final* heuristic.  Not gated on Act I; can
 proceed in parallel.
 
-### Depth emergence (issue A-a) — routing note, mostly closed
+### Depth emergence (issue A-a) — routing note, mostly closed  → ROADMAP R6a (execution) + MB-upstream
 
 "Path depth should emerge from the actual musical work structure" **is** the converged L2 design:
 uniform-ceiling / ragged-floor renders depth emergent — clamp over-resolution down, preserve real
@@ -167,7 +174,7 @@ per Rule 1 to the **MB-upstream track**: fix the data at its layer; keep the def
 tree until fixed; never compensate in the renderer.  No new renderer design is needed for A-a; the
 open work is Act III-a execution (W3b/L2 below) plus B-track data fixes as the census surfaces them.
 
-### Library-wide taxonomy + initial directory component (issue A-b, expanded)
+### Library-wide taxonomy + initial directory component (issue A-b, expanded)  → ROADMAP R4a
 
 The original A-b concern: composer / performer / conductor / ensemble initial-directory-component
 decisions and related issues.  Full inclusion (north star) widens it: the top-level taxonomy must now
@@ -181,7 +188,7 @@ education, …) LoC-style — a class for everything.  Two design layers when th
    native-language/script item (editorial track) and refracts through "path is a handle, not a
    manifest" and the CE editorial anchor.
 
-### Cross-medium fragmentation inventory (issue A-c)
+### Cross-medium fragmentation inventory (issue A-c)  → ROADMAP R4b
 
 Cross-medium MB attributions/annotations still fragment the filetree in some cases despite the C-S0
 all-media aggregation substrate and the audit/regroup detect→adjudicate→act cycle (`docs/NOTES.md`).
@@ -189,7 +196,7 @@ Inventory what still fragments — box sets MB models as multiple releases, per-
 differences, release-vs-release-group attribution splits — before designing anything; the remedy may
 be mostly B-track (MB data corrections) or III-b (regroup passes) once enumerated.
 
-### Concerto-like soloist override — editorial allowlist (follow-on to multimedium S5)
+### Concerto-like soloist override — editorial allowlist (follow-on to multimedium S5)  → ROADMAP R4c
 
 The mechanical `top_work.type == "Concerto"` case shipped in `PLAN-multimedium.md` S5 (soloist
 promoted into the path, accumulated across media — see `docs/NOTES.md` "Concerto-soloist path
@@ -216,7 +223,7 @@ like itself" — rather than piecemeal retro-fixes (user, 2026-07-10: cross-vers
 deferred to this phase rather than chasing backward-compat incrementally, which would be its own
 edge-case accretion).  Absorbs the items below plus any other accumulated cross-version naming drift.
 
-#### Catalogue-colon part-label retro-fix + library-revision reconciliation
+#### Catalogue-colon part-label retro-fix + library-revision reconciliation  → ROADMAP R6b
 
 **Heuristic fix shipped** (`strip_common_prefix` in `_works.py`); this item is the **deferred retro-fix**
 of already-annotated releases.
@@ -249,7 +256,7 @@ Survey at fix time found the bug had *fired* on 1 release, but the latent catalo
 present in ~16 Haydn releases and in Bach/Handel titles — the census must be re-run against the
 then-current library, not assumed to be the single Angeles release.
 
-#### Hierarchy-depth normalisation — W3b (deferred from PLAN-naming.md)
+#### Hierarchy-depth normalisation — W3b (deferred from PLAN-naming.md)  → ROADMAP R6a
 
 **Deferred from `docs/PLAN-naming.md` W3b** (2026-06-02, plan retired).  Dedicated multisession
 planned.
@@ -295,7 +302,7 @@ confirm:
   depth.  Existing callers (`run`, `repath`, `regroup`) pass the group context needed to compute the
   modal depth.
 
-#### Hierarchy-depth normalisation (deferred L2 of the leaf-numbering plan)
+#### Hierarchy-depth normalisation (deferred L2 of the leaf-numbering plan)  → ROADMAP R6a
 
 The leaf/intermediate numbering fix (L0/L1 of the now-complete `PLAN-leafnumber.md`) shipped; the
 **depth-uniformity** half (L2) was designed at an Opus-inflection HALT and then **deferred** — the
@@ -352,7 +359,7 @@ L0/L1 (per-group leaf index) was the load-bearing fix — it covers all 16 multi
 of depth — and L2 (depth) is the smaller, secondary concern touching only Shapes C/D (3 groups).
 Do not let L2's intricacy inflate its priority.
 
-#### AcoustID tag naming + semantics — Picard alignment
+#### AcoustID tag naming + semantics — Picard alignment  → ROADMAP R6c
 
 **Deferred by user (2026-07-14)** until library annotation is (mostly) complete; a persisted-tag
 migration — do not churn the convention mid-flight.
@@ -405,7 +412,7 @@ an archival library.
 
 ---
 
-## Playlist library — the access lens (parallel track)
+## Playlist library — the access lens (parallel track)  → future ROADMAP (graduates near Act I completion; decided 2026-07-18)
 
 Graduates the former one-liner ("Playlist generation for collection/cycle groupings (Ring cycle,
 symphony cycles, etc.)") into the second lens of the north star.  The filesystem stores by work
@@ -568,7 +575,7 @@ sources (Wikipedia / IMSLP / urtext evidence), not MB alone.
 
 ## Infrastructure (ungated — parallel)
 
-### Unified network-retrieval subpackage (`_net`) — lossless-archival retrieval policy
+### Unified network-retrieval subpackage (`_net`) — lossless-archival retrieval policy  → ROADMAP R1
 
 **Motivation.**  music-annotator's scholarly-archival policy is *lossless*: never lose a remote
 resource that might exist, by accident or by design.  A retrieval that *might* have succeeded but
@@ -701,7 +708,7 @@ consensus of the same pressing).
 
 ## Conventions and code stewardship (parallel)
 
-### Public conventions spec — CE anchor + documented extensions
+### Public conventions spec — CE anchor + documented extensions  → ROADMAP R6e (finalisation; draft + CE-author contact stay here)
 
 **Posture decided 2026-07-18** after assessing Classical Extras' state: CE the *plugin* is dormant
 (author's last commit June 2020, v2.0.11; last maintenance touch Jan 2022 by Picard's lead dev; not

@@ -129,8 +129,19 @@ tracks+sidecars" **holds**.  One genuine gap: rip *origin-time* exists today onl
 (`source` path + earliest `timestamp`); it is the one datum a blind regenerate would lose, which is
 why it must migrate into the provenance sidecar before the journal is ever discarded.
 
-**Note on host paths.**  The canonical library root is `/home/findlay/Music/Done` on hades; a dev
-mount (e.g. `~/Remote/hades/Music/Done`) is a convenience vantage only.  The journal's
+**Note on host paths.**  The canonical library layout is three siblings under `/home/findlay/Music/`
+on hades (music-annotator runs locally on hades); dev mounts (`~/Remote/hades/Music/*`) are a
+convenience vantage only:
+
+- **`Original/`** — the prepared ingest queue (manual prune of non-library material completed
+  2026-07-18; Act I drains this to empty).
+- **`Reference/`** — an unmodified copy of the library from before annotation.  Its role is nearly
+  complete; retained through the long tail of living with the annotated library as a
+  non-destructiveness check (wrong annotations, file collisions) before eventual deletion.
+- **`Done/`** — the annotated library, music-annotator's destination and the canonical root for all
+  maintenance commands.
+
+The journal's
 `/home/findlay/` paths are therefore *correct*, not stale — but `audit`/`regroup`/`repath` derive
 candidates via `Path(e.destination).relative_to(dest_root)`, which raises `ValueError` (silently
 yielding zero candidates) whenever `dest_root` does not match the journal's embedded root.  Running
