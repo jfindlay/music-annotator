@@ -23,6 +23,7 @@ import musicbrainzngs.mbxml as _mbxml
 import musicbrainzngs.musicbrainz as _mbmz
 import structlog
 
+from music_annotator._net import NetPolicy, RetryDecision, retrieve
 from music_annotator.models import JSON, CoverArt, CoverImage, MBArtistRelation, MBRecording, MBRelease, MBWork
 
 # ---------------------------------------------------------------------------
@@ -133,6 +134,11 @@ def _patched_safe_read(
     for such codes instead, matching the user's preference that data fetch errors are fatal and fast.
 
     Retryable codes (503, 502, 500) and auth errors (401) are handled identically to the original.
+
+    **Surface note (S2):** After the S2 migration, this patch is exercised only by MB-data calls
+    (``mb.get_release_by_id``, ``mb.get_recording_by_id``, ``mb.get_work_by_id``).  CAA image
+    fetches will move off ``musicbrainzngs`` in S3 and will no longer route through this function.
+    Do not remove this patch until S3 is complete and the remaining callers are confirmed MB-data only.
 
     Remove this function once musicbrainzngs2 ships the upstream fix (mbngs2-1: replace the
     ``else: retrying for now`` branch with ``raise ResponseError(cause=exc)``).
@@ -267,13 +273,54 @@ def _mb_call(fn: Callable[[], _T]) -> _T:
     return result
 
 
-@_mb_retry
+def _mb_data_classify(exc: Exception) -> RetryDecision:
+    """Structured classifier for MB data-fetch exceptions — maps an exception to a :class:`~music_annotator._net.RetryDecision`.
+
+    Reads typed attributes of the exception — never ``str(exc)``.  The ordering rule (C-NET-CORE) is
+    observed: ``mb.ResponseError`` wraps the original ``HTTPError`` on its ``.cause`` attribute; the
+    HTTP status code is extracted from ``exc.cause.code`` *before* any broad ``OSError`` check, because
+    ``HTTPError`` is a subclass of ``OSError``.
+
+    Classification rules:
+
+    - ``mb.ResponseError`` with an ``HTTPError`` cause:
+      - 503 / 500 / 429 → :attr:`~music_annotator._net.RetryDecision.RETRY` (transient server errors / rate limit)
+      - 307 → :attr:`~music_annotator._net.RetryDecision.RETRY` (redirect-loop condition from CAA/Internet Archive)
+      - 404 → :attr:`~music_annotator._net.RetryDecision.NO_DATA` (MBID not found — authoritative no-data)
+      - any other code → :attr:`~music_annotator._net.RetryDecision.FATAL` (permanent client or server error)
+    - ``mb.ResponseError`` without an ``HTTPError`` cause → :attr:`~music_annotator._net.RetryDecision.FATAL`
+    - ``OSError`` (including ``URLError`` / transport failures without HTTP code) →
+      :attr:`~music_annotator._net.RetryDecision.RETRY`
+    - Any other exception → :attr:`~music_annotator._net.RetryDecision.FATAL`
+
+    :param exc: The exception raised by the fetch callable.
+    :returns: A :class:`~music_annotator._net.RetryDecision` verdict.
+    """
+    if isinstance(exc, mb.ResponseError):
+        cause = exc.cause
+        if isinstance(cause, _mbcompat.HTTPError):
+            code = cause.code
+            if code in (503, 500, 429, 307):
+                return RetryDecision.RETRY
+            if code == 404:
+                return RetryDecision.NO_DATA
+            return RetryDecision.FATAL
+        return RetryDecision.FATAL
+    # OSError covers URLError and plain transport failures (no HTTP code available).
+    # This check comes AFTER the ResponseError check to honour the ordering rule: HTTPError
+    # is a subclass of OSError, and ResponseError wraps it — the typed code must be extracted first.
+    if isinstance(exc, OSError):
+        return RetryDecision.RETRY
+    return RetryDecision.FATAL
+
+
 def _get_release_by_id(release_id: str) -> dict[str, JSON]:
-    """Thin typed wrapper around ``mb.get_release_by_id`` decorated with ``@_mb_retry``.
+    """Thin typed wrapper around ``mb.get_release_by_id``.
 
     Requests all includes needed for full annotation: artists, recordings, release groups, labels, media, artist credits,
     work relations, recording-level relations, and disc IDs (so that each medium's ``discs`` list is populated for
-    TOC-based medium selection).
+    TOC-based medium selection).  Called as the ``fetch`` argument to :func:`~music_annotator._net.retrieve`; retry and
+    polite-delay are handled by the caller.
 
     :param release_id: The MusicBrainz release MBID.
     :returns: The raw response dict from ``musicbrainzngs``.
@@ -325,24 +372,32 @@ def _extract_session_date(artist_relation_list: list[MBArtistRelation]) -> tuple
 def fetch_release(release_id: str) -> MBRelease:
     """Fetch a full MusicBrainz release with all includes needed for annotation.
 
-    Calls :func:`_get_release_by_id` (which is retried on rate-limit errors), waits one second as a polite delay, then
-    validates the ``"release"`` key of the response into an :class:`~music_annotator.models.MBRelease` model.
+    Routes through :func:`~music_annotator._net.retrieve` with :func:`_mb_data_classify` as the structured classifier.
+    On success validates the ``"release"`` key of the response into an :class:`~music_annotator.models.MBRelease` model.
+    When :func:`~music_annotator._net.retrieve` returns ``None`` (authoritative 404 — MBID not found), an empty
+    :class:`~music_annotator.models.MBRelease` is returned.
 
     :param release_id: The MusicBrainz release MBID (UUID string).
-    :returns: An :class:`~music_annotator.models.MBRelease` instance populated from the ``musicbrainzngs`` response.
-    :raises mb.ResponseError: On a non-retryable API error.
-    :raises RuntimeError: If all retry attempts are exhausted.
+    :returns: An :class:`~music_annotator.models.MBRelease` instance populated from the ``musicbrainzngs`` response,
+        or an empty model when the MBID is not found.
+    :raises Exception: Re-raises the last exception on a FATAL classification or RETRY exhaustion.
     """
     log.info("fetch_release", release_id=release_id)
-    result = _mb_call(lambda: _get_release_by_id(release_id))
+    policy = NetPolicy(
+        classify=_mb_data_classify,
+        event="mb_release",
+        log_fields={"release_id": release_id},
+    )
+    raw = retrieve(lambda: _get_release_by_id(release_id), policy)
+    result: dict[str, JSON] = raw if raw is not None else {}
     return MBRelease.model_validate(result.get("release", {}))
 
 
-@_mb_retry
 def _get_recording_by_id(recording_id: str) -> dict[str, JSON]:
-    """Thin typed wrapper around ``mb.get_recording_by_id`` decorated with ``@_mb_retry``.
+    """Thin typed wrapper around ``mb.get_recording_by_id``.
 
-    Requests artist credits, work relations, and artist relations.
+    Requests artist credits, work relations, and artist relations.  Called as the ``fetch`` argument to
+    :func:`~music_annotator._net.retrieve`; retry and polite-delay are handled by the caller.
 
     :param recording_id: The MusicBrainz recording MBID.
     :returns: The raw response dict from ``musicbrainzngs``.
@@ -366,9 +421,9 @@ def fetch_recording_detail(recording_id: str, no_cache: bool = False) -> MBRecor
     :param recording_id: The MusicBrainz recording MBID.
     :param no_cache: When ``True``, bypass the on-disk cache entirely.  Defaults to ``False``.
     :returns: An :class:`~music_annotator.models.MBRecording` instance populated from the
-        ``musicbrainzngs`` response or the on-disk cache.
-    :raises mb.ResponseError: On a non-retryable API error.
-    :raises RuntimeError: If all retry attempts are exhausted.
+        ``musicbrainzngs`` response or the on-disk cache.  Returns an empty model when the MBID is
+        not found (authoritative 404).
+    :raises Exception: Re-raises the last exception on a FATAL classification or RETRY exhaustion.
     """
     if not no_cache:
         cache_path = _metadata_cache_dir("recording") / f"{recording_id}.json"
@@ -377,7 +432,13 @@ def fetch_recording_detail(recording_id: str, no_cache: bool = False) -> MBRecor
             return MBRecording.model_validate_json(cache_path.read_text(encoding="utf-8"))
 
     log.info("recording_network_fetch", recording_id=recording_id)
-    result = _mb_call(lambda: _get_recording_by_id(recording_id))
+    policy = NetPolicy(
+        classify=_mb_data_classify,
+        event="mb_recording",
+        log_fields={"recording_id": recording_id},
+    )
+    raw = retrieve(lambda: _get_recording_by_id(recording_id), policy)
+    result: dict[str, JSON] = raw if raw is not None else {}
     recording = MBRecording.model_validate(result.get("recording", {}))
 
     if not no_cache:
@@ -809,11 +870,11 @@ def fetch_cover_art(release_id: str, release_group_id: str = "", no_cache: bool 
     return result_art
 
 
-@_mb_retry
 def _get_work_by_id(work_id: str) -> dict[str, JSON]:
-    """Thin typed wrapper around ``mb.get_work_by_id`` decorated with ``@_mb_retry``.
+    """Thin typed wrapper around ``mb.get_work_by_id``.
 
-    Requests artist relations, work relations, URL relations, tags, and aliases.
+    Requests artist relations, work relations, URL relations, tags, and aliases.  Called as the ``fetch`` argument to
+    :func:`~music_annotator._net.retrieve`; retry and polite-delay are handled by the caller.
 
     :param work_id: The MusicBrainz work MBID.
     :returns: The raw response dict from ``musicbrainzngs``.
@@ -840,9 +901,9 @@ def fetch_work_detail(work_id: str, no_cache: bool = False) -> MBWork:
     :param no_cache: When ``True``, bypass both the in-process and on-disk caches.  Defaults to
         ``False``.
     :returns: An :class:`~music_annotator.models.MBWork` instance populated from the
-        ``musicbrainzngs`` response or a cache layer.
-    :raises mb.ResponseError: On a non-retryable API error.
-    :raises RuntimeError: If all retry attempts are exhausted.
+        ``musicbrainzngs`` response or a cache layer.  Returns an empty model when the MBID is not
+        found (authoritative 404).
+    :raises Exception: Re-raises the last exception on a FATAL classification or RETRY exhaustion.
     """
     if not no_cache and work_id in _WORK_CACHE:
         log.debug("fetch_work_l1_cache_hit", work_id=work_id)
@@ -857,7 +918,13 @@ def fetch_work_detail(work_id: str, no_cache: bool = False) -> MBWork:
             return work
 
     log.debug("fetch_work", work_id=work_id)
-    result = _mb_call(lambda: _get_work_by_id(work_id))
+    policy = NetPolicy(
+        classify=_mb_data_classify,
+        event="mb_work",
+        log_fields={"work_id": work_id},
+    )
+    raw = retrieve(lambda: _get_work_by_id(work_id), policy)
+    result: dict[str, JSON] = raw if raw is not None else {}
     work = MBWork.model_validate(result.get("work", {}))
 
     if not no_cache:

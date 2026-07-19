@@ -35,6 +35,7 @@ from music_annotator._mb_api import (
     _get_bottom_work,
     _infer_mime,
     _mb_call,
+    _mb_data_classify,
     _mb_retry,
     _metadata_cache_dir,
     _patched_parse_recording,
@@ -43,6 +44,7 @@ from music_annotator._mb_api import (
     fetch_acoustid_id,
     fetch_acoustid_lookup,
 )
+from music_annotator._net import RetryDecision
 from music_annotator._pipeline_io import _check_collisions
 from music_annotator.models import JSON, MBAttribute, MBRecording, MBWork, TransactionEntry
 
@@ -828,7 +830,7 @@ class TestFetchRelease:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mocker.patch(
             "music_annotator._mb_api.mb.get_release_by_id",
             return_value={"release": {"id": "rel-1", "title": "Test"}},
@@ -842,7 +844,7 @@ class TestFetchRelease:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_api = mocker.patch(
             "music_annotator._mb_api.mb.get_release_by_id",
             return_value={"release": {}},
@@ -880,7 +882,7 @@ class TestFetchRecordingDetail:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mocker.patch(
             "music_annotator._mb_api.mb.get_recording_by_id",
             return_value={"recording": {"id": "rec-1", "title": "Adagio"}},
@@ -893,7 +895,7 @@ class TestFetchRecordingDetail:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mocker.patch(
             "music_annotator._mb_api.mb.get_recording_by_id",
             return_value={},
@@ -1380,7 +1382,7 @@ class TestFetchWorkDetail:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mocker.patch(
             "music_annotator._mb_api.mb.get_work_by_id",
             return_value={"work": {"id": "w1", "title": "Fontane di Roma"}},
@@ -1393,7 +1395,7 @@ class TestFetchWorkDetail:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_api = mocker.patch(
             "music_annotator._mb_api.mb.get_work_by_id",
             return_value={"work": {"id": "w1", "title": "Cached Work"}},
@@ -1407,7 +1409,7 @@ class TestFetchWorkDetail:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mocker.patch(
             "music_annotator._mb_api.mb.get_work_by_id",
             return_value={"work": {"id": "w2", "title": "Symphony"}},
@@ -1421,7 +1423,7 @@ class TestFetchWorkDetail:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mocker.patch("music_annotator._mb_api.mb.get_work_by_id", return_value={})
         result = fetch_work_detail("w-missing")
         assert result.id == ""
@@ -1626,6 +1628,74 @@ class TestMbCall:
         with pytest.raises(ValueError, match="api error"):
             _mb_call(_boom)
         mock_sleep.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _mb_data_classify
+# ---------------------------------------------------------------------------
+
+
+class TestMbDataClassify:
+    """Tests for the _mb_data_classify structured classifier — covers all branches.
+
+    Each test exercises one classifier outcome to satisfy 100% branch coverage on the
+    ``_mb_data_classify`` function.  The ordering rule (C-NET-CORE) is verified implicitly:
+    ``ResponseError`` is checked before the broad ``OSError`` branch.
+    """
+
+    def _make_response_error(self, code: int) -> mb.ResponseError:
+        """Build a ``mb.ResponseError`` whose ``.cause`` is an ``HTTPError`` with ``code``.
+
+        :param code: HTTP status code to embed in the cause.
+        :returns: A :class:`mb.ResponseError` with a typed ``HTTPError`` cause.
+        """
+        http_exc = HTTPError("http://mb.org/", code, f"Status {code}", HTTPMessage(), None)
+        return mb.ResponseError(cause=http_exc)
+
+    def test_response_error_503_is_retry(self) -> None:
+        """ResponseError with HTTP 503 cause → RETRY (transient server error)."""
+        assert _mb_data_classify(self._make_response_error(503)) == RetryDecision.RETRY
+
+    def test_response_error_500_is_retry(self) -> None:
+        """ResponseError with HTTP 500 cause → RETRY (transient server error)."""
+        assert _mb_data_classify(self._make_response_error(500)) == RetryDecision.RETRY
+
+    def test_response_error_429_is_retry(self) -> None:
+        """ResponseError with HTTP 429 cause → RETRY (rate limit)."""
+        assert _mb_data_classify(self._make_response_error(429)) == RetryDecision.RETRY
+
+    def test_response_error_307_is_retry(self) -> None:
+        """ResponseError with HTTP 307 cause → RETRY (redirect-loop condition)."""
+        assert _mb_data_classify(self._make_response_error(307)) == RetryDecision.RETRY
+
+    def test_response_error_404_is_no_data(self) -> None:
+        """ResponseError with HTTP 404 cause → NO_DATA (MBID not found — authoritative no-data)."""
+        assert _mb_data_classify(self._make_response_error(404)) == RetryDecision.NO_DATA
+
+    def test_response_error_400_is_fatal(self) -> None:
+        """ResponseError with HTTP 400 cause → FATAL (permanent client error)."""
+        assert _mb_data_classify(self._make_response_error(400)) == RetryDecision.FATAL
+
+    def test_response_error_no_http_cause_is_fatal(self) -> None:
+        """ResponseError without an HTTPError cause → FATAL (unclassifiable)."""
+        err = mb.ResponseError(cause=Exception("no http cause"))
+        assert _mb_data_classify(err) == RetryDecision.FATAL
+
+    def test_oserror_is_retry(self) -> None:
+        """Plain OSError (transport failure without HTTP code) → RETRY."""
+        assert _mb_data_classify(OSError("connection refused")) == RetryDecision.RETRY
+
+    def test_url_error_is_retry(self) -> None:
+        """URLError (subclass of OSError, transport failure) → RETRY.
+
+        Verifies the ordering rule: URLError is an OSError subclass but is NOT a ResponseError,
+        so it falls through to the OSError branch correctly.
+        """
+        assert _mb_data_classify(URLError("name resolution failed")) == RetryDecision.RETRY
+
+    def test_unrecognised_exception_is_fatal(self) -> None:
+        """An unrecognised exception type → FATAL."""
+        assert _mb_data_classify(ValueError("unexpected")) == RetryDecision.FATAL
 
 
 # ---------------------------------------------------------------------------
@@ -2462,7 +2532,7 @@ class TestFetchRecordingDetailCache:
         """
         fs.create_dir("/cache")
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_get = mocker.patch("music_annotator._mb_api.mb.get_recording_by_id", return_value=self._raw_recording_dict())
 
         result = fetch_recording_detail("rec-1")
@@ -2487,7 +2557,7 @@ class TestFetchRecordingDetailCache:
         (cache_dir / "rec-2.json").write_text(recording.model_dump_json(by_alias=True), encoding="utf-8")
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_get = mocker.patch("music_annotator._mb_api.mb.get_recording_by_id")
 
         result = fetch_recording_detail("rec-2")
@@ -2508,7 +2578,7 @@ class TestFetchRecordingDetailCache:
         (cache_dir / "rec-3.json").write_text(stale.model_dump_json(by_alias=True), encoding="utf-8")
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_get = mocker.patch(
             "music_annotator._mb_api.mb.get_recording_by_id",
             return_value={"recording": {"id": "rec-3", "title": "Fresh"}},
@@ -2529,7 +2599,7 @@ class TestFetchRecordingDetailCache:
         """
         fs.create_dir("/cache")
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mocker.patch(
             "music_annotator._mb_api.mb.get_recording_by_id",
             return_value={"recording": {"id": "rec-4", "title": "Presto"}},
@@ -2576,7 +2646,7 @@ class TestFetchWorkDetailCache:
         """
         fs.create_dir("/cache")
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_get = mocker.patch("music_annotator._mb_api.mb.get_work_by_id", return_value=self._raw_work_dict("w-1", "Eroica"))
 
         result = fetch_work_detail("w-1")
@@ -2600,7 +2670,7 @@ class TestFetchWorkDetailCache:
         (cache_dir / "w-2.json").write_text(work.model_dump_json(by_alias=True), encoding="utf-8")
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_get = mocker.patch("music_annotator._mb_api.mb.get_work_by_id")
 
         result = fetch_work_detail("w-2")
@@ -2616,7 +2686,7 @@ class TestFetchWorkDetailCache:
         """
         fs.create_dir("/cache")
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_get = mocker.patch("music_annotator._mb_api.mb.get_work_by_id")
         # Pre-populate L1 cache.
         cached_work = MBWork.model_validate({"id": "w-3", "title": "Moonlight"})
@@ -2640,7 +2710,7 @@ class TestFetchWorkDetailCache:
         music_annotator._mb_api._WORK_CACHE["w-4"] = stale  # pylint: disable=protected-access
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_get = mocker.patch(
             "music_annotator._mb_api.mb.get_work_by_id",
             return_value=self._raw_work_dict("w-4", "Fresh"),
@@ -2661,7 +2731,7 @@ class TestFetchWorkDetailCache:
         """
         fs.create_dir("/cache")
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mocker.patch(
             "music_annotator._mb_api.mb.get_work_by_id",
             return_value=self._raw_work_dict("w-5", "Hammerklavier"),
@@ -2688,7 +2758,7 @@ class TestFetchWorkDetailCache:
         (cache_dir / "w-6.json").write_text(work.model_dump_json(by_alias=True), encoding="utf-8")
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_get = mocker.patch("music_annotator._mb_api.mb.get_work_by_id")
 
         first_result = fetch_work_detail("w-6")
@@ -2736,7 +2806,7 @@ class TestGetBottomWorkNoCache:
         """
         fs.create_dir("/cache")
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mocker.patch(
             "music_annotator._mb_api.mb.get_work_by_id",
             return_value={"work": {"id": "w-stub", "title": "Full"}},
@@ -2762,7 +2832,7 @@ class TestGetBottomWorkNoCache:
         (cache_dir / "w-nc.json").write_text(stale.model_dump_json(by_alias=True), encoding="utf-8")
 
         mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mocker.patch(
             "music_annotator._mb_api.mb.get_work_by_id",
             return_value={"work": {"id": "w-nc", "title": "Fresh"}},
