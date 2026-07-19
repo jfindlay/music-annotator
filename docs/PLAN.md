@@ -332,11 +332,15 @@ retry+polite-delay posture and the raise-on-data-integrity-failure contract thos
 | 1 | `_net` core | done | 011668e | C-NET-CORE, C-NET-TERM |
 | 2 | MB-data migration | done | 4deb288 | — |
 | 3 | CAA off musicbrainzngs | done | 967aa22 | C-CAA-URL |
-| 4 | AcoustID migration + collapse | pending | — | — |
+| 4 | AcoustID migration + collapse | done | 39dc90f | — (extras: _pipeline_maint.py, __init__.py, test_discover.py, test_pipeline.py, test_pipeline_maint.py — all plainly part of unit: caller updates + their tests) |
 
 ## Action-frame digest
 
-*(none yet)*
+### S4 ◆ boundary — 2026-07-19
+Discovery/flex: Two MB search/disc-ID call sites in _discover.py (_search_mb_releases, search_releases_by_dir) remain on the legacy _mb_retry/_mb_call path with a live "404" in str(exc) scrape — never enrolled in R1's session list.
+Affected: none (no frozen contract broken; consistent with PLAN's own scope boundary — S2 licensed "reduce to thin adapters")
+Deferred: yes — @plan-juncture recommends a follow-on BACKLOG row: migrate the two _discover.py search/disc-ID calls onto _net with a structured MB-search classifier; retire _mb_retry/_mb_call and the last str(exc) scrape so the "uniformly on _net" claim holds literally.
+Texture: still-on-intent verdict; the frozen _net core and universal terminal rule are complete and adapter-ready; the gap is scope-completeness, not a broken contract.
 
 ## Discoveries & risks
 
