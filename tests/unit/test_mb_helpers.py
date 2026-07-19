@@ -37,9 +37,7 @@ from music_annotator._mb_api import (
     _fetch_acoustid_lookup_raw,
     _get_bottom_work,
     _infer_mime,
-    _mb_call,
     _mb_data_classify,
-    _mb_retry,
     _metadata_cache_dir,
     _patched_parse_recording,
     _patched_safe_read,
@@ -49,123 +47,6 @@ from music_annotator._mb_api import (
 from music_annotator._net import RetryDecision
 from music_annotator._pipeline_io import _check_collisions
 from music_annotator.models import MBAttribute, MBRecording, MBWork, TransactionEntry
-
-# ---------------------------------------------------------------------------
-# _mb_retry
-# ---------------------------------------------------------------------------
-
-
-class TestMbRetry:
-    """Tests for the _mb_retry decorator."""
-
-    def test_success_on_first_attempt(self, mocker: MockerFixture) -> None:
-        """Returns immediately when the decorated function succeeds on first call.
-
-        :param mocker: pytest-mock fixture.
-        """
-        inner = mocker.MagicMock(return_value={"release": {}})
-        inner.__name__ = "mock_fn"
-
-        @_mb_retry
-        def wrapped() -> dict[str, object]:
-            return inner()  # type: ignore[no-any-return]
-
-        result = wrapped()
-        assert result == {"release": {}}
-        inner.assert_called_once()
-
-    def test_retries_on_503(self, mocker: MockerFixture) -> None:
-        """Retries on 503 error and succeeds on subsequent attempt.
-
-        :param mocker: pytest-mock fixture.
-        """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        err = mb.ResponseError(cause=Exception("503 Service Unavailable"))
-        inner = mocker.MagicMock(side_effect=[err, {"ok": True}])
-        inner.__name__ = "mock_fn"
-
-        @_mb_retry
-        def wrapped() -> dict[str, object]:
-            return inner()  # type: ignore[no-any-return]
-
-        result = wrapped()
-        assert result == {"ok": True}
-        assert inner.call_count == 2
-
-    def test_retries_on_429(self, mocker: MockerFixture) -> None:
-        """Retries on 429 rate-limit error.
-
-        :param mocker: pytest-mock fixture.
-        """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        err = mb.ResponseError(cause=Exception("429 Too Many Requests"))
-        inner = mocker.MagicMock(side_effect=[err, {"ok": True}])
-        inner.__name__ = "mock_fn"
-
-        @_mb_retry
-        def wrapped() -> dict[str, object]:
-            return inner()  # type: ignore[no-any-return]
-
-        result = wrapped()
-        assert result == {"ok": True}
-
-    def test_retries_on_307(self, mocker: MockerFixture) -> None:
-        """Retries on 307 (redirect loop) and succeeds on subsequent attempt.
-
-        307 is a transient CAA/Internet Archive condition and is included in the retry set alongside
-        503/429/500.
-
-        :param mocker: pytest-mock fixture.
-        """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        err = mb.ResponseError(cause=Exception("307 Temporary Redirect"))
-        inner = mocker.MagicMock(side_effect=[err, {"ok": True}])
-        inner.__name__ = "mock_fn"
-
-        @_mb_retry
-        def wrapped() -> dict[str, object]:
-            return inner()  # type: ignore[no-any-return]
-
-        result = wrapped()
-        assert result == {"ok": True}
-        assert inner.call_count == 2
-
-    def test_raises_immediately_on_non_retryable_error(self, mocker: MockerFixture) -> None:
-        """Raises ResponseError immediately on a non-retryable status code.
-
-        :param mocker: pytest-mock fixture.
-        """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        err = mb.ResponseError(cause=Exception("404 Not Found"))
-        inner = mocker.MagicMock(side_effect=err)
-        inner.__name__ = "mock_fn"
-
-        @_mb_retry
-        def wrapped() -> None:
-            inner()
-
-        with pytest.raises(mb.ResponseError):
-            wrapped()
-        inner.assert_called_once()
-
-    def test_raises_runtime_error_after_all_retries(self, mocker: MockerFixture) -> None:
-        """Raises RuntimeError after all 6 retry attempts are exhausted.
-
-        :param mocker: pytest-mock fixture.
-        """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        err = mb.ResponseError(cause=Exception("503 Service Unavailable"))
-        inner = mocker.MagicMock(side_effect=err)
-        inner.__name__ = "mock_fn"
-
-        @_mb_retry
-        def wrapped() -> None:
-            inner()
-
-        with pytest.raises(RuntimeError, match="after retries"):
-            wrapped()
-        assert inner.call_count == 6
-
 
 # ---------------------------------------------------------------------------
 # fetch_cover_art — retry behaviour
@@ -1946,49 +1827,6 @@ class TestWriteTransactionLog:
         write_transaction_log(journal, [entry])
         data = json.loads(journal.read_text(encoding="utf-8"))
         assert data[0]["action"] == "dry_run"
-
-
-# ---------------------------------------------------------------------------
-# _mb_call
-# ---------------------------------------------------------------------------
-
-
-class TestMbCall:
-    """Tests for the _mb_call rate-limit helper."""
-
-    def test_calls_fn_and_returns_result(self, mocker: MockerFixture) -> None:
-        """_mb_call invokes fn() and returns its result.
-
-        :param mocker: pytest-mock fixture.
-        """
-        mocker.patch("music_annotator._mb_api.time.sleep")
-        fn = mocker.MagicMock(return_value={"key": "value"})
-        result = _mb_call(fn)
-        fn.assert_called_once()
-        assert result == {"key": "value"}
-
-    def test_sleeps_one_second_after_call(self, mocker: MockerFixture) -> None:
-        """_mb_call sleeps exactly 1 second after fn() returns.
-
-        :param mocker: pytest-mock fixture.
-        """
-        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
-        _mb_call(lambda: None)
-        mock_sleep.assert_called_once_with(1)
-
-    def test_propagates_exception_without_sleeping(self, mocker: MockerFixture) -> None:
-        """_mb_call propagates exceptions from fn() and does not sleep.
-
-        :param mocker: pytest-mock fixture.
-        """
-        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
-
-        def _boom() -> None:
-            raise ValueError("api error")
-
-        with pytest.raises(ValueError, match="api error"):
-            _mb_call(_boom)
-        mock_sleep.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

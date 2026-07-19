@@ -1,13 +1,13 @@
 """MusicBrainz API helpers for music-annotator.
 
-Provides retry-decorated wrappers around ``musicbrainzngs`` functions, direct CAA HTTP fetches
-via :func:`~music_annotator._net.retrieve`, and the AcoustID lookup.
+Provides typed wrappers around ``musicbrainzngs`` functions, direct CAA HTTP fetches
+via :func:`~music_annotator._net.retrieve`, and the AcoustID lookup.  All network calls
+route through :func:`~music_annotator._net.retrieve` with a structured classifier.
 The module-level :data:`_WORK_CACHE` avoids redundant round-trips for shared parent works.
 """
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import json
 import os
@@ -16,9 +16,8 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as _ET
-from collections.abc import Callable
 from pathlib import Path
-from typing import ParamSpec, Protocol, TypeVar
+from typing import Protocol
 
 import musicbrainzngs as mb
 import musicbrainzngs.compat as _mbcompat
@@ -207,9 +206,6 @@ log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 #: In-process cache: work_id → MBWork, avoids redundant API calls for shared parents.
 _WORK_CACHE: dict[str, MBWork] = {}
 
-_P = ParamSpec("_P")
-_T = TypeVar("_T")
-
 
 def init_mb(user_agent: str) -> None:
     """Configure the musicbrainzngs user-agent from a ``"App/Version contact"`` string.
@@ -226,54 +222,6 @@ def init_mb(user_agent: str) -> None:
     version = vc[0]
     contact = vc[1] if len(vc) > 1 else ""
     mb.set_useragent(app, version, contact)
-
-
-def _mb_retry(fn: Callable[_P, _T]) -> Callable[_P, _T]:
-    """Decorator that wraps a callable with exponential-backoff retry on transient MB errors.
-
-    Attempts the call up to six times, sleeping ``2 ** attempt`` seconds between retries when the response error contains
-    ``"429"``, ``"503"``, ``"500"``, or ``"307"``.  Used by ``_discover.py`` for MB search and disc-ID calls that still go
-    through ``musicbrainzngs``.  CAA image fetches moved off ``musicbrainzngs`` in S3 and no longer use this decorator.
-    Any other :class:`~musicbrainzngs.ResponseError` is re-raised immediately.
-
-    :param fn: The callable to wrap.
-    :returns: A wrapped version of ``fn`` with the same signature.
-    :raises mb.ResponseError: If the error is not a retryable transient error.
-    :raises RuntimeError: If all six retry attempts are exhausted.
-    """
-
-    @functools.wraps(fn)
-    def _wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _T:
-        for attempt in range(6):
-            try:
-                return fn(*args, **kwargs)
-            except mb.ResponseError as exc:
-                code = str(exc)
-                if any(s in code for s in ("503", "429", "500", "307")):
-                    wait = 2**attempt
-                    log.warning("mb_rate_limit", code=code[:20], wait_s=wait, attempt=attempt)
-                    time.sleep(wait)
-                else:
-                    raise
-        raise RuntimeError(f"MB request failed after retries: {fn.__name__}")
-
-    return _wrapper
-
-
-def _mb_call(fn: Callable[[], _T]) -> _T:
-    """Call ``fn()`` and sleep 1 second to respect the MB 1 req/s rate limit.
-
-    Consolidates the repeated ``result = api_call(); time.sleep(1)`` pattern that appears at every
-    non-retry MB call site in ``_discover.py``.  CAA image fetches moved off ``musicbrainzngs`` in S3
-    and no longer use this helper.  The backoff sleep inside :func:`_mb_retry` is intentionally
-    separate and not affected by this helper.
-
-    :param fn: A zero-argument callable that performs exactly one MB network request.
-    :returns: The return value of ``fn()``.
-    """
-    result = fn()
-    time.sleep(1)
-    return result
 
 
 def _mb_data_classify(exc: Exception) -> RetryDecision:

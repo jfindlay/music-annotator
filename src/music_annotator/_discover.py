@@ -19,7 +19,8 @@ import structlog
 from rich.markup import escape as _markup_escape
 
 from music_annotator._console import _console
-from music_annotator._mb_api import _fetch_acoustid_lookup_raw, _mb_call, _mb_retry, fetch_release, init_mb
+from music_annotator._mb_api import _fetch_acoustid_lookup_raw, _mb_data_classify, fetch_release, init_mb
+from music_annotator._net import NetPolicy, retrieve
 from music_annotator._pipeline import CollisionPolicy, run
 from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
@@ -295,20 +296,20 @@ def _toc_lookup_mb_releases(toc_string: str, limit: int) -> list[dict[str, objec
     Calls ``mb.get_releases_by_discid`` with ``toc=toc_string`` so that the MB server performs a fuzzy TOC match even when the
     exact disc ID is not in the database.  The call uses a sentinel disc ID (``"intentionally-invalid-id"``) that will never
     match, ensuring the server always falls through to the fuzzy TOC path and returns a ``"release-list"`` dict.  The result is
-    routed through :func:`_mb_call` for the 1 req/s polite delay.
+    routed through :func:`~music_annotator._net.retrieve` with :func:`~music_annotator._mb_api._mb_data_classify` for retry,
+    polite delay, and structured 404 handling.
 
     Response shapes handled:
 
     * ``{"disc": {"release-list": [...]}}`` — exact disc-ID match (rare).
     * ``{"release-list": [...], "release-count": N}`` — fuzzy TOC match (typical).
-    * :class:`~musicbrainzngs.ResponseError` with a ``"404"`` status — no matches; return ``[]``.
+    * :attr:`~music_annotator._net.RetryDecision.NO_DATA` (404) — no matches; return ``[]``.
 
     :param toc_string: A TOC string in the form ``"1 <num_tracks> <leadout_frame> <offset_1> … <offset_N>"``.
     :param limit: Maximum number of results to slice from the response list.
     :returns: A list of raw release dicts (possibly empty).
     """
 
-    @_mb_retry
     def _call() -> dict[str, object]:
         return mb.get_releases_by_discid(  # type: ignore[no-any-return]
             "intentionally-invalid-id",
@@ -316,12 +317,12 @@ def _toc_lookup_mb_releases(toc_string: str, limit: int) -> list[dict[str, objec
             includes=["artist-credits", "labels"],
         )
 
-    try:
-        response: dict[str, object] = _mb_call(_call)
-    except mb.ResponseError as exc:
-        if "404" in str(exc):
-            return []
-        raise
+    policy = NetPolicy(classify=_mb_data_classify, event="mb_discid", log_fields={"toc_string": toc_string})
+    raw = retrieve(_call, policy)
+    if raw is None:
+        # NO_DATA: 404 — no releases match this TOC (authoritative no-data from MB).
+        return []
+    response: dict[str, object] = raw
 
     # Exact match path: {"disc": {"release-list": [...]}}
     disc: object = response.get("disc")
@@ -423,22 +424,25 @@ def parse_dir_hint(src_dir: Path) -> DirHint:
 def _search_mb_releases(query: str, tracks: int, limit: int) -> dict[str, JSON]:
     """Call ``mb.search_releases`` and return the raw response dict.
 
-    Wraps the call with the ``_mb_retry`` decorator indirectly by delegating to a decorated inner function, so transient 503/429
-    errors are automatically retried.  The result is routed through :func:`_mb_call` for the 1 req/s polite delay.
+    Routes through :func:`~music_annotator._net.retrieve` with :func:`~music_annotator._mb_api._mb_data_classify` for retry,
+    polite delay, and structured 404 handling.  On :attr:`~music_annotator._net.RetryDecision.NO_DATA` (authoritative 404),
+    returns ``{}`` so the existing ``raw.get("release-list", [])`` in :func:`search_releases_by_dir` yields no candidates.
 
     :param query: Lucene query string for the ``release`` field.
     :param tracks: Expected total track count; added as a ``tracks`` field constraint when non-zero.
     :param limit: Maximum number of results to return.
-    :returns: Raw ``musicbrainzngs`` response dict containing a ``"release-list"`` key.
+    :returns: Raw ``musicbrainzngs`` response dict containing a ``"release-list"`` key, or ``{}`` on authoritative no-data.
     """
 
-    @_mb_retry
     def _call() -> dict[str, JSON]:
         if tracks:
             return mb.search_releases(query, limit=limit, tracks=tracks)  # type: ignore[no-any-return]
         return mb.search_releases(query, limit=limit)  # type: ignore[no-any-return]
 
-    return _mb_call(_call)
+    policy = NetPolicy(classify=_mb_data_classify, event="mb_search", log_fields={"query": query})
+    raw = retrieve(_call, policy)
+    # NO_DATA: 404 — authoritative no-data; map to {} so release-list lookup yields no candidates.
+    return raw if raw is not None else {}
 
 
 def _parse_release_item(item: Mapping[str, object], score: int) -> MBReleaseCandidate:

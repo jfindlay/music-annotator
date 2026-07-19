@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import struct
 import textwrap
+from http.client import HTTPMessage
 from pathlib import Path
 from unittest.mock import MagicMock
+from urllib.error import HTTPError
 
 import musicbrainzngs as mb
 import pytest
@@ -867,7 +869,7 @@ class TestSearchReleasesByDir:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_mb_search = mocker.patch(
             "music_annotator._discover.mb.search_releases",
             return_value={"release-list": []},
@@ -882,7 +884,7 @@ class TestSearchReleasesByDir:
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
         mock_mb_search = mocker.patch(
             "music_annotator._discover.mb.search_releases",
             return_value={"release-list": []},
@@ -1808,11 +1810,13 @@ class TestTocLookupMbReleases:
 
     @pytest.fixture(autouse=True)
     def _patch_sleep(self, mocker: MockerFixture) -> None:
-        """Suppress the _mb_call polite sleep so tests remain fast.
+        """Suppress the retrieve() polite sleep so tests remain fast.
+
+        After migration the polite delay lives in _net.retrieve, not _mb_call.
 
         :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._mb_api.time.sleep")
+        mocker.patch("music_annotator._net.time.sleep")
 
     def _toc_release(self, release_id: str = "rel-toc-1", track_count: int = 4) -> dict[str, object]:
         """Build a minimal raw release dict for TOC response tests.
@@ -1859,28 +1863,53 @@ class TestTocLookupMbReleases:
         assert [r["id"] for r in result] == ["r1"]
 
     def test_404_response_error_returns_empty_list(self, mocker: MockerFixture) -> None:
-        """ResponseError with '404' returns empty list instead of raising.
+        """KAT: ResponseError with HTTP 404 cause → NO_DATA via _mb_data_classify → returns [].
+
+        The classifier reads the typed HTTPError cause (not str(exc)), so the cause must be a real
+        HTTPError with code 404.  retrieve() returns None; _toc_lookup_mb_releases maps None → [].
 
         :param mocker: pytest-mock fixture.
         """
+        http_exc = HTTPError("http://mb.org/", 404, "Not Found", HTTPMessage(), None)
         mocker.patch(
             "music_annotator._discover.mb.get_releases_by_discid",
-            side_effect=mb.ResponseError(cause=Exception("404 Not Found")),
+            side_effect=mb.ResponseError(cause=http_exc),
         )
         result = _toc_lookup_mb_releases("1 1 15000 150", 10)
         assert result == []
 
     def test_non_404_response_error_re_raised(self, mocker: MockerFixture) -> None:
-        """Non-404 ResponseError is re-raised.
+        """KAT: Non-404 ResponseError (FATAL) is re-raised immediately.
+
+        A 400 Bad Request is FATAL per _mb_data_classify — retrieve() re-raises immediately.
 
         :param mocker: pytest-mock fixture.
         """
+        http_exc = HTTPError("http://mb.org/", 400, "Bad Request", HTTPMessage(), None)
         mocker.patch(
             "music_annotator._discover.mb.get_releases_by_discid",
-            side_effect=mb.ResponseError(cause=Exception("400 Bad Request")),
+            side_effect=mb.ResponseError(cause=http_exc),
         )
         with pytest.raises(mb.ResponseError):
             _toc_lookup_mb_releases("1 1 15000 150", 10)
+
+    def test_5xx_response_error_retries_then_raises(self, mocker: MockerFixture) -> None:
+        """KAT: 5xx ResponseError exhausts retries and raises (cannot-determine → fatal).
+
+        503 is RETRY per _mb_data_classify.  After all max_attempts fail, retrieve() re-raises
+        the last exception — the universal terminal rule: cannot-determine → raise.
+
+        :param mocker: pytest-mock fixture.
+        """
+        http_exc = HTTPError("http://mb.org/", 503, "Service Unavailable", HTTPMessage(), None)
+        mock_api = mocker.patch(
+            "music_annotator._discover.mb.get_releases_by_discid",
+            side_effect=mb.ResponseError(cause=http_exc),
+        )
+        with pytest.raises(mb.ResponseError):
+            _toc_lookup_mb_releases("1 1 15000 150", 10)
+        # All max_attempts (6) were made before raising.
+        assert mock_api.call_count == 6
 
     def test_limit_applied_to_result(self, mocker: MockerFixture) -> None:
         """Result list is sliced to the limit.
@@ -1971,17 +2000,20 @@ class TestTocLookupMbReleases:
         assert result == []
 
     def test_polite_delay_observed_on_success(self, mocker: MockerFixture) -> None:
-        """_mb_call's 1-second polite delay is observed after a successful TOC lookup.
+        """retrieve()'s polite delay is observed after a successful TOC lookup.
+
+        After migration the 1-second polite delay lives in _net.retrieve (policy.polite_delay_s),
+        not in _mb_call.  The sleep patch must target music_annotator._net.time.sleep.
 
         :param mocker: pytest-mock fixture.
         """
-        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_sleep = mocker.patch("music_annotator._net.time.sleep")
         mocker.patch(
             "music_annotator._discover.mb.get_releases_by_discid",
             return_value={"release-list": [self._toc_release()]},
         )
         _toc_lookup_mb_releases("1 1 15000 150", 10)
-        mock_sleep.assert_called_once_with(1)
+        mock_sleep.assert_called_once_with(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -1990,20 +2022,58 @@ class TestTocLookupMbReleases:
 
 
 class TestSearchMbReleasesPoliteDelay:
-    """Tests for the _mb_call polite delay in _search_mb_releases."""
+    """Tests for the retrieve() polite delay in _search_mb_releases."""
 
     def test_polite_delay_observed_on_success(self, mocker: MockerFixture) -> None:
-        """_mb_call's 1-second polite delay is observed after a successful search.
+        """retrieve()'s polite delay is observed after a successful search.
+
+        After migration the 1-second polite delay lives in _net.retrieve (policy.polite_delay_s),
+        not in _mb_call.  The sleep patch must target music_annotator._net.time.sleep.
 
         :param mocker: pytest-mock fixture.
         """
-        mock_sleep = mocker.patch("music_annotator._mb_api.time.sleep")
+        mock_sleep = mocker.patch("music_annotator._net.time.sleep")
         mocker.patch(
             "music_annotator._discover.mb.search_releases",
             return_value={"release-list": []},
         )
         music_annotator._discover._search_mb_releases("Respighi", 0, 10)  # pylint: disable=protected-access
-        mock_sleep.assert_called_once_with(1)
+        mock_sleep.assert_called_once_with(1.0)
+
+    def test_search_none_maps_to_empty_dict(self, mocker: MockerFixture) -> None:
+        """KAT: When retrieve() returns None (NO_DATA), _search_mb_releases maps it to {}.
+
+        A 404 from MB search is authoritative no-data.  retrieve() returns None; the function
+        maps None → {} so the existing raw.get("release-list", []) yields no candidates.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._net.time.sleep")
+        http_exc = HTTPError("http://mb.org/", 404, "Not Found", HTTPMessage(), None)
+        mocker.patch(
+            "music_annotator._discover.mb.search_releases",
+            side_effect=mb.ResponseError(cause=http_exc),
+        )
+        result = music_annotator._discover._search_mb_releases("Respighi", 0, 10)  # pylint: disable=protected-access
+        assert result == {}
+
+    def test_search_5xx_retries_then_raises(self, mocker: MockerFixture) -> None:
+        """KAT: 5xx on search exhausts retries and raises (cannot-determine → fatal).
+
+        503 is RETRY per _mb_data_classify.  After all max_attempts fail, retrieve() re-raises
+        the last exception — the universal terminal rule: cannot-determine → raise.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._net.time.sleep")
+        http_exc = HTTPError("http://mb.org/", 503, "Service Unavailable", HTTPMessage(), None)
+        mock_api = mocker.patch(
+            "music_annotator._discover.mb.search_releases",
+            side_effect=mb.ResponseError(cause=http_exc),
+        )
+        with pytest.raises(mb.ResponseError):
+            music_annotator._discover._search_mb_releases("Respighi", 0, 10)  # pylint: disable=protected-access
+        assert mock_api.call_count == 6
 
 
 # ---------------------------------------------------------------------------
