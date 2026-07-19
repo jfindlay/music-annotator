@@ -126,7 +126,7 @@ deliberate consequence of R1-F being a substrate-completion, not a substrate-def
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | search/disc-ID → `_net`; retire `_mb_retry`/`_mb_call` | pending | — | — |
+| 1 | search/disc-ID → `_net`; retire `_mb_retry`/`_mb_call` | done | e7370b7 | — (no new contract) |
 
 ## Action-frame digest
 
