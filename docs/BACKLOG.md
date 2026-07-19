@@ -577,104 +577,52 @@ sources (Wikipedia / IMSLP / urtext evidence), not MB alone.
 
 ### Unified network-retrieval subpackage (`_net`) — lossless-archival retrieval policy  → ROADMAP R1
 
-**Motivation.**  music-annotator's scholarly-archival policy is *lossless*: never lose a remote
-resource that might exist, by accident or by design.  A retrieval that *might* have succeeded but
-failed to complete is an **error**, never a silent empty.  Today that principle is enforced
-inconsistently because there are two structurally different network paths.
+**GRADUATED — R1 sub-track complete (2026-07-19, commits `011668e`–`39dc90f`).**
 
-**Current state (as-audited 2026-07-14).**  Two retrieval mechanisms:
-1. **MB + CAA** — go through `musicbrainzngs` (`mb.get_release_by_id`, `mb.get_recording_by_id`,
-   `mb.get_work_by_id`, and — critically — `mb.get_image_list` / `mb.get_image`).  Wrapped by the
-   two-layer `_mb_retry` (exponential backoff, 6 attempts) + `_mb_call` (1 req/s) pattern.  On
-   exhausted retries `_mb_retry` **raises** `RuntimeError`; non-retryable `ResponseError`
-   re-raises.  All failures propagate to `_discover.py:966` `log.error("discover_run_error",
-   exc_info=True)`.  **This path already satisfies the lossless principle** (fails loud, logs
-   error at the boundary).
-2. **AcoustID** — the *sole* raw-`urllib` path (`fetch_acoustid_id`,
-   `_fetch_acoustid_lookup_raw`).  Its own hand-rolled 3-attempt loop; on failure **returns empty**
-   (`""` / `([], "")`) instead of raising.  **Retries-exhausted logs NOTHING** (silent give-up at
-   `_mb_api.py:959-960` and `1046-1047`); malformed-response and per-attempt cases log only
-   `warning`.  The caller (`_pipeline.py:1424`) stores the empty result with no log — a persisted
-   "no AcoustID" that may actually mean "fetch failed."  **This is the lossless-principle
-   violation.**
+`_net.py` ships with `RetryDecision` (RETRY/NO_DATA/FATAL), `NetPolicy`, and `retrieve()`.  All MB
+data, CAA, and AcoustID fetches route through `retrieve()` with structured classifiers — no
+`str(exc)` scraping anywhere on those paths.  `fetch_acoustid_lookup` collapsed into
+`_fetch_acoustid_lookup_raw` (callers slice the tuple).  Universal terminal rule applied: AcoustID
+retries-exhausted / malformed JSON / transport failure now raises (propagates to the per-release
+boundary in `discover()`), closing the lossless-principle gap.  CAA left musicbrainzngs entirely
+(direct `urllib` + URL templates).  `_patched_safe_read` surface confirmed MB-data only.
 
-**Two confirmed structural facts (why unification is possible and correct).**
-- `_mb_call` is already fully generic (call + sleep; no MB coupling).  `_mb_retry` is ~95% generic —
-  its *only* MB coupling is catching `mb.ResponseError` and classifying transient-vs-permanent by
-  **substring-matching the stringified exception** (`"503" in str(exc)`).  That string-scrape is a
-  workaround forced by musicbrainzngs; the AcoustID path already does it *correctly* with typed
-  `HTTPError.code` (`exc.code < 500`).
-- **musicbrainzngs's CAA module is a bare `urllib` URL-builder with ZERO CAA-specific logic**
-  (`caa.py` `_caa_request`: builds a `coverartarchive.org` URL, plain opener, calls `_safe_read`,
-  `json.loads`).  The `_safe_read` it calls is *already monkeypatched* by `_patched_safe_read`.  So
-  **CAA needs nothing from musicbrainzngs that the app can't do itself** — the canonical CAA URLs are
-  already captured in `_mb_api.py:726`.  musicbrainzngs's only irreplaceable value is `mbxml.py`
-  (XML→dict parsing for the three MB *data* calls).
+**Remaining gap (follow-on, see next item).**  Two `_discover.py` search/disc-ID calls
+(`_search_mb_releases` via `mb.search_releases`; `search_releases_by_dir` via
+`mb.get_releases_by_discid`) remain on the legacy `_mb_retry`/`_mb_call` path with a live
+`"404" in str(exc)` scrape.  These were never enrolled in R1's session list.  `_mb_retry` and
+`_mb_call` survive solely for these two callers.
 
-**Target design (converged, user-approved 2026-07-14).**  One general-purpose `_net` retrieval
-subpackage owning the app's *retrieval business policy*, not MusicBrainz specifics:
-- **One retry/backoff core**, parameterized by caller-supplied policy: retryable-classifier
-  (structured status codes / exception types — **never string-scraping**), terminal-action
-  (raise vs. return-sentinel), event name / logging context.
-- **The `_mb_*` names go away** (the coupling they imply is a transport accident).
-- **CAA and AcoustID both use `_net` directly** — CAA leaves musicbrainzngs entirely (reimplement
-  its two trivial URL templates; the app already has the URLs).
-- **The three MB *data* calls keep musicbrainzngs for `mbxml` parsing** but are wrapped by the
-  **same** retry core, with the classifier reading `exc.cause.code` (structured — `ResponseError`
-  stores the original `HTTPError` as `self.cause`) instead of `"503" in str(exc)`.  This kills the
-  string-scrape everywhere.
-- **`_patched_safe_read` shrinks** to the MB-data path only (CAA no longer routes through it).
-- **Terminal error logging**: one shared choke point in the core logs every terminal retrieval
-  failure as `log.error` (fixes the silent give-up gap).  Per-attempt `warning`s with rich fields
-  (`recording_mbid`, `coverid`, `duration_s`, …) stay at the call sites.
+### Migrate MB search/disc-ID calls onto `_net`; retire `_mb_retry`/`_mb_call`
 
-**Failure-vs-no-data discrimination (the crux of "lossless").**  The distinction the code must
-preserve: a *working server returning no data* (no track id / no results / 4xx "unknown MBID/bad
-fingerprint") is legitimate **no-data** → return empty, no error.  A *retries-exhausted / malformed*
-response is **failure to retrieve something that might exist** → the lossless case → log error.
-- **MB + CAA**: retrieval failure → raise (data-integrity-critical; unchanged contract).
-- **AcoustID persisted-tag path** (`fetch_acoustid_id` → written to `acoustid_id` tag): retrieval
-  failure is a data-integrity loss for archived data.  **Open policy sub-decision** (deferred): raise
-  and abort the release like MB/CAA, vs. log ERROR + record an explicit re-runnable gap and proceed.
-  Both honor losslessness; they differ on whether a flaky AcoustID endpoint blocks an
-  otherwise-complete annotation.  Resolve when this graduates to a PLAN.
-- **AcoustID diagnostic path** (`fetch_acoustid_lookup` identity-confirm at `_pipeline.py:1127`;
-  candidate-seed at `_discover.py:704`): read-only, alters nothing archival.  Keep its never-raise
-  contract but its retrieval failure must log **error** (not silent, not confused with no-data).
+**Motivation.**  R1 left two `_discover.py` call sites on the legacy `_mb_retry`/`_mb_call` path
+(surfaced at the R1 sub-track boundary by `@plan-juncture`, 2026-07-19).  After this item, every
+remote fetch in the codebase routes through `_net.retrieve()` with a structured classifier — the
+"uniformly on `_net`" claim the R3 adapters lean on holds literally, and the last `str(exc)` scrape
+is gone.
 
-**AcoustID function collapse (safe simplification).**  `fetch_acoustid_id` (recording-MBID →
-UUID via `/v2/track/list_by_mbid`) and `fetch_acoustid_lookup` (fingerprint → recording-MBIDs via
-`/v2/lookup`) are **inverse endpoints** — both genuinely used (the fingerprint→MBID direction drives
-discovery candidate-seeding) and **cannot merge**.  But `fetch_acoustid_lookup` is just a thin
-wrapper that calls `_fetch_acoustid_lookup_raw` and discards the top cluster UUID; those two can
-collapse into one function returning the tuple, callers slicing what they need.  Also note:
-`_fetch_acoustid_lookup_raw` currently has **no cache** whereas `fetch_acoustid_id` does — the
-`_net` migration should give both the same caching posture.
+**Scope.**
+- `_search_mb_releases` (`_discover.py`) — wraps `mb.search_releases` via `@_mb_retry` + `_mb_call`.
+  Replace with `retrieve(lambda: mb.search_releases(...), policy)` using `_mb_data_classify` (already
+  written in S2; the same classifier covers search errors).
+- `search_releases_by_dir` (`_discover.py`) — wraps `mb.get_releases_by_discid` via `@_mb_retry` +
+  `_mb_call`; string-scrapes `"404" in str(exc)` to detect no-disc-ID.  Replace with `retrieve(...)`
+  using `_mb_data_classify`; the 404 case is already `NO_DATA` in that classifier (returns `None` →
+  map to `[]`).
+- Delete `_mb_retry` and `_mb_call` from `_mb_api.py` once both callers are migrated.  Update
+  `_discover.py`'s import of `_mb_retry`, `_mb_call` accordingly.
+- Update `tests/unit/test_discover.py` — `TestSearchReleasesByDir` and `TestSearchMbReleases` patch
+  targets and retry/exhaustion assertions must align with the `_net`-backed path.
 
-**Interactions / dependencies.**
-- **`mbngs2-1`** (MB-upstream track, musicbrainzngs2 items) is the upstream version of the
-  `_patched_safe_read` fix.  The `_net` refactor and the eventual musicbrainzngs2 migration must be
-  sequenced together — once CAA leaves musicbrainzngs, `_patched_safe_read`'s surface (and
-  mbngs2-1's relevance to CAA) shrinks to MB-data only.
-- The **"This should have already been fixed?"** item (an `acoustid_lookup_failed` timeout, logged
-  below) is a symptom of exactly this gap — it graduates into this work: the timeout is a retrieval
-  failure that currently degrades silently.
-- Depends on the **100% branch-coverage gate**: the retry-exhausted, per-exception, and
-  classify-transient-vs-permanent branches all need explicit tests.  **Verify** the CAA listing/image
-  decode against a real CAA response when CAA moves off musicbrainzngs (content-type quirk noted at
-  `caa.py:81-84`; the app infers MIME from bytes via `_infer_mime`, so this is likely a non-issue —
-  confirm).
-- New Act I adapters (Discogs, whipper/AccurateRip verification lookups) should be built on `_net`
-  from day one — sequencing pressure to do `_net` early in Act I's dev work.
-
-**Graduation note**: when this acquires a PLAN, resolve the deferred AcoustID persisted-path
-failure policy (raise-vs-gap) and sequence against the musicbrainzngs2 migration.
-
-Graduated symptom (2026-07-14), preserved for reference — a retrieval failure that currently degrades
-silently (returns empty, no error log), exactly the lossless-principle gap the `_net` work fixes:
-```
-acoustid_lookup_failed [music_annotator._mb_api] attempt=0 error='The read operation timed out' recording_mbid=93200fdb-9f20-4eb0-8cc1-0aed9d97508c wait_s=1
-```
+**Interactions.**
+- `_mb_data_classify` (written in S2) already handles `mb.ResponseError` with typed `exc.cause.code`
+  and plain `OSError` transport failures — no new classifier needed; just wire the two call sites.
+- `_patched_safe_read` remains (MB-data only; removal gated on mbngs2-1).
+- After this item, musicbrainzngs's role in music-annotator is purely XML parsing (`mbxml.py` for
+  the five MB calls: three data-detail + two search/disc-ID) plus the two monkey-patches
+  (`_patched_safe_read`, `_patched_parse_recording`).  The transport, retry, and polite-delay are
+  entirely owned by `_net`.
+- Sequence before any R3 adapter work so the "uniformly on `_net`" invariant holds from day one.
 
 ### AcoustID-seeded wholly-new-release-candidate resolution (deferred from F6)
 
@@ -682,7 +630,8 @@ When `discover()` with `--acoustid-key` finds recording MBIDs from the fingerpri
 candidate (organic search returned nothing), resolve those recording MBIDs to releases via MB and seed wholly-new candidates.
 Currently `_enrich_candidates_with_acoustid_seed` only boosts existing candidates — it re-scores candidates whose medium
 contains the AcoustID-returned recording MBIDs, but does not create new candidates from scratch.  The boost-existing form is
-the F6 deliverable; this richer extension is deferred.  Substrate: `fetch_acoustid_lookup` (C-F6a) and the existing
+the F6 deliverable; this richer extension is deferred.  Substrate: `_fetch_acoustid_lookup_raw` (collapsed from
+`fetch_acoustid_lookup` in R1/S4; callers slice the `(mbids, cluster_uuid)` tuple) and the existing
 `fetch_release` / `fetch_recording_detail` MB wrappers are all in place.  Deferred from F6 (C-F6c Discovery).
 
 ### `accuraterip` 4th archival dimension (deferred from PLAN-fingerprint.md)
