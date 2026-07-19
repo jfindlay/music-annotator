@@ -436,3 +436,26 @@ asserts no journal entry exists after a forced `_verify_copy` failure.
 dest_root, now, release_id="") -> int` returning the moved count; `_resolve_current_lib(journal) ->
 dict[Path, str]` for the lineage walk.  `release_id` is over-specified (included even though `repath` passes
 `""`) so callers never need to widen it.
+
+## The `_net` universal terminal rule (failure vs. no-data, sharpened)
+
+2026-07-18: The lossless principle ("failure ≠ no-data") has one uniform, actionable form for every
+network action routed through `_net` — the terminal action is decided by the failure-vs-no-data
+discrimination, *not* per-call-site policy:
+
+- **Cannot determine whether the data exists** — retries exhausted, malformed/undecodable response,
+  transport failure → the retrieval function **raises** (never a silent empty return). The raise
+  propagates to the **per-release error boundary** (`discover()` at `_discover.py:966`), which logs
+  the error and proceeds to the next release. So "raise" means *abandon this release, log, move on* —
+  a single release's failure is never fatal to the run. True for MB, CAA, *and* AcoustID, including
+  AcoustID's read-only diagnostic path (`_fetch_acoustid_lookup_raw` / candidate-seed at
+  `_discover.py:704`).
+- **Remote server authoritatively answers "no data"** — a working server returning empty results, or
+  a 4xx "unknown MBID / bad fingerprint" → **warning + return empty** (legitimate no-data; a success
+  return of empty, gated on the classifier confirming the server actually answered).
+
+This **overrides** the earlier BACKLOG framing (`_net` write-up, 2026-07-14) that the AcoustID
+diagnostic path keeps a "never raises" contract: under the universal rule, a *cannot-determine*
+failure on that path raises too — and is caught at the same per-release boundary. The rule is frozen
+as contract **C-NET-TERM** in the R1 `_net` PLAN and is the reason the `_net` classifier is
+three-outcome (`RETRY` / `NO_DATA` / `FATAL`), not a two-way retryable/permanent split.
