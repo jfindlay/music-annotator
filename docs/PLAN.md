@@ -160,16 +160,159 @@ structural-audit trigger (module-boundary review of `_net` + adapters) stays in 
 
 ### C-NET-CORE — the `_net` retrieval interface *(compiler-enforced)*
 - **Defined-in:** S1. **Consumed-by:** S2, S3, S4.
-- The `retrieve` primitive signature + the policy object (classifier callable type, terminal-action
-  encoding, logging context). *To be frozen at S1* — the `@architect` juncture writes the resolved
-  signature into this subsection at execution time. Over-specified: `max_attempts` / `backoff_base`
-  present even though only MB tunes them today.
+- **FROZEN at S1 (@plan-juncture, 2026-07-18).** The resolved interface below is implementable by a
+  Sonnet `@build` agent without further design decisions. All names live in `src/music_annotator/_net.py`
+  with `from __future__ import annotations` at the top.
+
+**Module preamble.**
+```python
+from __future__ import annotations
+
+import enum
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import TypeVar
+
+import structlog
+
+log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
+
+_T = TypeVar("_T")
+```
+
+**(1) `RetryDecision` — the three-outcome enum.** (Full prose contract in C-NET-TERM.)
+```python
+class RetryDecision(enum.Enum):
+    """Classifier verdict for one failed fetch attempt — the load-bearing three-outcome shape."""
+
+    RETRY = enum.auto()    # transient; back off and re-attempt (exhaustion → FATAL terminal)
+    NO_DATA = enum.auto()  # server authoritatively answered "no data" → warning + return None
+    FATAL = enum.auto()    # permanent, non-no-data failure → error + raise immediately
+```
+
+**(2) The classifier callable type.** Reads *typed* attributes of the exception — status codes /
+exception types — **never** `str(exc)`.
+```python
+type RetryableClassifier = Callable[[Exception], RetryDecision]
+```
+- **Ordering rule (load-bearing, KAT-pinned).** `urllib.error.HTTPError` is a subclass of `URLError`
+  which is a subclass of `OSError`; `mb.ResponseError` wraps the original `HTTPError` on its `.cause`
+  attribute. A classifier that tests `isinstance(exc, OSError)` before extracting an HTTP status code
+  will misclassify a 4xx as a transient transport failure. **Every classifier MUST extract the typed
+  status code (via `exc.code` for `HTTPError`, or `exc.cause.code` for `mb.ResponseError`) before any
+  broad `OSError`/transport check.** Classifiers are supplied by the consuming session (S2/S3/S4); the
+  core never inspects exception structure itself.
+
+**(3) `NetPolicy` — the policy object.** Frozen dataclass; carries classifier, logging context, and
+the over-specified backoff knobs.
+```python
+@dataclass(frozen=True)
+class NetPolicy:
+    """Caller-supplied retrieval policy: classifier + logging context + backoff knobs.
+
+    :ivar classify: Structured retryable-classifier mapping a raised exception to a RetryDecision.
+        Must read typed status codes / exception types, never str(exc). See the ordering rule.
+    :ivar event: structlog event name for this retrieval class (e.g. "mb_retrieve", "caa_retrieve",
+        "acoustid_retrieve"); used as the base event for warning (NO_DATA) and error (FATAL) logs.
+    :ivar log_fields: Static rich fields merged into every log line for this retrieval (e.g.
+        {"release_id": ...}); the terminal choke point adds attempt/wait/outcome fields.
+    :ivar max_attempts: Maximum fetch attempts before exhaustion → FATAL terminal. Over-specified per
+        the substrate-row rule; MB's historical value is 6.
+    :ivar backoff_base: Base of the exponential back-off; sleep before attempt n is backoff_base ** n
+        seconds. Over-specified; MB's historical value is 2.
+    :ivar polite_delay_s: Seconds to sleep after a successful fetch to honour the 1 req/s posture
+        (folds the generic body of the old _mb_call). Defaults to 1.0.
+    """
+
+    classify: RetryableClassifier
+    event: str
+    log_fields: dict[str, object] = field(default_factory=dict)
+    max_attempts: int = 6
+    backoff_base: float = 2.0
+    polite_delay_s: float = 1.0
+```
+
+**(4) `retrieve` — the primitive.** One retry/backoff/terminal engine, generic in the success type.
+```python
+def retrieve(fetch: Callable[[], _T], policy: NetPolicy) -> _T | None:
+    """Execute a zero-arg fetch under the policy's retry/backoff and universal terminal rule.
+
+    Loops up to policy.max_attempts. Each raised exception is handed to policy.classify:
+      * RETRY   → sleep policy.backoff_base ** attempt seconds, re-attempt; exhausting all attempts
+                  is treated as the FATAL terminal (cannot-determine → raise).
+      * NO_DATA → emit exactly one warning log ("<event>_no_data"), return None (no raise).
+      * FATAL   → emit exactly one error log ("<event>_fatal"), re-raise the original exception.
+    On success, sleep policy.polite_delay_s (the folded polite delay) and return the fetch value.
+
+    :param fetch: Zero-arg callable performing exactly one network request; may raise.
+    :param policy: The NetPolicy governing classification, logging, backoff, and polite delay.
+    :returns: The fetch's value on success, or None when the server authoritatively answered no-data.
+    :raises Exception: Re-raises the original exception on a FATAL classification or on RETRY
+        exhaustion (the cannot-determine terminal). The raise propagates to the per-release error
+        boundary in discover().
+    """
+```
+- **Return-type decision (pivotal — the `None` sentinel).** `retrieve` returns `T | None`. The core
+  is generic in `T` and therefore cannot know what "empty" means for an arbitrary success type; `None`
+  is the **one universal NO_DATA sentinel**. Each consuming call site maps `None` to its own empty
+  shape at the boundary: MB-data callers → validate `{}` / empty model; CAA callers → skip image /
+  RG-fallback (`None` ≡ today's `bytes | None` None); AcoustID callers → `""` (persisted) or `([], "")`
+  (diagnostic). NO_DATA is **not** encoded as "empty `T`" and **not** as a caller-supplied sentinel —
+  both were rejected because they conflate authoritative-no-data with an empty-shaped success and would
+  leak `T`-structure knowledge into the core. Tradeoff: a caller wanting to know *which* classifier
+  rule produced the `None` does not get it in the return value — it is carried in the warning log only.
+  No current call site needs that programmatically.
+- **Polite-delay integration: folded in.** The 1 req/s delay is `policy.polite_delay_s`, slept inside
+  `retrieve` on the success path only (not on RETRY backoff sleeps, which are separate — mirroring the
+  old `_mb_call` / `_mb_retry` separation). The standalone `_mb_call` helper is retired as callers
+  migrate (S2–S4); `retrieve` subsumes its generic body.
+- **Exhaustion is the FATAL terminal.** RETRY exhaustion and an explicit FATAL classification share the
+  single error-log choke point and both raise. On exhaustion, `retrieve` re-raises the **last** caught
+  exception (preserving the transport cause) rather than synthesising a bare `RuntimeError`; this keeps
+  the `.cause` chain inspectable at the per-release boundary. (S2's existing `RuntimeError("... after
+  retries")`-matching tests may assert on the re-raised type; the S2 executor reconciles the match
+  string against the frozen behaviour — the *raise-on-exhaustion* contract is frozen, the exact
+  exception type is the executor's to align with the surviving tests.)
+- **No `Any`, no `cast()`.** `_T` is a `TypeVar`; the classifier is fully typed. 100% branch coverage:
+  every `RetryDecision` arm, the exhaustion branch, and any `match/case` on `RetryDecision` needs an
+  explicit test (`case _: # pragma: no cover` on the exhaustive enum match).
 
 ### C-NET-TERM — the universal terminal rule *(test-enforced + prose)*
 - **Defined-in:** S1 (as the classifier's three-outcome contract). **Consumed-by:** S2, S3, S4.
-- `cannot-determine → raise` (fatal); `server-authoritative-no-data → warning + empty`. Uniform
-  across MB, CAA, AcoustID. The one shared terminal choke point logs exactly one `log.error` per
-  fatal exhaustion. *To be frozen at S1.* KAT-pinned in `test_net.py`.
+- **FROZEN at S1 (@plan-juncture, 2026-07-18).** The three `RetryDecision` outcomes (enum in
+  C-NET-CORE) encode the universal terminal rule; `retrieve` is the single shared choke point that
+  actions them uniformly across MB, CAA, and AcoustID:
+
+| Classifier verdict | Meaning | `retrieve` terminal action | Log |
+|---|---|---|---|
+| `RETRY` | transient (503/500/OSError-shaped, redirect-loop) | back off `backoff_base ** attempt`, re-attempt; **exhaustion → FATAL** | (per-attempt warning optional; terminal error on exhaustion) |
+| `NO_DATA` | server authoritatively answered "no data" (4xx unknown MBID / bad fingerprint / empty result set) | **return `None`** (no raise) | exactly one `log.warning("<event>_no_data", **log_fields)` |
+| `FATAL` | permanent, non-no-data failure (malformed request, unclassifiable transport failure) | **re-raise** the original exception | exactly one `log.error("<event>_fatal", **log_fields)` |
+
+- **Cannot-determine → raise.** RETRY exhaustion, a malformed/unparseable response, and any transport
+  failure the classifier cannot resolve to NO_DATA all terminate as FATAL: exactly one `log.error`,
+  then raise. This is the lossless principle — a retrieval that *might* have succeeded but did not
+  complete is an error, never a silent empty. The raise propagates to the per-release boundary
+  (`discover()`, `_discover.py:966`), which logs and proceeds to the next release.
+- **Server-authoritative-no-data → warning + None.** Only when the classifier confirms the server
+  itself answered (a working server returning an empty result set, or a 4xx that authoritatively means
+  "this MBID/fingerprint has no data") does `retrieve` return the `None` sentinel with a single
+  warning. Callers map `None` to their own empty shape (see C-NET-CORE return-type decision).
+- **Exactly-one-log invariant (KAT-pinned).** Per terminal event, exactly one `log.error` (FATAL /
+  exhaustion) or exactly one `log.warning` (NO_DATA) is emitted at the choke point — not zero, not two.
+- **KATs in `test_net.py` (≥4, each pins this contract behaviorally):**
+  1. Transient classification (503/500/OSError-shaped) → retries `max_attempts` times, then raises
+     (cannot-determine → fatal).
+  2. Authoritative-no-data classification (4xx-unknown / empty result) → returns `None` with exactly
+     one warning, no raise.
+  3. Permanent non-retryable, non-no-data classification → raises immediately (no retry loop).
+  4. The terminal choke point emits **exactly one** `log.error` on fatal exhaustion.
+- **D-1 reconciliation (behavior change is in-scope).** Under this uniform rule the AcoustID
+  *diagnostic* path's prior "never raises" contract is overridden at S4: a cannot-determine failure now
+  raises. This is user-authoritative (2026-07-18) and reconciled here — `discover()`'s per-release
+  catch degrades it to "release skipped, logged, next release," not a crash. S4 confirms the catch
+  covers the candidate-seed call site (`_discover.py:704`).
 
 ### C-CAA-URL — canonical CAA URL templates *(prose-enforced)*
 - **Defined-in:** S3. **Consumed-by:** S3 only (and any future adapter that fetches art).
