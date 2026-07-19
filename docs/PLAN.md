@@ -330,7 +330,7 @@ retry+polite-delay posture and the raise-on-data-integrity-failure contract thos
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 | `_net` core | done | 011668e | C-NET-CORE, C-NET-TERM |
-| 2 | MB-data migration | pending | — | — |
+| 2 | MB-data migration | done | 4deb288 | — |
 | 3 | CAA off musicbrainzngs | pending | — | C-CAA-URL |
 | 4 | AcoustID migration + collapse | pending | — | — |
 
