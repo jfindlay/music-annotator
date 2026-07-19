@@ -36,7 +36,7 @@ until then (renderer/policy = class A, MB data = class B, scholarship = class C)
 ```
 R0 census ──► J1 (adjudicate adapter order + rung ladder)
                 │
-R1 _net ────────┼──► R2 rung substrate ──► R3 adapters (J1-ordered) ──► R5 drain ──► J3 ──► R6 re-derivation
+R1 _net ✓ ──────┼──► R2 rung substrate ──► R3 adapters (J1-ordered) ──► R5 drain ──► J3 ──► R6 re-derivation
                 │                                                                     ▲
 R4 Act II convergence ──────────────► J2 (naming-policy freeze) ──────────────────────┘
 ```
@@ -52,7 +52,7 @@ Edition remainder / Presto / whipper rip / not-in-MB / track-mismatch / non-clas
 Deliverable: a census artifact.  Ends at **J1**.  Also feeds R4a (inventory of the non-classical
 corpus the taxonomy must admit).  → BACKLOG "Census of `Original/`".
 
-### R1 — `_net` retrieval subpackage  (Category A substrate; ~3-5 sessions; can start now)
+### R1 — `_net` retrieval subpackage  (Category A substrate; ~3-5 sessions; DONE 2026-07-19)
 
 One retry/backoff core with structured (never string-scraped) retryable classification; CAA and
 AcoustID leave musicbrainzngs' transport; one terminal-error choke point closes the lossless-principle
@@ -60,6 +60,16 @@ gap.  PLAN derivation must resolve the deferred AcoustID persisted-path failure 
 logged-gap).  Adapters (R3) build on `_net` from day one — this is the sequencing pressure that puts
 R1 first.  Produces the `_net` core interface contract.  → BACKLOG "Unified network-retrieval
 subpackage (`_net`)".
+
+**DONE (commits `011668e`–`39dc90f`, PLAN R1 4/4 rows).**  `_net.py` ships `RetryDecision` /
+`NetPolicy` / `retrieve()`; MB-data, CAA, and AcoustID all route through it with structured
+classifiers; the universal terminal rule is applied (AcoustID cannot-determine now raises).
+**Follow-on (BACKLOG-resident, sharded as PLAN R1-F — not a new DAG node):** two `_discover.py`
+search/disc-ID calls (`_search_mb_releases` → `mb.search_releases`; `_toc_lookup_mb_releases` →
+`mb.get_releases_by_discid`) were never enrolled in R1's session list and kept the legacy
+`_mb_retry`/`_mb_call` path with the codebase's last `"404" in str(exc)` scrape.  Migrating them
+completes the "uniformly on `_net`" property R3 leans on; freezes no new contract; consumes
+C-NET-CORE / C-NET-TERM.  Sequence before any R3 adapter.
 
 ### R2 — Provisional-rung substrate  (Category A substrate; ~2-4 sessions; after J1)
 
@@ -154,4 +164,12 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
 
 ## Discoveries appendix
 
-(Empty.  Mid-session discoveries append here; evaluated at the next sub-track boundary.)
+(Mid-session discoveries append here; evaluated at the next sub-track boundary.)
+
+- **R1 boundary (2026-07-19) — search/disc-ID transport gap.**  R1's session list never enrolled the
+  two `_discover.py` search/disc-ID call sites (`_search_mb_releases` → `mb.search_releases`;
+  `_toc_lookup_mb_releases` → `mb.get_releases_by_discid`); they kept the legacy `_mb_retry`/`_mb_call`
+  path and the last `"404" in str(exc)` scrape.  Static-frame consequence: the "every remote fetch
+  routes through `_net`" property R3 adapters assume did **not** hold literally at R1 close.
+  Resolution: sharded as **PLAN R1-F** (a BACKLOG-resident completion of R1, not a new DAG node) —
+  sequence before any R3 adapter.  No design change to the arc; scope-completeness only.
