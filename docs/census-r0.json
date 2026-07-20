@@ -1,0 +1,7801 @@
+[
+  {
+    "dir": "4757765 - Berlioz Requiem",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 15,
+      "audio_files": 14,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 592894161,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "4833954 - Hilary Hahn plays Bach",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 18,
+      "audio_files": 16,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1468450016,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Hilary Hahn plays Bach.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "4870712 - Gould Spirituals; Fall River Legend; Barber Medea",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 19,
+      "audio_files": 18,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 339022048,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "6872862 - Samuel Barber Adagio",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 30,
+      "audio_files": 29,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 670007439,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "9029661011 - Itzhak Perlman Plays Tchaikovsky",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 25,
+      "audio_files": 24,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 608016812,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "ALC 3146 - Leopold Stokowski - Complete Everest  Vanguard Masters",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 128,
+      "audio_files": 125,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 3635440278,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "ALC-3146-Stokowski_notes.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Aesop_Fables.0xe60a3e11",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        ".cdda. file naming (old rip format)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 18,
+      "audio_files": 17,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 205597958,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": true,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Alkan - Edition",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 208,
+      "audio_files": 206,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 3300080048,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music > Instrumental"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Alkan - Edition.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Amazon Music",
+    "axis1": "amazon",
+    "axis2": "non-classical-other",
+    "evidence": {
+      "provenance": [
+        "Amazon tag signatures present (COMM/PRIV frames)"
+      ],
+      "mb_status": [
+        "genre tag: 'R&B'",
+        "genre tag: 'Pop'",
+        "genre tag: 'Dance & DJ'",
+        "genre tag: \"Children's Music\"",
+        "genre tag: 'Rap & Hip-Hop'",
+        "genre tag: 'Christian & Gospel'"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 3,
+      "audio_files": 3,
+      "formats": [
+        ".mp3"
+      ],
+      "disc_subdirs": [
+        "Alicia Keys",
+        "All I Want for Christmas Is More Karaoke - Family Friendly Traditional and Popular Karaoke Tracks to Celebrate the Holidays Including Jingle Bells, Frosty, Away in a Manger",
+        "Amazing Karaoke",
+        "Andrea Bocelli",
+        "Ballet Dance Company",
+        "Barbra Streisand",
+        "Barry Manilow",
+        "Ben E King",
+        "Best of Electronic Music",
+        "Billy Gorilly",
+        "Count Basie",
+        "Cuban Jazz Legends",
+        "Dan Gibson's Solitudes",
+        "Disco Dance Robots",
+        "Dragon Karma - The Ultimate Martial Arts Music Collection Oriental Tai Chi, Karate, Kung Fu, Jujitsu, Tae Kwon Do, Tibetan Songs and Asian Music for Inner Power - Ultimate Or",
+        "Drums of the World",
+        "Duke Ellington",
+        "Ella Fitzgerald",
+        "Ella Jenkins",
+        "Eric Chappelle",
+        "Eric Tingstad, Nancy Rumbel And Spencer Brewer",
+        "Estudios Talkback",
+        "Ethel Merman",
+        "Flautas de Oro",
+        "Frank Sinatra",
+        "Friends Of The Family",
+        "Gippa",
+        "Glenn Miller & His Orchestra",
+        "Goldsound Karaoke",
+        "Gypsy - The 2008 Broadway Cast Recording",
+        "Hans Zimmer",
+        "Hans Zimmer & John Powell",
+        "Hap Palmer",
+        "Hilary Hahn and Natalie Zhu",
+        "Hit Tunes Karaoke",
+        "Hypnotherapy Birthing Hypnobirthing Music Company",
+        "I Salonisti",
+        "Instrumental Hip Hop Beat Makers",
+        "Instrumental Holiday Music Artists",
+        "Instrumental Holiday Songs",
+        "Israel Kamakawiwo ole",
+        "Israel Kamakawiwo'ole",
+        "Jackson 5",
+        "Janice Kapp Perry & Joy Saunders Lundberg",
+        "John Williams",
+        "Judy Garland",
+        "Kathryn Clark & Hypnobirthing Hub",
+        "Kimbo Children s Music",
+        "Latin Karaoke Tunes",
+        "Lindsey Stirling",
+        "London Philharmonic Orchestra And Choir",
+        "Manuel Radaelli",
+        "Martial Arts Music",
+        "Melinda Caroll",
+        "Michael Roberts",
+        "Miley Cyrus",
+        "Muffin Songs",
+        "Original Broadway Cast of Into the Woods",
+        "Original Broadway Cast of Sweeney Todd The Demon Barber of Fleet Street",
+        "Osipov State Russian Folk Orchestra",
+        "Peder B Helland",
+        "Peruvian Harp & Flute Ensemble",
+        "Pharrell Williams",
+        "Praise Hymn Tracks",
+        "ProSound Karaoke Band",
+        "Pulse - Percussion Ensemble",
+        "Richard Maddock",
+        "SBI Audio Karaoke",
+        "Samba Fitness",
+        "Samovar Russian Folk Music Ensemble",
+        "Sound Healing Center",
+        "Soundtrack",
+        "Stage Stars",
+        "The Accompanist",
+        "The Chordettes",
+        "The Countdown Kids",
+        "The Shenanigans",
+        "Thomas Walker",
+        "Turnaround Karaoke Crew",
+        "Urban Hit Combo",
+        "Various",
+        "Various artists",
+        "Yo-Yo Ma & Bobby McFerrin"
+      ],
+      "total_size_bytes": 15198358,
+      "has_subdirs": true
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": true,
+      "genres": [
+        "R&B",
+        "Pop",
+        "International",
+        "Dance & DJ",
+        "Miscellaneous",
+        "Jazz",
+        "New Age",
+        "Children's Music",
+        "Broadway & Vocalists",
+        "Soundtracks",
+        "Classical",
+        "Rap & Hip-Hop",
+        "Christian & Gospel"
+      ],
+      "files_probed": 83,
+      "sample_file_count": 83
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "American Composers Choral Festibal: An Evening with Mack J. Wilberg",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 15,
+      "audio_files": 13,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 220709648,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Anne Sofie von Otter sings Offenbach",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 17,
+      "audio_files": 15,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 316473922,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Anne Sofie von Otter sings Offenbach.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Antonio Vivaldi; Amsterdam Baroque Orchestra, Yo‐Yo Ma, Ton Koopman - Vivaldi’s Cello (US Sony Classical (SK 90916) Release)",
+    "axis1": "whipper",
+    "axis2": "in-mb-clean",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "MUSICBRAINZ_ALBUMID present: ['ad0487d7-bac8-48db-b12e-534325c60f8f']"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 23,
+      "audio_files": 19,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 321652106,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [
+        "ad0487d7-bac8-48db-b12e-534325c60f8f"
+      ],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Antonio Vivaldi; Amsterdam Baroque Orchestra, Yo‐Yo Ma, Ton Koopman - Vivaldi’s Cello (US Sony Classical (SK 90916) Release).cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Arturo Toscanini :: Beethoven (NBC Symphony Orchestra) (Disc 6).0x310f2704",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 5,
+      "audio_files": 4,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 323401668,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Arturo Toscanini :: Ludwig van Beethoven Symphonies Nos. 1,2,3&4 Vol 1.0x670e3a09",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 10,
+      "audio_files": 9,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 320405156,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Arturo Toscanini :: NBC Symphony Orchestra Vol II: Ludwig van Beethoven CD2.0x7f0da908",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 9,
+      "audio_files": 8,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 307199408,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Audiobooks",
+    "axis1": "unknown",
+    "axis2": "non-classical-other",
+    "evidence": {
+      "provenance": [],
+      "mb_status": [
+        "dir name contains 'audiobook'",
+        "genre tag: 'Biography & Autobiography'"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 24,
+      "audio_files": 23,
+      "formats": [
+        ".mp3"
+      ],
+      "disc_subdirs": [
+        "Autobiography of Mark Twain, Volume 1"
+      ],
+      "total_size_bytes": 714456663,
+      "has_subdirs": true
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [
+        "Biography & Autobiography"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Autour de la Harpe",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 16,
+      "audio_files": 14,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 346935884,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Autour de la Harpe.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Bach, J.S. :: Symphonic Bach - Orchestral Transcriptions by Respigi and Elgar.0xac0d6e0c",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 13,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 235536933,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Bayer - Die Puppenfee (The Fairy Doll)",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 37,
+      "audio_files": 35,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 231743139,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music > Ballet"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Bayer - Die Puppenfee (The Fairy Doll).pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Beethoven  :: Symphonies Nos. 3&4 - Toscanini, NBCSO.0x73121308",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 9,
+      "audio_files": 8,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 363770214,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Beethoven - Fur Elise and Bagatelles Opp. 33, 119",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 31,
+      "audio_files": 29,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1140061267,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Beethoven - Fur Elise and Bagatelles Opp. 33, 119 & 126.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Beethoven - String Quartets Nos. 1-16 (complete, ",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 73,
+      "audio_files": 71,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2268171668,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Beethoven - String Quartets Nos. 1-16 (complete, inc. Grosse Fuge).pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Beethoven :: Beethoven (NBC Symphony Orchestra) (Disc 5).0x3d117c05",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 6,
+      "audio_files": 5,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 361164937,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Beethoven Piano Concerto No.1, No.2 - Argerich - Sinopoli - Philharmonia Orchestra [4156822]",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 8,
+      "audio_files": 6,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 271145386,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Beethoven Piano Concertos Nos  1  2.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Beethoven Violin Concerto, Romance No.1, No.2 - Mintz - Sinopoli - Philharmonia Orchestra [E4230642]",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 7,
+      "audio_files": 5,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 295597380,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Beethoven Violin Concerto  Romances.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Beethoven, Ludwig Van:  :: Beethoven: Complete Sym & Con for Pno; Barenboim::PO::NPO::Klemperer.0x5d118508",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 9,
+      "audio_files": 8,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 384540512,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Berlioz Odyssey",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 219,
+      "audio_files": 217,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 4059854958,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Berlioz Odyssey.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Berlioz: Requiem (Grande Messe des morts) [Live]",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 12,
+      "audio_files": 10,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1658944726,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Berlioz Requiem (Grande Messe des morts) [Live].pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "CHAN9177 - Barber Complete Works for Solo Piano",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 18,
+      "audio_files": 16,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 207111456,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music: Chamber Music"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Barber Complete Works for Solo Piano.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Caro mio ben",
+    "axis1": "unknown",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 4,
+      "audio_files": 1,
+      "formats": [
+        ".mp3"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 3950547,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Chicago Jazz Philharmonic - Collective Creativity.0xb80c360c",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 13,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 323866872,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": true,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Daniel Barenboim & Orchestre de Paris",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 65,
+      "audio_files": 64,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2216658200,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Dave Eaton Show Live.0xc50f780d",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 14,
+      "audio_files": 13,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 357599922,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": true,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Debussy - Les Trois Sonates, The Late Works",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 15,
+      "audio_files": 13,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 936786383,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Debussy - Les Trois Sonates, The Late Works.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Debussy - Sonatas & Trios",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 16,
+      "audio_files": 14,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1205185161,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Debussy - Sonatas & Trios.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Delibes - Coppelia & La Source Suite",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 45,
+      "audio_files": 43,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 533704976,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music > Ballet"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Delibes - Coppelia & La Source Suite.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Disc Cleaner.0x720f9e07",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        ".cdda. file naming (old rip format)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 2,
+      "audio_files": 2,
+      "formats": [
+        ".wav"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 78653048,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": true,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Durham Mus Theater.0x43113c15",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        ".cdda. file naming (old rip format)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 17,
+      "audio_files": 17,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 289323684,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": true,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Education",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 2,
+      "audio_files": 2,
+      "formats": [
+        ".flac",
+        ".mp3"
+      ],
+      "disc_subdirs": [
+        "The Top"
+      ],
+      "total_size_bytes": 17800617,
+      "has_subdirs": true
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": true,
+      "genres": [
+        "Pop"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Unknown Artist - v2CiekdY4mVJVz31__2.r88SVXE-.cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Elgar Cello Concerto, Enigma Variations, Pomp and Circumstance March No.1, No.4 - Maisky - Sinopoli - Philharmonia Orchestra [4783619]",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 22,
+      "audio_files": 21,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 336538167,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Ella Fitzgerald & Louis Armstrong :: The Best Of Ella Fitzgerald & Louis Armstrong.0xea0ff30f",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 16,
+      "audio_files": 15,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 287107172,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "English Class Hits! June 2006.0x37123416",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 23,
+      "audio_files": 22,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 411138228,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": true,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Franz Schubert; Takács Quartet - Death and the Maiden",
+    "axis1": "whipper",
+    "axis2": "in-mb-clean",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "MUSICBRAINZ_ALBUMID present: ['2180e7f5-bc9a-44c9-9b69-1814b23a6bd9']"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 11,
+      "audio_files": 8,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 308752490,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [
+        "2180e7f5-bc9a-44c9-9b69-1814b23a6bd9"
+      ],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Franz Schubert; Takács Quartet - Death and the Maiden.cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Françaix - L’Horloge de Flore.999779-2",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 21,
+      "audio_files": 20,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 247934684,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "G010001967730Z - The Music Of America - Samuel Barber",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 39,
+      "audio_files": 37,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1006695724,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "The Music Of America - Samuel Barber.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "GarageBand",
+    "axis1": "unknown",
+    "axis2": "non-classical-other",
+    "evidence": {
+      "provenance": [],
+      "mb_status": [
+        "dir name contains 'garageband'"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 75,
+      "audio_files": 4,
+      "formats": [
+        ".aif",
+        ".m4a"
+      ],
+      "disc_subdirs": [
+        "An Ebenezer Scrooge Xmas 2.1.band",
+        "April and Thomas Wedding Mix For Reals.band",
+        "April and Thomas Wedding Mix Revised.band",
+        "April and Thomas Wedding Mix.band",
+        "Babeeeee Bwava.band",
+        "Camp Statements 2013.band",
+        "Come to Me (Peace).band",
+        "Countenance.band",
+        "Darling, I 2.0.band",
+        "Dave Galvan Interview.band",
+        "Dawn Alison's Cut 2.band",
+        "Dawn Alison's Cut.band",
+        "Father's Day And Bach.band",
+        "Floating.band",
+        "Free Land.band",
+        "Glenn (Bucks Try).band",
+        "Glenn Lockwood.band",
+        "God Moves in Mysterious Ways.band",
+        "Hero's Journey Project Sam and Jesus.band",
+        "Jingle Bells.band",
+        "Justin's Organ Fantasies.band",
+        "Keat's Bright Star.band",
+        "Letter to Alex.band",
+        "Letter to.band",
+        "Lollipop Shelley's Cut.band",
+        "Lydia Whistling.band",
+        "M Dance 1.0.band",
+        "M Dance 2.0.band",
+        "M Dance 2.1.band",
+        "M Dance 3.0.band",
+        "M Dance 3.1.band",
+        "M Dance 3.2.band",
+        "M Dance 3.3.1.band",
+        "M Dance 3.3.band",
+        "M Dance 3.4.1.band",
+        "M Dance 3.4.band",
+        "M Dance Internal Mic 1.band",
+        "M Dance Internal Mic 2.band",
+        "Matthew 13.band",
+        "Message for Justin.band",
+        "My Song 2.band",
+        "My Song 3.band",
+        "My Song 4.band",
+        "My Song 5.band",
+        "My Song 6.band",
+        "My Song.band",
+        "Never Liked the Cold 1.3.band",
+        "Never Liked the Cold.band",
+        "Not in a Million Years.band",
+        "Orbit 1.2.band",
+        "Orbit.band",
+        "Princess on the Pea Archive.band",
+        "Rudolph.band",
+        "Second Trimester Song.band",
+        "Secret Life.band",
+        "Snowless Christmas.band",
+        "Star.band",
+        "Stifled.band",
+        "Thank You.band",
+        "The Talisman.band",
+        "Velvet Picture.band",
+        "Walden, Or Life in the Woods.band",
+        "What Child is This.band",
+        "Young Women Singing Love One Another.band",
+        "Young Women Singing Scripture Power.band",
+        "father's day.band",
+        "haydn.band",
+        "intarwebs.band",
+        "lydia.band",
+        "piano doodling.band",
+        "under the covers.band"
+      ],
+      "total_size_bytes": 116423793,
+      "has_subdirs": true
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 67
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Ginastera · Boieldieu Harp Concertos - Zoff, Kurz, Staatskapelle Dresden",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 9,
+      "audio_files": 6,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 206486435,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Ginastera · Boieldieu Harp Concertos - Zoff, Kurz, Staatskapelle Dresden - KT25asGueTodAO.am5fk_cOUpwc-.cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Gioacchino Rossini :: Panorama - Gioacchino Rossini - Disc 1.0x9b10f20b",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 12,
+      "audio_files": 11,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 343920679,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Gioacchino Rossini :: Panorama.0xe6120d0f",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 16,
+      "audio_files": 15,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 346850879,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Glazunov Complete Symphonies.19642a",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 32,
+      "audio_files": 31,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1493376245,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Glinka & Glazunov - Chamber Music",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 13,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 368376095,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Grieg Complete Orchestral Works",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 125,
+      "audio_files": 124,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2247131177,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Grieg Edition",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 340,
+      "audio_files": 337,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [
+        "Vol.1",
+        "Vol.2"
+      ],
+      "total_size_bytes": 4340834889,
+      "has_subdirs": true
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical > Solo Instrumental"
+      ],
+      "files_probed": 2,
+      "sample_file_count": 2
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Grieg Edition.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Handel The Messiah - Wilberg - Orchestra and Choir at Temple Square",
+    "axis1": "unknown",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 54,
+      "audio_files": 54,
+      "formats": [
+        ".flac",
+        ".mp3"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2089290627,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Haydn String Quartets - The Angeles Quartet - disc 15.0x920e900c",
+    "axis1": "whipper",
+    "axis2": "already-ingested",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "journal: 12 entries, 12 destinations present"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 13,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 276488915,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 12,
+      "destination_present_count": 12,
+      "source_file_count": 12,
+      "hash_verified_count": 0,
+      "is_collision_candidate": true
+    }
+  },
+  {
+    "dir": "Herbert von Karajan - Invitation to the Dance",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 19,
+      "audio_files": 17,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 376118481,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Herbert von Karajan - Invitation to the Dance.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Humperdinck - Hansel und Gretel",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 30,
+      "audio_files": 29,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 472295561,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music: Others... (Compilations)"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "HypnoBirthing Tracks",
+    "axis1": "presto",
+    "axis2": "non-classical-other",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present"
+      ],
+      "mb_status": [
+        "dir name contains 'hypno'"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 44,
+      "audio_files": 39,
+      "formats": [
+        ".flac",
+        ".mp3",
+        ".ogg"
+      ],
+      "disc_subdirs": [
+        "Fav",
+        "Hypno Scripts + Music",
+        "Music Tracks"
+      ],
+      "total_size_bytes": 700954761,
+      "has_subdirs": true
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": true,
+      "genres": [
+        "New Age"
+      ],
+      "files_probed": 3,
+      "sample_file_count": 3
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "HypnoBirthingPlaylist.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Igor Stravinsky - Columbia Symphony Orchestra :: Stravinsky Conducts - The Firebird Suite - Petrushka Ballet Suite.0x6c0c8818",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 25,
+      "audio_files": 24,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 260486175,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Into The Woods Piano Accompaniment",
+    "axis1": "unknown",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 34,
+      "audio_files": 34,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 487265946,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Jane Austen Entertains :: Music from Her Own Library.0x100ff515",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 22,
+      "audio_files": 21,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 239157977,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Joshua Bell - Romance of the Violin",
+    "axis1": "whipper",
+    "axis2": "in-mb-clean",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "MUSICBRAINZ_ALBUMID present: ['f2a1dc5d-d6e2-4e49-b477-4910169eb023']"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 17,
+      "audio_files": 13,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 242445085,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [
+        "f2a1dc5d-d6e2-4e49-b477-4910169eb023"
+      ],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Joshua Bell - Romance of the Violin.cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Karajan Sampler",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 84,
+      "audio_files": 82,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2591222760,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music > Orchestral"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Herbert von Karajan.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Karen #4.0xd00f0610",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 17,
+      "audio_files": 16,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 330188561,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": true,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Karen Song #1.0x6f07de09",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 10,
+      "audio_files": 9,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 188362699,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": true,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Kathleen Battle, Placido Domingo, Metropolitan Opera Orchestra - James Levine :: Live in Tokyo 1988 - Kathleen Battle, Placido Domingo, Metropolitan Opera Orchestra - James Levine.0x660e0809",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 11,
+      "audio_files": 10,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 275478749,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Kidz Bop Kids :: Kidz Bop 33.0x990a330e",
+    "axis1": "whipper",
+    "axis2": "non-classical-other",
+    "evidence": {
+      "provenance": [
+        ".cdda. file naming (old rip format)"
+      ],
+      "mb_status": [
+        "dir name contains 'kids/kidz'"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 13,
+      "audio_files": 13,
+      "formats": [
+        ".wav"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 392348380,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": true,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "LDS Youth Music",
+    "axis1": "unknown",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 9,
+      "audio_files": 9,
+      "formats": [
+        ".mp3"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 48938427,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [
+        "Music"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Lifescapes :: Celtic Christmas.0xcf0c250e",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        ".cdda. file naming (old rip format)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 2,
+      "audio_files": 2,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 15398969,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": true,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Lydia Ballet Exercises",
+    "axis1": "unknown",
+    "axis2": "non-classical-other",
+    "evidence": {
+      "provenance": [],
+      "mb_status": [
+        "dir name contains 'exercise'"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 8,
+      "audio_files": 8,
+      "formats": [
+        ".flac",
+        ".ogg"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 30779966,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Lydia Dance Repertoire Music",
+    "axis1": "unknown",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 10,
+      "audio_files": 9,
+      "formats": [
+        ".flac",
+        ".mp3"
+      ],
+      "disc_subdirs": [
+        "Rain Lydia Contemporary Solo Audio Project_data",
+        "YAGP Submission File 2025"
+      ],
+      "total_size_bytes": 30748735,
+      "has_subdirs": true
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [
+        "Soundtrack"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 2
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Marvin Goldstein :: Inspirational Notes.0x9708d90c",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 13,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 132182869,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Mascagni, Pietro: :: Mascagni: Karajan the Opera Recordings; Karajan::Orch Del Teatro alla Scala.0x2f12eb16",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 23,
+      "audio_files": 22,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 408136872,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Mendelssohn - A Midsummer Night's Dream - incidental music - Deutsch, Op.61",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 19,
+      "audio_files": 17,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 337390188,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music > Orchestral"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Mendelssohn - A Midsummer Night's Dream - incidental music, Op. 61.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Mendelssohn - A Midsummer Night's Dream - incidental music - English, Op.61",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 19,
+      "audio_files": 17,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 336060411,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music > Orchestral"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Mendelssohn - A Midsummer Night's Dream - incidental music, Op. 61.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Merill Jensen :: Come Unto Christ - The Conversion of Alma the Younger.0xc20f550e",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 15,
+      "audio_files": 14,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 393795749,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Michael Bolton :: Time, Love & Tenderness.0x880a820a",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        ".cdda. file naming (old rip format)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 1,
+      "audio_files": 1,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 21524756,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": true,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Mormon Tabernacle Choir feat. Santino Fontana and The Muppets from Sesame Street - Keep Christmas With You",
+    "axis1": "whipper",
+    "axis2": "in-mb-clean",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "MUSICBRAINZ_ALBUMID present: ['375184e7-c024-4308-97a5-b0a340f9d60e']"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 21,
+      "audio_files": 18,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 396746919,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [
+        "375184e7-c024-4308-97a5-b0a340f9d60e"
+      ],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Mormon Tabernacle Choir feat. Santino Fontana and The Muppets from Sesame Street - Keep Christmas With You.cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Mormon Tabernacle Choir, Orchestra at Temple Square, Mack Wilberg - Praise to the Man",
+    "axis1": "whipper",
+    "axis2": "in-mb-clean",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "MUSICBRAINZ_ALBUMID present: ['99432d27-4e9e-4698-807e-e66ccc01d668']"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 15,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 246392211,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [
+        "99432d27-4e9e-4698-807e-e66ccc01d668"
+      ],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Mormon Tabernacle Choir, Orchestra at Temple Square, Mack Wilberg - Praise to the Man.cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Music Together - Bongos (Family Edition 2023)",
+    "axis1": "whipper",
+    "axis2": "in-mb-clean",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "MUSICBRAINZ_ALBUMID present: ['55cf72ad-96ea-4bf8-a5aa-9afd70a3af10']"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 28,
+      "audio_files": 25,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 316608840,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [
+        "55cf72ad-96ea-4bf8-a5aa-9afd70a3af10"
+      ],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Music Together - Bongos (Family Edition 2023).cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Music Together - Tambourine (Family Edition 2022)",
+    "axis1": "whipper",
+    "axis2": "in-mb-clean",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "MUSICBRAINZ_ALBUMID present: ['9109ec4a-7b4c-47ac-8f76-020742281597']"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 28,
+      "audio_files": 25,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 368610097,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [
+        "9109ec4a-7b4c-47ac-8f76-020742281597"
+      ],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Music Together - Tambourine (Family Edition 2022).cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Mussorgsky - Pictures at an Exhibition",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 15,
+      "audio_files": 13,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 272532503,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Mussorgsky - Pictures at an Exhibition.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Mussorgsky Sorochintsy Fair",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 17,
+      "audio_files": 16,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 507429861,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Mussorgsky: Romances and Songs",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 29,
+      "audio_files": 28,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2608457474,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "NSO0023 - Barber Vanessa",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 39,
+      "audio_files": 37,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 4004272145,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music: Opera"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Barber Vanessa.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "ONYX4129 - American Chamber Music",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 13,
+      "audio_files": 11,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 254737489,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "American Chamber Music.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Offenbach Folies symphoniques & Ouvertures",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 14,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 324690386,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Offenbach Folies symphoniques & Ouvertures.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Playlists",
+    "axis1": "unknown",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 74,
+      "audio_files": 0,
+      "formats": [],
+      "disc_subdirs": [],
+      "total_size_bytes": 780480,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 0
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "ProVocal Volume 12: Ella Fitzgerald.0xf60c8711",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 17,
+      "audio_files": 16,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 281234785,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": true,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Prokofiev - Symphony No. 5 & Stravinsky - The Rite of Spring",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 20,
+      "audio_files": 18,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1590766578,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Prokofiev - Symphony No. 5 & Stravinsky - The Rite of Spring.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Prokofiev Peter and the Wolf, Op. 67",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 11,
+      "audio_files": 10,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 113940124,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Prokofiev Romeo and Juliet, Op.64",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 54,
+      "audio_files": 52,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2475973665,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Prokofiev - Romeo and Juliet, Op. 64.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Prokofiev Symphony No.5, Stravinsky The Rite of Spring - Karajan - Berliner Philharmoniker",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 20,
+      "audio_files": 18,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1590766578,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Prokofiev - Symphony No. 5 & Stravinsky - The Rite of Spring.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Puccini Madama Butterfly - Freni - Carreras - Pons - Berganza - Sinopoli - Philharmonia Orchestra [4779128]",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 36,
+      "audio_files": 34,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 707350390,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Puccini Madama Butterfly.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "RCID15847740 - Tchaikovsky Complete Romances",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 104,
+      "audio_files": 103,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1367525015,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "RES10301 - Barber The Complete Songs",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 69,
+      "audio_files": 67,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2997624507,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Barber The Complete Songs.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Ravel - Introduction & Allegro, etc",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 12,
+      "audio_files": 10,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 269081577,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music: Others... (Compilations)"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Ravel - Introduction & Allegro, etc.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Red and Yellow.0x870a410a",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 11,
+      "audio_files": 10,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 254724654,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": true,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Reid Nibley :: Sabbath Song.0x11118d12",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 19,
+      "audio_files": 18,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 244258213,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Ric's Class Music.0x9812024d",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 78,
+      "audio_files": 77,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 245183305,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": true,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Richard Strauss Also sprach Zarathustra, Don Juan, Salome Scene No.4 - Sinopoli - New York Philharmonic - Staatskapelle Dresden - Deutsche Oper Berlin [E4745662]",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 13,
+      "audio_files": 11,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 315170830,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Strauss, R Also sprach Zarathustra, Op  30, etc.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Saint-Saens: Carnival of the Animals, Organ Symphony & other orchestral works",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 27,
+      "audio_files": 26,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 546116960,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Saint-Saëns Symphonies - Martinon - Orchestre National de l’ORTF.6318042",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 19,
+      "audio_files": 18,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 701497577,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Saint-Saëns Symphonies - Mǎcelaru - Orchestre National de France.9029653343",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 22,
+      "audio_files": 20,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2954484988,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Saint-Saëns Symphonies - Mǎcelaru - Orchestre National de France.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Schubert - Quintet in C D956 & Quartettsatz D703",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 8,
+      "audio_files": 6,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1123405349,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music: Others... (Compilations)"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Schubert - Quintet in C D956 & Quartettsatz D703.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Schubert - Symphonies Nos. 3 & 8",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 8,
+      "audio_files": 6,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 834961527,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Schubert - Symphonies Nos. 3 & 8.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Schubert String Quintet - Brandis Quartet, Jorg Baumann.Apex.Teldec.0x2a0cfb04",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 5,
+      "audio_files": 4,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 247394696,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": true,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Schubert String Quintet I, II - Piacevole Quintet.0x39071b05",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 6,
+      "audio_files": 5,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 139919235,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": true,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Schubert; Takács Quartet, Ralph Kirshbaum - String Quintet, D. 956 _ String Quartet, D. 703 “Quartettsatz”",
+    "axis1": "whipper",
+    "axis2": "in-mb-clean",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "MUSICBRAINZ_ALBUMID present: ['059cceec-1477-4df7-bbe3-9a74cd8f1c10']"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 8,
+      "audio_files": 5,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 281919183,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [
+        "059cceec-1477-4df7-bbe3-9a74cd8f1c10"
+      ],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Schubert; Takács Quartet, Ralph Kirshbaum - String Quintet, D. 956 _ String Quartet, D. 703 “Quartettsatz”.cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Schumann, Robert: :: Schumann: Con for Pno::Con for Clo; Gieseking::Machula::BPO::Furtwangler.0x570c5306",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 7,
+      "audio_files": 6,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 257365673,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Shostakovich Selected Symphonies, Песнь о лесах - Mravinsky - Санкт-Петербургская филармония",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 40,
+      "audio_files": 39,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1772294273,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Shostakovich Symphony No.1-15, October, Над Родиной нашей солнце сияет, Казнь Степана Разина, Violin Concerto No.2 [RCID18056928]",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 69,
+      "audio_files": 68,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 3603781377,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Electronic"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Shostakovich Symphony No.4, No.11 \"1905-й год\" - Nelsons - Boston Symphony [4835220]",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 11,
+      "audio_files": 9,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2236676103,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Shostakovich Symphonies Nos  4  11 The Year 1905.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Shostakovich Symphony No.4, No.5, No.6 - Mäkelä - Oslo-Filharmonien [4854637]",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 13,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2653389893,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Shostakovich Symphony No.9, No.5, Suite from Hamlet, Symphony No.8 - Nelsons - Boston Symphony [4795201]",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 23,
+      "audio_files": 21,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 2756593494,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Shostakovich Under Stalins Shadow Symphonies Nos  5, 8  9.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Shostakovich Леди Макбет Мценского уезда Passacaglia, Symphony No.10 - Nelsons - Boston Symphony [4795059]",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 7,
+      "audio_files": 5,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1333456729,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Shostakovich Under Stalins Shadow Symphony No  10.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Shostakovich, Stravinsky - Bernstein - Complete Deutsche Grammphon",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 90,
+      "audio_files": 88,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1725640551,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Leonard Bernstein - Stravinsky - Shostakovich.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Sibelius Violin Concerto, Prokofiev Violin Concerto, Sibelius Vesipisaroita - Jansen - Mäkelä - Oslo-Filharmonien [4854748]",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 9,
+      "audio_files": 7,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1081894802,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Sibelius  Prokofiev Violin Concertos.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Steinberg Passion Week - Fox - Clarion Choir.8573665",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 18,
+      "audio_files": 16,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 1016466215,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Steinberg Passion Week - Fox - Clarion Choir.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Strauss, Richard: :: Strauss: Sinfonia Domestica::Don Juan; Furtwangler::BPO.0x4d0e0b06",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 7,
+      "audio_files": 6,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 274156771,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Stravinsky - Orchestral Works",
+    "axis1": "other-download",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "ISRC tags present (download, vendor unidentified)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 11,
+      "audio_files": 10,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 293080035,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Stravinsky, Igor (1882-1971) :: Le Sacre du Printemps (Stravinsky).0xd4084d0f",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "dir name has .0x hex checksum suffix (old rip format): 'Stravinsky, Igor (1882-1971) :: Le Sacre du Printemps (Stravinsky).0xd4084d0f'"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 14,
+      "audio_files": 14,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 140895742,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Swedish Orchestral Favourites Vol.1.8553115",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 16,
+      "audio_files": 14,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 273680529,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Swedish Orchestral Favourites.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Swedish Orchestral Favourites Vol.2.8553715",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 21,
+      "audio_files": 19,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 355558329,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Swedish Orchestral Favourites Vol  2.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Tchaikovsky Complete Symphonies - Jansons - Oslo-Filharmonien.CHAN10392(6)",
+    "axis1": "presto",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "booklet PDF present",
+        "ISRC tags present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 32,
+      "audio_files": 30,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 3070368203,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical Music: Orchestral"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": true,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Tchaikovsky Complete Symphonies - Jansons - Oslo-Filharmonien.pdf"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "The Choirs and Orchestra of Brigham Young University :: Songs of Praise and Remembrance.0xd10d400f",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 16,
+      "audio_files": 15,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 324609032,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "The Feel Good CD.0xd90a370d",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 14,
+      "audio_files": 13,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 267881937,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": true,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Unknown Artist - aKkt9ShtSOg1Acgk8ealeqP6NqE-",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 16,
+      "audio_files": 13,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 396973183,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Unknown Artist - aKkt9ShtSOg1Acgk8ealeqP6NqE-.cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Unknown Artist - qlSQ2jDIvQP22d9x8JFZAo5Om4Y-",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 15,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 278281151,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": true,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Unknown Artist - qlSQ2jDIvQP22d9x8JFZAo5Om4Y-.cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Various :: Jazz Classic, 10th ED, CD03.0xb912740c",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 13,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 468685425,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Various :: Jazz Classics, 10th ED, CD01.0xd712ac1f",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 32,
+      "audio_files": 31,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 308050948,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Various :: Jazz Classics, 10th ED, CD02.0xa912340c",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 13,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 450780766,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Various :: Preludes, Fugues and Riffs - Jazz in Classical Music.0xab12490d",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 14,
+      "audio_files": 13,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 335918313,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Various :: Spirit Of The 60's [Blue}.0x6206170a",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 11,
+      "audio_files": 10,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 191294259,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Various :: Spirit Of The 60's [Green].0x6705a60a",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 11,
+      "audio_files": 10,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 179366961,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Various :: Symphony No. 3- Organ.0x5b0e2b07",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 8,
+      "audio_files": 7,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 272193365,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Various :: The Irving Berlin 100th Anniversary Collection",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        ".cue + .log files present (rip artifacts)"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 15,
+      "audio_files": 12,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 161512724,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": true,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": true,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "Unknown Artist - v2CiekdY4mVJVz31__2.r88SVXE-.cue"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Various Artists :: Kidz Bop 37.0xd60a640f",
+    "axis1": "whipper",
+    "axis2": "non-classical-other",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "dir name contains 'kids/kidz'"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 16,
+      "audio_files": 15,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 303096291,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Wagner, Richard: :: Wagner: Das Rheingold.0x56123b18",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 25,
+      "audio_files": 24,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 362375055,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Wagner, Richard: :: Wagner: Das Rheingold; Karajan::BPO.0x450ff514",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 21,
+      "audio_files": 20,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 319279513,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Wagner, Richard: :: Wagner: Ring Des Nibelungen; Karajan::BPO.0x6b0a9b08",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 9,
+      "audio_files": 8,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 208320251,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Wagner, Richard: :: Wagner: Ring Des Nibelungen; Karajan::BPO.0xaf11030d",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 15,
+      "audio_files": 14,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 363918552,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Wilhelm Furtwängler :: [Disc 2] Johannes Brahms.0x1a0b2104",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 5,
+      "audio_files": 4,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 209328189,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Wilhelm Furtwängler :: [Disc 3] Anton Bruckner.0x2f0fe904",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 5,
+      "audio_files": 4,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 297373804,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Wilhelm Furtwängler :: [Disk 5] Sibelius, Strauss, Ravel.0x180c3b03",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 4,
+      "audio_files": 3,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 185000059,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "Wolfgang Amadeus Mozart :: Complete Mozart Edition, Vol. 6: Dances & Marches, Disc 1.0xdd0f3323",
+    "axis1": "whipper",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [
+        "disc info.yaml (FreeDB sidecar) present"
+      ],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 37,
+      "audio_files": 36,
+      "formats": [
+        ".flac"
+      ],
+      "disc_subdirs": [],
+      "total_size_bytes": 338408764,
+      "has_subdirs": false
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [],
+      "files_probed": 0,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": true,
+      "has_cdda_files": false,
+      "sidecar_files": [
+        "00 - disc info.yaml"
+      ]
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  },
+  {
+    "dir": "nachtmusick",
+    "axis1": "unknown",
+    "axis2": "unknown",
+    "evidence": {
+      "provenance": [],
+      "mb_status": [
+        "no MB status signal found in Pass 1"
+      ]
+    },
+    "notes": "",
+    "shape": {
+      "total_files": 79,
+      "audio_files": 79,
+      "formats": [
+        ".mp3"
+      ],
+      "disc_subdirs": [
+        "Messiah"
+      ],
+      "total_size_bytes": 430494231,
+      "has_subdirs": true
+    },
+    "tag_probe": {
+      "mbids": [],
+      "has_isrc": false,
+      "has_amazon_tags": false,
+      "genres": [
+        "Classical"
+      ],
+      "files_probed": 1,
+      "sample_file_count": 1
+    },
+    "sidecar_probe": {
+      "has_whipper_log": false,
+      "has_cue": false,
+      "has_accuraterip_log": false,
+      "has_booklet_pdf": false,
+      "has_log_files": false,
+      "has_disc_info_yaml": false,
+      "has_cdda_files": false,
+      "sidecar_files": []
+    },
+    "collision_probe": {
+      "journal_entry_count": 0,
+      "destination_present_count": 0,
+      "source_file_count": 0,
+      "hash_verified_count": 0,
+      "is_collision_candidate": false
+    }
+  }
+]
