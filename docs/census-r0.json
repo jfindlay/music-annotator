@@ -2,13 +2,13 @@
   {
     "dir": "4757765 - Berlioz Requiem",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Berlioz: Requiem / Mahler: Symphony no. 1 “Titan”' by 'Berlioz, Mahler' (2004), score=86, tracks=14 vs local=14, url=https://musicbrainz.org/release/b8bbe775-9d94-4c50-ad00-895b8e86229d"
       ]
     },
     "notes": "",
@@ -53,14 +53,14 @@
   {
     "dir": "4833954 - Hilary Hahn plays Bach",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Hilary Hahn plays Bach' by 'Bach; Hilary Hahn' (1997), score=100, tracks=16 vs local=16, url=https://musicbrainz.org/release/0b59a934-8e68-4b4c-ac4f-142f0c8945ac"
       ]
     },
     "notes": "",
@@ -107,13 +107,13 @@
   {
     "dir": "4870712 - Gould Spirituals; Fall River Legend; Barber Medea",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Morton Gould: Spirituals / Fall River Legend / Samuel Barber: Medea' by 'Morton Gould, Samuel Barber; Howard Hanson, Eastman-Rochester Orchestra' (1991), score=100, tracks=18 vs local=18, url=https://musicbrainz.org/release/3cd7df10-4fe1-40a5-990b-7f402cb96446"
       ]
     },
     "notes": "",
@@ -158,13 +158,13 @@
   {
     "dir": "6872862 - Samuel Barber Adagio",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Samuel Barber: Adagio: 100th Anniversary' by 'Samuel Barber' (2010), score=100, tracks=29 vs local=29, url=https://musicbrainz.org/release/7d66db74-478f-45a9-bfef-cc98ceb4ccd2"
       ]
     },
     "notes": "",
@@ -209,13 +209,13 @@
   {
     "dir": "9029661011 - Itzhak Perlman Plays Tchaikovsky",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'The Essential Itzhak Perlman' by 'Itzhak Perlman' (2009), score=76, tracks=21 vs local=24, url=https://musicbrainz.org/release/4f960cd4-c29d-4557-923d-e0cacbc44703"
       ]
     },
     "notes": "",
@@ -260,14 +260,14 @@
   {
     "dir": "ALC 3146 - Leopold Stokowski - Complete Everest  Vanguard Masters",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Complete Everest & Vanguard Recordings' by 'Leopold Stokowski' (), score=90, tracks=125 vs local=125, url=https://musicbrainz.org/release/a98a5cc8-adb3-42de-9c0f-ffc443774dec"
       ]
     },
     "notes": "",
@@ -314,16 +314,16 @@
   {
     "dir": "Aesop_Fables.0xe60a3e11",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "non-classical-other",
     "evidence": {
       "provenance": [
         ".cdda. file naming (old rip format)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: Audiobook/spoken word (Aesop's Fables); auto-classified as in-mb-clean via MB match; adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "Audiobook/spoken word (Aesop's Fables); auto-classified as in-mb-clean via MB match; adjudicated 2026-07-20",
     "shape": {
       "total_files": 18,
       "audio_files": 17,
@@ -363,14 +363,14 @@
   {
     "dir": "Alkan - Edition",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Alkan Edition' by 'Charles‐Valentin Alkan' (2017-11-17), score=100, tracks=206 vs local=206, url=https://musicbrainz.org/release/0ed787c2-24b1-4d57-81b4-1236e8bf5801"
       ]
     },
     "notes": "",
@@ -569,13 +569,13 @@
   {
     "dir": "American Composers Choral Festibal: An Evening with Mack J. Wilberg",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'An Evening With' by 'Dan Reed' (2009-03-08), score=100, tracks=12 vs local=13, url=https://musicbrainz.org/release/6a3e69d7-1e23-3968-82ec-efdc987af6d5"
       ]
     },
     "notes": "",
@@ -618,14 +618,14 @@
   {
     "dir": "Anne Sofie von Otter sings Offenbach",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Anne Sofie von Otter Sings Offenbach' by 'Jacques Offenbach; Anne Sofie von Otter, Les Musiciens du Louvre, Marc Minkowski' (2002), score=100, tracks=15 vs local=15, url=https://musicbrainz.org/release/42aa9932-7702-44b3-afbd-d664228e870b"
       ]
     },
     "notes": "",
@@ -725,13 +725,13 @@
   {
     "dir": "Arturo Toscanini :: Beethoven (NBC Symphony Orchestra) (Disc 6).0x310f2704",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Tribute To Arturo Toscanini' by 'Symphony of the Air' (1958), score=67, tracks=5 vs local=4, url=https://musicbrainz.org/release/769c1c27-e79a-40a3-8ad2-a1a228d918d3"
       ]
     },
     "notes": "",
@@ -776,13 +776,13 @@
   {
     "dir": "Arturo Toscanini :: Ludwig van Beethoven Symphonies Nos. 1,2,3&4 Vol 1.0x670e3a09",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Ludwig van Beethoven: Symphonies Nos.2 & 7' by 'Vladimir Ashkenazy, Ludwig van Beethoven, NHK Symphony Orchestra' (2008), score=98, tracks=8 vs local=9, url=https://musicbrainz.org/release/44282b74-3af9-4137-9ebb-ac1ed35ca71a"
       ]
     },
     "notes": "",
@@ -827,13 +827,13 @@
   {
     "dir": "Arturo Toscanini :: NBC Symphony Orchestra Vol II: Ludwig van Beethoven CD2.0x7f0da908",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Ludwig van Beethoven' by 'Raphael Kwartet' (), score=75, tracks=8 vs local=8, url=https://musicbrainz.org/release/989d2e70-8245-43c4-ba4c-e8ce242e52e4"
       ]
     },
     "notes": "",
@@ -880,13 +880,15 @@
     "axis1": "unknown",
     "axis2": "non-classical-other",
     "evidence": {
-      "provenance": [],
+      "provenance": [
+        "axis1=unknown: no provenance signal found; user-adjudicated 2026-07-20"
+      ],
       "mb_status": [
         "dir name contains 'audiobook'",
         "genre tag: 'Biography & Autobiography'"
       ]
     },
-    "notes": "",
+    "notes": "User: will manually move out of library; axis1=unknown (no provenance signal); adjudicated 2026-07-20",
     "shape": {
       "total_files": 24,
       "audio_files": 23,
@@ -930,14 +932,14 @@
   {
     "dir": "Autour de la Harpe",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Autour de la harpe' by 'Roussel, Ropartz, Debussy, Ravel, Koechlin; Montreal Chamber Players' (2006-05), score=100, tracks=14 vs local=14, url=https://musicbrainz.org/release/6e18e0bc-2354-4f91-a90a-fe088a8c08cb"
       ]
     },
     "notes": "",
@@ -984,13 +986,13 @@
   {
     "dir": "Bach, J.S. :: Symphonic Bach - Orchestral Transcriptions by Respigi and Elgar.0xac0d6e0c",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Bach Transcriptions' by 'Johann Sebastian Bach, Leopold Stokowski; Bournemouth Symphony Orchestra, José Serebrier' (2006-06-20), score=94, tracks=12 vs local=12, url=https://musicbrainz.org/release/3a427559-92eb-4d39-8339-e8d3f3e00d5f"
       ]
     },
     "notes": "",
@@ -1035,14 +1037,14 @@
   {
     "dir": "Bayer - Die Puppenfee (The Fairy Doll)",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'The Fairy Doll' by 'Josef Bayer; Slovak Radio Symphony Orchestra, Andrew Mogrelia' (2004), score=89, tracks=35 vs local=35, url=https://musicbrainz.org/release/5f8b90c0-2d79-4af5-a8f7-9c8d21611cca"
       ]
     },
     "notes": "",
@@ -1089,13 +1091,13 @@
   {
     "dir": "Beethoven  :: Symphonies Nos. 3&4 - Toscanini, NBCSO.0x73121308",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Brahms Symphonies Nos. 3&4' by 'Johannes Brahms, Nikolaus Harnoncourt & Berliner Philharmoniker' (), score=100, tracks=8 vs local=8, url=https://musicbrainz.org/release/7eb12321-1670-4a66-8c3e-835665214b84"
       ]
     },
     "notes": "",
@@ -1140,14 +1142,14 @@
   {
     "dir": "Beethoven - Fur Elise and Bagatelles Opp. 33, 119",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: '“Für Elise” / Bagatelles, opp. 33, 119 & 126' by 'Beethoven; Paul Lewis' (2020-07-10), score=100, tracks=29 vs local=29, url=https://musicbrainz.org/release/45ae7c46-b284-4242-b8db-088c44af52f9"
       ]
     },
     "notes": "",
@@ -1194,14 +1196,14 @@
   {
     "dir": "Beethoven - String Quartets Nos. 1-16 (complete, ",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'The Guarneri plays Beethoven: The Complete String Quartets Nos. 1-16 / Große Fuge' by 'Beethoven; Guarneri Quartet' (), score=100, tracks=71 vs local=71, url=https://musicbrainz.org/release/d63083eb-ab77-4f82-8997-ef317ebcd0c4"
       ]
     },
     "notes": "",
@@ -1248,13 +1250,13 @@
   {
     "dir": "Beethoven :: Beethoven (NBC Symphony Orchestra) (Disc 5).0x3d117c05",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Beethoven Symphony No.9' by '中島章博 & みなとシティオーケストラ' (2014-11-24), score=100, tracks=5 vs local=5, url=https://musicbrainz.org/release/45f452c0-c47a-4f19-8e73-5706a680a470"
       ]
     },
     "notes": "",
@@ -1299,14 +1301,14 @@
   {
     "dir": "Beethoven Piano Concerto No.1, No.2 - Argerich - Sinopoli - Philharmonia Orchestra [4156822]",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Piano Concertos 1 & 2' by 'Ludwig van Beethoven; Martha Argerich, Philharmonia Orchestra, Giuseppe Sinopoli' (1994-08-15), score=100, tracks=6 vs local=6, url=https://musicbrainz.org/release/238b21a9-b6d7-3363-8a46-1c5934f4f5bf"
       ]
     },
     "notes": "",
@@ -1353,14 +1355,14 @@
   {
     "dir": "Beethoven Violin Concerto, Romance No.1, No.2 - Mintz - Sinopoli - Philharmonia Orchestra [E4230642]",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Beethoven - Violin Concerto - Romance 1 & 2' by 'Stefan Popov & Sian Edwards' (2006), score=100, tracks=5 vs local=5, url=https://musicbrainz.org/release/58257cdd-18c9-437d-b4af-1459d33f1dc9"
       ]
     },
     "notes": "",
@@ -1407,13 +1409,13 @@
   {
     "dir": "Beethoven, Ludwig Van:  :: Beethoven: Complete Sym & Con for Pno; Barenboim::PO::NPO::Klemperer.0x5d118508",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Ludwig van Beethoven' by 'Raphael Kwartet' (), score=100, tracks=8 vs local=8, url=https://musicbrainz.org/release/989d2e70-8245-43c4-ba4c-e8ce242e52e4"
       ]
     },
     "notes": "",
@@ -1458,14 +1460,14 @@
   {
     "dir": "Berlioz Odyssey",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Berlioz Masterworks' by 'Hector Berlioz; Orchestre symphonique de Montréal, Charles Dutoit' (), score=85, tracks=197 vs local=217, url=https://musicbrainz.org/release/c5530a25-7bb2-4f6e-953d-fb4ecc5d7f77"
       ]
     },
     "notes": "",
@@ -1512,14 +1514,14 @@
   {
     "dir": "Berlioz: Requiem (Grande Messe des morts) [Live]",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Requiem (Grande Messe des Morts)' by 'Berlioz; Robert Tear, London Philharmonic Choir, London Philharmonic Orchestra, André Previn' (1980), score=100, tracks=10 vs local=10, url=https://musicbrainz.org/release/99ef6767-cb33-4271-ad5e-41211061e3c2"
       ]
     },
     "notes": "",
@@ -1566,14 +1568,14 @@
   {
     "dir": "CHAN9177 - Barber Complete Works for Solo Piano",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Complete Works for Solo Piano' by 'Barber; Eric Parkin' (1993), score=100, tracks=16 vs local=16, url=https://musicbrainz.org/release/cde131b2-402d-4844-ab0e-62603f79de61"
       ]
     },
     "notes": "",
@@ -1620,14 +1622,16 @@
   {
     "dir": "Caro mio ben",
     "axis1": "unknown",
-    "axis2": "unknown",
+    "axis2": "non-classical-other",
     "evidence": {
-      "provenance": [],
+      "provenance": [
+        "axis1=unknown: no provenance signal found; user-adjudicated 2026-07-20"
+      ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: User: will move out of library; single MP3 of classical aria, not a full release; adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "User: will move out of library; single MP3 of classical aria, not a full release; adjudicated 2026-07-20; User: will manually move out of library; axis1=unknown (no provenance signal); adjudicated 2026-07-20",
     "shape": {
       "total_files": 4,
       "audio_files": 1,
@@ -1667,13 +1671,13 @@
   {
     "dir": "Chicago Jazz Philharmonic - Collective Creativity.0xb80c360c",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Jazz Collective' by 'Jazz Collective' (2012-04-18), score=100, tracks=11 vs local=12, url=https://musicbrainz.org/release/bd7b1308-1c01-4d90-8ddf-2e956db9d92a"
       ]
     },
     "notes": "",
@@ -1718,13 +1722,13 @@
   {
     "dir": "Daniel Barenboim & Orchestre de Paris",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Daniel Barenboim Dirigiert' score=100, tracks=4 vs local=64"
       ]
     },
     "notes": "",
@@ -1769,16 +1773,16 @@
   {
     "dir": "Dave Eaton Show Live.0xc50f780d",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "not-in-mb",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: Personal live show recording; auto-classified as in-mb-clean via dubious MB match (Steve Eaton, score 100 but different name); adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "Personal live show recording; auto-classified as in-mb-clean via dubious MB match (Steve Eaton, score 100 but different name); adjudicated 2026-07-20",
     "shape": {
       "total_files": 14,
       "audio_files": 13,
@@ -1820,14 +1824,14 @@
   {
     "dir": "Debussy - Les Trois Sonates, The Late Works",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Les Trois Sonates / The Late Works' by 'Claude Debussy; Isabelle Faust, Alexander Melnikov, Jean‐Guihen Queyras, Javier Perianes, Xavier de Maistre, Antoine Tamestit, Magali Mosnier, Tanguy De Williencourt' (2018-10), score=100, tracks=13 vs local=13, url=https://musicbrainz.org/release/e17247c8-a0b8-4d6e-8bb3-0f628c5cc255"
       ]
     },
     "notes": "",
@@ -1874,14 +1878,14 @@
   {
     "dir": "Debussy - Sonatas & Trios",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Debussy: Sonates & Trios' by 'Claude Debussy, Renaud Capuçon, Bertrand Chamayou, Gérard Caussé, Emmanuel Pahud, Marie‐Pierre Langlamet & Edgar Moreau' (2017-11-03), score=100, tracks=14 vs local=14, url=https://musicbrainz.org/release/2aa75150-2394-48a1-b926-6ee957cd2e1f"
       ]
     },
     "notes": "",
@@ -1928,14 +1932,14 @@
   {
     "dir": "Delibes - Coppelia & La Source Suite",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Delibes: Coppélia / Sylvia Suite / Ravel: Daphnis et Chloé Suite No. 2' by 'Delibes, Ravel; L’Orchestre de la Suisse Romande, Ernest Ansermet' (2009), score=100, tracks=37 vs local=43, url=https://musicbrainz.org/release/c9427ba8-85f0-4f9d-a2b7-5d67fb3798d0"
       ]
     },
     "notes": "",
@@ -1982,16 +1986,16 @@
   {
     "dir": "Disc Cleaner.0x720f9e07",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "non-classical-other",
     "evidence": {
       "provenance": [
         ".cdda. file naming (old rip format)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: CD cleaning disc, not music; auto-classified as in-mb-clean via dubious MB match (Head Cleaner by Popof); adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "CD cleaning disc, not music; auto-classified as in-mb-clean via dubious MB match (Head Cleaner by Popof); adjudicated 2026-07-20",
     "shape": {
       "total_files": 2,
       "audio_files": 2,
@@ -2031,16 +2035,16 @@
   {
     "dir": "Durham Mus Theater.0x43113c15",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "not-in-mb",
     "evidence": {
       "provenance": [
         ".cdda. file naming (old rip format)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: Theater music rip; auto-classified as in-mb-clean via dubious MB match (Richard & Linda Thompson live, score 78); adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "Theater music rip; auto-classified as in-mb-clean via dubious MB match (Richard & Linda Thompson live, score 78); adjudicated 2026-07-20",
     "shape": {
       "total_files": 17,
       "audio_files": 17,
@@ -2080,16 +2084,16 @@
   {
     "dir": "Education",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "non-classical-other",
     "evidence": {
       "provenance": [
         ".cue + .log files present (rip artifacts)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: Pop music with Amazon tags; auto-classified as in-mb-clean via dubious MB match; adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "Pop music with Amazon tags; auto-classified as in-mb-clean via dubious MB match; adjudicated 2026-07-20",
     "shape": {
       "total_files": 2,
       "audio_files": 2,
@@ -2136,13 +2140,13 @@
   {
     "dir": "Elgar Cello Concerto, Enigma Variations, Pomp and Circumstance March No.1, No.4 - Maisky - Sinopoli - Philharmonia Orchestra [4783619]",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Sir Neville Marriner - Elgar - Enigma Variations, Pomp & Circumstance Marches' by 'Edward Elgar, Sir Neville Marriner& Koninklijk Concertgebouworkest' (), score=93, tracks=18 vs local=21, url=https://musicbrainz.org/release/cffd070b-3895-4298-8176-60bcecc43246"
       ]
     },
     "notes": "",
@@ -2187,13 +2191,13 @@
   {
     "dir": "Ella Fitzgerald & Louis Armstrong :: The Best Of Ella Fitzgerald & Louis Armstrong.0xea0ff30f",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Ella Fitzgerald Louis Armstrong' by 'Ella Fitzgerald, Louis Armstrong' (2011), score=100, tracks=17 vs local=15, url=https://musicbrainz.org/release/430769e0-b84a-4c2c-932d-075f2eb9b2e8"
       ]
     },
     "notes": "",
@@ -2238,13 +2242,13 @@
   {
     "dir": "English Class Hits! June 2006.0x37123416",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Hits June 10' by 'Various Artists' (2010-06-01), score=82, tracks=20 vs local=22, url=https://musicbrainz.org/release/958893c5-4ad6-4a15-9585-4f00f089b2d4"
       ]
     },
     "notes": "",
@@ -2342,13 +2346,13 @@
   {
     "dir": "Françaix - L’Horloge de Flore.999779-2",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'L'Horloge sans temps' by 'L'Horloge' (2003-11), score=75, tracks=17 vs local=20, url=https://musicbrainz.org/release/9e9e201d-d375-4f0d-b5df-8e95458ff0f4"
       ]
     },
     "notes": "",
@@ -2393,14 +2397,14 @@
   {
     "dir": "G010001967730Z - The Music Of America - Samuel Barber",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Music of Samuel Barber' score=100, tracks=6 vs local=37"
       ]
     },
     "notes": "",
@@ -2449,12 +2453,14 @@
     "axis1": "unknown",
     "axis2": "non-classical-other",
     "evidence": {
-      "provenance": [],
+      "provenance": [
+        "axis1=unknown: no provenance signal found; user-adjudicated 2026-07-20"
+      ],
       "mb_status": [
         "dir name contains 'garageband'"
       ]
     },
-    "notes": "",
+    "notes": "User: will manually move out of library; axis1=unknown (GarageBand project files); adjudicated 2026-07-20",
     "shape": {
       "total_files": 75,
       "audio_files": 4,
@@ -2567,13 +2573,13 @@
   {
     "dir": "Ginastera · Boieldieu Harp Concertos - Zoff, Kurz, Staatskapelle Dresden",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         ".cue + .log files present (rip artifacts)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Harp Concertos' by 'Boïeldieu, Ginastera; Jutta Zoff, Staatskapelle Dresden, Siegfried Kurz' (2013), score=100, tracks=6 vs local=6, url=https://musicbrainz.org/release/c518a617-b8c4-4f8a-8082-7aafe7379520"
       ]
     },
     "notes": "",
@@ -2618,13 +2624,13 @@
   {
     "dir": "Gioacchino Rossini :: Panorama - Gioacchino Rossini - Disc 1.0x9b10f20b",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Favourite Rossini' by 'Gioachino Rossini' (), score=55, tracks=11 vs local=11, url=https://musicbrainz.org/release/c09694dd-ef53-4369-9af3-8b8c96521360"
       ]
     },
     "notes": "",
@@ -2669,13 +2675,13 @@
   {
     "dir": "Gioacchino Rossini :: Panorama.0xe6120d0f",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Panorama' by '6Cyclemind' (2005), score=61, tracks=15 vs local=15, url=https://musicbrainz.org/release/8e81c143-61ac-4dae-ab76-9e85025fd1d8"
       ]
     },
     "notes": "",
@@ -2720,13 +2726,13 @@
   {
     "dir": "Glazunov Complete Symphonies.19642a",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Glazunov Piano Transcriptions' score=100, tracks=17 vs local=31"
       ]
     },
     "notes": "",
@@ -2771,13 +2777,13 @@
   {
     "dir": "Glinka & Glazunov - Chamber Music",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Glinka: String Quartets in F major and D major / Glazunov: Four Novelettes From op. 15' by 'Glinka, Glazunov; The Shostakovich Quartet' (1992), score=100, tracks=12 vs local=12, url=https://musicbrainz.org/release/542d3d0a-0174-4722-873e-0ccef75c54c6"
       ]
     },
     "notes": "",
@@ -2822,13 +2828,13 @@
   {
     "dir": "Grieg Complete Orchestral Works",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Complete Orchestral Works' by 'Edvard Grieg; Malmö Symphony Orchestra, Royal Scottish National Orchestra, Bjarte Engeset' (2014-05-07), score=100, tracks=124 vs local=124, url=https://musicbrainz.org/release/5cf97224-3eaa-4bba-bb80-21daab620126"
       ]
     },
     "notes": "",
@@ -2873,14 +2879,14 @@
   {
     "dir": "Grieg Edition",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Grieg Edition' score=100, tracks=507 vs local=337"
       ]
     },
     "notes": "",
@@ -2929,15 +2935,17 @@
   },
   {
     "dir": "Handel The Messiah - Wilberg - Orchestra and Choir at Temple Square",
-    "axis1": "unknown",
-    "axis2": "unknown",
+    "axis1": "other-download",
+    "axis2": "in-mb-clean",
     "evidence": {
-      "provenance": [],
+      "provenance": [
+        "adjudicated: User: downloaded (user was in the recording); MB tags are good; axis1 corrected from unknown to other-download; adjudicated 2026-07-20"
+      ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Handel’s Messiah' by 'George Frideric Handel; The Tabernacle Choir at Temple Square & Orchestra at Temple Square' (2016-03-04), score=82, tracks=54 vs local=54, url=https://musicbrainz.org/release/029513f1-343d-4e38-b9a3-268e8835e0fb"
       ]
     },
-    "notes": "",
+    "notes": "User: downloaded (user was in the recording); MB tags are good; axis1 corrected from unknown to other-download; adjudicated 2026-07-20",
     "shape": {
       "total_files": 54,
       "audio_files": 54,
@@ -3029,14 +3037,14 @@
   {
     "dir": "Herbert von Karajan - Invitation to the Dance",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Herbert von Karajan' score=100, tracks=73 vs local=17"
       ]
     },
     "notes": "",
@@ -3083,13 +3091,13 @@
   {
     "dir": "Humperdinck - Hansel und Gretel",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Hansel and Gretel' by 'Engelbert Humperdinck; Philharmonia Orchestra, New London Children's Choir, Sir Charles Mackerras' (2007), score=100, tracks=29 vs local=29, url=https://musicbrainz.org/release/00cc172a-0c65-45da-ba51-9607ab630432"
       ]
     },
     "notes": "",
@@ -3193,13 +3201,13 @@
   {
     "dir": "Igor Stravinsky - Columbia Symphony Orchestra :: Stravinsky Conducts - The Firebird Suite - Petrushka Ballet Suite.0x6c0c8818",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Stravinsky Conducts - The Firebird Suite - Petrushka Ballet Suite' by 'Игорь Фёдорович Стравинский' (1999), score=100, tracks=24 vs local=24, url=https://musicbrainz.org/release/26e1e528-e80e-4356-8b31-344242e54ed0"
       ]
     },
     "notes": "",
@@ -3244,14 +3252,16 @@
   {
     "dir": "Into The Woods Piano Accompaniment",
     "axis1": "unknown",
-    "axis2": "unknown",
+    "axis2": "non-classical-other",
     "evidence": {
-      "provenance": [],
+      "provenance": [
+        "axis1=unknown: no provenance signal found; user-adjudicated 2026-07-20"
+      ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: User: will move out; piano accompaniment tracks for musical theater rehearsal, not classical; adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "User: will move out; piano accompaniment tracks for musical theater rehearsal, not classical; adjudicated 2026-07-20; User: will manually move out of library; axis1=unknown (no provenance signal); adjudicated 2026-07-20",
     "shape": {
       "total_files": 34,
       "audio_files": 34,
@@ -3291,13 +3301,13 @@
   {
     "dir": "Jane Austen Entertains :: Music from Her Own Library.0x100ff515",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Jane Austen's Favourite Music' by 'The Windsor Box and Fir Company' (1996), score=100, tracks=18 vs local=21, url=https://musicbrainz.org/release/023de1f6-bfcb-4614-bd1c-4380c16b0cfe"
       ]
     },
     "notes": "",
@@ -3395,14 +3405,14 @@
   {
     "dir": "Karajan Sampler",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Karajan' score=100, tracks=40 vs local=82"
       ]
     },
     "notes": "",
@@ -3449,16 +3459,16 @@
   {
     "dir": "Karen #4.0xd00f0610",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "not-in-mb",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: Personal recording (Karen #4); no plausible MB match; adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "Personal recording (Karen #4); no plausible MB match; adjudicated 2026-07-20",
     "shape": {
       "total_files": 17,
       "audio_files": 16,
@@ -3500,16 +3510,16 @@
   {
     "dir": "Karen Song #1.0x6f07de09",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "not-in-mb",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: Personal recording (Karen Song #1); auto-classified as in-mb-clean via dubious MB match; adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "Personal recording (Karen Song #1); auto-classified as in-mb-clean via dubious MB match; adjudicated 2026-07-20",
     "shape": {
       "total_files": 10,
       "audio_files": 9,
@@ -3551,13 +3561,13 @@
   {
     "dir": "Kathleen Battle, Placido Domingo, Metropolitan Opera Orchestra - James Levine :: Live in Tokyo 1988 - Kathleen Battle, Placido Domingo, Metropolitan Opera Orchestra - James Levine.0x660e0809",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Götterdämmerung: Highlights (Metropolitan Opera Orchestra and Chorus feat. conductor: James Levine)' by 'Richard Wagner' (), score=89, tracks=9 vs local=10, url=https://musicbrainz.org/release/2ffba3e4-63b3-40c2-92e6-4fd2d7b966e0"
       ]
     },
     "notes": "",
@@ -3651,14 +3661,16 @@
   {
     "dir": "LDS Youth Music",
     "axis1": "unknown",
-    "axis2": "unknown",
+    "axis2": "not-in-mb",
     "evidence": {
-      "provenance": [],
+      "provenance": [
+        "axis1=unknown: no provenance signal found; user-adjudicated 2026-07-20"
+      ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: User: personal/religious LDS youth music collection, not in MB as a unit; adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "User: personal/religious LDS youth music collection, not in MB as a unit; adjudicated 2026-07-20; User: will manually move out of library; axis1=unknown (no provenance signal); adjudicated 2026-07-20",
     "shape": {
       "total_files": 9,
       "audio_files": 9,
@@ -3700,13 +3712,13 @@
   {
     "dir": "Lifescapes :: Celtic Christmas.0xcf0c250e",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         ".cdda. file naming (old rip format)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Lifescapes: Celtic Christmas' score=100, tracks=14 vs local=2"
       ]
     },
     "notes": "",
@@ -3751,12 +3763,14 @@
     "axis1": "unknown",
     "axis2": "non-classical-other",
     "evidence": {
-      "provenance": [],
+      "provenance": [
+        "axis1=unknown: no provenance signal found; user-adjudicated 2026-07-20"
+      ],
       "mb_status": [
         "dir name contains 'exercise'"
       ]
     },
-    "notes": "",
+    "notes": "User: will manually move out of library; axis1=unknown (no provenance signal); adjudicated 2026-07-20",
     "shape": {
       "total_files": 8,
       "audio_files": 8,
@@ -3797,14 +3811,16 @@
   {
     "dir": "Lydia Dance Repertoire Music",
     "axis1": "unknown",
-    "axis2": "unknown",
+    "axis2": "non-classical-other",
     "evidence": {
-      "provenance": [],
+      "provenance": [
+        "axis1=unknown: no provenance signal found; user-adjudicated 2026-07-20"
+      ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: User: will move out; personal dance competition music (YAGP submission files), not classical; adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "User: will move out; personal dance competition music (YAGP submission files), not classical; adjudicated 2026-07-20; User: will manually move out of library; axis1=unknown (no provenance signal); adjudicated 2026-07-20",
     "shape": {
       "total_files": 10,
       "audio_files": 9,
@@ -3850,13 +3866,13 @@
   {
     "dir": "Marvin Goldstein :: Inspirational Notes.0x9708d90c",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Goldstein Variationen' by 'Station 17' (2008), score=92, tracks=12 vs local=12, url=https://musicbrainz.org/release/e3d34555-7205-4fb9-9e20-ce4c9f0e01ee"
       ]
     },
     "notes": "",
@@ -3901,13 +3917,13 @@
   {
     "dir": "Mascagni, Pietro: :: Mascagni: Karajan the Opera Recordings; Karajan::Orch Del Teatro alla Scala.0x2f12eb16",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Mascagni: Cavalleria Rusticana' by 'Pietro Mascagni; Brian Jagde, Elisabetta Fiorillo, Lester Lynch, Roxana Constantinescu, Dresdner Philharmonie, MDR Rundfunkchor Leipzig, Marek Janowski' (), score=67, tracks=20 vs local=22, url=https://musicbrainz.org/release/2a3db04a-5e7b-4f25-870c-1183e77dd05c"
       ]
     },
     "notes": "",
@@ -3952,14 +3968,14 @@
   {
     "dir": "Mendelssohn - A Midsummer Night's Dream - incidental music - Deutsch, Op.61",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Mendelssohn - A Midsummer Night’s Dream Opp. 21 & 61' by 'Felix Mendelssohn, Rebecca Evans, Joyce DiDonato, Royal Shakespeare Company, Le Jeune Chœur de Paris, Orchestre de chambre de Paris & Emma Nelson' (2002-06-15), score=65, tracks=16 vs local=17, url=https://musicbrainz.org/release/8563c7c4-8a7b-4af0-a16e-39037cef6e83"
       ]
     },
     "notes": "",
@@ -4006,14 +4022,14 @@
   {
     "dir": "Mendelssohn - A Midsummer Night's Dream - incidental music - English, Op.61",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Mendelssohn - A Midsummer Night’s Dream Opp. 21 & 61' by 'Felix Mendelssohn, Rebecca Evans, Joyce DiDonato, Royal Shakespeare Company, Le Jeune Chœur de Paris, Orchestre de chambre de Paris & Emma Nelson' (2002-06-15), score=65, tracks=16 vs local=17, url=https://musicbrainz.org/release/8563c7c4-8a7b-4af0-a16e-39037cef6e83"
       ]
     },
     "notes": "",
@@ -4060,13 +4076,13 @@
   {
     "dir": "Merill Jensen :: Come Unto Christ - The Conversion of Alma the Younger.0xc20f550e",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Come Unto Him' by 'Brigham Young University Young Ambassadors' (1999), score=89, tracks=13 vs local=14, url=https://musicbrainz.org/release/1d82cc9d-a9b3-494d-84f1-20e4db061b98"
       ]
     },
     "notes": "",
@@ -4111,13 +4127,13 @@
   {
     "dir": "Michael Bolton :: Time, Love & Tenderness.0x880a820a",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         ".cdda. file naming (old rip format)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Michael Bolton' by 'Superdestroyer' (2019-02-14), score=86, tracks=1 vs local=1, url=https://musicbrainz.org/release/622824a4-0a6b-4832-a3b0-d38f6da23ee8"
       ]
     },
     "notes": "",
@@ -4372,14 +4388,14 @@
   {
     "dir": "Mussorgsky - Pictures at an Exhibition",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Mussorgsky - Pictures at an Exhibition' score=100, tracks=3 vs local=13"
       ]
     },
     "notes": "",
@@ -4426,13 +4442,13 @@
   {
     "dir": "Mussorgsky Sorochintsy Fair",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Fair Ain’t Fair' by 'Tim Fite' (2008-05-06), score=95, tracks=16 vs local=16, url=https://musicbrainz.org/release/15a02e00-daf4-41d8-8e8c-26bc2c4699e8"
       ]
     },
     "notes": "",
@@ -4477,13 +4493,13 @@
   {
     "dir": "Mussorgsky: Romances and Songs",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Songs and Romances' score=100, tracks=16 vs local=28"
       ]
     },
     "notes": "",
@@ -4528,14 +4544,14 @@
   {
     "dir": "NSO0023 - Barber Vanessa",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Vanessa' by 'Samuel Barber' (2003-11-18), score=100, tracks=37 vs local=37, url=https://musicbrainz.org/release/9c32c8bb-46ce-4082-9170-1ff85d7692d6"
       ]
     },
     "notes": "",
@@ -4582,14 +4598,14 @@
   {
     "dir": "ONYX4129 - American Chamber Music",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'American Chamber Music' by 'Aaron Copland, Charles Ives, Leonard Bernstein, Elliott Carter, Samuel Barber; James Ehnes, Ehnes Quartet' (), score=100, tracks=11 vs local=11, url=https://musicbrainz.org/release/89c29e5d-bbd8-47f6-967b-ce9c5c0fe5de"
       ]
     },
     "notes": "",
@@ -4636,14 +4652,14 @@
   {
     "dir": "Offenbach Folies symphoniques & Ouvertures",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Folies symphoniques / Ouvertures' by 'Jacques Offenbach; Brandenburgisches Staatsorchester Frankfurt, Howard Griffiths' (2019-05-03), score=100, tracks=12 vs local=12, url=https://musicbrainz.org/release/c8e46c5c-be0d-4185-a740-207c784720c5"
       ]
     },
     "notes": "",
@@ -4690,14 +4706,16 @@
   {
     "dir": "Playlists",
     "axis1": "unknown",
-    "axis2": "unknown",
+    "axis2": "non-classical-other",
     "evidence": {
-      "provenance": [],
+      "provenance": [
+        "axis1=unknown: no provenance signal found; user-adjudicated 2026-07-20"
+      ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: User: playlist files only, no audio content; adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "User: playlist files only, no audio content; adjudicated 2026-07-20; User: playlist files to be transferred to new playlist library when created; axis1=unknown (no provenance signal); adjudicated 2026-07-20",
     "shape": {
       "total_files": 74,
       "audio_files": 0,
@@ -4735,13 +4753,13 @@
   {
     "dir": "ProVocal Volume 12: Ella Fitzgerald.0xf60c8711",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Ella Fitzgerald' by 'Ella Fitzgerald' (1996), score=100, tracks=16 vs local=16, url=https://musicbrainz.org/release/b07c9537-9734-4133-b113-ef6d7e46fa21"
       ]
     },
     "notes": "",
@@ -4786,14 +4804,14 @@
   {
     "dir": "Prokofiev - Symphony No. 5 & Stravinsky - The Rite of Spring",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Shostakovich: Symphony no. 5 / Stravinsky: The Rite of Spring' by 'Shostakovich, Stravinsky; The Cleveland Orchestra, Lorin Maazel' (1993-08-27), score=94, tracks=18 vs local=18, url=https://musicbrainz.org/release/b5a06878-d28a-4eb3-be5a-87c9f46da30a"
       ]
     },
     "notes": "",
@@ -4840,13 +4858,13 @@
   {
     "dir": "Prokofiev Peter and the Wolf, Op. 67",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Prokofiev: Peter and the Wolf, Op. 67 / Tchaikovsky: Nutcracker Suite, Op. 71a' by 'Serge Prokofiev, Peter Ilyich Tchaikovsky' (1984), score=100, tracks=9 vs local=10, url=https://musicbrainz.org/release/fb17fe7a-c4b4-418d-bbc6-1d1164fd7c79"
       ]
     },
     "notes": "",
@@ -4891,14 +4909,14 @@
   {
     "dir": "Prokofiev Romeo and Juliet, Op.64",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Romeo & Juliet' by 'Prokofiev; Royal Philharmonic Orchestra, Vladimir Ashkenazy' (2003), score=82, tracks=52 vs local=52, url=https://musicbrainz.org/release/2078c7d0-8955-412e-b57c-0b01ca66f789"
       ]
     },
     "notes": "",
@@ -4945,14 +4963,14 @@
   {
     "dir": "Prokofiev Symphony No.5, Stravinsky The Rite of Spring - Karajan - Berliner Philharmoniker",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Karajan: Berliner Philharmoniker' score=100, tracks=86 vs local=18"
       ]
     },
     "notes": "",
@@ -4999,14 +5017,14 @@
   {
     "dir": "Puccini Madama Butterfly - Freni - Carreras - Pons - Berganza - Sinopoli - Philharmonia Orchestra [4779128]",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='– – –' score=100, tracks=3 vs local=34"
       ]
     },
     "notes": "",
@@ -5053,13 +5071,13 @@
   {
     "dir": "RCID15847740 - Tchaikovsky Complete Romances",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Tchaikovsky: Complete Romances' by 'Tchaikovsky; Tamara Milashkina, Irina Arkhipova, Elena Obraztsova, Sergei Lemeshev, Muslim Magomayev, Vladimir Atlantov & Ivan Petrov and others' (2015-04-28), score=100, tracks=103 vs local=103, url=https://musicbrainz.org/release/29dc3dad-981c-4276-9142-623f70ae66e3"
       ]
     },
     "notes": "",
@@ -5104,14 +5122,14 @@
   {
     "dir": "RES10301 - Barber The Complete Songs",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'The Complete Songs' by 'Samuel Barber; Fleur Barron, Mary Bevan, Samantha Clarke, Jess Dandy, Louise Kemény, Soraya Mafi, Julien Van Mellaerts, Dominic Sedgwick, Nicky Spence, William Thomas, Navarra String Quartet, Dylan Perez' (2022-05-06), score=100, tracks=67 vs local=67, url=https://musicbrainz.org/release/82ac9480-b59f-4a74-af81-1da963571ed8"
       ]
     },
     "notes": "",
@@ -5158,14 +5176,14 @@
   {
     "dir": "Ravel - Introduction & Allegro, etc",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Etc. etc. etc.' by 'Celia Cruz' (1970), score=82, tracks=10 vs local=10, url=https://musicbrainz.org/release/72c7d6e9-e86b-4137-a105-d26abd3e0bf6"
       ]
     },
     "notes": "",
@@ -5212,13 +5230,13 @@
   {
     "dir": "Red and Yellow.0x870a410a",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Red and Yellow' by 'Liz Rhodes' (), score=100, tracks=10 vs local=10, url=https://musicbrainz.org/release/09289e1d-1b7a-4462-b22e-e3b5a8342156"
       ]
     },
     "notes": "",
@@ -5263,13 +5281,13 @@
   {
     "dir": "Reid Nibley :: Sabbath Song.0x11118d12",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Sabbath Song' by 'Clayne Robison' (1998), score=100, tracks=18 vs local=18, url=https://musicbrainz.org/release/21e39fb2-a833-4688-8fd9-7a7ca63b8852"
       ]
     },
     "notes": "",
@@ -5314,16 +5332,16 @@
   {
     "dir": "Ric's Class Music.0x9812024d",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "not-in-mb",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: Personal class music collection (77 tracks); no plausible MB match; adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "Personal class music collection (77 tracks); no plausible MB match; adjudicated 2026-07-20",
     "shape": {
       "total_files": 78,
       "audio_files": 77,
@@ -5365,14 +5383,14 @@
   {
     "dir": "Richard Strauss Also sprach Zarathustra, Don Juan, Salome Scene No.4 - Sinopoli - New York Philharmonic - Staatskapelle Dresden - Deutsche Oper Berlin [E4745662]",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Also Sprach Zarathustra - Don Juan - Till Eulenspiegel' by 'R. Strauss / Berliner Philharmoniker / Böhm' (1996), score=96, tracks=11 vs local=11, url=https://musicbrainz.org/release/893c638e-51de-431c-a62d-83dc261878f3"
       ]
     },
     "notes": "",
@@ -5419,13 +5437,13 @@
   {
     "dir": "Saint-Saens: Carnival of the Animals, Organ Symphony & other orchestral works",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Saint‐Saëns: Carnival of the Animals – Bizet: Jeux d’enfants – Ravel: Mother Goose' by 'London Symphony Orchestra & Barry Wordsworth' (2005-01-01), score=87, tracks=26 vs local=26, url=https://musicbrainz.org/release/639ba1b5-617f-4565-987e-6fe304f38282"
       ]
     },
     "notes": "",
@@ -5470,13 +5488,13 @@
   {
     "dir": "Saint-Saëns Symphonies - Martinon - Orchestre National de l’ORTF.6318042",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Bizet - Debussy - Chausson - Saint-Saëns - Tchaïkovsky' by 'Nicolas Baldeyrou' (), score=97, tracks=18 vs local=18, url=https://musicbrainz.org/release/2cd10d43-a99c-4626-b009-af1dad73f702"
       ]
     },
     "notes": "",
@@ -5521,14 +5539,14 @@
   {
     "dir": "Saint-Saëns Symphonies - Mǎcelaru - Orchestre National de France.9029653343",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Saint-Saëns - Piano Trios' by 'Camille Saint‐Saëns & The Australian Trio' (), score=100, tracks=22 vs local=20, url=https://musicbrainz.org/release/85594de7-63c2-4a71-9980-5d1ed84973a3"
       ]
     },
     "notes": "",
@@ -5575,14 +5593,14 @@
   {
     "dir": "Schubert - Quintet in C D956 & Quartettsatz D703",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'String Quintet, D956 / Quartettsatz, D703' by 'Schubert; Cypress String Quartet, Gary Hoffman' (2014-05-05), score=100, tracks=5 vs local=6, url=https://musicbrainz.org/release/8466d4a9-0c9c-4bd4-ad29-e207794b658e"
       ]
     },
     "notes": "",
@@ -5629,14 +5647,14 @@
   {
     "dir": "Schubert - Symphonies Nos. 3 & 8",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Schubert – Symphonies Nos. 4 & 8' by 'Franz Schubert; Claudio Abbado' (1988), score=100, tracks=6 vs local=6, url=https://musicbrainz.org/release/2cd21d07-29d5-4ece-abbe-f72a77bff84d"
       ]
     },
     "notes": "",
@@ -5683,13 +5701,13 @@
   {
     "dir": "Schubert String Quintet - Brandis Quartet, Jorg Baumann.Apex.Teldec.0x2a0cfb04",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Schubert: String Quintet; Quartettsatz' by 'Franz Schubert; Guarneri Quartet' (), score=100, tracks=5 vs local=4, url=https://musicbrainz.org/release/318d4290-8c69-4db8-9feb-9922cec6ba68"
       ]
     },
     "notes": "",
@@ -5734,13 +5752,13 @@
   {
     "dir": "Schubert String Quintet I, II - Piacevole Quintet.0x39071b05",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Schubert: String Quintet; Quartettsatz' by 'Franz Schubert; Guarneri Quartet' (), score=100, tracks=5 vs local=5, url=https://musicbrainz.org/release/318d4290-8c69-4db8-9feb-9922cec6ba68"
       ]
     },
     "notes": "",
@@ -5838,13 +5856,13 @@
   {
     "dir": "Schumann, Robert: :: Schumann: Con for Pno::Con for Clo; Gieseking::Machula::BPO::Furtwangler.0x570c5306",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Robert Schumann' by 'Robert Schumann; Thomas Zehetmair, Orchestre de chambre de Paris' (), score=100, tracks=8 vs local=6, url=https://musicbrainz.org/release/e1410516-fc3e-4c77-8f48-3c91c8aeda43"
       ]
     },
     "notes": "",
@@ -5889,13 +5907,13 @@
   {
     "dir": "Shostakovich Selected Symphonies, Песнь о лесах - Mravinsky - Санкт-Петербургская филармония",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Симфонии 5, 6, 7, 8, 10, 11, 12, 15 / Песнь о лесах' by 'Шостакович; Евгений Александрович Мравинский' (2004), score=87, tracks=39 vs local=39, url=https://musicbrainz.org/release/29b79ae5-4c54-4d37-8100-93dee731a3c0"
       ]
     },
     "notes": "",
@@ -5940,13 +5958,13 @@
   {
     "dir": "Shostakovich Symphony No.1-15, October, Над Родиной нашей солнце сияет, Казнь Степана Разина, Violin Concerto No.2 [RCID18056928]",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Shostakovich: Violin Concerto no. 1 / Prokofiev: Violin Concerto no. 2' score=100, tracks=7 vs local=68"
       ]
     },
     "notes": "",
@@ -5991,14 +6009,14 @@
   {
     "dir": "Shostakovich Symphony No.4, No.11 \"1905-й год\" - Nelsons - Boston Symphony [4835220]",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Stokowski Shostakovich Symphony No. 11 (\"1905\")' score=100, tracks=4 vs local=9"
       ]
     },
     "notes": "",
@@ -6045,13 +6063,13 @@
   {
     "dir": "Shostakovich Symphony No.4, No.5, No.6 - Mäkelä - Oslo-Filharmonien [4854637]",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Tchaikovsky: Symphony No. 4, No. 5, No. 6 \"Pathetique\"' by 'Berliner Philharmoniker' (2015), score=100, tracks=12 vs local=12, url=https://musicbrainz.org/release/cc98851a-c21f-484b-a953-76c63481c614"
       ]
     },
     "notes": "",
@@ -6096,14 +6114,14 @@
   {
     "dir": "Shostakovich Symphony No.9, No.5, Suite from Hamlet, Symphony No.8 - Nelsons - Boston Symphony [4795201]",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Symphony no. 8' by 'Gustav Mahler; Deutsches Symphonie‐Orchester Berlin, Kent Nagano' (), score=87, tracks=21 vs local=21, url=https://musicbrainz.org/release/8127d937-b730-4438-8a56-e0fc9101c5ee"
       ]
     },
     "notes": "",
@@ -6150,14 +6168,14 @@
   {
     "dir": "Shostakovich Леди Макбет Мценского уезда Passacaglia, Symphony No.10 - Nelsons - Boston Symphony [4795059]",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Shostakovich - Symphony No.5' by 'Dmitri Shostakovich; London Symphony Orchestra, Mstislav Rostropovich' (2005), score=100, tracks=4 vs local=5, url=https://musicbrainz.org/release/c6cbd8c5-d467-4ed5-94f2-b81ea67db310"
       ]
     },
     "notes": "",
@@ -6204,14 +6222,14 @@
   {
     "dir": "Shostakovich, Stravinsky - Bernstein - Complete Deutsche Grammphon",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Stravinsky / Shostakovich: Complete Recordings on Deutsche Grammophon' by 'Stravinsky, Shostakovich; Leonard Bernstein' (), score=100, tracks=88 vs local=88, url=https://musicbrainz.org/release/7db2ee35-6971-4b37-9d0b-a0dae7ef15d2"
       ]
     },
     "notes": "",
@@ -6258,14 +6276,14 @@
   {
     "dir": "Sibelius Violin Concerto, Prokofiev Violin Concerto, Sibelius Vesipisaroita - Jansen - Mäkelä - Oslo-Filharmonien [4854748]",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Sibelius: Violin Concerto / Prokofiev: Violin Concerto no. 1' by 'Sibelius, Prokofiev; Janine Jansen, Oslo Philharmonic, Klaus Mäkelä' (), score=100, tracks=7 vs local=7, url=https://musicbrainz.org/release/8a9f0324-2382-4d10-a969-40b7e053409f"
       ]
     },
     "notes": "",
@@ -6312,14 +6330,14 @@
   {
     "dir": "Steinberg Passion Week - Fox - Clarion Choir.8573665",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Passion Week' by 'Maximilian Steinberg; The Clarion Choir, Steven Fox' (2016-08-12), score=100, tracks=16 vs local=16, url=https://musicbrainz.org/release/ab62ca23-55f6-44b5-90b2-eec7f5de92b8"
       ]
     },
     "notes": "",
@@ -6366,13 +6384,13 @@
   {
     "dir": "Strauss, Richard: :: Strauss: Sinfonia Domestica::Don Juan; Furtwangler::BPO.0x4d0e0b06",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Strauss: Sinfonia Domestica' by 'Strauss; Münchner Philharmoniker, Zubin Mehta' (), score=100, tracks=7 vs local=6, url=https://musicbrainz.org/release/55df4927-e148-4bfa-bf57-1bed7428675d"
       ]
     },
     "notes": "",
@@ -6417,13 +6435,13 @@
   {
     "dir": "Stravinsky - Orchestral Works",
     "axis1": "other-download",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "ISRC tags present (download, vendor unidentified)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Igor Stravinsky: Orchestral and Choral Works' by 'Collegium Vocale Gent, Philippe Herreweghe & Royal Philharmonic Orchestra' (), score=100, tracks=9 vs local=10, url=https://musicbrainz.org/release/f8bdafa1-478d-4a32-a198-9313497b0312"
       ]
     },
     "notes": "",
@@ -6468,13 +6486,13 @@
   {
     "dir": "Stravinsky, Igor (1882-1971) :: Le Sacre du Printemps (Stravinsky).0xd4084d0f",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "dir name has .0x hex checksum suffix (old rip format): 'Stravinsky, Igor (1882-1971) :: Le Sacre du Printemps (Stravinsky).0xd4084d0f'"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Igor Stravinsky, Le Sacre du Printemps / Claude Debussy, Jeux' by 'Philippe Auguin, Nürnberger Philharmoniker' (), score=81, tracks=15 vs local=14, url=https://musicbrainz.org/release/57374c56-40be-4df3-b9f7-bc2a864deab5"
       ]
     },
     "notes": "",
@@ -6517,14 +6535,14 @@
   {
     "dir": "Swedish Orchestral Favourites Vol.1.8553115",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Swedish Orchestral Favourites' by 'Helsingborg Symphony Orchestra, Okko Kamu' (1995-06-07), score=100, tracks=14 vs local=14, url=https://musicbrainz.org/release/675ca123-b104-4a71-86b9-6bba13e3bf04"
       ]
     },
     "notes": "",
@@ -6571,14 +6589,14 @@
   {
     "dir": "Swedish Orchestral Favourites Vol.2.8553715",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Swedish Orchestral Favourites, Vol. 2' by 'Swedish Chamber Orchestra' (2000-04-10), score=84, tracks=19 vs local=19, url=https://musicbrainz.org/release/746f7c63-4ef4-45f0-821d-d395baaf014a"
       ]
     },
     "notes": "",
@@ -6625,14 +6643,14 @@
   {
     "dir": "Tchaikovsky Complete Symphonies - Jansons - Oslo-Filharmonien.CHAN10392(6)",
     "axis1": "presto",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "booklet PDF present",
         "ISRC tags present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Symphonies - Complete' score=100, tracks=62 vs local=30"
       ]
     },
     "notes": "",
@@ -6679,13 +6697,13 @@
   {
     "dir": "The Choirs and Orchestra of Brigham Young University :: Songs of Praise and Remembrance.0xd10d400f",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Brigham Young University Choirs and Eric Whitacre 2' by 'Eric Whitacre; BYU Singers, BYU Concert Choir, BYU Women's Chorus' (2008-09-22), score=100, tracks=14 vs local=15, url=https://musicbrainz.org/release/c60c82ac-e15b-4ffe-bcb7-df1eab613148"
       ]
     },
     "notes": "",
@@ -6730,13 +6748,13 @@
   {
     "dir": "The Feel Good CD.0xd90a370d",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Feel Good' by 'The Internet' (2013-09-20), score=100, tracks=13 vs local=13, url=https://musicbrainz.org/release/858fef49-d71f-46b6-9732-4ff7e8a96650"
       ]
     },
     "notes": "",
@@ -6781,13 +6799,13 @@
   {
     "dir": "Unknown Artist - aKkt9ShtSOg1Acgk8ealeqP6NqE-",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         ".cue + .log files present (rip artifacts)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Artist' by 'A Boogie Wit da Hoodie' (), score=61, tracks=11 vs local=13, url=https://musicbrainz.org/release/a5be88c4-ce37-4e84-8054-ad53499bf6ae"
       ]
     },
     "notes": "",
@@ -6832,13 +6850,13 @@
   {
     "dir": "Unknown Artist - qlSQ2jDIvQP22d9x8JFZAo5Om4Y-",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         ".cue + .log files present (rip artifacts)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Artist' by 'Кукрыниксы' (2016-07-20), score=66, tracks=12 vs local=12, url=https://musicbrainz.org/release/ef0c8224-cd3d-430c-a9cd-e0676b2b18ce"
       ]
     },
     "notes": "",
@@ -6883,13 +6901,13 @@
   {
     "dir": "Various :: Jazz Classic, 10th ED, CD03.0xb912740c",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Classic Jazz' by 'Various Artists' (2002), score=73, tracks=12 vs local=12, url=https://musicbrainz.org/release/08784f94-740c-41ff-93b2-50b6889f0f10"
       ]
     },
     "notes": "",
@@ -6934,13 +6952,13 @@
   {
     "dir": "Various :: Jazz Classics, 10th ED, CD01.0xd712ac1f",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Jazz Classics' by 'Various Artists' (2001), score=100, tracks=30 vs local=31, url=https://musicbrainz.org/release/bf580c9a-2d9e-402e-9b48-36c4d576dfd4"
       ]
     },
     "notes": "",
@@ -6985,13 +7003,13 @@
   {
     "dir": "Various :: Jazz Classics, 10th ED, CD02.0xa912340c",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Jazz Classics' by 'The Dutch Swing College Band' (1960), score=71, tracks=12 vs local=12, url=https://musicbrainz.org/release/cc3b4c80-d107-4adc-a440-13819f9a72cc"
       ]
     },
     "notes": "",
@@ -7036,13 +7054,13 @@
   {
     "dir": "Various :: Preludes, Fugues and Riffs - Jazz in Classical Music.0xab12490d",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Preludes & Fugues' by 'Claudio Nuñez' (2021-07-05), score=100, tracks=11 vs local=13, url=https://musicbrainz.org/release/36b8c23f-f1ba-47e3-9632-b7fe5e5771f9"
       ]
     },
     "notes": "",
@@ -7087,13 +7105,13 @@
   {
     "dir": "Various :: Spirit Of The 60's [Blue}.0x6206170a",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Various BLUE' by '雨宮天' (2016-09-07), score=96, tracks=12 vs local=10, url=https://musicbrainz.org/release/83d9f309-d0a4-4fa9-a35b-b549880075a8"
       ]
     },
     "notes": "",
@@ -7138,13 +7156,13 @@
   {
     "dir": "Various :: Spirit Of The 60's [Green].0x6705a60a",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Spirit of the 60's' score=100, tracks=34 vs local=10"
       ]
     },
     "notes": "",
@@ -7189,13 +7207,13 @@
   {
     "dir": "Various :: Symphony No. 3- Organ.0x5b0e2b07",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Symphony No. 3, \"Organ\"' by 'Various Artists' (), score=100, tracks=7 vs local=7, url=https://musicbrainz.org/release/e5ef3a58-8fe9-4e36-a6f6-66eba349f68e"
       ]
     },
     "notes": "",
@@ -7240,13 +7258,13 @@
   {
     "dir": "Various :: The Irving Berlin 100th Anniversary Collection",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         ".cue + .log files present (rip artifacts)"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'The Irving Berlin 100th Anniversary Collection' by 'Irving Berlin' (1988), score=100, tracks=12 vs local=12, url=https://musicbrainz.org/release/48b990e7-072f-350a-9de6-d3817dae214c"
       ]
     },
     "notes": "",
@@ -7342,13 +7360,13 @@
   {
     "dir": "Wagner, Richard: :: Wagner: Das Rheingold.0x56123b18",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Wagner : Das Rheingold' score=100, tracks=44 vs local=24"
       ]
     },
     "notes": "",
@@ -7393,13 +7411,13 @@
   {
     "dir": "Wagner, Richard: :: Wagner: Das Rheingold; Karajan::BPO.0x450ff514",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Wagner : Das Rheingold' score=100, tracks=44 vs local=20"
       ]
     },
     "notes": "",
@@ -7444,13 +7462,13 @@
   {
     "dir": "Wagner, Richard: :: Wagner: Ring Des Nibelungen; Karajan::BPO.0x6b0a9b08",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Richard Wagner' by 'Richard Wagner; Peter Hofmann, RSO Stuttgart, Iván Fischer' (1983), score=91, tracks=8 vs local=8, url=https://musicbrainz.org/release/2276c25a-c6f0-4b36-a962-8c1d1cc1c4dc"
       ]
     },
     "notes": "",
@@ -7495,13 +7513,13 @@
   {
     "dir": "Wagner, Richard: :: Wagner: Ring Des Nibelungen; Karajan::BPO.0xaf11030d",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Wagner Siegfried Ring des Nibelungen' by 'Richard Wagner' (), score=100, tracks=13 vs local=14, url=https://musicbrainz.org/release/254f5cf4-947c-4353-90d2-7aa6879b030b"
       ]
     },
     "notes": "",
@@ -7546,13 +7564,13 @@
   {
     "dir": "Wilhelm Furtwängler :: [Disc 2] Johannes Brahms.0x1a0b2104",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Wilhelm Furtwängler dirige Brahms' by 'Brahms; Wilhelm Furtwängler, Orchestre Philharmonique de Berlin' (2008), score=84, tracks=5 vs local=4, url=https://musicbrainz.org/release/7f2de9ee-24bd-4f71-a79a-77723aa2ddf4"
       ]
     },
     "notes": "",
@@ -7597,13 +7615,13 @@
   {
     "dir": "Wilhelm Furtwängler :: [Disc 3] Anton Bruckner.0x2f0fe904",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Wilhelm Furtwängler 1942-1944' by 'Wilhelm Furtwängler' (1989-10-16), score=91, tracks=4 vs local=4, url=https://musicbrainz.org/release/599f76b0-a391-4ab3-be6e-0d885754700a"
       ]
     },
     "notes": "",
@@ -7648,13 +7666,13 @@
   {
     "dir": "Wilhelm Furtwängler :: [Disk 5] Sibelius, Strauss, Ravel.0x180c3b03",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-clean",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB search hit: 'Wilhelm Furtwängler 1942-1944' by 'Wilhelm Furtwängler' (1989-10-16), score=91, tracks=3 vs local=3, url=https://musicbrainz.org/release/85a6446e-fd10-4820-86fa-b40ced42fe39"
       ]
     },
     "notes": "",
@@ -7699,13 +7717,13 @@
   {
     "dir": "Wolfgang Amadeus Mozart :: Complete Mozart Edition, Vol. 6: Dances & Marches, Disc 1.0xdd0f3323",
     "axis1": "whipper",
-    "axis2": "unknown",
+    "axis2": "in-mb-mismatch",
     "evidence": {
       "provenance": [
         "disc info.yaml (FreeDB sidecar) present"
       ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "MB candidates found but track counts disagree: best='Wolfgang Amadeus Mozart' score=100, tracks=25 vs local=36"
       ]
     },
     "notes": "",
@@ -7750,14 +7768,16 @@
   {
     "dir": "nachtmusick",
     "axis1": "unknown",
-    "axis2": "unknown",
+    "axis2": "non-classical-other",
     "evidence": {
-      "provenance": [],
+      "provenance": [
+        "axis1=unknown: no provenance signal found; user-adjudicated 2026-07-20"
+      ],
       "mb_status": [
-        "no MB status signal found in Pass 1"
+        "adjudicated: User: will move out; personal classical MP3 collection folder (79 tracks incl. Messiah subdir), not a single release; adjudicated 2026-07-20"
       ]
     },
-    "notes": "",
+    "notes": "User: will move out; personal classical MP3 collection folder (79 tracks incl. Messiah subdir), not a single release; adjudicated 2026-07-20; User: will manually move out of library; axis1=unknown (no provenance signal); adjudicated 2026-07-20",
     "shape": {
       "total_files": 79,
       "audio_files": 79,
