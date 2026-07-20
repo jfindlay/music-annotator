@@ -35,10 +35,12 @@ from music_annotator._audit import (
     diff_journal,
 )
 from music_annotator._pipeline_io import (
+    PROVENANCE_FILENAME,
     _audio_hash,
     _read_albumid_tag,
+    _write_provenance_fields,
 )
-from music_annotator.models import TrackTags, TransactionEntry
+from music_annotator.models import AnnotationTier, ProvenanceSidecar, TrackTags, TransactionEntry
 from tests.conftest import _MINIMAL_FLAC, _MINIMAL_MP3
 
 # ---------------------------------------------------------------------------
@@ -172,7 +174,8 @@ class TestAudit:
         """audit() logs a clean message and does not warn when no fragmentation is detected.
 
         All entries share the same release_id and map to the same work_dir, so neither
-        case (a) nor case (b) fires.
+        case (a) nor case (b) fires.  A provenance sidecar with ``full-mb-verified`` is written
+        so the tier pass does not log ``audit_tier_unset`` warnings.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -181,13 +184,25 @@ class TestAudit:
         fs.create_dir(str(dest_root))
 
         # Create destination FLAC files so the new identity passes find no issues.
+        work_top_dir = Path("/lib/Beethoven - Karajan/Symphony No 5 [2020]")
         for dp in [
-            "/lib/Beethoven - Karajan/Symphony No 5 [2020]/01 - Mvt1.flac",
-            "/lib/Beethoven - Karajan/Symphony No 5 [2020]/02 - Mvt2.flac",
+            str(work_top_dir / "01 - Mvt1.flac"),
+            str(work_top_dir / "02 - Mvt2.flac"),
         ]:
             p = Path(dp)
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_bytes(_MINIMAL_FLAC)
+
+        # Write a provenance sidecar so the tier pass does not log audit_tier_unset.
+        _write_provenance_fields(
+            work_top_dir / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
+                needs_spot_check=False,
+            ),
+        )
 
         _write_library_journal(
             dest_root,
@@ -196,7 +211,7 @@ class TestAudit:
                     "timestamp": "2024-01-01T00:00:00Z",
                     "release_id": "rel-1",
                     "source": "/src/01.flac",
-                    "destination": "/lib/Beethoven - Karajan/Symphony No 5 [2020]/01 - Mvt1.flac",
+                    "destination": str(work_top_dir / "01 - Mvt1.flac"),
                     "action": "tagged",
                     "audio_hash": "flac-md5:00000000000000000000000000000000",
                     "acoustid_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -205,7 +220,7 @@ class TestAudit:
                     "timestamp": "2024-01-01T00:00:00Z",
                     "release_id": "rel-1",
                     "source": "/src/02.flac",
-                    "destination": "/lib/Beethoven - Karajan/Symphony No 5 [2020]/02 - Mvt2.flac",
+                    "destination": str(work_top_dir / "02 - Mvt2.flac"),
                     "action": "tagged",
                     "audio_hash": "flac-md5:00000000000000000000000000000000",
                     "acoustid_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
@@ -225,7 +240,8 @@ class TestAudit:
 
         A destination outside ``dest_root`` (e.g. ``/other/Work-X/01.flac`` when dest_root is
         ``/lib``) raises ``ValueError`` in ``Path.relative_to``.  The entry must be skipped and
-        the audit must complete as though the entry were absent.
+        the audit must complete as though the entry were absent.  A provenance sidecar is written
+        for the valid work_dir so the tier pass does not log ``audit_tier_unset`` warnings.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -238,9 +254,21 @@ class TestAudit:
         foreign_dest = Path("/other/Work-X/01.flac")
         foreign_dest.parent.mkdir(parents=True, exist_ok=True)
         foreign_dest.write_bytes(_MINIMAL_FLAC)
-        valid_dest = Path("/lib/Beethoven - Karajan/Work-A [2020]/01 - Mvt1.flac")
+        valid_work_top_dir = Path("/lib/Beethoven - Karajan/Work-A [2020]")
+        valid_dest = valid_work_top_dir / "01 - Mvt1.flac"
         valid_dest.parent.mkdir(parents=True, exist_ok=True)
         valid_dest.write_bytes(_MINIMAL_FLAC)
+
+        # Write a provenance sidecar for the valid work_dir so the tier pass does not warn.
+        _write_provenance_fields(
+            valid_work_top_dir / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
+                needs_spot_check=False,
+            ),
+        )
 
         _write_library_journal(
             dest_root,
@@ -260,7 +288,7 @@ class TestAudit:
                     "timestamp": "2024-01-01T00:00:00Z",
                     "release_id": "rel-1",
                     "source": "/src/02.flac",
-                    "destination": "/lib/Beethoven - Karajan/Work-A [2020]/01 - Mvt1.flac",
+                    "destination": str(valid_dest),
                     "action": "tagged",
                     "audio_hash": "flac-md5:00000000000000000000000000000000",
                     "acoustid_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
@@ -321,7 +349,8 @@ class TestAudit:
         """audit() only considers ``action == "tagged"`` entries; other actions are ignored.
 
         Entries with actions ``"skipped"``, ``"dry_run"``, ``"repathed"`` etc. must not
-        contribute to the fragmentation groupings.
+        contribute to the fragmentation groupings.  A provenance sidecar is written for the
+        tagged work_dir so the tier pass does not log ``audit_tier_unset`` warnings.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -330,9 +359,21 @@ class TestAudit:
         fs.create_dir(str(dest_root))
 
         # Create the tagged destination FLAC file so the new identity passes find no issues.
-        tagged_dest = Path("/lib/Beethoven - Karajan/Work-C [2020]/01 - Mvt1.flac")
+        tagged_work_top_dir = Path("/lib/Beethoven - Karajan/Work-C [2020]")
+        tagged_dest = tagged_work_top_dir / "01 - Mvt1.flac"
         tagged_dest.parent.mkdir(parents=True, exist_ok=True)
         tagged_dest.write_bytes(_MINIMAL_FLAC)
+
+        # Write a provenance sidecar for the tagged work_dir so the tier pass does not warn.
+        _write_provenance_fields(
+            tagged_work_top_dir / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
+                needs_spot_check=False,
+            ),
+        )
 
         _write_library_journal(
             dest_root,
@@ -357,7 +398,7 @@ class TestAudit:
                     "timestamp": "2024-01-01T00:00:00Z",
                     "release_id": "rel-1",
                     "source": "/src/03.flac",
-                    "destination": "/lib/Beethoven - Karajan/Work-C [2020]/01 - Mvt1.flac",
+                    "destination": str(tagged_dest),
                     "action": "tagged",
                     "audio_hash": "flac-md5:00000000000000000000000000000000",
                     "acoustid_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",

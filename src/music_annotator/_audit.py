@@ -5,7 +5,9 @@ freshly-rebuilt in-memory cache, and detecting fragmented releases.  All functio
 are read-only: they do not move files or write any journal entries.
 
 The three identity-integrity passes (journal scan, tag adjudication, audio anchor confirmation)
-are implemented as private helpers and called by :func:`audit`.  The fragmentation-detection
+are implemented as private helpers and called by :func:`audit`.  The tier-enumeration pass
+(:func:`_audit_tier_pass`) reads ``annotation_tier`` from each work directory's provenance sidecar
+and counts per-tier, provisional, and spot-check populations.  The fragmentation-detection
 helpers (:func:`_journal_fragmentation_groups`, :func:`_confirm_fragmentation`) are also private
 and called by :func:`audit` and :func:`detect_fragmented_releases`.
 """
@@ -22,14 +24,17 @@ import structlog
 from music_annotator._pipeline_io import (
     _REBUILD_AUDIO_EXTENSIONS,
     JOURNAL_FILENAME,
+    PROVENANCE_FILENAME,
     _audio_hash,
+    _find_freedb_sidecar,
     _read_acoustid_tag,
     _read_albumid_tag,
     _read_audio_hash_tag,
+    _read_provenance_sidecar,
     read_journal,
     rebuild_journal,
 )
-from music_annotator.models import TransactionEntry, TransactionLog
+from music_annotator.models import AnnotationTier, TransactionEntry, TransactionLog
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -52,6 +57,15 @@ _AUDIT_COUNT_KEYS: tuple[str, ...] = (
     "audio_drift",
     "audio_stable",
     "file_missing",
+    # Tier-enumeration pass (Pass 4) — counts are per destination file; a work_dir's tier
+    # applies to all its tracks (sidecar-per-work-dir vs entry-per-file aggregation).
+    "tier_full",
+    "tier_search",
+    "tier_partial",
+    "tier_alt",
+    "tier_source_only",
+    "provisional_total",
+    "needs_spot_check",
 )
 
 
@@ -79,7 +93,7 @@ class JournalDiffResult:
 
 
 def _make_audit_counts() -> dict[str, int]:
-    """Return a zeroed counter dict for the three audit passes.
+    """Return a zeroed counter dict for all audit passes.
 
     Keys correspond to :data:`_AUDIT_COUNT_KEYS`:
 
@@ -91,6 +105,13 @@ def _make_audit_counts() -> dict[str, int]:
     * ``audio_drift`` — recomputed ``audio_hash`` differs from the stored tag.
     * ``audio_stable`` — recomputed ``audio_hash`` matches the stored tag.
     * ``file_missing`` — destination file no longer exists on disk.
+    * ``tier_full`` — destination files whose work_dir sidecar carries ``full-mb-verified``.
+    * ``tier_search`` — destination files whose work_dir sidecar carries ``mb-search-resolved``.
+    * ``tier_partial`` — destination files whose work_dir sidecar carries ``mb-partial``.
+    * ``tier_alt`` — destination files whose work_dir sidecar carries ``alternate-source``.
+    * ``tier_source_only`` — destination files whose work_dir sidecar carries ``source-tags-only``.
+    * ``provisional_total`` — destination files below ``full-mb-verified`` (all non-full tiers).
+    * ``needs_spot_check`` — destination files whose work_dir sidecar has ``needs_spot_check=True``.
 
     :returns: A ``dict[str, int]`` with all keys initialised to ``0``.
     """
@@ -259,6 +280,144 @@ def _audit_audio_anchor(
             log.debug("audit_audio_stable", path=dest, audio_hash=stored_hash, message="audio anchor confirmed")
 
 
+def _audit_tier_pass(
+    dest_root: Path,
+    entries: list[TransactionEntry],
+    counts: dict[str, int],
+) -> None:
+    """Pass 4 — tier enumeration: count per-tier, provisional, and spot-check populations.
+
+    Reads ``annotation_tier`` and ``needs_spot_check`` from each eligible work directory's
+    provenance sidecar and aggregates counts per destination file.  A work directory's tier
+    applies to all its tracks (sidecar-per-work-dir vs entry-per-file aggregation).
+
+    The eligible set is the same as passes 1–3: ``action in {"tagged", "enriched"}``, deduplicated
+    by destination path (first occurrence wins).  This keeps the tier denominator consistent with
+    ``counts["total"]`` so per-tier counts reconcile against the same base.
+
+    For each eligible destination, the work_top_dir is derived as
+    ``dest_root / rel.parts[0] / rel.parts[1]``.  The sidecar is resolved by
+    :func:`~music_annotator._pipeline_io._find_freedb_sidecar` (``freedb_disc_*.yaml``) with
+    fallback to :data:`~music_annotator._pipeline_io.PROVENANCE_FILENAME`.  Destinations whose
+    path cannot be made relative to ``dest_root`` or whose relative path has fewer than two parts
+    are silently skipped (same guard as the fragmentation passes).
+
+    Logs one event per finding:
+
+    * ``audit_tier_unset`` — sidecar exists but ``annotation_tier`` is empty (defect state per
+      the lossless principle; S3 write path must always set it).
+    * ``audit_tier_full`` — ``full-mb-verified`` (logged at DEBUG; expected clean state).
+    * ``audit_tier_provisional`` — any below-``full-mb-verified`` tier (logged at INFO).
+    * ``audit_tier_needs_spot_check`` — ``needs_spot_check=True`` (logged at INFO).
+
+    :param dest_root: Root of the annotated music library.
+    :param entries: All :class:`~music_annotator.models.TransactionEntry` objects from the journal.
+    :param counts: Mutable counter dict from :func:`_make_audit_counts`, updated in place.
+    """
+    # Build a deduplicated set of (destination, work_top_dir) pairs from eligible entries.
+    # First occurrence per destination wins (same dedup rule as pass 1).
+    seen: set[str] = set()
+    dest_to_work_top: dict[str, Path] = {}
+    for entry in entries:
+        if entry.action not in {"tagged", "enriched"}:
+            continue
+        dest = entry.destination
+        if dest in seen:
+            continue
+        seen.add(dest)
+        try:
+            rel = Path(dest).relative_to(dest_root)
+        except ValueError:
+            continue
+        if len(rel.parts) < 2:  # noqa: PLR2004 — structural constant (parts[0], parts[1])
+            continue
+        dest_to_work_top[dest] = dest_root / rel.parts[0] / rel.parts[1]
+
+    # Cache sidecar reads per work_top_dir to avoid re-reading for multi-track work dirs.
+    sidecar_cache: dict[Path, tuple[AnnotationTier | str, bool]] = {}
+
+    for dest, work_top_dir in dest_to_work_top.items():
+        if work_top_dir not in sidecar_cache:
+            sidecar_path = _find_freedb_sidecar(work_top_dir)
+            if sidecar_path is None:
+                sidecar_path = work_top_dir / PROVENANCE_FILENAME
+            sidecar = _read_provenance_sidecar(sidecar_path)
+            sidecar_cache[work_top_dir] = (sidecar.annotation_tier, sidecar.needs_spot_check)
+
+        tier_raw, spot_check = sidecar_cache[work_top_dir]
+
+        if not tier_raw:
+            log.warning(
+                "audit_tier_unset",
+                path=dest,
+                message="annotation_tier is unset in sidecar — S3 write path must always set it",
+            )
+            continue
+
+        try:
+            tier = AnnotationTier(str(tier_raw))
+        except ValueError:
+            log.warning(
+                "audit_tier_unset",
+                path=dest,
+                tier_raw=str(tier_raw),
+                message="annotation_tier value in sidecar is not a recognised AnnotationTier",
+            )
+            continue
+
+        match tier:
+            case AnnotationTier.FULL_MB_VERIFIED:
+                counts["tier_full"] += 1
+                log.debug("audit_tier_full", path=dest, tier=str(tier))
+            case AnnotationTier.MB_SEARCH_RESOLVED:
+                counts["tier_search"] += 1
+                counts["provisional_total"] += 1
+                log.info(
+                    "audit_tier_provisional",
+                    path=dest,
+                    tier=str(tier),
+                    message="below full-mb-verified — upgrade candidate",
+                )
+            case AnnotationTier.MB_PARTIAL:
+                counts["tier_partial"] += 1
+                counts["provisional_total"] += 1
+                log.info(
+                    "audit_tier_provisional",
+                    path=dest,
+                    tier=str(tier),
+                    message="below full-mb-verified — upgrade candidate",
+                )
+            case AnnotationTier.ALTERNATE_SOURCE:
+                counts["tier_alt"] += 1
+                counts["provisional_total"] += 1
+                log.info(
+                    "audit_tier_provisional",
+                    path=dest,
+                    tier=str(tier),
+                    message="below full-mb-verified — upgrade candidate",
+                )
+            case AnnotationTier.SOURCE_TAGS_ONLY:
+                counts["tier_source_only"] += 1
+                counts["provisional_total"] += 1
+                log.info(
+                    "audit_tier_provisional",
+                    path=dest,
+                    tier=str(tier),
+                    message="below full-mb-verified — upgrade candidate",
+                )
+            case _:  # pragma: no cover
+                pass
+
+        if spot_check:
+            counts["needs_spot_check"] += 1
+            log.info(
+                "audit_tier_needs_spot_check",
+                path=dest,
+                tier=str(tier),
+                message="mb-search-resolved entry awaiting human spot-check",
+            )
+
+
 def _journal_fragmentation_groups(
     dest_root: Path,
     journal: TransactionLog,
@@ -395,14 +554,16 @@ def audit(dest_root: Path) -> None:
 
     When neither shape is detected a clean "no fragmentation detected" message is logged.
 
-    In addition, three identity-integrity passes are run over all ``action == "tagged"`` and
-    ``action == "enriched"`` journal entries:
+    In addition, four passes are run over all ``action == "tagged"`` and ``action == "enriched"``
+    journal entries:
 
     * **Pass 1 — journal scan:** flags entries with empty ``audio_hash`` or ``acoustid_id`` fields.
     * **Pass 2 — tag adjudication:** reads on-disk tags and compares them to the journal's stored
       identity fields, flagging mismatches.
     * **Pass 3 — audio anchor confirmation:** recomputes ``audio_hash`` from the file's decoded
       audio content and compares it to the stored tag, flagging drift (audio content changed).
+    * **Pass 4 — tier enumeration:** reads ``annotation_tier`` from each work directory's
+      provenance sidecar and counts per-tier, provisional, and spot-check populations.
 
     A summary of finding counts is logged at the end.
 
@@ -446,6 +607,7 @@ def audit(dest_root: Path) -> None:
     _audit_journal_scan(journal.entries, counts)
     _audit_tag_adjudication(journal.entries, counts)
     _audit_audio_anchor(journal.entries, counts)
+    _audit_tier_pass(dest_root, journal.entries, counts)
 
     log.info(
         "audit_summary",
@@ -458,6 +620,13 @@ def audit(dest_root: Path) -> None:
         audio_drift=counts["audio_drift"],
         audio_stable=counts["audio_stable"],
         file_missing=counts["file_missing"],
+        tier_full=counts["tier_full"],
+        tier_search=counts["tier_search"],
+        tier_partial=counts["tier_partial"],
+        tier_alt=counts["tier_alt"],
+        tier_source_only=counts["tier_source_only"],
+        provisional_total=counts["provisional_total"],
+        needs_spot_check=counts["needs_spot_check"],
     )
 
 

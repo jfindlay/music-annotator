@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from pytest_mock import MockerFixture
 
 import music_annotator
 from music_annotator import (
+    JOURNAL_FILENAME,
+    PROVENANCE_FILENAME,
     artist_credit_phrase,
     artist_ids,
     artist_sort_names,
@@ -31,11 +34,14 @@ from music_annotator import (
     safe_name,
     strip_common_prefix,
 )
+from music_annotator._audit import _audit_tier_pass, _make_audit_counts
 from music_annotator._mb_api import _extract_session_date
+from music_annotator._pipeline_io import _write_provenance_fields
 from music_annotator._tags import _NAME_MAX, _proposed_short, _work_aliases
 from music_annotator._works import _date_range, _score_top_work, select_primary_performance_work
 from music_annotator.models import (
     JSON,
+    AnnotationTier,
     ArtistEntry,
     MBAlias,
     MBArtistRelation,
@@ -45,8 +51,10 @@ from music_annotator.models import (
     MBUrlRelation,
     MBWork,
     MBWorkRelation,
+    ProvenanceSidecar,
     RoleBuckets,
     TrackTags,
+    TransactionEntry,
 )
 from tests.conftest import _ac, _rec, _rel, _trk, _w
 
@@ -3617,3 +3625,594 @@ class TestExtractWorkArtistRelsNewTypes:
             rb,
         )
         assert len(rb.choreographers) == 1
+
+
+# ---------------------------------------------------------------------------
+# TestAuditTierPass — S2 KATs: tier enumeration audit pass
+# ---------------------------------------------------------------------------
+
+
+def _write_journal(dest_root: Path, entries: list[dict[str, str]]) -> None:
+    """Write a journal JSON file to ``dest_root / JOURNAL_FILENAME``.
+
+    :param dest_root: Destination root directory (must already exist).
+    :param entries: List of raw entry dicts to serialise.
+    """
+    journal_path = dest_root / JOURNAL_FILENAME
+    journal_path.write_text(json.dumps(entries), encoding="utf-8")
+
+
+class TestAuditTierPass:
+    """KAT tests for the tier-enumeration audit pass (S2 deliverable).
+
+    Covers :func:`music_annotator._audit._audit_tier_pass` directly and via the full
+    :func:`music_annotator.audit` integration.  All tests use pyfakefs for filesystem isolation
+    and patch the structlog ``log`` object in ``music_annotator._audit`` to assert on logged events.
+    """
+
+    # ------------------------------------------------------------------
+    # KAT: test_audit_enumerates_tiers
+    # ------------------------------------------------------------------
+
+    def test_audit_enumerates_tiers(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT: _audit_tier_pass counts per-tier and provisional_total correctly for a mixed library.
+
+        Fixture library:
+        - Work-A: ``full-mb-verified`` (1 track) → tier_full=1, provisional_total unchanged
+        - Work-B: ``mb-search-resolved`` (1 track) → tier_search=1, provisional_total=1
+        - Work-C: ``mb-partial`` (1 track) → tier_partial=1, provisional_total=2
+        - Work-D: ``alternate-source`` (1 track) → tier_alt=1, provisional_total=3
+        - Work-E: ``source-tags-only`` (1 track) → tier_source_only=1, provisional_total=4
+
+        Asserts per-tier counts and provisional_total.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tiers = [
+            ("Work-A [2020]", AnnotationTier.FULL_MB_VERIFIED, False),
+            ("Work-B [2020]", AnnotationTier.MB_SEARCH_RESOLVED, True),
+            ("Work-C [2020]", AnnotationTier.MB_PARTIAL, False),
+            ("Work-D [2020]", AnnotationTier.ALTERNATE_SOURCE, False),
+            ("Work-E [2020]", AnnotationTier.SOURCE_TAGS_ONLY, False),
+        ]
+
+        entries: list[dict[str, str]] = []
+        for work_dir_name, tier, spot_check in tiers:
+            work_top_dir = dest_root / "Composer - Performer" / work_dir_name
+            work_top_dir.mkdir(parents=True, exist_ok=True)
+            sidecar_path = work_top_dir / PROVENANCE_FILENAME
+            _write_provenance_fields(
+                sidecar_path,
+                ProvenanceSidecar(
+                    origin_time="2024-01-01T00:00:00+00:00",
+                    origin_source="/rip/source",
+                    annotation_tier=tier,
+                    needs_spot_check=spot_check,
+                ),
+            )
+            dest_file = str(work_top_dir / "01 - Track.flac")
+            entries.append(
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": f"rel-{work_dir_name}",
+                    "source": f"/src/{work_dir_name}/01.flac",
+                    "destination": dest_file,
+                    "action": "tagged",
+                    "audio_hash": "",
+                    "acoustid_id": "",
+                }
+            )
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp=e["timestamp"],
+                release_id=e["release_id"],
+                source=e["source"],
+                destination=e["destination"],
+                action=e["action"],
+                audio_hash=e["audio_hash"],
+                acoustid_id=e["acoustid_id"],
+            )
+            for e in entries
+        ]
+
+        counts = _make_audit_counts()
+        mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        assert counts["tier_full"] == 1
+        assert counts["tier_search"] == 1
+        assert counts["tier_partial"] == 1
+        assert counts["tier_alt"] == 1
+        assert counts["tier_source_only"] == 1
+        assert counts["provisional_total"] == 4
+
+    def test_audit_enumerates_tiers_multi_track(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_audit_tier_pass applies a work_dir's tier to all its tracks (multi-track case).
+
+        A single work_dir with ``mb-search-resolved`` and two tracks should yield
+        ``tier_search=2``, ``provisional_total=2``, and ``needs_spot_check=2``.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_top_dir = dest_root / "Composer - Performer" / "Work-Multi [2020]"
+        work_top_dir.mkdir(parents=True, exist_ok=True)
+        sidecar_path = work_top_dir / PROVENANCE_FILENAME
+        _write_provenance_fields(
+            sidecar_path,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.MB_SEARCH_RESOLVED,
+                needs_spot_check=True,
+            ),
+        )
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-multi",
+                source="/src/01.flac",
+                destination=str(work_top_dir / "01 - Track.flac"),
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-multi",
+                source="/src/02.flac",
+                destination=str(work_top_dir / "02 - Track.flac"),
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+        ]
+
+        counts = _make_audit_counts()
+        mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        assert counts["tier_search"] == 2
+        assert counts["provisional_total"] == 2
+        assert counts["needs_spot_check"] == 2
+
+    # ------------------------------------------------------------------
+    # KAT: test_audit_flags_needs_spot_check
+    # ------------------------------------------------------------------
+
+    def test_audit_flags_needs_spot_check(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT: _audit_tier_pass surfaces the mb-search-resolved population via needs_spot_check.
+
+        A library with one ``mb-search-resolved`` work (needs_spot_check=True) and one
+        ``full-mb-verified`` work (needs_spot_check=False) should yield needs_spot_check=1
+        and log ``audit_tier_needs_spot_check`` exactly once.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Work-A: full-mb-verified, no spot check
+        work_a = dest_root / "Composer - Performer" / "Work-A [2020]"
+        work_a.mkdir(parents=True, exist_ok=True)
+        _write_provenance_fields(
+            work_a / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
+                needs_spot_check=False,
+            ),
+        )
+
+        # Work-B: mb-search-resolved, needs spot check
+        work_b = dest_root / "Composer - Performer" / "Work-B [2020]"
+        work_b.mkdir(parents=True, exist_ok=True)
+        _write_provenance_fields(
+            work_b / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.MB_SEARCH_RESOLVED,
+                needs_spot_check=True,
+            ),
+        )
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-a",
+                source="/src/a/01.flac",
+                destination=str(work_a / "01 - Track.flac"),
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-b",
+                source="/src/b/01.flac",
+                destination=str(work_b / "01 - Track.flac"),
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+        ]
+
+        counts = _make_audit_counts()
+        mock_log = mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        assert counts["needs_spot_check"] == 1
+        assert counts["tier_full"] == 1
+        assert counts["tier_search"] == 1
+
+        info_events = [c.args[0] for c in mock_log.info.call_args_list]
+        assert "audit_tier_needs_spot_check" in info_events
+        assert "audit_tier_provisional" in info_events
+
+    def test_audit_tier_pass_skips_non_eligible_actions(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_audit_tier_pass skips entries with actions other than 'tagged' and 'enriched'.
+
+        A 'copied' action entry should not contribute to any tier count.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-1",
+                source="/src/01.flac",
+                destination="/lib/Composer/Work [2020]/01.flac",
+                action="copied",
+                audio_hash="",
+                acoustid_id="",
+            ),
+        ]
+
+        counts = _make_audit_counts()
+        mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        assert counts["tier_full"] == 0
+        assert counts["provisional_total"] == 0
+        assert counts["needs_spot_check"] == 0
+
+    def test_audit_tier_pass_skips_dest_not_under_dest_root(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_audit_tier_pass silently skips entries whose destination is not under dest_root.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-1",
+                source="/src/01.flac",
+                destination="/other/Composer/Work [2020]/01.flac",
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+        ]
+
+        counts = _make_audit_counts()
+        mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        assert counts["tier_full"] == 0
+        assert counts["provisional_total"] == 0
+
+    def test_audit_tier_pass_skips_dest_with_too_few_parts(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_audit_tier_pass silently skips entries whose relative path has fewer than two parts.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-1",
+                source="/src/01.flac",
+                destination="/lib/only-one-part.flac",
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+        ]
+
+        counts = _make_audit_counts()
+        mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        assert counts["tier_full"] == 0
+        assert counts["provisional_total"] == 0
+
+    def test_audit_tier_pass_logs_unset_tier(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_audit_tier_pass logs audit_tier_unset when annotation_tier is empty in the sidecar.
+
+        An empty annotation_tier is a defect state (lossless principle); the pass must flag it.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_top_dir = dest_root / "Composer - Performer" / "Work-Unset [2020]"
+        work_top_dir.mkdir(parents=True, exist_ok=True)
+        # Write a sidecar with no annotation_tier (empty string default)
+        _write_provenance_fields(
+            work_top_dir / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier="",
+                needs_spot_check=False,
+            ),
+        )
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-unset",
+                source="/src/01.flac",
+                destination=str(work_top_dir / "01 - Track.flac"),
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+        ]
+
+        counts = _make_audit_counts()
+        mock_log = mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "audit_tier_unset" in warning_events
+        assert counts["tier_full"] == 0
+        assert counts["provisional_total"] == 0
+
+    def test_audit_tier_pass_logs_unrecognised_tier(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_audit_tier_pass logs audit_tier_unset when annotation_tier is an unrecognised string.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_top_dir = dest_root / "Composer - Performer" / "Work-Bad [2020]"
+        work_top_dir.mkdir(parents=True, exist_ok=True)
+        # Write a sidecar with an invalid tier string directly (bypassing Pydantic validation)
+        sidecar_path = work_top_dir / PROVENANCE_FILENAME
+        sidecar_path.write_text(
+            "origin_time: '2024-01-01T00:00:00+00:00'\norigin_source: /rip/source\nannotation_tier: not-a-valid-tier\n",
+            encoding="utf-8",
+        )
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-bad",
+                source="/src/01.flac",
+                destination=str(work_top_dir / "01 - Track.flac"),
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+        ]
+
+        counts = _make_audit_counts()
+        mock_log = mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "audit_tier_unset" in warning_events
+        assert counts["tier_full"] == 0
+        assert counts["provisional_total"] == 0
+
+    def test_audit_tier_pass_deduplicates_destinations(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_audit_tier_pass counts each destination only once even if it appears multiple times in the journal.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_top_dir = dest_root / "Composer - Performer" / "Work-Dup [2020]"
+        work_top_dir.mkdir(parents=True, exist_ok=True)
+        _write_provenance_fields(
+            work_top_dir / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
+                needs_spot_check=False,
+            ),
+        )
+
+        dest_file = str(work_top_dir / "01 - Track.flac")
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-dup",
+                source="/src/01.flac",
+                destination=dest_file,
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+            TransactionEntry(
+                timestamp="2024-01-02T00:00:00Z",
+                release_id="rel-dup",
+                source="/src/01.flac",
+                destination=dest_file,
+                action="enriched",
+                audio_hash="flac-md5:aabb",
+                acoustid_id="some-acoustid",
+            ),
+        ]
+
+        counts = _make_audit_counts()
+        mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        assert counts["tier_full"] == 1  # counted only once despite two journal entries
+
+    def test_audit_tier_pass_enriched_action_eligible(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_audit_tier_pass includes 'enriched' action entries in the eligible set.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_top_dir = dest_root / "Composer - Performer" / "Work-Enrich [2020]"
+        work_top_dir.mkdir(parents=True, exist_ok=True)
+        _write_provenance_fields(
+            work_top_dir / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.SOURCE_TAGS_ONLY,
+                needs_spot_check=False,
+            ),
+        )
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-enrich",
+                source="/src/01.flac",
+                destination=str(work_top_dir / "01 - Track.flac"),
+                action="enriched",
+                audio_hash="flac-md5:aabb",
+                acoustid_id="some-acoustid",
+            ),
+        ]
+
+        counts = _make_audit_counts()
+        mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        assert counts["tier_source_only"] == 1
+        assert counts["provisional_total"] == 1
+
+    def test_audit_tier_pass_uses_freedb_sidecar_when_present(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_audit_tier_pass reads tier from a freedb_disc_N.yaml sidecar when one exists.
+
+        When a ``freedb_disc_*.yaml`` file is present in the work_top_dir, the tier pass must
+        read the tier from it rather than falling back to ``music_annotator_provenance.yaml``.
+        This exercises the ``sidecar_path is not None`` branch in :func:`_audit_tier_pass`.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_top_dir = dest_root / "Composer - Performer" / "Work-Freedb [2020]"
+        work_top_dir.mkdir(parents=True, exist_ok=True)
+        # Write a freedb sidecar (not the fallback PROVENANCE_FILENAME)
+        freedb_sidecar = work_top_dir / "freedb_disc_1.yaml"
+        _write_provenance_fields(
+            freedb_sidecar,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.MB_PARTIAL,
+                needs_spot_check=False,
+            ),
+        )
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-freedb",
+                source="/src/01.flac",
+                destination=str(work_top_dir / "01 - Track.flac"),
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+        ]
+
+        counts = _make_audit_counts()
+        mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        assert counts["tier_partial"] == 1
+        assert counts["provisional_total"] == 1
+
+    def test_audit_summary_includes_tier_counts(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """audit() logs audit_summary with tier counts after the tier-enumeration pass.
+
+        Verifies that the full audit() integration includes tier_full, tier_search,
+        provisional_total, and needs_spot_check in the audit_summary event.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_top_dir = dest_root / "Composer - Performer" / "Work-Full [2020]"
+        work_top_dir.mkdir(parents=True, exist_ok=True)
+        _write_provenance_fields(
+            work_top_dir / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
+                needs_spot_check=False,
+            ),
+        )
+
+        _write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00Z",
+                    "release_id": "rel-full",
+                    "source": "/src/01.flac",
+                    "destination": str(work_top_dir / "01 - Track.flac"),
+                    "action": "tagged",
+                    "audio_hash": "",
+                    "acoustid_id": "",
+                }
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._audit.log")
+        music_annotator.audit(dest_root=dest_root)
+
+        info_events = [c.args[0] for c in mock_log.info.call_args_list]
+        assert "audit_summary" in info_events
+        summary_call = next(c for c in mock_log.info.call_args_list if c.args[0] == "audit_summary")
+        assert summary_call.kwargs["tier_full"] == 1
+        assert summary_call.kwargs["tier_search"] == 0
+        assert summary_call.kwargs["provisional_total"] == 0
+        assert summary_call.kwargs["needs_spot_check"] == 0
