@@ -27,6 +27,7 @@ from mutagen.id3 import ID3
 from music_annotator._tagger import _MP3_STD_KEYS, _MP3_TXXX_MAP
 from music_annotator.models import (
     JSON,
+    AnnotationTier,
     CoverArt,
     MBTrack,
     PictureEntry,
@@ -34,6 +35,7 @@ from music_annotator.models import (
     TrackTags,
     TransactionEntry,
     TransactionLog,
+    annotation_tier_rank,
 )
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
@@ -1302,12 +1304,19 @@ def _read_provenance_sidecar(sidecar_path: Path) -> ProvenanceSidecar:
 
 
 def _write_provenance_fields(sidecar_path: Path, provenance: ProvenanceSidecar) -> None:
-    """Merge ``origin_time`` and ``origin_source`` into the YAML sidecar at ``sidecar_path``.
+    """Merge provenance fields into the YAML sidecar at ``sidecar_path``.
 
     Reads the existing YAML content (if any), merges the provenance fields in, and writes the
-    result back.  Existing keys other than ``origin_time`` and ``origin_source`` are preserved.
-    The write is idempotent: if both fields are already present with the correct values, the file
-    is not modified.
+    result back.  Existing keys other than the provenance fields are preserved.
+
+    **Idempotency rules:**
+
+    - ``origin_time`` and ``origin_source`` are written once and never overwritten.  If both are
+      already present with the correct values, the file is not modified.
+    - ``annotation_tier`` follows the **monotonic-upgrade rule**: it is written when unset (``""``)
+      or when the incoming tier ranks strictly higher than the current one.  A re-resolve may raise
+      the tier but never lower it.  An empty incoming tier is not written.
+    - ``needs_spot_check`` is written whenever ``annotation_tier`` is written.
 
     :param sidecar_path: Absolute path to the YAML sidecar file to update or create.
     :param provenance: The :class:`~music_annotator.models.ProvenanceSidecar` whose fields are
@@ -1324,6 +1333,29 @@ def _write_provenance_fields(sidecar_path: Path, provenance: ProvenanceSidecar) 
 
     existing["origin_time"] = provenance.origin_time
     existing["origin_source"] = provenance.origin_source
+
+    # annotation_tier: monotonic-upgrade rule — write only when incoming tier ranks higher.
+    incoming_tier_raw = provenance.annotation_tier
+    if incoming_tier_raw:
+        try:
+            incoming_tier = AnnotationTier(str(incoming_tier_raw))
+        except ValueError:
+            incoming_tier = None  # unrecognised incoming value — skip write
+        if incoming_tier is not None:
+            current_tier_raw = existing.get("annotation_tier", "")
+            should_write = False
+            if not current_tier_raw:
+                should_write = True
+            else:
+                try:
+                    current_tier = AnnotationTier(str(current_tier_raw))
+                    should_write = annotation_tier_rank(incoming_tier) > annotation_tier_rank(current_tier)
+                except ValueError:
+                    # Current value is not a valid tier — treat as unset, allow write.
+                    should_write = True
+            if should_write:
+                existing["annotation_tier"] = str(incoming_tier)
+                existing["needs_spot_check"] = provenance.needs_spot_check
 
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     with sidecar_path.open("w", encoding="utf-8") as fh:

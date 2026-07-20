@@ -83,6 +83,7 @@ from music_annotator._pipeline_io import (
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
     JSON,
+    AnnotationTier,
     CopyPlanEntry,
     CoverArt,
     CoverImage,
@@ -95,6 +96,7 @@ from music_annotator.models import (
     TrackTags,
     TransactionEntry,
     TransactionLog,
+    annotation_tier_rank,
 )
 from tests.conftest import _MINIMAL_FLAC, _MINIMAL_MP3, _rec, _rel, _trk, _w
 
@@ -10134,3 +10136,240 @@ class TestRebuildJournal:
         mocker.patch("music_annotator._pipeline_io._read_tags_flac", side_effect=RuntimeError("corrupt"))
         result = _read_albumid_from_tags(flac_path)
         assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# Annotation-tier vocabulary round-trip tests (C-TIER, S1 KAT)
+# ---------------------------------------------------------------------------
+
+
+class TestAnnotationTierVocabularyRoundtrips:
+    """KAT: write each tier + needs_spot_check to a sidecar, read back, assert equality.
+
+    Covers the C-TIER contract: all five AnnotationTier values persist correctly through
+    _write_provenance_fields / _read_provenance_sidecar, and the monotonic-upgrade rule
+    prevents lowering a tier.
+    """
+
+    def test_all_tiers_roundtrip(self, fs: FakeFilesystem) -> None:
+        """Each AnnotationTier value survives a write/read round-trip through the YAML sidecar.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+
+        for tier in AnnotationTier:
+            # Reset sidecar for each tier
+            if sidecar.exists():
+                sidecar.unlink()
+            provenance = ProvenanceSidecar(
+                origin_time="2024-06-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=tier,
+                needs_spot_check=(tier == AnnotationTier.MB_SEARCH_RESOLVED),
+            )
+            _write_provenance_fields(sidecar, provenance)
+            result = _read_provenance_sidecar(sidecar)
+            assert result.annotation_tier == tier, f"round-trip failed for tier {tier!r}"
+            expected_spot_check = tier == AnnotationTier.MB_SEARCH_RESOLVED
+            assert result.needs_spot_check == expected_spot_check, f"needs_spot_check mismatch for tier {tier!r}"
+
+    def test_needs_spot_check_true_for_search_resolved(self, fs: FakeFilesystem) -> None:
+        """needs_spot_check=True is persisted and read back correctly for mb-search-resolved.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+        provenance = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/source",
+            annotation_tier=AnnotationTier.MB_SEARCH_RESOLVED,
+            needs_spot_check=True,
+        )
+        _write_provenance_fields(sidecar, provenance)
+        result = _read_provenance_sidecar(sidecar)
+        assert result.annotation_tier == AnnotationTier.MB_SEARCH_RESOLVED
+        assert result.needs_spot_check is True
+
+    def test_needs_spot_check_false_for_full_mb_verified(self, fs: FakeFilesystem) -> None:
+        """needs_spot_check=False is persisted and read back correctly for full-mb-verified.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+        provenance = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/source",
+            annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
+            needs_spot_check=False,
+        )
+        _write_provenance_fields(sidecar, provenance)
+        result = _read_provenance_sidecar(sidecar)
+        assert result.annotation_tier == AnnotationTier.FULL_MB_VERIFIED
+        assert result.needs_spot_check is False
+
+    def test_monotonic_upgrade_raises_tier(self, fs: FakeFilesystem) -> None:
+        """annotation_tier is overwritten when the incoming tier ranks strictly higher.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+
+        # Write a low tier first
+        low = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/source",
+            annotation_tier=AnnotationTier.SOURCE_TAGS_ONLY,
+            needs_spot_check=False,
+        )
+        _write_provenance_fields(sidecar, low)
+
+        # Now write a higher tier — must overwrite
+        high = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/source",
+            annotation_tier=AnnotationTier.MB_SEARCH_RESOLVED,
+            needs_spot_check=True,
+        )
+        _write_provenance_fields(sidecar, high)
+
+        result = _read_provenance_sidecar(sidecar)
+        assert result.annotation_tier == AnnotationTier.MB_SEARCH_RESOLVED
+        assert result.needs_spot_check is True
+
+    def test_monotonic_upgrade_does_not_lower_tier(self, fs: FakeFilesystem) -> None:
+        """annotation_tier is NOT overwritten when the incoming tier ranks lower or equal.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+
+        # Write a high tier first
+        high = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/source",
+            annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
+            needs_spot_check=False,
+        )
+        _write_provenance_fields(sidecar, high)
+
+        # Attempt to lower the tier — must be rejected
+        low = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/source",
+            annotation_tier=AnnotationTier.SOURCE_TAGS_ONLY,
+            needs_spot_check=False,
+        )
+        _write_provenance_fields(sidecar, low)
+
+        result = _read_provenance_sidecar(sidecar)
+        # Tier must remain at the higher value
+        assert result.annotation_tier == AnnotationTier.FULL_MB_VERIFIED
+
+    def test_empty_incoming_tier_not_written(self, fs: FakeFilesystem) -> None:
+        """An empty annotation_tier on the incoming provenance is not written to the sidecar.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+
+        # Write a tier first
+        provenance = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/source",
+            annotation_tier=AnnotationTier.MB_PARTIAL,
+            needs_spot_check=False,
+        )
+        _write_provenance_fields(sidecar, provenance)
+
+        # Now write with empty tier — must not overwrite
+        empty_tier = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/source",
+            annotation_tier="",
+            needs_spot_check=False,
+        )
+        _write_provenance_fields(sidecar, empty_tier)
+
+        result = _read_provenance_sidecar(sidecar)
+        assert result.annotation_tier == AnnotationTier.MB_PARTIAL
+
+    def test_annotation_tier_rank_ordering(self) -> None:
+        """annotation_tier_rank returns strictly increasing values from lowest to highest tier.
+
+        Verifies the ordering: source-tags-only < alternate-source < mb-partial
+        < mb-search-resolved < full-mb-verified.
+        """
+        ordered = [
+            AnnotationTier.SOURCE_TAGS_ONLY,
+            AnnotationTier.ALTERNATE_SOURCE,
+            AnnotationTier.MB_PARTIAL,
+            AnnotationTier.MB_SEARCH_RESOLVED,
+            AnnotationTier.FULL_MB_VERIFIED,
+        ]
+        ranks = [annotation_tier_rank(t) for t in ordered]
+        assert ranks == sorted(ranks), "tier ranks must be strictly increasing"
+        assert len(set(ranks)) == len(ranks), "all tier ranks must be distinct"
+
+    def test_invalid_current_tier_in_sidecar_allows_write(self, fs: FakeFilesystem) -> None:
+        """When the sidecar contains an unrecognised tier string, the incoming tier is written.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+        # Write a sidecar with a bogus tier value
+        sidecar.write_text(
+            "origin_time: '2024-06-01T00:00:00+00:00'\norigin_source: /rip/source\nannotation_tier: not-a-valid-tier\n",
+            encoding="utf-8",
+        )
+
+        provenance = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/source",
+            annotation_tier=AnnotationTier.MB_PARTIAL,
+            needs_spot_check=False,
+        )
+        _write_provenance_fields(sidecar, provenance)
+
+        result = _read_provenance_sidecar(sidecar)
+        assert result.annotation_tier == AnnotationTier.MB_PARTIAL
+
+    def test_unrecognised_incoming_tier_string_not_written(self, fs: FakeFilesystem) -> None:
+        """An unrecognised annotation_tier string on the incoming provenance is not written.
+
+        This exercises the ValueError branch in _write_provenance_fields where the incoming
+        tier string cannot be coerced to a valid AnnotationTier value.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+        # Write a valid tier first
+        provenance = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/source",
+            annotation_tier=AnnotationTier.MB_PARTIAL,
+            needs_spot_check=False,
+        )
+        _write_provenance_fields(sidecar, provenance)
+
+        # Pass a ProvenanceSidecar with an unrecognised tier string (bypassing Pydantic validation).
+        # model_construct skips validation so annotation_tier stays as a plain unrecognised string.
+        bad_provenance = ProvenanceSidecar.model_construct(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/source",
+            annotation_tier="not-a-valid-tier",
+            needs_spot_check=False,
+        )
+        _write_provenance_fields(sidecar, bad_provenance)
+
+        # The existing tier must remain unchanged because the incoming value was unrecognised
+        result = _read_provenance_sidecar(sidecar)
+        assert result.annotation_tier == AnnotationTier.MB_PARTIAL

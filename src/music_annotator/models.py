@@ -7,6 +7,7 @@ logic.  All fields that the MB API may omit default to empty strings or empty li
 
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -17,6 +18,108 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 type JSON = dict[str, JSON] | list[JSON] | str | float | int | bool | None  # pylint: disable=invalid-name
+
+
+# ---------------------------------------------------------------------------
+# Annotation-tier vocabulary (C-TIER — frozen at S1)
+# ---------------------------------------------------------------------------
+
+
+class AnnotationTier(StrEnum):
+    """Closed vocabulary for annotation completeness of an ingested release.
+
+    Records *how completely a release could be annotated*, orthogonal to the archival-identity
+    confidence ladder (``_IDENTITY_METHODS`` rungs in ``_pipeline_io.py``).  A release can be
+    high-tier / low-rung (full MB annotation, identity only from source tags) or low-tier /
+    high-rung (source-tags-only ingest, strong AcoustID identity).
+
+    Tier ordering from lowest to highest completeness:
+
+    ``source-tags-only`` < ``alternate-source`` < ``mb-partial``
+    < ``mb-search-resolved`` < ``full-mb-verified``
+
+    This ordering is encoded in :data:`ANNOTATION_TIER_ORDER` and enforced by
+    :func:`annotation_tier_rank`.  The monotonic-upgrade rule on
+    :class:`ProvenanceSidecar` uses this ordering: ``annotation_tier`` may only be
+    overwritten when the new tier ranks strictly higher than the current one.
+    """
+
+    FULL_MB_VERIFIED = "full-mb-verified"
+    """Identity-confirmed full MB annotation (embedded MBID or TOC disc-ID match)."""
+
+    MB_SEARCH_RESOLVED = "mb-search-resolved"
+    """Search-reconciled MB annotation, lower confidence; ``needs_spot_check`` is set."""
+
+    MB_PARTIAL = "mb-partial"
+    """MB release identified but track/structure disagrees; mismatch recorded."""
+
+    ALTERNATE_SOURCE = "alternate-source"
+    """Non-MB external identity (Discogs-style) — reserved, no census population today."""
+
+    SOURCE_TAGS_ONLY = "source-tags-only"
+    """No MB identity; provisional minimal ingest from embedded/source tags only."""
+
+
+#: Tier rank mapping — higher integer = higher completeness.  Used by :func:`annotation_tier_rank`.
+ANNOTATION_TIER_ORDER: dict[AnnotationTier, int] = {
+    AnnotationTier.SOURCE_TAGS_ONLY: 0,
+    AnnotationTier.ALTERNATE_SOURCE: 1,
+    AnnotationTier.MB_PARTIAL: 2,
+    AnnotationTier.MB_SEARCH_RESOLVED: 3,
+    AnnotationTier.FULL_MB_VERIFIED: 4,
+}
+
+
+def annotation_tier_rank(tier: AnnotationTier) -> int:
+    """Return the integer rank of ``tier`` (higher = more complete).
+
+    :param tier: An :class:`AnnotationTier` value.
+    :returns: Integer rank in ``[0, 4]``.
+    """
+    return ANNOTATION_TIER_ORDER[tier]
+
+
+class CensusSignal(StrEnum):
+    """Census axis-2 classification signals consumed by :func:`classify_annotation_tier`.
+
+    These signals are produced by the census/discovery pass and map to annotation tiers.
+    ``ALTERNATE_SOURCE`` has no census signal today (reserved for R3c Discogs adapter).
+    """
+
+    EMBEDDED_MBID = "embedded-mbid"
+    """Source file carries an embedded MusicBrainz recording MBID — strongest identity signal."""
+
+    SEARCH_HIT = "search-hit"
+    """Release resolved via MB search (track-count reconciliation, no embedded MBID)."""
+
+    MISMATCH = "mismatch"
+    """MB release identified but track/structure disagrees."""
+
+    NOT_IN_MB = "not-in-mb"
+    """No MB identity found; ingest from source tags only."""
+
+
+def classify_annotation_tier(signal: CensusSignal) -> tuple[AnnotationTier, bool]:
+    """Map a census axis-2 classification signal to an annotation tier and ``needs_spot_check`` flag.
+
+    Pure function — no I/O, fully unit-testable.  The ``alternate-source`` tier has no census
+    signal today (reserved for the R3c Discogs adapter); it is not reachable from this helper.
+
+    :param signal: A :class:`CensusSignal` value from the census/discovery pass.
+    :returns: A ``(tier, needs_spot_check)`` tuple.  ``needs_spot_check`` is ``True`` only for
+        ``mb-search-resolved`` entries (J1 adjudication: search-only confidence is real).
+    """
+    match signal:
+        case CensusSignal.EMBEDDED_MBID:
+            return AnnotationTier.FULL_MB_VERIFIED, False
+        case CensusSignal.SEARCH_HIT:
+            return AnnotationTier.MB_SEARCH_RESOLVED, True
+        case CensusSignal.MISMATCH:
+            return AnnotationTier.MB_PARTIAL, False
+        case CensusSignal.NOT_IN_MB:
+            return AnnotationTier.SOURCE_TAGS_ONLY, False
+        case _:  # pragma: no cover
+            return AnnotationTier.SOURCE_TAGS_ONLY, False
 
 
 # ---------------------------------------------------------------------------
@@ -1559,18 +1662,31 @@ class TransactionLog(BaseModel):
 
 
 class ProvenanceSidecar(BaseModel):
-    """Provenance fields written into ``freedb_disc_N.yaml`` or ``music_annotator_provenance.yaml`` by ``enrich --origin-time``.
+    """Provenance fields written into ``freedb_disc_N.yaml`` or ``music_annotator_provenance.yaml``.
 
-    These fields record the rip/download origin of a work directory so that the information
-    survives journal regeneration (W1b).  They are written once and never overwritten (idempotent).
+    These fields record the rip/download origin of a work directory and its annotation completeness
+    so that the information survives journal regeneration (W1b).
 
-    ``origin_time`` is the ISO-8601 UTC timestamp of the earliest journal entry for the work_dir —
-    the annotation time that approximates when the rip was processed.  ``origin_source`` is the
-    parent directory of the ``source`` rip-path from the same earliest entry, recording where the
-    audio files came from.
+    ``origin_time`` and ``origin_source`` are written once and never overwritten (idempotent).
 
-    Important attributes: ``origin_time``, ``origin_source``.
+    ``annotation_tier`` records how completely the release could be annotated (C-TIER contract,
+    frozen at S1).  It defaults to ``""`` (unset), which is a *defect* state — the write path
+    (S3) must always set it; S2's audit flags any empty one.  The field is overwritable **only
+    monotonically upward**: a re-resolve may raise the tier (e.g. ``source-tags-only`` →
+    ``mb-search-resolved`` after a later MB lookup), but may never silently lower it.  Callers
+    must compare :func:`annotation_tier_rank` values before writing.
+
+    ``needs_spot_check`` is ``True`` for ``mb-search-resolved`` entries until a human has
+    confirmed the match.  It is persisted here so the ``audit`` pass can enumerate the
+    spot-check population without re-running the census.
+
+    Important attributes: ``origin_time``, ``origin_source``, ``annotation_tier``,
+    ``needs_spot_check``.
     """
 
     origin_time: str = ""
     origin_source: str = ""
+    annotation_tier: AnnotationTier | str = ""
+    """Annotation completeness tier (C-TIER).  ``""`` = unset (defect).  Overwritable only upward."""
+    needs_spot_check: bool = False
+    """``True`` for ``mb-search-resolved`` entries awaiting human confirmation."""

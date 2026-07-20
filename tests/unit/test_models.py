@@ -5,8 +5,10 @@ from __future__ import annotations
 import pytest
 
 from music_annotator.models import (
+    AnnotationTier,
     ArtistEntry,
     CeaPerformers,
+    CensusSignal,
     CoverArt,
     CoverImage,
     CwpTags,
@@ -35,6 +37,7 @@ from music_annotator.models import (
     TransactionLog,
     WorkDates,
     WorkHierarchyLevel,
+    classify_annotation_tier,
 )
 
 # ---------------------------------------------------------------------------
@@ -1257,3 +1260,80 @@ class TestMBReleaseCandidate:
         assert enriched.score == 101
         assert enriched.title == "T"
         assert enriched.release_id == "rel-1"
+
+
+# ---------------------------------------------------------------------------
+# AnnotationTier vocabulary and classify_annotation_tier (C-TIER, S1 KAT)
+# ---------------------------------------------------------------------------
+
+
+class TestAnnotationTierEnum:
+    """Tests for the AnnotationTier StrEnum vocabulary."""
+
+    def test_all_five_values_present(self) -> None:
+        """AnnotationTier has exactly five members with the correct string values."""
+        values = {t.value for t in AnnotationTier}
+        assert values == {
+            "full-mb-verified",
+            "mb-search-resolved",
+            "mb-partial",
+            "alternate-source",
+            "source-tags-only",
+        }
+
+    def test_str_enum_values_equal_strings(self) -> None:
+        """AnnotationTier members have the correct string values (StrEnum contract)."""
+        assert AnnotationTier.FULL_MB_VERIFIED.value == "full-mb-verified"
+        assert AnnotationTier.MB_SEARCH_RESOLVED.value == "mb-search-resolved"
+        assert AnnotationTier.MB_PARTIAL.value == "mb-partial"
+        assert AnnotationTier.ALTERNATE_SOURCE.value == "alternate-source"
+        assert AnnotationTier.SOURCE_TAGS_ONLY.value == "source-tags-only"
+
+    def test_annotation_tier_from_string(self) -> None:
+        """AnnotationTier can be constructed from its string value."""
+        assert AnnotationTier("full-mb-verified") is AnnotationTier.FULL_MB_VERIFIED
+        assert AnnotationTier("source-tags-only") is AnnotationTier.SOURCE_TAGS_ONLY
+
+
+class TestTierClassifierMapsCensusSignals:
+    """KAT: classify_annotation_tier maps each census axis-2 signal to the correct tier.
+
+    Covers the C-TIER classification→tier mapping contract.
+    """
+
+    def test_embedded_mbid_maps_to_full_mb_verified(self) -> None:
+        """embedded-mbid signal → full-mb-verified, needs_spot_check=False."""
+        tier, spot_check = classify_annotation_tier(CensusSignal.EMBEDDED_MBID)
+        assert tier == AnnotationTier.FULL_MB_VERIFIED
+        assert spot_check is False
+
+    def test_search_hit_maps_to_mb_search_resolved(self) -> None:
+        """search-hit signal → mb-search-resolved, needs_spot_check=True."""
+        tier, spot_check = classify_annotation_tier(CensusSignal.SEARCH_HIT)
+        assert tier == AnnotationTier.MB_SEARCH_RESOLVED
+        assert spot_check is True
+
+    def test_mismatch_maps_to_mb_partial(self) -> None:
+        """mismatch signal → mb-partial, needs_spot_check=False."""
+        tier, spot_check = classify_annotation_tier(CensusSignal.MISMATCH)
+        assert tier == AnnotationTier.MB_PARTIAL
+        assert spot_check is False
+
+    def test_not_in_mb_maps_to_source_tags_only(self) -> None:
+        """not-in-mb signal → source-tags-only, needs_spot_check=False."""
+        tier, spot_check = classify_annotation_tier(CensusSignal.NOT_IN_MB)
+        assert tier == AnnotationTier.SOURCE_TAGS_ONLY
+        assert spot_check is False
+
+    def test_all_census_signals_covered(self) -> None:
+        """Every CensusSignal maps to a valid AnnotationTier (no signal is unhandled)."""
+        for signal in CensusSignal:
+            tier, _ = classify_annotation_tier(signal)
+            assert isinstance(tier, AnnotationTier), f"signal {signal!r} did not return an AnnotationTier"
+
+    def test_census_signal_string_values(self) -> None:
+        """CensusSignal members have the expected string values."""
+        assert CensusSignal.EMBEDDED_MBID.value == "embedded-mbid"
+        assert CensusSignal.SEARCH_HIT.value == "search-hit"
+        assert CensusSignal.MISMATCH.value == "mismatch"
+        assert CensusSignal.NOT_IN_MB.value == "not-in-mb"
