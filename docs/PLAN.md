@@ -177,7 +177,7 @@ until R3c is un-pruned.
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 | Freeze annotation-tier vocabulary + persist `ANNOTATION_TIER` | done | d679394 | C-TIER (AnnotationTier StrEnum, annotation_tier + needs_spot_check on ProvenanceSidecar, classify_annotation_tier helper, monotonic-upgrade rule) |
-| 2 | `audit` pass: enumerate provisional + upgrade candidates | pending | — | — |
+| 2 | `audit` pass: enumerate provisional + upgrade candidates | done | 8ad5c70 | — (extra: tests/unit/test_audit.py — regression fix for existing audit tests after new tier pass added) |
 | 3 ◆ | Wire tier assignment into the ingest/tag write path | pending | — | — |
 
 ## Action-frame digest
