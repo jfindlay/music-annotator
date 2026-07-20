@@ -162,7 +162,7 @@ J1 handoff digest appended to this PLAN's action-frame digest.
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 | Census tool + Pass 1 offline sweep | done | 63c897b | C-R0-TAX (frozen: two-axis taxonomy + census-r0.json schema) |
-| 2 ◆ | Pass 2 + adjudication + final artifact | done | 5b3ee95 | — (artifact finalised; J1 handoff digest appended) |
+| 2 ◆ | Pass 2 + adjudication + final artifact | done | 5b3ee95 | — (artifact finalised; J1 handoff digest appended); ◆ boundary: still-on-intent (J1 paged) |
 
 ## Action-frame digest
 
@@ -224,6 +224,12 @@ J1 handoff digest appended to this PLAN's action-frame digest.
 
 **R4a non-classical inventory:** 15 dirs — see `census-r0.md` §"Non-Classical-Other Inventory for R4a"
 for the full list with genres.
+
+### ◆ Boundary — 2026-07-20
+Discovery/flex: still-on-intent; 147 dirs classified, zero unknown on axis 2, J1 consumption surface complete.
+Affected: none (no contract drift)
+Deferred: yes — three items for J1: (1) additive-reshard signal: pre-R3 fix session for `_parse_release_item` search-result track-count bug; (2) R3d sub-classification (edition-mismatch vs flat-local/multi-disc-MB) before adapter ordering; (3) confidence calibration: weight search-only `in-mb-clean` below embedded-MBID `in-mb-clean`; spot-check before finalizing R3a/R3b/R3e order.
+Texture: `in-mb-mismatch` double-duty (edition vs structure) and confirmed dubious-match pattern caught at adjudication are the two texture items J1 should weigh when ordering R3 adapters.
 
 ## Discoveries & risks
 
