@@ -161,7 +161,7 @@ J1 handoff digest appended to this PLAN's action-frame digest.
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Census tool + Pass 1 offline sweep | pending | — | C-R0-TAX |
+| 1 | Census tool + Pass 1 offline sweep | done | 63c897b | C-R0-TAX (frozen: two-axis taxonomy + census-r0.json schema) |
 | 2 ◆ | Pass 2 + adjudication + final artifact | pending | — | — (artifact finalised) |
 
 ## Action-frame digest
