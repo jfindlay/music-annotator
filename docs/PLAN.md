@@ -162,11 +162,68 @@ J1 handoff digest appended to this PLAN's action-frame digest.
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 | Census tool + Pass 1 offline sweep | done | 63c897b | C-R0-TAX (frozen: two-axis taxonomy + census-r0.json schema) |
-| 2 ◆ | Pass 2 + adjudication + final artifact | pending | — | — (artifact finalised) |
+| 2 ◆ | Pass 2 + adjudication + final artifact | done | 5b3ee95 | — (artifact finalised; J1 handoff digest appended) |
 
 ## Action-frame digest
 
-*(none yet — S2 appends the J1 handoff entry)*
+### S2 J1 handoff — 2026-07-20
+
+**Final census distribution (147 dirs):**
+
+| Axis 2 | Count | Notes |
+|--------|-------|-------|
+| `in-mb-clean` | 107 | 8 from Pass 1 (embedded MBID); 99 from Pass 2 MB search |
+| `in-mb-mismatch` | 18 | MB release found but track counts disagree |
+| `non-classical-other` | 15 | Audiobooks, GarageBand, dance/exercise, Amazon non-classical, etc. |
+| `not-in-mb` | 6 | Personal recordings, partial rips, no plausible MB match |
+| `already-ingested` | 1 | Haydn String Quartets disc 15 (journal-confirmed) |
+
+| Axis 1 | Count |
+|--------|-------|
+| `whipper` | 68 |
+| `presto` | 46 |
+| `other-download` | 23 |
+| `unknown` | 9 (all user-adjudicated — will be manually moved out) |
+| `amazon` | 1 |
+
+**J1 population counts for R3 adapter ordering:**
+- R3a (presto/in-mb-clean): 36 dirs — direct ingest candidates
+- R3b (whipper/in-mb-clean): 52 dirs — direct ingest candidates (many with embedded MBID)
+- R3c (not-in-mb): 6 dirs — Discogs/manual-entry adjudication needed
+- R3d (in-mb-mismatch): 18 dirs — MB edit or manual reconciliation needed
+- R3e (other-download/amazon/in-mb-clean): 19 dirs — ingest candidates
+
+**Discoveries:**
+- Pass 2 MB search hit rate was very high: 131/131 unknown dirs resolved, 107 classified `in-mb-clean`.
+  The corpus is substantially in MB already.
+- The `_parse_release_item` function in `_discover.py` has a known bug: it uses `len(track-list)` which
+  yields 0 for empty lists in search results (MB API returns `track-list: []` with `track-count: N`).
+  The census script works around this with a custom `_extract_track_count` function. This is a latent
+  bug in the ingest path that should be fixed before R3 (CAPTURE-CANDIDATE: `_parse_release_item`
+  track-count extraction from search results).
+- 9 dirs have `axis1=unknown` (no provenance signal); all are non-classical/personal items the user
+  will manually move out. The `Playlists/` dir will be transferred to a future playlist library.
+- The `Handel The Messiah - Wilberg` dir: user was in the recording (Temple Square Choir); perfect
+  54-track MB match; classified `other-download / in-mb-clean`.
+
+**Distribution surprises:**
+- `in-mb-mismatch` (18 dirs) is dominated by large box sets / compilations where the local flat
+  directory has all tracks while MB has them spread across multiple discs (e.g. Grieg Edition 337
+  tracks vs MB 507, Tchaikovsky Complete Symphonies 30 vs 62). These are not data errors — they are
+  edition differences. R3d work will need to handle multi-disc reconciliation.
+- Several whipper rips (Karen #4, Karen Song #1, Ric's Class Music, Dave Eaton Show Live) are
+  personal recordings with no MB presence — classified `not-in-mb` after adjudication.
+
+**Taxonomy strain:**
+- No new class needed. The two-axis taxonomy held cleanly. The `non-classical-other` class absorbed
+  all personal/non-classical items (15 dirs). The `not-in-mb` class correctly captured personal
+  recordings and partial rips.
+- The `in-mb-mismatch` class is doing double duty: (a) genuine edition mismatches and (b) large
+  compilations where the local flat structure doesn't match MB's multi-disc structure. J1 may want
+  to sub-classify R3d into these two cases for adapter ordering.
+
+**R4a non-classical inventory:** 15 dirs — see `census-r0.md` §"Non-Classical-Other Inventory for R4a"
+for the full list with genres.
 
 ## Discoveries & risks
 
