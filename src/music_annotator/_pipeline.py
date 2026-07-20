@@ -43,13 +43,17 @@ from music_annotator._mb_api import (
 from music_annotator._pipeline_io import (
     _DISC_INFO_FILENAME,
     JOURNAL_FILENAME,
+    PROVENANCE_FILENAME,
     AudioCompareResult,
     _assess_collisions,
     _audio_hash,
+    _find_freedb_sidecar,
     _read_duration_ms,
+    _read_recording_id_tag,
     _run_fpcalc,
     _sha256_file,
     _verify_copy,
+    _write_provenance_fields,
     check_duration_preflight,
     find_source_files,
     parse_disc_title,
@@ -60,6 +64,7 @@ from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import _NAME_MAX, _proposed_short, build_dest_path, build_track_tags
 from music_annotator._works import build_work_hierarchy, select_primary_performance_work
 from music_annotator.models import (
+    CensusSignal,
     CopyPlanEntry,
     CoverArt,
     CoverImage,
@@ -67,8 +72,10 @@ from music_annotator.models import (
     MBRelease,
     MBTrack,
     MBWork,
+    ProvenanceSidecar,
     TrackTags,
     TransactionEntry,
+    classify_annotation_tier,
 )
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
@@ -1006,6 +1013,7 @@ def _copy_tag_verify_journal_pass(
     skip_dest: set[Path],
     dry_run: bool,
     acoustid_key: str,
+    census_signal: CensusSignal = CensusSignal.SEARCH_HIT,
 ) -> list[TransactionEntry]:
     """Execute the copy / tag / verify / journal loop for the selected medium's tracks.
 
@@ -1022,8 +1030,9 @@ def _copy_tag_verify_journal_pass(
     8. Restore source timestamps via ``os.utime``.
     9. Verify the copy via :func:`~music_annotator._pipeline_io._verify_copy` — raise
        :exc:`RuntimeError` on any mismatch.
-    10. Write sidecar cover-art files and the FreeDB YAML (once per work directory).
-    11. Append a ``"tagged"`` :class:`~music_annotator.models.TransactionEntry` to the result list.
+    10. Write the annotation tier to the provenance sidecar (once per work directory).
+    11. Write sidecar cover-art files and the FreeDB YAML (once per work directory).
+    12. Append a ``"tagged"`` :class:`~music_annotator.models.TransactionEntry` to the result list.
 
     Dry-run and skip-dest entries are handled before step 1 and produce ``"dry_run"`` or
     ``"skipped"`` journal entries respectively.
@@ -1044,6 +1053,9 @@ def _copy_tag_verify_journal_pass(
     :param acoustid_key: AcoustID application API key.  When set and a fingerprint is available,
         performs a keyed lookup and logs whether the selected recording MBID is confirmed or
         contradicted.  Never alters the copy/tag/verify path.
+    :param census_signal: The identity evidence signal for this ingest, used to derive the
+        annotation tier written to the provenance sidecar.  Defaults to
+        :attr:`~music_annotator.models.CensusSignal.SEARCH_HIT` (``mb-search-resolved``).
     :returns: List of :class:`~music_annotator.models.TransactionEntry` objects produced during
         this pass (one per plan entry, plus sidecar entries).
     :raises RuntimeError: If copy integrity fails, tag write fails, or ``_verify_copy`` fails.
@@ -1052,7 +1064,9 @@ def _copy_tag_verify_journal_pass(
     journal_entries: list[TransactionEntry] = []
     sidecars_written: set[Path] = set()
     freedb_written: set[Path] = set()
+    tier_written: set[Path] = set()
     now = datetime.datetime.now(datetime.UTC).isoformat()
+    annotation_tier, needs_spot_check = classify_annotation_tier(census_signal)
 
     for entry in plan:
         idx, src_file, dest_file = entry.idx, entry.src_file, entry.dest_file
@@ -1200,8 +1214,29 @@ def _copy_tag_verify_journal_pass(
         # sidecar cover art files exactly once per work directory across all tracks.
         rel_parts = dest_file.relative_to(dest_root).parts
         work_top_dir = dest_root / rel_parts[0] / rel_parts[1]
+
         _write_sidecars(cover, work_top_dir, sidecars_written, journal_entries, now, release_id)
         _write_freedb_yaml(src_dir, work_top_dir, medium_pos, freedb_written, journal_entries, now, release_id)
+
+        # Step 5.5 (C-PROV invariant): write annotation_tier to the provenance sidecar after
+        # _verify_copy succeeds and before journal_entries.append.  Runs after _write_freedb_yaml
+        # so that the tier is merged into the freedb sidecar when one exists, consistent with the
+        # enrich_origin_time convention.  Once per work directory.
+        if work_top_dir not in tier_written:
+            tier_written.add(work_top_dir)
+            _sidecar_path = _find_freedb_sidecar(work_top_dir)
+            if _sidecar_path is None:
+                _sidecar_path = work_top_dir / PROVENANCE_FILENAME
+            _write_provenance_fields(
+                _sidecar_path,
+                ProvenanceSidecar(annotation_tier=annotation_tier, needs_spot_check=needs_spot_check),
+            )
+            log.debug(
+                "annotation_tier_written",
+                tier=str(annotation_tier),
+                needs_spot_check=needs_spot_check,
+                sidecar=str(_sidecar_path.relative_to(dest_root)),
+            )
 
         journal_entries.append(
             TransactionEntry(
@@ -1314,6 +1349,7 @@ def run(
 
     mediums = release.medium_list
 
+    toc_matched: bool = False  # True when the medium was selected via TOC disc-ID match.
     if disc_override is not None:
         hits = [m for m in mediums if m.position == disc_override]
         if not hits:
@@ -1330,6 +1366,7 @@ def run(
             selected_medium, selection_method = _select_medium_with_reason(
                 mediums, len(src_files), src_dir.name, track_frames=track_frames, dtitle=dtitle
             )
+            toc_matched = selection_method == SelectionMethod.TOC
             # When a heuristic (title or fallback) selected the medium, prompt for confirmation
             # unless we're in dry-run mode or no UI was provided.
             if selection_method in {SelectionMethod.TITLE, SelectionMethod.FALLBACK} and ui is not None and not dry_run:
@@ -1526,6 +1563,27 @@ def run(
                     case _:  # pragma: no cover
                         pass
 
+    # --- Determine annotation tier (C-TIER / S3) ---
+    # Classify the identity evidence available for this ingest.  The signal drives the
+    # annotation_tier written to the provenance sidecar inside _copy_tag_verify_journal_pass.
+    #
+    # Evidence hierarchy (strongest first):
+    #   1. TOC disc-ID match (multi-disc only) — hardware-level identity, equivalent to embedded MBID.
+    #   2. Embedded recording MBIDs in source files that match the selected medium's track list.
+    #   3. Default: search-resolved (user supplied a release_id; no stronger identity evidence).
+    #
+    # NOTE: track/structure mismatch (mb-partial) and no-MB (source-tags-only) are not reachable
+    # from run() — the former raises RuntimeError before this point; the latter requires no
+    # release_id at all.  Both are handled by classify_annotation_tier for completeness.
+    if toc_matched:
+        census_signal = CensusSignal.EMBEDDED_MBID
+    else:
+        selected_medium_track_ids: set[str] = {t.recording.id for t in selected_medium.track_list}
+        embedded_ids = [_read_recording_id_tag(f) for f in src_files]
+        has_embedded_mbid = any(eid and eid in selected_medium_track_ids for eid in embedded_ids)
+        census_signal = CensusSignal.EMBEDDED_MBID if has_embedded_mbid else CensusSignal.SEARCH_HIT
+    log.info("annotation_tier_signal", signal=str(census_signal))
+
     # --- Copy, tag, and journal ---
     journal_entries = _copy_tag_verify_journal_pass(
         plan=plan,
@@ -1538,6 +1596,7 @@ def run(
         skip_dest=skip_dest,
         dry_run=dry_run,
         acoustid_key=acoustid_key,
+        census_signal=census_signal,
     )
 
     if not dry_run:

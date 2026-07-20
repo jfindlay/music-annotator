@@ -22,10 +22,11 @@ import music_annotator
 from music_annotator import JOURNAL_FILENAME, CollisionPolicy
 from music_annotator._audit import detect_fragmented_releases
 from music_annotator._discover import DiscoverUI
-from music_annotator._pipeline_io import rebuild_journal
+from music_annotator._pipeline_io import PROVENANCE_FILENAME, _read_provenance_sidecar, rebuild_journal
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path
 from music_annotator.models import (
+    AnnotationTier,
     CoverArt,
     CoverImage,
     MBMedium,
@@ -1846,3 +1847,153 @@ class TestUnifyIntegration:
         journal2 = music_annotator.read_journal(dest_root / JOURNAL_FILENAME)
         unified2 = [e for e in journal2.entries if e.action == "unified"]
         assert len(unified2) == 1  # still only one entry from the first run
+
+
+# ---------------------------------------------------------------------------
+# Integration test: annotation tier persisted at ingest time (S3 KAT)
+# ---------------------------------------------------------------------------
+
+
+class TestIngestPersistsAnnotationTier:
+    """KAT: integration test proving the annotation-tier write-and-read-back path (S3).
+
+    Two fixtures:
+    (a) A release whose source FLAC carries an embedded MUSICBRAINZ_TRACKID matching the
+        release's recording ID → CensusSignal.EMBEDDED_MBID → AnnotationTier.FULL_MB_VERIFIED.
+    (b) A release whose source FLAC carries no embedded recording ID → CensusSignal.SEARCH_HIT
+        → AnnotationTier.MB_SEARCH_RESOLVED + needs_spot_check=True.
+
+    No internal helpers (apply_tags_flac, _verify_copy) are patched — the real mutagen
+    write-and-read-back path executes, proving the tier survives the full ingest cycle.
+    """
+
+    def test_ingest_persists_annotation_tier(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Full pipeline: embedded MBID → full-mb-verified; search hit → mb-search-resolved.
+
+        Runs the pipeline twice:
+        1. Source FLAC with embedded MUSICBRAINZ_TRACKID matching the release → full-mb-verified.
+        2. Source FLAC with no embedded recording ID → mb-search-resolved + needs_spot_check.
+
+        Both runs use the real mutagen write-and-read-back path (no internal helpers patched).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        # --- Fixture (a): embedded MBID → full-mb-verified ---
+        # Use a single-track release so one source file matches the track count.
+        src_embedded = Path("/src/embedded")
+        dest_embedded = Path("/dest/embedded")
+        fs.create_dir(str(src_embedded))
+        fs.create_dir(str(dest_embedded))
+        flac_path = src_embedded / "01 - track1.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+
+        # Build a single-track release whose recording id is "rec1".
+        single_track_release = MBRelease.model_validate(
+            {
+                "id": "rel-1",
+                "title": "Respighi: Fontane di Roma",
+                "date": "1995",
+                "status": "Official",
+                "barcode": "028944972429",
+                "artist-credit": [
+                    {
+                        "name": "Karajan",
+                        "artist": {
+                            "id": "k1",
+                            "name": "Herbert von Karajan",
+                            "sort-name": "Karajan, Herbert von",
+                            "type": "Person",
+                        },
+                    }
+                ],
+                "release-group": {"id": "rg-1", "primary-type": "Album", "first-release-date": "1995"},
+                "label-info-list": [{"label": {"id": "lab1", "name": "Deutsche Grammophon"}, "catalog-number": "449 724-2"}],
+                "text-representation": {"script": "Latn", "language": "ita"},
+                "medium-list": [
+                    {
+                        "position": 1,
+                        "format": "CD",
+                        "track-list": [
+                            {
+                                "id": "trk1",
+                                "position": 1,
+                                "recording": {
+                                    "id": "rec1",
+                                    "title": "Fontane di Roma: I. La fontana di Valle Giulia all'alba",
+                                    "artist-credit": [],
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        # Embed MUSICBRAINZ_TRACKID = "rec1" (matches the single-track release's recording id)
+        audio = FLAC(str(flac_path))
+        audio["musicbrainz_trackid"] = ["rec1"]
+        audio.save()
+
+        _patch_mb(mocker, single_track_release)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src_embedded,
+            dest_root=dest_embedded,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        # Locate the work top directory and read the provenance sidecar
+        flac_files_a = sorted(dest_embedded.rglob("*.flac"))
+        assert len(flac_files_a) == 1
+        work_top_a = (
+            dest_embedded
+            / flac_files_a[0].relative_to(dest_embedded).parts[0]
+            / flac_files_a[0].relative_to(dest_embedded).parts[1]
+        )
+        prov_path_a = work_top_a / PROVENANCE_FILENAME
+        assert prov_path_a.exists(), "provenance sidecar must be written for embedded-MBID fixture"
+        sidecar_a = _read_provenance_sidecar(prov_path_a)
+        assert sidecar_a.annotation_tier == AnnotationTier.FULL_MB_VERIFIED, (
+            f"embedded MBID fixture must produce full-mb-verified, got {sidecar_a.annotation_tier!r}"
+        )
+        assert sidecar_a.needs_spot_check is False
+
+        # --- Fixture (b): no embedded MBID → mb-search-resolved ---
+        # Re-patch fetch_release to return the two-track release for this fixture.
+        two_track_release = _make_release()
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=two_track_release)
+
+        src_search = Path("/src/search")
+        dest_search = Path("/dest/search")
+        fs.create_dir(str(src_search))
+        fs.create_dir(str(dest_search))
+        # Plain FLAC with no embedded recording ID
+        fs.create_file(str(src_search / "01 - track1.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src_search / "02 - track2.flac"), contents=_MINIMAL_FLAC)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src_search,
+            dest_root=dest_search,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        flac_files_b = sorted(dest_search.rglob("*.flac"))
+        assert len(flac_files_b) == 2
+        work_top_b = (
+            dest_search / flac_files_b[0].relative_to(dest_search).parts[0] / flac_files_b[0].relative_to(dest_search).parts[1]
+        )
+        prov_path_b = work_top_b / PROVENANCE_FILENAME
+        assert prov_path_b.exists(), "provenance sidecar must be written for search-hit fixture"
+        sidecar_b = _read_provenance_sidecar(prov_path_b)
+        assert sidecar_b.annotation_tier == AnnotationTier.MB_SEARCH_RESOLVED, (
+            f"search-hit fixture must produce mb-search-resolved, got {sidecar_b.annotation_tier!r}"
+        )
+        assert sidecar_b.needs_spot_check is True

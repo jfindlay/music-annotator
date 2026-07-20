@@ -84,6 +84,7 @@ from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
     JSON,
     AnnotationTier,
+    CensusSignal,
     CopyPlanEntry,
     CoverArt,
     CoverImage,
@@ -1355,8 +1356,13 @@ class TestRunWritesFreedBYaml:
         flac_files = list(dest.rglob("*.flac"))
         assert flac_files
         work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
-        assert (work_top / "freedb_disc_1.yaml").exists()
-        assert (work_top / "freedb_disc_1.yaml").read_bytes() == yaml_content
+        freedb_path = work_top / "freedb_disc_1.yaml"
+        assert freedb_path.exists()
+        # The original disc_id data must be preserved (tier write merges, not replaces).
+        freedb_text = freedb_path.read_text(encoding="utf-8")
+        assert "disc_id" in freedb_text
+        # The annotation tier must also be present (S3 tier write merges into the freedb sidecar).
+        assert "annotation_tier" in freedb_text
 
         # Journal must include a sidecar entry for the yaml.
         journal_data = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
@@ -10373,3 +10379,208 @@ class TestAnnotationTierVocabularyRoundtrips:
         # The existing tier must remain unchanged because the incoming value was unrecognised
         result = _read_provenance_sidecar(sidecar)
         assert result.annotation_tier == AnnotationTier.MB_PARTIAL
+
+
+# ---------------------------------------------------------------------------
+# Annotation-tier write path (S3 — _copy_tag_verify_journal_pass + run())
+# ---------------------------------------------------------------------------
+
+
+class TestAnnotationTierWritePath:
+    """Tests for the annotation-tier write path wired into the ingest pipeline (S3).
+
+    Covers:
+    - _copy_tag_verify_journal_pass writes annotation_tier to PROVENANCE_FILENAME when no
+      freedb sidecar exists (the ``if _sidecar_path is None`` True branch).
+    - _copy_tag_verify_journal_pass writes annotation_tier to the freedb sidecar when one
+      exists (the ``if _sidecar_path is None`` False branch).
+    - run() classifies SEARCH_HIT when source files carry no embedded recording MBIDs.
+    - run() classifies EMBEDDED_MBID when source files carry embedded recording MBIDs that
+      match the selected medium's track list.
+    """
+
+    def _patch_mb_for_run(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API calls and internal helpers used by run().
+
+        :param mocker: pytest-mock fixture.
+        :param release: MBRelease model to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", return_value=MBRecording())
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+    def test_tier_written_to_provenance_yaml_when_no_freedb_sidecar(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """annotation_tier is written to PROVENANCE_FILENAME when no freedb_disc_N.yaml exists.
+
+        Exercises the ``if _sidecar_path is None`` True branch in _copy_tag_verify_journal_pass:
+        _find_freedb_sidecar returns None, so the tier is written to music_annotator_provenance.yaml.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb_for_run(mocker, release)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        flac_files = list(dest.rglob("*.flac"))
+        assert flac_files
+        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        prov_path = work_top / PROVENANCE_FILENAME
+        assert prov_path.exists(), "music_annotator_provenance.yaml must be written when no freedb sidecar exists"
+        result = _read_provenance_sidecar(prov_path)
+        # No embedded MBIDs in source → SEARCH_HIT → mb-search-resolved
+        assert result.annotation_tier == AnnotationTier.MB_SEARCH_RESOLVED
+        assert result.needs_spot_check is True
+
+    def test_tier_written_to_freedb_sidecar_when_present(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """annotation_tier is written to freedb_disc_N.yaml when it exists in the work directory.
+
+        Exercises the ``if _sidecar_path is None`` False branch in _copy_tag_verify_journal_pass:
+        _find_freedb_sidecar returns the freedb path, so the tier is merged into that file.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        yaml_content = b"disc_id: [123, 2, 182, 50000, 3600]\nrecord: []\n"
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "00 - disc info.yaml"), contents=yaml_content)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb_for_run(mocker, release)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        flac_files = list(dest.rglob("*.flac"))
+        assert flac_files
+        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        freedb_path = work_top / "freedb_disc_1.yaml"
+        assert freedb_path.exists(), "freedb_disc_1.yaml must exist (written by _write_freedb_yaml)"
+        result = _read_provenance_sidecar(freedb_path)
+        # No embedded MBIDs in source → SEARCH_HIT → mb-search-resolved
+        assert result.annotation_tier == AnnotationTier.MB_SEARCH_RESOLVED
+        assert result.needs_spot_check is True
+        # PROVENANCE_FILENAME must NOT be created when freedb sidecar exists
+        assert not (work_top / PROVENANCE_FILENAME).exists()
+
+    def test_run_classifies_search_hit_when_no_embedded_mbids(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """run() assigns mb-search-resolved when source files carry no embedded recording MBIDs.
+
+        Source files with no MUSICBRAINZ_TRACKID tag → CensusSignal.SEARCH_HIT →
+        AnnotationTier.MB_SEARCH_RESOLVED + needs_spot_check=True.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        # Plain FLAC with no embedded tags
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb_for_run(mocker, release)
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info",
+            side_effect=lambda event, **kw: log_events.append({"event": event, **kw}),
+        )
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        tier_events = [e for e in log_events if e["event"] == "annotation_tier_signal"]
+        assert tier_events, "annotation_tier_signal must be logged"
+        assert tier_events[0]["signal"] == CensusSignal.SEARCH_HIT
+
+    def test_run_classifies_embedded_mbid_when_source_has_matching_recording_id(
+        self, mocker: MockerFixture, fs: FakeFilesystem
+    ) -> None:
+        """run() assigns full-mb-verified when source files carry embedded recording MBIDs.
+
+        A source FLAC with MUSICBRAINZ_TRACKID matching the release's recording ID →
+        CensusSignal.EMBEDDED_MBID → AnnotationTier.FULL_MB_VERIFIED + needs_spot_check=False.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+
+        # Write a FLAC with an embedded MUSICBRAINZ_TRACKID matching the release's recording ID.
+        flac_path = src / "01.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        audio = FLAC(str(flac_path))
+        audio["musicbrainz_trackid"] = ["rec-1"]  # matches _make_release(n_tracks=1) recording id
+        audio.save()
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb_for_run(mocker, release)
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info",
+            side_effect=lambda event, **kw: log_events.append({"event": event, **kw}),
+        )
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        tier_events = [e for e in log_events if e["event"] == "annotation_tier_signal"]
+        assert tier_events, "annotation_tier_signal must be logged"
+        assert tier_events[0]["signal"] == CensusSignal.EMBEDDED_MBID
+
+        # Verify the sidecar carries full-mb-verified
+        flac_files = list(dest.rglob("*.flac"))
+        assert flac_files
+        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        prov_path = work_top / PROVENANCE_FILENAME
+        result = _read_provenance_sidecar(prov_path)
+        assert result.annotation_tier == AnnotationTier.FULL_MB_VERIFIED
+        assert result.needs_spot_check is False
