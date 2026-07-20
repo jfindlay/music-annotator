@@ -1,261 +1,226 @@
 <!-- juncture-tier: opus -->
-<!-- sub-track: R0 (census of Original/) — ROADMAP critical-path head; ends at J1 -->
+<!-- sub-track: R2 (annotation-tier substrate) — ROADMAP critical-path; after J1, before R3 adapters -->
 
-# PLAN — R0: census of `Original/`
+# PLAN — R2: annotation-tier substrate
 
 ## Purpose (design intent)
 
 *(Re-read at every ◆ boundary — anti-defocus anchor.)*
 
-Classify every remaining top-level dir in `~/Remote/hades/Music/Original/` (**147 counted 2026-07-19**, down from ~218
-pre-prune) into a two-axis taxonomy, producing the census artifact that **J1** adjudicates (R3 adapter order and pruning,
-rung-ladder shape for R2, not-in-MB default posture) and that **R4a** consumes (inventory of the non-classical corpus the
-Act II taxonomy must admit).
+Build the **annotation-tier substrate**: the present-state authority that records, for every ingested
+release, *how completely it could be annotated* — so that coverage-before-quality is honored (every dir
+ingested at its best achievable tier, provisionality persisted as a first-class fact) and upgrades are
+enumerable (Act III-b re-resolves below-full entries as better data appears).  R2 freezes **C-TIER**, the
+annotation-tier contract every R3 adapter consumes, and adds an `audit` pass that enumerates provisional
+entries.  This is the Category-A substrate on the critical path: **J1 → R2 → R3 (binding adapter) → R5**.
 
-**Census-before-policy: classify, don't fix.**  R0 takes no action on any dir — no ingest, no deletion, no MB edits, no
-adapter work.  In particular the Discogs question ("is it time to implement R3c?") is *answered by* this census's
-not-in-MB population count and adjudicated at J1, not pre-empted here.  The one near-action R0 performs is *evidence
-collection* for the already-ingested collision class (dirs the user forgot to delete after a past ingest): the census
-marks them delete-candidates with journal evidence; deletion itself is operator work (R5).
+**Annotation tier ≠ identity rung (the two-ladder distinction — do not conflate).**  The codebase already
+uses "rung" for an **archival-identity-confidence** ladder (rung 0 embedded tags → rung 1 ISRC → … → rung
+5 keyed AcoustID, in `_pipeline_io.py`/`__main__.py`): *how confidently a file matches an MB recording*.
+R2's **annotation tier** is the orthogonal axis: *how completely a release could be annotated*.  A dir can
+be high-tier / low-rung (full MB annotation, identity only from source tags) or low-tier / high-rung
+(source-tags-only ingest, but a strong AcoustID identity).  **Keep "rung" for identity; use "tier" (never
+"rung") for annotation completeness throughout R2.**  Reusing "rung" would collide with load-bearing
+existing code.
 
-**Two-axis taxonomy (design decision, this derivation).**  BACKLOG's flat six-class list conflates two orthogonal
-dimensions — "whipper rip" is a *provenance* fact; "not-in-MB" is an *MB-relationship* fact; a whipper rip can be
-not-in-MB.  The census records both axes per dir so J1 sees the joint distribution (e.g. how many Presto dirs are also
-track-mismatched decides whether R3a depends on R3d).  The flat BACKLOG classes are recoverable as projections.
+**Substrate over-specification (Category-A discipline).**  C-TIER carries all five tiers — including the
+`alternate-source` tier that has **zero census population today** (R3c Discogs pruned by J1).  Carrying the
+empty tier now is deliberate: adding it later would re-freeze the contract every adapter consumes.  Same
+for the `needs-spot-check` flag on `mb-search-resolved` — it exists to make the search-only-confidence
+concern (J1) persisted and `audit`-discoverable, even though the spot-check itself lands in R3.
 
 ## Verify gate
 
-- The census tool lives in `scripts/` — **outside every tox gate** (test/mypy/lint/format all target `src/ tests/` only;
-  precedent: `scan_nonuniform_depth.py`, "ad-hoc analysis tool, not part of the package").  Sessions are
-  **deliverable-checked** (the artifact exists, is complete, and its counts reconcile), not KAT-gated.
-- `~/.local/bin/tox -m analyze` must remain green trivially (no `src/`/`tests/` changes are enrolled in this sub-track).
-  If a session finds it must touch `src/`, that is unenrolled scope — surface it (additive-reshard signal), do not ride
-  through.
-- Completeness check at ◆: every one of the 147 dirs carries a value on both axes; `unknown` counts are zero or each
-  residual is explicitly user-adjudicated and annotated.
+R2 touches `src/` and `tests/` and is **fully gated** (unlike R0, which lived in `scripts/` outside the
+gates — this is a KAT-enforced substrate, not a deliverable-checked artifact).  `/plan-run` re-discovers
+these; stated here to document the gate:
 
-## Taxonomy (frozen at S1 as C-R0-TAX)
-
-**Axis 1 — provenance** (from local evidence only):
-
-| Value | Evidence signature |
-|-------|--------------------|
-| `bach-edition` | Brilliant Classics Bach Edition remainder (dir naming, existing conventions) |
-| `presto` | PrestoMusic download: ISRC-bearing tags, booklet PDFs, Presto artifact files |
-| `whipper` | whipper/MakeMKV rip: `whipper.log` / `.cue` / AccurateRip artifacts / rip-log sidecars |
-| `amazon` | Amazon Music download: vendor tag signatures, Amazon manifest files |
-| `other-download` | Downloaded provenance evident but vendor not identified |
-| `unknown` | No provenance signal (must be zero or adjudicated at ◆) |
-
-**Axis 2 — MB status**:
-
-| Value | How determined |
-|-------|----------------|
-| `already-ingested` | Collision class: journal `source` match (relative path) + destination present.  Delete-candidate. |
-| `in-mb-clean` | Embedded `MUSICBRAINZ_ALBUMID`, or Pass 2 search hit whose track/disc counts reconcile |
-| `in-mb-mismatch` | MB release found but track counts / edition disagree (feeds R3d population) |
-| `not-in-mb` | Pass 2 search authoritatively empty (feeds R3e/R3c adjudication at J1) |
-| `non-classical-other` | Audiobooks, Dance, Education, … — MB largely inapplicable; feeds R4a inventory |
-| `unknown` | Pass 1 could not determine and Pass 2 not yet run (must be zero at ◆) |
-
-Free-text `evidence` and `notes` fields accompany every row; `ambiguous → user-adjudicated` resolutions record who/why.
+- **VERIFY_TEST**: `~/.local/bin/tox -e test` — pytest, **100% branch coverage enforced** (`fail_under =
+  100`).  Every new tier value, every audit-pass branch, every match/case arm needs an explicit test.
+- **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` — mypy strict on `src/ tests/`, **zero errors**.  No
+  `Any`, no `cast()`.
+- Full gate before any ◆ close: `~/.local/bin/tox -m analyze` (build + test + check_type + check_format +
+  check_lint 10.00/10 + check_upgrade) must be green.
 
 ## Session list
 
 | # | Session | Cat | Tier | Consumes | Expected files |
 |---|---------|-----|------|----------|----------------|
-| 1 | Census tool + Pass 1 offline evidence sweep | B | Sonnet | journal-detects/tag-adjudicates (NOTES), C-PROV vocabulary | `scripts/census_original.py`, `docs/census-r0.json`, `docs/census-r0.md` |
-| 2 ◆ | Pass 2 targeted MB lookups + adjudication + final census artifact | B | Sonnet | C-NET-CORE, C-NET-TERM (via `_discover` search helpers), C-R0-TAX | `docs/census-r0.json`, `docs/census-r0.md` (finalised), `scripts/census_original.py` (Pass 2 mode) |
+| 1 | Freeze annotation-tier vocabulary + persist `ANNOTATION_TIER` on the sidecar | A | Sonnet | C-PROV/C-MOVE, ProvenanceSidecar (models.py), PROVENANCE_FILENAME (`_pipeline_io.py`) | `src/music_annotator/models.py`, `src/music_annotator/_pipeline_io.py`, `tests/unit/test_models.py`, `tests/unit/test_pipeline.py` |
+| 2 | `audit` pass: enumerate provisional (below-full) entries + upgrade candidates | A | Sonnet | **C-TIER** (S1), `_audit.py` counter/pass structure, journal action vocabulary | `src/music_annotator/_audit.py`, `src/music_annotator/__init__.py`, `tests/unit/test_annotator.py` |
+| 3 ◆ | Wire tier assignment into the ingest/tag write path (default `mb-search-resolved`/`full`) | A | Sonnet | **C-TIER** (S1), `_tags.py`/`_tagger.py` write path, `_pipeline.py` provenance-append ordering | `src/music_annotator/_tags.py`, `src/music_annotator/_pipeline.py`, `tests/unit/test_pipeline.py`, `tests/integration/test_integration.py` |
 
-`Cat`: B = algorithm/analysis.  `◆` = sub-track-final row; **J1 fires at this boundary** (ROADMAP juncture,
-`juncture-tier: opus`) consuming the census artifact and the R0 action-frame digest.  No interface-design juncture fires
-inside R0: the taxonomy (the sub-track's one design surface) is frozen in this derivation, not designed by an executor.
+`Cat`: A = substrate (all three — R2 is one Category-A unit split at contract-sharp boundaries: S1 freezes
+the interface S2/S3 consume).  `Tier`: Sonnet throughout — no session carries an open design surface once
+C-TIER is frozen at S1 (the one design decision, the tier vocabulary, is J1 output + this derivation, not
+an executor's call).  `◆` = sub-track-final row; **no juncture fires at R2's ◆** — R2 hands off to the R3
+adapter shards (each its own `/plan-shard`), not to an adjudication juncture.  No `@architect` inflection
+row: the substrate shape is fixed by J1 + this PLAN, so no executor faces an interface-design decision.
 
 ## Session detail
 
-### S1 — census tool + Pass 1 offline evidence sweep
+### S1 — freeze annotation-tier vocabulary + persist `ANNOTATION_TIER`
 
-**Deliverable.**  `scripts/census_original.py` (Pass 1 mode) run against the live mount, emitting
-`docs/census-r0.json` (one row per top-level dir: both axis values, evidence fields, per-dir stats) and
-`docs/census-r0.md` (human summary: joint-distribution table, per-class dir listings, ambiguity queue for S2).
+**Deliverable.**  The C-TIER contract frozen in code: (a) the five tier identifiers as a closed vocabulary
+(a `StrEnum` or `Literal` union — an enum is preferred for match/case exhaustiveness and mypy), (b) an
+`annotation_tier: str = ""` field (defaulting to unset) plus a `needs_spot_check: bool = False` field on
+`ProvenanceSidecar` (models.py), (c) read/write support in `_read_provenance_sidecar` /
+`_write_provenance_sidecar` preserving the existing idempotent "written once, other keys preserved"
+invariant, (d) a helper that maps a census-style classification to a tier (pure, unit-testable).
 
-Pass 1 collects, per top-level dir, **local evidence only — zero network**:
+Tier vocabulary (frozen — R3 adapters and `audit` consume these exact strings):
 
-1. **Shape stats** — file formats/extensions, track counts, disc-subdir structure, total size.
-2. **Embedded-tag probe** (mutagen, first-file-per-disc sampling with a `--full-scan` flag): `MUSICBRAINZ_ALBUMID`
-   (→ `in-mb-clean` + collision candidate), ISRC presence (→ `presto` signal), vendor/comment tag signatures
-   (→ `amazon`), genre tags (→ `non-classical-other` signal).
-3. **Sidecar artifacts** — `whipper.log`, `.cue`, AccurateRip logs (→ `whipper`); booklet PDFs (→ `presto`); vendor
-   manifests (→ `amazon`).
-4. **Collision probe** (journal detects, tag adjudicates): parse `Done/music_annotator_journal.json`; join each census
-   dir against journal `source` fields **on paths relative to `Original/`** (journal holds canonical
-   `/home/findlay/...` paths; the census runs from the `~/Remote/hades/...` vantage — absolute-path joins are the
-   documented silent-no-op hazard, NOTES "Note on host paths").  A dir whose files match journal entries *and* whose
-   journal destinations exist under `Done/` is `already-ingested` (delete-candidate).  Evidence recorded per dir:
-   journal-entry count, destination-present count, source file count.  Optional `--verify-hashes` flag re-verifies
-   SHA-256 per file for gold-plated evidence (default **off** — expensive over sshfs; the delete decision is the
-   operator's at R5 drain time, made against the recorded evidence level).
+| Tier | Meaning | Entry criterion | `needs_spot_check` |
+|------|---------|-----------------|--------------------|
+| `full-mb-verified` | identity-confirmed full MB annotation | embedded MBID **or** TOC disc-ID identity match; track count reconciles | `false` |
+| `mb-search-resolved` | search-reconciled MB annotation, *lower confidence* | in-mb-clean via MB **search** (track-count reconciliation, not identity) | **`true`** until spot-checked |
+| `mb-partial` | declared track/structure mismatch tolerated | MB release identified but track/structure disagrees; mismatch recorded | `false` |
+| `alternate-source` | non-MB external identity (Discogs-style) — **reserved, empty today** | identity from external source; no MB | `false` |
+| `source-tags-only` | no MB identity; provisional minimal | ingest from embedded/source tags only | `false` |
 
-**CLI**: `--original`, `--done`, `--journal` path args (defaults to the `~/Remote/hades/Music/*` vantage), `--out`
-prefix, `--full-scan`, `--verify-hashes`.  Follows house style (docstrings, types, 128-col) but is **not** enrolled in
-the tox gates (see Verify gate).
+**≥1 KAT.**  `test_annotation_tier_vocabulary_roundtrips` — write each tier + `needs_spot_check` to a sidecar,
+read back, assert equality; `test_tier_classifier_maps_census_signals` — the classification→tier helper maps
+each census axis-2 signal (embedded-MBID → `full-mb-verified`, search-hit → `mb-search-resolved`, mismatch →
+`mb-partial`, not-in-mb → `source-tags-only`) to the correct tier.  (C-TIER's deliverable *is* a KAT — the
+contract is behavioural.)
 
 **Subtleties.**
+- **Idempotency invariant** (existing, `ProvenanceSidecar`): fields written once, never overwritten; other
+  keys preserved.  Adding `annotation_tier` must not break this — but a *tier upgrade* (Act III-b) is a
+  legitimate overwrite.  Resolve now: `annotation_tier` is overwritable **only monotonically upward** (a
+  re-resolve may raise the tier, never silently lower it); record the design in the field docstring.  This
+  is a prose sub-contract of C-TIER.
+- **Lossless principle**: an unset/empty `annotation_tier` on an ingested entry is a *defect*, not a valid
+  state — the whole point is that provisionality is persisted, never silent.  S3 makes the write path always
+  set it; S2's audit flags any empty one.
+- **No `Any` / no `cast()`**: the tier enum + `populate_by_name` model config keep this clean.
 
-- **Journal action vocabulary**: repo AGENTS.md describes `action="copied"`; `_pipeline.py:1548` filters
-  `action == "tagged"`.  The probe must match the journal's *actual* vocabulary — inspect real entries before coding the
-  filter; treat `{"tagged", "copied"}` membership as the candidate set and record which occurred.
-- **Read-only invariant**: the script must not write, move, or delete anything under `Original/`, `Done/`, or
-  `Reference/`.  Its only outputs are the two artifact files in the repo.
-- **sshfs performance**: sample tags (first file per disc dir) by default; full scans opt-in.  147 dirs must complete in
-  one session comfortably.
+### S2 — `audit` pass: enumerate provisional entries + upgrade candidates
 
-### S2 ◆ — Pass 2 targeted MB lookups + adjudication + final artifact
+**Deliverable.**  A new `audit` pass (following the existing `_make_audit_counts` / `_audit_*` multi-pass
+structure in `_audit.py`) that reads `annotation_tier` from each entry's sidecar and enumerates: count per
+tier, the below-`full-mb-verified` (provisional) population, and the `needs_spot_check` population.  New
+counter keys in `_AUDIT_COUNT_KEYS` (e.g. `tier_full`, `tier_search`, `tier_partial`, `tier_alt`,
+`tier_source_only`, `provisional_total`, `needs_spot_check`).  Logs one event per finding, consistent with
+the existing audit event vocabulary.  This is the "`audit` enumerates provisional entries cheaply / upgrade
+candidates discoverable" ROADMAP requirement.
 
-**Deliverable.**  Every dir carries both axis values; `docs/census-r0.md` finalised with the joint distribution and the
-J1 handoff digest appended to this PLAN's action-frame digest.
-
-1. **Pass 2 network mode** (`--pass2`): for dirs Pass 1 left `unknown` on axis 2, search MB via the *existing*
-   `_discover` helpers (`search_releases_by_dir` / `_search_mb_releases` — already on `_net` since R1-F, commit
-   `e7370b7`).  Read-only; polite-delay and retry posture inherited from C-NET-CORE/C-NET-TERM.  Compare candidate
-   releases' track/disc counts against Pass 1 shape stats → `in-mb-clean` / `in-mb-mismatch` / `not-in-mb`.
-2. **Adjudication queue**: dirs still ambiguous after Pass 2 are surfaced to the user (Question tool, batched) rather
-   than guessed; resolutions recorded with rationale in the `notes` field.
-3. **Final artifact**: regenerate `census-r0.json` / `census-r0.md`; the MD leads with the joint-distribution table
-   (axis 1 × axis 2 counts) and the per-class listings J1 needs: R3a/R3b/R3c/R3d/R3e populations, `already-ingested`
-   delete-candidates with evidence levels, `non-classical-other` inventory for R4a.
-4. **J1 handoff**: append the action-frame digest entry (discoveries, distribution surprises, taxonomy strain) — J1 is a
-   paged fork and sees only what is written down.
+**≥1 KAT.**  `test_audit_enumerates_tiers` — a fixture library with a mix of tiers; assert the per-tier
+counts and the provisional total; `test_audit_flags_needs_spot_check` — assert the search-resolved
+population is surfaced.
 
 **Subtleties.**
+- **Journal action vocabulary** (repeated R0 hazard, now `src/`-side): `_audit_journal_scan` filters
+  `action in {"tagged", "enriched"}`.  The tier pass keys off the *sidecar*, not the journal action — but
+  confirm the eligible-entry set matches so tier counts and existing audit counts reconcile against the same
+  denominator.
+- **Sidecar-per-work-dir vs entry-per-file**: `ProvenanceSidecar` is per work_top_dir; audit counts are per
+  destination.  State the aggregation explicitly (a work_dir's tier applies to all its tracks) and test the
+  multi-track case.
 
-- **Search scope discipline**: Pass 2 queries only dirs unresolved by local evidence — do not re-query dirs with an
-  embedded MBID (their status is tag-held).
-- **`in-mb-clean` vs `in-mb-mismatch` boundary**: a fuzzy-search hit is not identity.  Track-count reconciliation is the
-  minimum bar; when counts disagree across all candidates, classify `in-mb-mismatch` only if some candidate is plausibly
-  the same edition, else `not-in-mb` with the near-miss noted.  When in doubt → adjudication queue, not silent choice.
-- **Defensive-download invariant** applies unchanged: retries exhausted / cannot-determine → that dir goes to the
-  adjudication queue with the failure noted (never silently classified).
+### S3 ◆ — wire tier assignment into the ingest/tag write path
 
-**Deferrals.**  Acting on any classification (ingest, deletion, MB edits, adapters) — all post-J1.  The
-`already-ingested` drain is R5 operator work.
+**Deliverable.**  The ingest path (`_pipeline.py` / `_tags.py`) sets `annotation_tier` on the provenance
+sidecar at ingest time, derived from the identity evidence available (embedded MBID/TOC → `full-mb-verified`;
+search hit → `mb-search-resolved` + `needs_spot_check=true`; mismatch → `mb-partial`; no MB →
+`source-tags-only`).  The default clean-ingest path assigns `full-mb-verified` or `mb-search-resolved` per
+the evidence.  End-to-end integration test proves the real write-and-read-back path (per the integration-test
+convention: no internal helpers patched).
+
+**≥1 KAT.**  Integration test `test_ingest_persists_annotation_tier` — run the pipeline on a fixture release
+with an embedded MBID, assert the sidecar carries `full-mb-verified`; a second fixture resolved by search
+asserts `mb-search-resolved` + `needs_spot_check`.
+
+**Subtleties.**
+- **Confirmation-provenance invariant (FROZEN — repo AGENTS.md).**  The tier write must slot into the
+  copy/tag/verify/journal-append ordering **without disturbing it**: the `action="copied"` journal entry and
+  the "Verified OK" message still derive exclusively from post-verification in-memory state.  Write the tier
+  to the sidecar *within* the already-verified region (after `_verify_copy` succeeds), never before.  A tier
+  write that appends before verification, or that becomes a new source for the confirmation message, violates
+  the invariant → destructive-HALT.
+- **Layer-routing rule** (NOTES): tier assignment is a policy/provenance concern — keep it in the
+  provenance-sidecar layer, not smeared into the MB-data or renderer layers.
+
+**Deferrals.**  The **spot-check gate** on the `mb-search-resolved` population lands in the **first R3
+adapter** (R3b), not R2 — R2 only persists the `needs_spot_check` flag that makes it discoverable.  Tier
+*upgrades* (re-resolve below-full entries) are Act III-b.  The `alternate-source` tier stays adapter-less
+until R3c is un-pruned.
 
 ## Cross-session contracts
 
 ### Consumed (frozen upstream — invalidation is a destructive-HALT)
 
-- **C-NET-CORE / C-NET-TERM** (R1, `_net.py`) — Pass 2 reuses the `_discover` search helpers migrated in R1-F
-  (`e7370b7`); no new transport code, no new classifier.
-- **Journal-detects / tag-adjudicates** and **"Note on host paths"** (prose, `docs/NOTES.md`) — the collision probe is
-  a read-only instance of the detect step; relative-path joins are mandatory.
-- **Defensive-download posture** (repo `AGENTS.md`) — cannot-determine ≠ no-data, applied to census classification.
+- **C-PROV / C-MOVE** (move/verify/journal provenance, NOTES + repo AGENTS.md) — the tier write is a new
+  sidecar field *inside* the existing verified region; it must not alter the provenance chain.
+- **Confirmation-provenance invariant** (repo AGENTS.md) — S3 writes the tier only after `_verify_copy`
+  succeeds; the "safe to delete source" message's evidence basis is unchanged.
+- **`ProvenanceSidecar` idempotency** (existing, models.py / `_pipeline_io.py`) — written-once, other-keys-
+  preserved; `annotation_tier` extends it with a *monotonic-upgrade* carve-out (S1 subtlety).
+- **The identity-rung ladder** (`_pipeline_io.py` `_IDENTITY_METHODS`, rungs 0–5) — R2 must **not** rename,
+  reuse, or collide with "rung"; annotation tier is a distinct axis (Purpose two-ladder note).
+- **Prose contracts** (NOTES): lossless principle (unset tier = defect, not silent state); "journal detects,
+  tag adjudicates" (tier is present-state authority on the sidecar; journal is the detector); layer-routing.
 
 ### Produced
 
-- **C-R0-TAX** (frozen at S1; consumed by S2, J1, and the R2/R3 PLAN derivations): the two-axis taxonomy — axis
-  definitions, class values, and evidence-signature semantics as specified in "Taxonomy" above.  The census artifact
-  schema (`census-r0.json` row shape) is an appendix of this contract.  Stability horizon: through J1 and the R2/R3
-  derivations that cite census populations; not a runtime contract.
+- **C-TIER** (frozen at S1; consumed by S2, S3, and every R3 adapter): the five-value annotation-tier
+  vocabulary (`full-mb-verified` / `mb-search-resolved` / `mb-partial` / `alternate-source` /
+  `source-tags-only`), the `ANNOTATION_TIER` + `needs_spot_check` persistence on `ProvenanceSidecar`, the
+  classification→tier mapping, and the monotonic-upgrade rule.  **Flavour: compiler-enforced** (the tier enum
+  is a closed type mypy checks at every consumer) **+ test-enforced** (KATs on round-trip and classification)
+  **+ prose** (monotonic-upgrade rule, unset=defect).  Over-specified: carries the empty `alternate-source`
+  tier and the `needs_spot_check` flag whose consumer (spot-check gate) is in R3.  Stability horizon:
+  runtime contract for all of R3 and Act III-b.
 
 ## Progress ledger
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Census tool + Pass 1 offline sweep | done | 63c897b | C-R0-TAX (frozen: two-axis taxonomy + census-r0.json schema) |
-| 2 ◆ | Pass 2 + adjudication + final artifact | done | 5b3ee95 | — (artifact finalised; J1 handoff digest appended); ◆ boundary: still-on-intent (J1 paged) |
+| 1 | Freeze annotation-tier vocabulary + persist `ANNOTATION_TIER` | pending | — | — |
+| 2 | `audit` pass: enumerate provisional + upgrade candidates | pending | — | — |
+| 3 ◆ | Wire tier assignment into the ingest/tag write path | pending | — | — |
 
 ## Action-frame digest
 
-### S2 J1 handoff — 2026-07-20
-
-**Final census distribution (147 dirs):**
-
-| Axis 2 | Count | Notes |
-|--------|-------|-------|
-| `in-mb-clean` | 107 | 8 from Pass 1 (embedded MBID); 99 from Pass 2 MB search |
-| `in-mb-mismatch` | 18 | MB release found but track counts disagree |
-| `non-classical-other` | 15 | Audiobooks, GarageBand, dance/exercise, Amazon non-classical, etc. |
-| `not-in-mb` | 6 | Personal recordings, partial rips, no plausible MB match |
-| `already-ingested` | 1 | Haydn String Quartets disc 15 (journal-confirmed) |
-
-| Axis 1 | Count |
-|--------|-------|
-| `whipper` | 68 |
-| `presto` | 46 |
-| `other-download` | 23 |
-| `unknown` | 9 (all user-adjudicated — will be manually moved out) |
-| `amazon` | 1 |
-
-**J1 population counts for R3 adapter ordering:**
-- R3a (presto/in-mb-clean): 36 dirs — direct ingest candidates
-- R3b (whipper/in-mb-clean): 52 dirs — direct ingest candidates (many with embedded MBID)
-- R3c (not-in-mb): 6 dirs — Discogs/manual-entry adjudication needed
-- R3d (in-mb-mismatch): 18 dirs — MB edit or manual reconciliation needed
-- R3e (other-download/amazon/in-mb-clean): 19 dirs — ingest candidates
-
-**Discoveries:**
-- Pass 2 MB search hit rate was very high: 131/131 unknown dirs resolved, 107 classified `in-mb-clean`.
-  The corpus is substantially in MB already.
-- The `_parse_release_item` function in `_discover.py` has a known bug: it uses `len(track-list)` which
-  yields 0 for empty lists in search results (MB API returns `track-list: []` with `track-count: N`).
-  The census script works around this with a custom `_extract_track_count` function. This is a latent
-  bug in the ingest path that should be fixed before R3 (CAPTURE-CANDIDATE: `_parse_release_item`
-  track-count extraction from search results).
-- 9 dirs have `axis1=unknown` (no provenance signal); all are non-classical/personal items the user
-  will manually move out. The `Playlists/` dir will be transferred to a future playlist library.
-- The `Handel The Messiah - Wilberg` dir: user was in the recording (Temple Square Choir); perfect
-  54-track MB match; classified `other-download / in-mb-clean`.
-
-**Distribution surprises:**
-- `in-mb-mismatch` (18 dirs) is dominated by large box sets / compilations where the local flat
-  directory has all tracks while MB has them spread across multiple discs (e.g. Grieg Edition 337
-  tracks vs MB 507, Tchaikovsky Complete Symphonies 30 vs 62). These are not data errors — they are
-  edition differences. R3d work will need to handle multi-disc reconciliation.
-- Several whipper rips (Karen #4, Karen Song #1, Ric's Class Music, Dave Eaton Show Live) are
-  personal recordings with no MB presence — classified `not-in-mb` after adjudication.
-
-**Taxonomy strain:**
-- No new class needed. The two-axis taxonomy held cleanly. The `non-classical-other` class absorbed
-  all personal/non-classical items (15 dirs). The `not-in-mb` class correctly captured personal
-  recordings and partial rips.
-- The `in-mb-mismatch` class is doing double duty: (a) genuine edition mismatches and (b) large
-  compilations where the local flat structure doesn't match MB's multi-disc structure. J1 may want
-  to sub-classify R3d into these two cases for adapter ordering.
-
-**R4a non-classical inventory:** 15 dirs — see `census-r0.md` §"Non-Classical-Other Inventory for R4a"
-for the full list with genres.
-
-### ◆ Boundary — 2026-07-20
-Discovery/flex: still-on-intent; 147 dirs classified, zero unknown on axis 2, J1 consumption surface complete.
-Affected: none (no contract drift)
-Deferred: yes — three items for J1: (1) additive-reshard signal: pre-R3 fix session for `_parse_release_item` search-result track-count bug; (2) R3d sub-classification (edition-mismatch vs flat-local/multi-disc-MB) before adapter ordering; (3) confidence calibration: weight search-only `in-mb-clean` below embedded-MBID `in-mb-clean`; spot-check before finalizing R3a/R3b/R3e order.
-Texture: `in-mb-mismatch` double-duty (edition vs structure) and confirmed dubious-match pattern caught at adjudication are the two texture items J1 should weigh when ordering R3 adapters.
+*(none yet)*
 
 ## Discoveries & risks
 
-- **R-1 (journal action vocabulary).**  `action="copied"` (AGENTS.md prose) vs `action == "tagged"` (`_pipeline.py`
-  code) — the probe must be coded against inspected journal reality, not either document.  If the journal contains
-  neither for copy events, HALT and surface (documentation/code divergence worth its own fix).
-- **R-2 (host-path mapping).**  Journal `source`/`destination` are `/home/findlay/...`; census vantage is
-  `~/Remote/hades/...`.  All joins relative to `Original/` / `Done/` roots.  An absolute-path join silently yields zero
-  collisions — the exact hazard NOTES documents for maintenance commands.
-- **R-3 (sshfs scan cost).**  147 dirs × per-file tag reads over sshfs may be slow; sampling default + opt-in full scan
-  bounds it.  If Pass 1 cannot complete in-session even sampled, split the sweep by dir range (internal-continue, not a
-  reshard).
-- **R-4 (taxonomy strain).**  If a dir class emerges that neither axis admits (e.g. a mixed dir holding two releases),
-  extend `notes` and surface at ◆ — J1 evaluates whether C-R0-TAX needs a class added.  Do not silently shoehorn.
+- **R-1 (two-ladder collision — resolved in derivation, watch in execution).**  "rung" is taken by the
+  identity-confidence ladder; annotation completeness is "tier".  If an executor reaches for "rung" for tier,
+  or the two ladders get wired into one field, HALT and surface — this is the contract's central naming
+  invariant.  (internal-continue if caught early; the collision itself is already adjudicated.)
+- **R-2 (idempotency vs upgrade tension).**  `ProvenanceSidecar` is written-once; annotation-tier needs a
+  monotonic-upgrade carve-out (Act III-b re-resolves upward).  S1 must state this precisely; a naive "never
+  overwrite" breaks Act III-b, a naive "always overwrite" breaks the idempotency invariant.  If S1 cannot
+  reconcile cleanly, surface at ◆ (additive-reshard: the upgrade semantics may want their own small session).
+- **R-3 (confirmation-provenance is a destructive-risk surface).**  S3 touches the copy/tag/verify loop.  A
+  tier write placed before `_verify_copy` succeeds, or feeding the confirmation message, is a
+  **destructive-HALT** — the invariant is frozen (repo AGENTS.md).  Never ride through.
+- **R-4 (empty `alternate-source` tier).**  Carrying a tier with zero population and no adapter is deliberate
+  over-specification, not dead code to prune.  If an executor proposes removing it "because it's unused,"
+  that's a contract regression — refuse and cite Category-A over-specification.
+- **R-5 (search-confidence is real, not paranoia).**  The `needs_spot_check` flag exists because R0
+  adjudication caught score-100-but-wrong MB matches.  If S3's classifier marks search hits as
+  `full-mb-verified` (dropping the distinction), the whole point of the tier is lost — the search/identity
+  boundary is load-bearing.
 
 ## Notes for executors
 
-- **Tier routing.**  S1/S2 are Sonnet (`@build`).  No juncture fires inside R0; **J1 fires at the ◆ boundary** and is
-  Opus per the ROADMAP header (`juncture-tier: opus`).
-- **Read-only invariant** (S1 subtlety, repeated because it is the sub-track's one destructive-risk surface): the
-  census never mutates the music mounts.  Repo-file writes only.
-- **No `src/`/`tests/` changes are enrolled.**  `scripts/` + `docs/` only.  A discovered need to touch `src/` is an
-  additive-reshard signal.
-- **Register: PEDAGOGY off** — the script gets thin mechanical docstrings; the census MD is a data artifact, not an
-  essay.
-- **Adjudication posture** (S2): batch ambiguous dirs into Question-tool prompts for the user; never guess a
-  classification.  The census's value to J1 is that its counts are *trustworthy*.
-- **Suggested `/plan-run` invocation**: `/plan-run halt-at-boundaries` — the ◆ boundary is the J1 handoff; halting
-  there hands the census review + juncture to the user rather than auto-chaining into J1.
+- **Tier routing.**  S1/S2/S3 are all Sonnet (`@build`).  No juncture fires inside R2; the ◆ boundary hands
+  off to the R3 adapter shards (each a separate `/plan-shard`), not to an adjudication fork.  ROADMAP
+  `juncture-tier: opus` stands but is not exercised here.
+- **Register: PEDAGOGY off** — thin mechanical docstrings per house style (Sphinx/PEP 257, 128-col); the
+  design exposition lives in this PLAN and the ROADMAP, not inline.
+- **Invariants to preserve (do not regress):** confirmation-provenance ordering (S3), `ProvenanceSidecar`
+  idempotency + monotonic-upgrade (S1), the identity-rung / annotation-tier axis separation (all), lossless
+  principle (unset tier = defect).  All are C-TIER's consumed or produced contracts above.
+- **Full gate before each ◆ / commit:** `~/.local/bin/tox -m analyze` green (100% branch cov, mypy strict,
+  pylint 10.00/10, pyupgrade clean).  R2 is `src/`-side — the R0 "outside the gates" posture does **not**
+  apply.
+- **Sequencing:** the **pre-R3 `_parse_release_item` fix** (ROADMAP; own session) and **PLAN R1-F** both
+  sequence before any R3 adapter but are **independent of R2** — R2 can proceed in parallel with or before
+  them; only R3 depends on all three.
+- **Suggested `/plan-run` invocation:** `/plan-run halt-at-boundaries` — R2 is a fresh shard pattern
+  (first `src/`-side substrate sharded under this tuning law); halting at the ◆ hands the C-TIER-frozen
+  substrate to the user for review before the R3 adapter shards derive from it.

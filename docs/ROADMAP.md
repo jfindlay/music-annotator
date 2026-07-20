@@ -45,12 +45,19 @@ Critical path: **R0 → J1 → R2 → R3 (binding adapter) → R5 → J3 → R6*
 R3).  R4 is parallel but J2 gates R6.  R5 is operator-paced, not agent-session-paced — the arc's
 schedule is dominated by the user's drain rate, not AI throughput.
 
-### R0 — Census of `Original/`  (Category B; ~1-2 sessions; UNBLOCKED 2026-07-18)
+### R0 — Census of `Original/`  (Category B; 2 sessions; DONE 2026-07-20)
 
 Scan and classify the remaining top-level dirs (~218 pre-prune) into the BACKLOG taxonomy (Bach
 Edition remainder / Presto / whipper rip / not-in-MB / track-mismatch / non-classical–other).
 Deliverable: a census artifact.  Ends at **J1**.  Also feeds R4a (inventory of the non-classical
 corpus the taxonomy must admit).  → BACKLOG "Census of `Original/`".
+
+**DONE (commits `63c897b`–`6bb7b73`, PLAN R0 2/2 rows).**  147 dirs classified on a two-axis taxonomy
+(provenance × MB-status; C-R0-TAX), zero `unknown` on axis 2.  Artifact: `docs/census-r0.{json,md}`.
+Final distribution: **107 in-mb-clean · 18 in-mb-mismatch · 15 non-classical-other · 6 not-in-mb · 1
+already-ingested**.  The corpus is substantially already in MB — this **tightens the R3 range** (the
+scope estimate below) and reinforces the coverage-before-quality intent rather than challenging it (no
+defocus).  J1 handoff digest is written to PLAN R0's action-frame digest; **J1 has not yet fired.**
 
 ### R1 — `_net` retrieval subpackage  (Category A substrate; ~3-5 sessions; DONE 2026-07-19)
 
@@ -71,23 +78,65 @@ search/disc-ID calls (`_search_mb_releases` → `mb.search_releases`; `_toc_look
 completes the "uniformly on `_net`" property R3 leans on; freezes no new contract; consumes
 C-NET-CORE / C-NET-TERM.  Sequence before any R3 adapter.
 
-### R2 — Provisional-rung substrate  (Category A substrate; ~2-4 sessions; after J1)
+### Pre-R3 hardening  (Category A fix; 1 session; J1 additive-reshard; before any R3 adapter)
 
-Finalise the rung ladder; persist the rung in the track+sidecars unit (present-state authority);
-`audit` enumerates provisional entries; upgrade candidates discoverable.  The ladder's exact rungs are
-J1 output (the census distribution shapes them).  Freezes the rung-marking contract every adapter
-consumes.  → BACKLOG "Provisional-ingest mode — the rung ladder".
+**Added by J1 (2026-07-20).**  Fix the `_discover.py` `_parse_release_item` search-result track-count
+bug (`len(track-list)` yields 0 for MB search results, which return `track-list: []` + `track-count:
+N`) with a regression test.  Standalone, *not* folded into R2: the annotation-tier substrate's
+`mb-search-resolved` tier keys on track-count reconciliation, so the count must be correct before the
+tier contract freezes on it.  Sequence alongside/after PLAN R1-F, before any R3 adapter.  Distinct from
+R1-F (transport routing) — this is response *parsing*.  → ROADMAP Discoveries appendix (R0 boundary).
 
-### R3 — Source adapters  (Category B; mutually orthogonal on R1+R2; ~2-4 sessions each; J1-ordered)
+### R2 — Annotation-tier substrate  (Category A substrate; ~3 sessions; after J1)
 
-- **R3a** PrestoMusic downloads (ISRC-bearing).
-- **R3b** whipper / MakeMKV rips (+ AccurateRip exposure — unblocks the reserved 4th archival
-  dimension, which backfills via P-FP3 and stays in BACKLOG).
-- **R3c** Discogs adapter (identity mapping, mid-ladder rung, no work tree).
-- **R3d** Track-mismatch-tolerant ingest (declared-mismatch mode; strict default preserved).
-- **R3e** Not-in-MB routing rule (mostly policy; per-release adjudication posture set at J1 review).
+Finalise the **annotation-tier ladder** (J1 output; renamed from "rung ladder" — see the two-ladder
+note below); persist the tier in the track+sidecars unit (present-state authority) via an
+`ANNOTATION_TIER` field on `ProvenanceSidecar`; `audit` enumerates provisional (below-full) entries as
+a new pass; upgrade candidates discoverable.  Freezes **C-TIER**, the annotation-tier contract every
+adapter consumes (over-specified per Category-A).  → BACKLOG "Provisional-ingest mode — the rung ladder".
 
-J1 decides order and may prune scope (an adapter with zero census population is dead weight).
+**J1 annotation-tier ladder (5 tiers; census-tuned):** `full-mb-verified` (embedded MBID/TOC identity)
+→ `mb-search-resolved` (search-reconciled, *lower confidence*, carries `needs-spot-check`) → `mb-partial`
+(declared track/structure mismatch) → `alternate-source` (Discogs-style; **empty now, reserved, no
+adapter**) → `source-tags-only` (no MB identity; provisional).  The `mb-search-resolved` tier is J1's
+key census-driven addition: 99 of 107 clean dirs are search-resolved, not identity-confirmed, and
+adjudication caught score-100-but-wrong matches, so search-resolution must be a distinct persisted tier.
+
+**Two-ladder note (CAPTURE-CANDIDATE, 2026-07-20).**  The codebase already uses "rung" for an
+orthogonal **archival-identity-confidence ladder** (rung 0 embedded tags → rung 1 ISRC → … → rung 5
+keyed AcoustID, in `_pipeline_io.py`/`__main__.py`: *how confidently a file matches an MB recording*).
+J1's ladder is a different axis — **annotation quality/completeness**: *how completely a release could
+be annotated*.  The two are orthogonal; R2 keeps "rung" for identity-confidence and names J1's ladder
+"annotation tier" to avoid the collision.  A dir can be high-tier (full MB annotation) yet low-rung
+(identity only from source tags), or vice versa.
+
+### R3 — Source adapters  (Category B; on R1+R2; J1-ordered; ~9-10 sessions total)
+
+**J1 order (descending clean population → maximises R5 drain-unlock per session):**
+
+1. **R3b** whipper / MakeMKV rips — **first** (52 clean dirs; embedded MBID + TOC disc-ID = highest
+   identity confidence; unlocks the reserved AccurateRip 4th archival dimension).  ~3 sessions.
+2. **R3a** PrestoMusic downloads (ISRC-bearing; 36 dirs; simplest single-source).  ~2 sessions.
+3. **R3e** other-download/amazon clean (19 dirs; may collapse into R3a as a source-variant).  ~1-2.
+4. **R3d** Track-mismatch-tolerant ingest — **after** the strict clean adapters prove C-TIER.
+   **Sub-classified (J1):** **R3d-edition** (genuine edition/pressing mismatch, single-medium) vs
+   **R3d-structure** (flat-local dir vs multi-disc-MB layout — Grieg, Tchaikovsky, Karajan Sampler,
+   Puccini; needs multi-disc reconciliation, consumes C-S0).  The R3d PLAN reads `census-r0.json`
+   deltas to size the two sub-classes.  ~3 sessions.
+- **R3c Discogs adapter — PRUNED to BACKLOG (J1).**  Census refuted its premise: all 6 not-in-mb dirs
+  are personal recordings, none Discogs-suitable.  Returns to BACKLOG as trigger-based (fires if a
+  future census surfaces Discogs-suitable commercial releases).  The `alternate-source` tier is
+  reserved in C-TIER so the adapter drops in later without re-freezing.
+- **R3e-policy Not-in-MB routing** (retained as policy): default the 6 not-in-mb dirs to
+  `source-tags-only` (tier 4) provisional ingest; MB-upstream creation is a per-release operator
+  election, never the automatic default (the census's close-to-MB-ready subset is empty).  LDS Youth
+  Music is manual-move-out (user, census adjudication log).
+
+**Spot-check gate (J1):** before the first direct-ingest adapter bulk-runs, spot-check a sample of the
+search-only (`mb-search-resolved`) population; fold into the first R3 adapter's PLAN as a gating step;
+`needs-spot-check` is the persisted, `audit`-discoverable mechanism.  A high false-match rate is a
+step-3 watch item that could reshard R3 order.
+
 → BACKLOG "Source-adapter support", "Alternate metadata source: Discogs adapter",
 "Track-mismatch-tolerant ingest", "Not-in-MB routing rule".
 
@@ -127,7 +176,7 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
 
 | Juncture | When | Adjudicates |
 |----------|------|-------------|
-| **J1** | end of R0 | Census distribution → R3 order/pruning; rung-ladder shape for R2; not-in-MB default posture. |
+| **J1** *(FIRED 2026-07-20)* | end of R0 | Census distribution → R3 order/pruning; rung-ladder shape for R2; not-in-MB default posture.  Verdict `still-on-intent` + `additive-reshard`; no destructive-HALT.  Outputs folded into R2/R3/pre-R3 nodes above and recorded in the appendix.  R2 shard proceeds against C-TIER. |
 | **J2** | end of R4 | Naming-policy freeze: taxonomy, depth policy, editorial signals.  Gates R6. |
 | **J3** | before R6d | Go/no-go on the destructive-scale full-library repath: `Reference/` retention decision, journal capacity, dry-run evidence. |
 
@@ -150,10 +199,13 @@ convention.
 the layer-routing rule, "journal detects, tag adjudicates" — all in `docs/NOTES.md`; every PLAN
 derivation re-reads them.
 
-## Scope estimate (static frame; provisional until J1)
+## Scope estimate (static frame; R3 tightened by J1 2026-07-20)
 
-R0 1-2 · R1 3-5 · R2 2-4 · R3 8-16 · R4 3-6 · R6 5-8 → **~22-41 agent sessions**, plus the
-operator-paced R5 drain.  The R3 range is the widest and is exactly what J1 tightens.
+R0 2 ✓ · R1 3-5 ✓ · pre-R3 fix 1 · R2 3 · R3 9-10 · R4 3-6 · R6 5-8 → **~24-35 agent sessions**, plus
+the operator-paced R5 drain.  J1 tightened the R3 range from the provisional 8-16 to **9-10** on the
+census distribution: pre-R3 fix 1 · R2 3 · R3b 3 · R3a 2 · R3e 1-2 · R3d 3 · R3c 0 (pruned).  The
+clean-ingest adapters (R3a/R3b/R3e ≈ 107 dirs) dominate; R3d (18) is sub-classified; R3c (Discogs) is
+pruned to BACKLOG.
 
 ## Out of scope (stays in BACKLOG)
 
@@ -173,3 +225,44 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   routes through `_net`" property R3 adapters assume did **not** hold literally at R1 close.
   Resolution: sharded as **PLAN R1-F** (a BACKLOG-resident completion of R1, not a new DAG node) —
   sequence before any R3 adapter.  No design change to the arc; scope-completeness only.
+
+- **R0 boundary (2026-07-20) — `_parse_release_item` search-result track-count bug.**  `_discover.py`
+  `_parse_release_item` uses `len(track-list)`, which yields 0 for MB search results (the API returns
+  `track-list: []` alongside `track-count: N`).  The census script worked around it with a custom
+  `_extract_track_count`.  Static-frame consequence: a **latent bug in the ingest path** that will
+  mis-count tracks for every search-driven ingest — it must be fixed before R3 adapters rely on
+  search-result track counts.  Resolution: **additive-reshard signal — a pre-R3 fix session** (or fold
+  into R2 substrate work).  For J1 to sequence.  (CAPTURE-CANDIDATE surfaced at R0 close.)
+
+- **R0 boundary (2026-07-20) — `in-mb-mismatch` is doing double duty.**  The 18 `in-mb-mismatch` dirs
+  split into two structurally different cases: (a) genuine **edition mismatches** (different pressing /
+  track selection) and (b) **flat-local / multi-disc-MB structure mismatches** (local flat dir holds
+  all tracks; MB spreads them across discs — e.g. Grieg Edition 337 vs 507, Tchaikovsky 30 vs 62).
+  These are not data errors; they need different adapter handling.  Static-frame consequence: **R3d may
+  need sub-classification** (edition-mismatch vs structure-mismatch) before adapter ordering, and R3d
+  must handle multi-disc reconciliation.  For J1 to decide.
+
+- **R0 boundary (2026-07-20) — search-only vs embedded-MBID confidence asymmetry.**  Of the 107
+  `in-mb-clean` dirs, only 8 carry an embedded `MUSICBRAINZ_ALBUMID`; 99 were resolved by Pass 2 MB
+  search (track-count reconciliation, not identity).  Static-frame consequence: **search-only
+  `in-mb-clean` is lower-confidence than embedded-MBID `in-mb-clean`** and should be weighted below it
+  when J1 orders R3a/R3b/R3e; a spot-check of the search-only population is warranted before finalising
+  direct-ingest adapter order.  For J1 to weigh.
+
+- **J1 adjudication (2026-07-20) — verdict `still-on-intent` + `additive-reshard`, no destructive-HALT.**
+  Census reinforces coverage-before-quality (107/147 clean-ingestable).  Resolutions folded into the R2,
+  R3, and pre-R3 nodes above: (1) R3 ordered R3b→R3a→R3e→R3d by descending clean population (drain-unlock);
+  (2) **R3c Discogs pruned** to trigger-based BACKLOG (zero census population); (3) 5-tier annotation
+  ladder with the **`mb-search-resolved` tier added** (99/107 search-resolved ≠ identity); (4) `_parse_release_item`
+  fix sequenced as its **own pre-R3 session** (not folded into R2 — the `mb-search-resolved` tier keys on
+  track-count); (5) **R3d sub-classified** edition vs structure; (6) not-in-MB defaults to `source-tags-only`;
+  (7) spot-check gate on the search-only population folds into the first R3 adapter.  Tightened R2+R3 to
+  ~12-14 sessions.  No frozen contract invalidated (the bug is a parse error, orthogonal to
+  defensive-download and confirmation-provenance).
+
+- **R2 substrate survey (2026-07-20) — two-ladder terminology collision (CAPTURE-CANDIDATE).**  The
+  codebase already uses "rung" for an **archival-identity-confidence** ladder (rung 0–5 in
+  `_pipeline_io.py`/`__main__.py`); J1's ladder is the orthogonal **annotation-quality** axis.  R2 keeps
+  "rung" for identity-confidence and names J1's ladder **annotation tier** (`ANNOTATION_TIER` on
+  `ProvenanceSidecar`; contract C-TIER).  A dir can be high-tier / low-rung or vice versa.  This framing
+  is durable through R3 and Act III-b — candidate for `docs/NOTES.md`.
