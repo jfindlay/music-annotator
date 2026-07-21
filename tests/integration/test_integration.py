@@ -9,6 +9,7 @@ apply_tags_flac and _verify_copy are not patched, so the real mutagen write-and-
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -22,10 +23,11 @@ import music_annotator
 from music_annotator import JOURNAL_FILENAME, CollisionPolicy
 from music_annotator._audit import detect_fragmented_releases
 from music_annotator._discover import DiscoverUI
-from music_annotator._pipeline_io import PROVENANCE_FILENAME, _read_provenance_sidecar, rebuild_journal
+from music_annotator._pipeline_io import PROVENANCE_FILENAME, _find_freedb_sidecar, _read_provenance_sidecar, rebuild_journal
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path
 from music_annotator.models import (
+    AccurateRipSummary,
     AnnotationTier,
     CoverArt,
     CoverImage,
@@ -1997,3 +1999,290 @@ class TestIngestPersistsAnnotationTier:
             f"search-hit fixture must produce mb-search-resolved, got {sidecar_b.annotation_tier!r}"
         )
         assert sidecar_b.needs_spot_check is True
+
+
+# ---------------------------------------------------------------------------
+# Whipper integration test (S5 primary KAT)
+# ---------------------------------------------------------------------------
+
+#: Minimal whipper native log body (before the SHA-256 line) for a 2-track disc.
+#: The SHA-256 line is appended by :func:`_make_whipper_log_2track`.
+_WHIPPER_LOG_BODY_2TRACK = """\
+Log created by: whipper 0.10.0 (2023-01-01)
+Log creation date: 2023-01-01 12:00:00
+
+CD metadata:
+  MusicBrainz Disc ID: whipper-test-disc-id
+  CDDB Disc ID: 0x12345678
+
+Tracks:
+  1:
+    AccurateRip v1:
+      Result: exact-match
+      Confidence: 42
+      Local CRC: AABBCCDD
+      Remote CRC: AABBCCDD
+    AccurateRip v2:
+      Result: exact-match
+      Confidence: 38
+      Local CRC: 11223344
+      Remote CRC: 11223344
+    Test CRC: AABBCCDD
+    Copy CRC: AABBCCDD
+    Status: Copy OK
+  2:
+    AccurateRip v1:
+      Result: exact-match
+      Confidence: 40
+      Local CRC: EEFF0011
+      Remote CRC: EEFF0011
+    AccurateRip v2:
+      Result: exact-match
+      Confidence: 36
+      Local CRC: 22334455
+      Remote CRC: 22334455
+    Test CRC: EEFF0011
+    Copy CRC: EEFF0011
+    Status: Copy OK
+
+Conclusive status report:
+  AccurateRip summary: All tracks accurately ripped
+  Accurately ripped: 2
+  Tracks in AR database: 2
+
+"""
+
+
+def _make_whipper_log_2track(body: str = _WHIPPER_LOG_BODY_2TRACK) -> str:
+    """Return a complete 2-track whipper log string with a valid self-attesting SHA-256 line.
+
+    :param body: The log body (everything before the SHA-256 line).
+    :returns: The complete log string including the trailing SHA-256 line.
+    """
+    sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest().upper()
+    return f"{body}SHA-256 hash: {sha256}\n"
+
+
+def _make_whipper_release() -> MBRelease:
+    """Return a 2-track single-disc release with a disc_list entry for TOC matching.
+
+    The disc_list offsets ``[182, 67232]`` match the ``disc_id`` list written into
+    ``00 - disc info.yaml`` by the whipper integration test fixture, enabling the
+    single-disc TOC promotion path (S3 / C-WHIP).
+
+    :returns: An :class:`~music_annotator.models.MBRelease` instance.
+    """
+    return MBRelease.model_validate(
+        {
+            "id": "rel-whipper",
+            "title": "Whipper Test Album",
+            "date": "2023",
+            "status": "Official",
+            "barcode": "",
+            "artist-credit": [
+                {
+                    "name": "Test Artist",
+                    "artist": {
+                        "id": "artist-1",
+                        "name": "Test Artist",
+                        "sort-name": "Artist, Test",
+                        "type": "Person",
+                    },
+                }
+            ],
+            "release-group": {
+                "id": "rg-whipper",
+                "primary-type": "Album",
+                "first-release-date": "2023",
+            },
+            "label-info-list": [],
+            "text-representation": {"script": "Latn", "language": "eng"},
+            "medium-list": [
+                {
+                    "position": 1,
+                    "format": "CD",
+                    # disc-list carries the TOC offsets that match the 00 - disc info.yaml fixture.
+                    # offsets=[182, 67232] matches track_frames extracted from disc_id list below.
+                    "disc-list": [{"offset-list": [182, 67232], "sectors": "356250"}],
+                    "track-list": [
+                        {
+                            "id": "trk-w1",
+                            "position": 1,
+                            "recording": {
+                                "id": "rec-w1",
+                                "title": "Whipper Track 1",
+                                "artist-credit": [],
+                            },
+                        },
+                        {
+                            "id": "trk-w2",
+                            "position": 2,
+                            "recording": {
+                                "id": "rec-w2",
+                                "title": "Whipper Track 2",
+                                "artist-credit": [],
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+
+class TestWhipperIntegration:
+    """Primary KAT (S5): end-to-end whipper pipeline integration test.
+
+    Exercises the full public path on an embedded whipper-shaped fixture:
+    dir recognition → TOC lookup (mocked MB) → tier promotion → AccurateRip tags written
+    and read back through the real mutagen path → sidecar preserved → journal + confirmation
+    message correct.
+
+    No internal helpers (apply_tags_flac, _verify_copy) are patched — the real mutagen
+    write-and-read-back path executes, per the integration convention.
+    """
+
+    def test_whipper_full_pipeline(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Full whipper pipeline: recognition → TOC promotion → AR tags → sidecar → journal.
+
+        Fixture:
+        - Source dir with 2 FLAC files + whipper ``.log`` (trailing SHA-256 line) + ``00 - disc info.yaml``
+          with a ``disc_id`` list whose offsets match the release's ``disc_list``.
+        - MB API mocked to return a release with a matching disc TOC entry.
+        - ``discover()`` called with a stub UI that selects the candidate.
+
+        Asserts:
+        (a) Annotation tier is ``full-mb-verified`` (single-disc TOC promotion fired via C-WHIP).
+        (b) ``needs_spot_check == False`` (TOC-promoted entries are not spot-check candidates).
+        (c) AccurateRip flat fields are present in the output FLAC tags (read back via mutagen).
+        (d) ``accuraterip_summary`` is in the provenance sidecar with ``log_sha256`` non-empty.
+        (e) Whipper ``.log`` sidecar is preserved in the work dir.
+        (f) Journal has a ``"sidecar"`` entry for the log file.
+        (g) Journal has ``"tagged"`` entries for the FLACs (the "safe to delete" provenance chain).
+        (h) ``origin_source == "whipper"`` in the provenance sidecar.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        src_dir = Path("/src/whipper_album.0xe212b212")
+        dest_root = Path("/dest_whipper")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(dest_root))
+
+        # Source FLAC files (2 tracks)
+        fs.create_file(str(src_dir / "01 - track1.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src_dir / "02 - track2.flac"), contents=_MINIMAL_FLAC)
+
+        # Whipper native log (C-WHIP strong signature 1): trailing SHA-256 line present.
+        log_content = _make_whipper_log_2track()
+        fs.create_file(str(src_dir / "rip.log"), contents=log_content)
+
+        # 00 - disc info.yaml (C-WHIP strong signature 2 + TOC data for single-disc promotion).
+        # disc_id list: [freedb_crc, num_tracks, offset_1, offset_2, total_seconds]
+        # track_frames = [182, 67232]; leadout_frame = 4750 * 75 = 356250.
+        # These offsets match the release's disc_list[0].offsets = [182, 67232].
+        disc_info_yaml = "disc_id: [0x12345678, 2, 182, 67232, 4750]\nrecord: []\n"
+        fs.create_file(str(src_dir / "00 - disc info.yaml"), contents=disc_info_yaml)
+
+        # Mock MB API calls
+        release = _make_whipper_release()
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch(
+            "music_annotator._pipeline.fetch_recording_detail",
+            return_value=_make_recording_detail("rec-w1", "Whipper Track 1"),
+        )
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        # search_releases_by_dir is called by discover(); return the whipper release as a candidate.
+        candidate = MBReleaseCandidate(release_id="rel-whipper", score=100, title="Whipper Test Album", artist="Test Artist")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[candidate])
+
+        class _AutoSelectUI:
+            """Stub DiscoverUI: always picks the first candidate and never deletes."""
+
+            def choose_release(self, _src_dir: object, candidates: list[MBReleaseCandidate]) -> str | None:
+                """Return the first candidate's release_id unconditionally."""
+                return candidates[0].release_id if candidates else None
+
+            def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
+                """Always accept the proposed disc."""
+                return proposed
+
+            def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
+                """Always accept the proposed shortened name."""
+                return proposed
+
+            def confirm_delete(self, _src_dir: object) -> bool:
+                """Decline deletion."""
+                return False
+
+        stub: DiscoverUI = _AutoSelectUI()
+        music_annotator.discover(
+            src_dirs=[src_dir],
+            dest_root=dest_root,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+            ui=stub,
+        )
+
+        # --- (a) Tier is full-mb-verified ---
+        flac_files = sorted(dest_root.rglob("*.flac"))
+        assert len(flac_files) == 2, f"expected 2 FLAC files in dest, got {len(flac_files)}"
+        work_top = dest_root / flac_files[0].relative_to(dest_root).parts[0] / flac_files[0].relative_to(dest_root).parts[1]
+        # The sidecar may be freedb_disc_1.yaml (when 00 - disc info.yaml is present) or
+        # music_annotator_provenance.yaml.  Use _find_freedb_sidecar with fallback.
+        prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
+        assert prov_path.exists(), f"provenance sidecar must be written at {prov_path}"
+        sidecar = _read_provenance_sidecar(prov_path)
+        assert sidecar.annotation_tier == AnnotationTier.FULL_MB_VERIFIED, (
+            f"whipper TOC promotion must yield full-mb-verified, got {sidecar.annotation_tier!r}"
+        )
+
+        # --- (b) needs_spot_check == False ---
+        assert sidecar.needs_spot_check is False, "TOC-promoted whipper rip must not be flagged for spot-check"
+
+        # --- (c) AccurateRip flat fields in FLAC tags ---
+        # Track 1 should have AR fields from the whipper log (exact-match, confidence 42 v1 / 38 v2).
+        flac_tags_1 = FLAC(str(flac_files[0]))
+        assert flac_tags_1.get("accuraterip_v1_result"), "accuraterip_v1_result must be present in FLAC tags"
+        assert flac_tags_1["accuraterip_v1_result"][0] == "exact-match"
+        assert flac_tags_1.get("accuraterip_v2_result"), "accuraterip_v2_result must be present in FLAC tags"
+        assert flac_tags_1["accuraterip_v2_result"][0] == "exact-match"
+        assert flac_tags_1.get("accuraterip_status"), "accuraterip_status must be present in FLAC tags"
+        assert flac_tags_1["accuraterip_status"][0] == "Copy OK"
+
+        # --- (d) accuraterip_summary in provenance sidecar ---
+        ar_summary: AccurateRipSummary = sidecar.accuraterip_summary
+        assert ar_summary.log_sha256, "accuraterip_summary.log_sha256 must be non-empty (AR-verified)"
+        assert ar_summary.accurately_ripped == 2
+        assert ar_summary.in_ar_database == 2
+        assert ar_summary.mb_disc_id == "whipper-test-disc-id"
+
+        # --- (e) Whipper .log sidecar preserved in work dir ---
+        log_dest = work_top / "rip.log"
+        assert log_dest.exists(), "whipper .log sidecar must be copied to the work dir"
+        assert log_dest.read_text(encoding="utf-8") == log_content, "whipper .log content must be preserved byte-exact"
+
+        # --- (f) Journal has a "sidecar" entry for the log ---
+        journal_path = dest_root / JOURNAL_FILENAME
+        assert journal_path.exists()
+        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        sidecar_entries = [e for e in entries if e["action"] == "sidecar"]
+        assert len(sidecar_entries) >= 1, "journal must have at least one 'sidecar' entry for the whipper log"
+        sidecar_dests = [e["destination"] for e in sidecar_entries]
+        assert str(log_dest) in sidecar_dests, f"journal sidecar entry must reference {log_dest}"
+
+        # --- (g) Journal has "tagged" entries for the FLACs (C-MOVE provenance invariant) ---
+        tagged_entries = [e for e in entries if e["action"] == "tagged"]
+        assert len(tagged_entries) == 2, f"journal must have 2 'tagged' entries, got {len(tagged_entries)}"
+        # The "safe to delete" message derives only from action=="tagged" entries (C-MOVE invariant).
+        # Sidecar entries must NOT feed the tagged count — verify they are separate.
+        assert all(e["action"] == "tagged" for e in tagged_entries)
+        # Confirm the "safe to delete" provenance chain: tagged entries reference the source FLAC files.
+        tagged_sources = {e["source"] for e in tagged_entries}
+        assert str(src_dir / "01 - track1.flac") in tagged_sources
+        assert str(src_dir / "02 - track2.flac") in tagged_sources

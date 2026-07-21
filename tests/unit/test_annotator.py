@@ -41,6 +41,7 @@ from music_annotator._tags import _NAME_MAX, _proposed_short, _work_aliases
 from music_annotator._works import _date_range, _score_top_work, select_primary_performance_work
 from music_annotator.models import (
     JSON,
+    AccurateRipSummary,
     AnnotationTier,
     ArtistEntry,
     MBAlias,
@@ -3860,6 +3861,110 @@ class TestAuditTierPass:
         info_events = [c.args[0] for c in mock_log.info.call_args_list]
         assert "audit_tier_needs_spot_check" in info_events
         assert "audit_tier_provisional" in info_events
+
+    # ------------------------------------------------------------------
+    # KAT: test_audit_enumerates_spot_check_population (S5)
+    # ------------------------------------------------------------------
+
+    def test_audit_enumerates_spot_check_population(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT (S5): _audit_tier_pass enumerates the spot-check population with AR status attached.
+
+        Two fixtures:
+        (a) ``mb-search-resolved`` work with a populated ``AccurateRipSummary`` (AR-verified):
+            ``audit_tier_needs_spot_check`` must include ``ar_verified=True``,
+            ``accurately_ripped=2``, ``in_ar_database=2``.
+        (b) ``mb-search-resolved`` work with an empty ``AccurateRipSummary`` (no AR data):
+            ``audit_tier_needs_spot_check`` must include ``ar_verified=False``,
+            ``accurately_ripped=0``, ``in_ar_database=0``.
+
+        This verifies that a rip that is AccurateRip-verified but only search-resolved is
+        visibly distinguished from one with no AR data (J1 spot-check gate).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Work-A: mb-search-resolved + AR-verified (log_sha256 non-empty)
+        work_a = dest_root / "Composer - Performer" / "Work-A [2020]"
+        work_a.mkdir(parents=True, exist_ok=True)
+        _write_provenance_fields(
+            work_a / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="whipper",
+                annotation_tier=AnnotationTier.MB_SEARCH_RESOLVED,
+                needs_spot_check=True,
+                accuraterip_summary=AccurateRipSummary(
+                    mb_disc_id="disc-abc",
+                    log_sha256="A" * 64,
+                    accurately_ripped=2,
+                    in_ar_database=2,
+                    summary_text="All tracks accurately ripped",
+                ),
+            ),
+        )
+
+        # Work-B: mb-search-resolved + no AR data (empty AccurateRipSummary)
+        work_b = dest_root / "Composer - Performer" / "Work-B [2020]"
+        work_b.mkdir(parents=True, exist_ok=True)
+        _write_provenance_fields(
+            work_b / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.MB_SEARCH_RESOLVED,
+                needs_spot_check=True,
+            ),
+        )
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-a",
+                source="/src/a/01.flac",
+                destination=str(work_a / "01 - Track.flac"),
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-b",
+                source="/src/b/01.flac",
+                destination=str(work_b / "01 - Track.flac"),
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            ),
+        ]
+
+        counts = _make_audit_counts()
+        mock_log = mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        assert counts["needs_spot_check"] == 2
+
+        # Collect all audit_tier_needs_spot_check calls
+        spot_check_calls = [c for c in mock_log.info.call_args_list if c.args[0] == "audit_tier_needs_spot_check"]
+        assert len(spot_check_calls) == 2
+
+        # Find the AR-verified call (work_a) and the no-AR call (work_b)
+        ar_verified_calls = [c for c in spot_check_calls if c.kwargs.get("ar_verified") is True]
+        no_ar_calls = [c for c in spot_check_calls if c.kwargs.get("ar_verified") is False]
+        assert len(ar_verified_calls) == 1, "expected exactly one AR-verified spot-check call"
+        assert len(no_ar_calls) == 1, "expected exactly one no-AR spot-check call"
+
+        # AR-verified call must carry the correct counts
+        ar_call = ar_verified_calls[0]
+        assert ar_call.kwargs["accurately_ripped"] == 2
+        assert ar_call.kwargs["in_ar_database"] == 2
+
+        # No-AR call must carry zero counts
+        no_ar_call = no_ar_calls[0]
+        assert no_ar_call.kwargs["accurately_ripped"] == 0
+        assert no_ar_call.kwargs["in_ar_database"] == 0
 
     def test_audit_tier_pass_skips_non_eligible_actions(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """_audit_tier_pass skips entries with actions other than 'tagged' and 'enriched'.

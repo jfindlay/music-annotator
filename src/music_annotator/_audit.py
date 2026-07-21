@@ -34,7 +34,7 @@ from music_annotator._pipeline_io import (
     read_journal,
     rebuild_journal,
 )
-from music_annotator.models import AnnotationTier, TransactionEntry, TransactionLog
+from music_annotator.models import AccurateRipSummary, AnnotationTier, TransactionEntry, TransactionLog
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -308,7 +308,11 @@ def _audit_tier_pass(
       the lossless principle; S3 write path must always set it).
     * ``audit_tier_full`` — ``full-mb-verified`` (logged at DEBUG; expected clean state).
     * ``audit_tier_provisional`` — any below-``full-mb-verified`` tier (logged at INFO).
-    * ``audit_tier_needs_spot_check`` — ``needs_spot_check=True`` (logged at INFO).
+    * ``audit_tier_needs_spot_check`` — ``needs_spot_check=True`` (logged at INFO), with
+      AccurateRip status attached: ``ar_verified`` (``True`` when ``log_sha256`` is non-empty),
+      ``accurately_ripped``, and ``in_ar_database`` counts from the sidecar's
+      ``accuraterip_summary``.  This allows a rip that is AccurateRip-verified but only
+      search-resolved to be visibly distinguished from one with no AR data.
 
     :param dest_root: Root of the annotated music library.
     :param entries: All :class:`~music_annotator.models.TransactionEntry` objects from the journal.
@@ -334,7 +338,10 @@ def _audit_tier_pass(
         dest_to_work_top[dest] = dest_root / rel.parts[0] / rel.parts[1]
 
     # Cache sidecar reads per work_top_dir to avoid re-reading for multi-track work dirs.
-    sidecar_cache: dict[Path, tuple[AnnotationTier | str, bool]] = {}
+    # Tuple: (annotation_tier, needs_spot_check, accuraterip_summary) — the AR summary is
+    # attached to the spot-check log event so AR-verified search-resolved entries are
+    # visibly distinguished from those with no AR data (J1 spot-check gate, S5).
+    sidecar_cache: dict[Path, tuple[AnnotationTier | str, bool, AccurateRipSummary]] = {}
 
     for dest, work_top_dir in dest_to_work_top.items():
         if work_top_dir not in sidecar_cache:
@@ -342,9 +349,9 @@ def _audit_tier_pass(
             if sidecar_path is None:
                 sidecar_path = work_top_dir / PROVENANCE_FILENAME
             sidecar = _read_provenance_sidecar(sidecar_path)
-            sidecar_cache[work_top_dir] = (sidecar.annotation_tier, sidecar.needs_spot_check)
+            sidecar_cache[work_top_dir] = (sidecar.annotation_tier, sidecar.needs_spot_check, sidecar.accuraterip_summary)
 
-        tier_raw, spot_check = sidecar_cache[work_top_dir]
+        tier_raw, spot_check, ar_summary = sidecar_cache[work_top_dir]
 
         if not tier_raw:
             log.warning(
@@ -414,6 +421,9 @@ def _audit_tier_pass(
                 "audit_tier_needs_spot_check",
                 path=dest,
                 tier=str(tier),
+                ar_verified=bool(ar_summary.log_sha256),
+                accurately_ripped=ar_summary.accurately_ripped,
+                in_ar_database=ar_summary.in_ar_database,
                 message="mb-search-resolved entry awaiting human spot-check",
             )
 
