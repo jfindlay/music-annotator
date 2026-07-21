@@ -428,7 +428,7 @@ single-disc TOC match.
 | 1 | Add AccurateRip provenance models + tag/sidecar round-trip | done | 92d9f7c | C-AR, C-WHIP |
 | 2 | Parse whipper log into C-AR models | done | 71d52eb | — |
 | 3 | Promote TOC-disc-ID identity to full-mb-verified | done | 5ab3a72 | — |
-| 4 | Wire whipper adapter into discovery + preserve sidecars | pending | — | — |
+| 4 | Wire whipper adapter into discovery + preserve sidecars | done | 48fa591 | — |
 | 5 | Spot-check gate + audit surfacing + whipper integration test | pending | — | — |
 
 ## Action-frame digest
