@@ -458,23 +458,25 @@ def is_whipper_dir(src_dir: Path) -> bool:
     return _find_whipper_log(src_dir) is not None
 
 
-def is_presto_dir(src_dir: Path) -> bool:
-    """Return ``True`` when ``src_dir`` is recognised as a PrestoMusic download (C-PRESTO).
+def is_download_dir(src_dir: Path) -> bool:
+    """Return ``True`` when ``src_dir`` is recognised as a generic ISRC-bearing download (C-DL).
 
-    A directory is a Presto download when **both** conditions hold:
+    Matches any ISRC-bearing download dir with no competing rip-provenance signature.
+
+    A directory is a generic download when **both** conditions hold:
 
     1. At least one audio file yields a non-empty ISRC via :func:`~music_annotator._pipeline_io._read_isrc_tag`.
     2. No competing strong rip-provenance signature is present — no whipper native log
        (:func:`~music_annotator._pipeline_io._find_whipper_log` returns ``None``) and no
        ``00 - disc info.yaml`` (:data:`~music_annotator._pipeline_io._DISC_INFO_FILENAME`).  The
-       ``00 - disc info.yaml`` check subsumes the "no resolvable TOC" condition from C-PRESTO because
+       ``00 - disc info.yaml`` check subsumes the "no resolvable TOC" condition because
        :func:`~music_annotator._pipeline_io.parse_disc_toc` reads exclusively from that file.
 
     Whipper recognition takes precedence (C-WHIP mutual exclusion): callers must check
     :func:`is_whipper_dir` first and skip this function when whipper is recognised.
 
     :param src_dir: Directory to inspect.
-    :returns: ``True`` when the Presto heuristic matches; ``False`` otherwise.
+    :returns: ``True`` when the download heuristic matches; ``False`` otherwise.
     """
     # Condition 2: reject if any strong rip-provenance signature is present.
     # The disc info yaml check subsumes the "no resolvable TOC" condition because parse_disc_toc
@@ -1048,14 +1050,14 @@ def discover(
         # Whipper recognition (C-WHIP): set origin_source and parse AccurateRip data when
         # either strong signature is present.  The AR data is passed to run() so it can be
         # threaded into TransactionEntry flat fields and ProvenanceSidecar.accuraterip_summary.
-        # Presto recognition (C-PRESTO) runs only when whipper is not recognised — mutual exclusion.
+        # Download recognition (C-DL) runs only when whipper is not recognised — mutual exclusion.
         whipper = is_whipper_dir(src_dir)
         if whipper:
             origin_source = "whipper"
             log.info("whipper_dir_recognised", src_dir=str(src_dir))
-        elif is_presto_dir(src_dir):
-            origin_source = "presto"
-            log.info("presto_dir_recognised", src_dir=str(src_dir))
+        elif is_download_dir(src_dir):
+            origin_source = "download"
+            log.info("download_dir_recognised", src_dir=str(src_dir))
         else:
             origin_source = ""
         ar_summary, ar_tracks = _parse_whipper_ar(src_dir) if whipper else (AccurateRipSummary(), {})

@@ -308,7 +308,7 @@ def _audit_tier_pass(
       the lossless principle; S3 write path must always set it).
     * ``audit_tier_full`` — ``full-mb-verified`` (logged at DEBUG; expected clean state).
       Includes ``origin_source`` from the sidecar so an operator can see the identity basis:
-      ``"presto"`` for ISRC-promoted entries, ``"whipper"`` for TOC-promoted entries, ``""``
+      ``"download"`` for ISRC-promoted entries, ``"whipper"`` for TOC-promoted entries, ``""``
       for embedded-MBID entries.
     * ``audit_tier_provisional`` — any below-``full-mb-verified`` tier (logged at INFO).
     * ``audit_tier_needs_spot_check`` — ``needs_spot_check=True`` (logged at INFO), with
@@ -345,7 +345,7 @@ def _audit_tier_pass(
     # summary is attached to the spot-check log event so AR-verified search-resolved entries are
     # visibly distinguished from those with no AR data (J1 spot-check gate, S5).  origin_source
     # is included in the audit_tier_full event so an operator can see the identity basis (e.g.
-    # "presto" for ISRC-promoted entries, "whipper" for TOC-promoted entries).
+    # "download" for ISRC-promoted entries, "whipper" for TOC-promoted entries).
     sidecar_cache: dict[Path, tuple[AnnotationTier | str, bool, AccurateRipSummary, str]] = {}
 
     for dest, work_top_dir in dest_to_work_top.items():

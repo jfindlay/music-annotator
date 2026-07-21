@@ -3,7 +3,7 @@
 Covers :func:`~music_annotator.parse_disc_info_yaml`, :func:`~music_annotator.parse_disc_toc`,
 :func:`~music_annotator.parse_disc_title`, :func:`~music_annotator.parse_dir_hint`,
 :func:`~music_annotator.search_releases_by_dir`, :func:`~music_annotator._format_candidate`,
-:func:`~music_annotator._discover.is_whipper_dir`, :func:`~music_annotator._discover.is_presto_dir`,
+:func:`~music_annotator._discover.is_whipper_dir`, :func:`~music_annotator._discover.is_download_dir`,
 and :func:`~music_annotator.discover`.
 """
 # pylint: disable=duplicate-code  # _make_single_track_release helper intentionally mirrors test_pipeline.py scaffolding
@@ -38,7 +38,7 @@ from music_annotator._discover import (
     _parse_whipper_ar,
     _score_toc_release,
     _toc_lookup_mb_releases,
-    is_presto_dir,
+    is_download_dir,
     is_whipper_dir,
 )
 from music_annotator._pipeline import _copy_tag_verify_journal_pass, _write_whipper_sidecars
@@ -3686,7 +3686,7 @@ class TestIsWhipperDir:
 
 
 # ---------------------------------------------------------------------------
-# is_presto_dir — C-PRESTO recognition KATs
+# is_download_dir — C-DL recognition KATs
 # ---------------------------------------------------------------------------
 
 
@@ -3704,31 +3704,31 @@ def _flac_with_isrc(path: Path, isrc: str) -> None:
     audio.save()
 
 
-class TestIsPrestoDir:
-    """Tests for is_presto_dir (C-PRESTO recognition heuristic).
+class TestIsDownloadDir:
+    """Tests for is_download_dir (C-DL recognition heuristic).
 
-    KATs named in C-PRESTO:
+    KATs named in C-DL:
     (a) dir with ISRC-bearing FLACs and no rip-provenance artifact → recognised.
-    (b) dir with a whipper log and ISRCs → NOT recognised (is_presto_dir returns False; whipper
+    (b) dir with a whipper log and ISRCs → NOT recognised (is_download_dir returns False; whipper
         mutual exclusion is also enforced at the discover() wiring level).
     (c) dir with no ISRC tags → NOT recognised.
     (d) dir with 00 - disc info.yaml → NOT recognised (competing strong rip-provenance signature;
         also subsumes the "no resolvable TOC" condition since parse_disc_toc reads only from that file).
     """
 
-    def test_presto_dir_recognised(self, fs: FakeFilesystem) -> None:
+    def test_download_dir_recognised(self, fs: FakeFilesystem) -> None:
         """KAT (a): dir with ISRC-bearing FLACs and no rip-provenance artifact is recognised.
 
         :param fs: pyfakefs fixture.
         """
-        src = Path("/music/PrestoAlbum")
+        src = Path("/music/DownloadAlbum")
         fs.create_dir(str(src))
         _flac_with_isrc(src / "01.flac", "GBAYE0000001")
 
-        assert is_presto_dir(src) is True
+        assert is_download_dir(src) is True
 
-    def test_no_isrc_not_presto(self, fs: FakeFilesystem) -> None:
-        """KAT (c): dir with no ISRC tags is not recognised as Presto.
+    def test_no_isrc_not_download(self, fs: FakeFilesystem) -> None:
+        """KAT (c): dir with no ISRC tags is not recognised as a download.
 
         :param fs: pyfakefs fixture.
         """
@@ -3737,14 +3737,14 @@ class TestIsPrestoDir:
         # Write a FLAC with no ISRC tag — _saveable_flac bytes, no tag written.
         (src / "01.flac").write_bytes(_saveable_flac())
 
-        assert is_presto_dir(src) is False
+        assert is_download_dir(src) is False
 
-    def test_disc_info_yaml_blocks_presto(self, fs: FakeFilesystem) -> None:
-        """KAT (d): dir with 00 - disc info.yaml is not recognised as Presto.
+    def test_disc_info_yaml_blocks_download(self, fs: FakeFilesystem) -> None:
+        """KAT (d): dir with 00 - disc info.yaml is not recognised as a download.
 
         The disc info yaml is a strong rip-provenance signature (whipper); its presence
-        disqualifies the Presto heuristic even when ISRCs are present.  This check also
-        subsumes the "no resolvable TOC" condition from C-PRESTO because parse_disc_toc
+        disqualifies the download heuristic even when ISRCs are present.  This check also
+        subsumes the "no resolvable TOC" condition from C-DL because parse_disc_toc
         reads exclusively from 00 - disc info.yaml.
 
         :param fs: pyfakefs fixture.
@@ -3754,13 +3754,13 @@ class TestIsPrestoDir:
         fs.create_file(str(src / "00 - disc info.yaml"), contents="disc_id: [1, 1, 150, 200]\n")
         _flac_with_isrc(src / "01.flac", "GBAYE0000001")
 
-        assert is_presto_dir(src) is False
+        assert is_download_dir(src) is False
 
-    def test_whipper_log_blocks_presto(self, fs: FakeFilesystem) -> None:
-        """KAT (b): dir with a whipper log is not recognised as Presto.
+    def test_whipper_log_blocks_download(self, fs: FakeFilesystem) -> None:
+        """KAT (b): dir with a whipper log is not recognised as a download.
 
         A whipper native log (trailing SHA-256 line) is a strong rip-provenance signature;
-        its presence disqualifies the Presto heuristic even when ISRCs are present.
+        its presence disqualifies the download heuristic even when ISRCs are present.
 
         :param fs: pyfakefs fixture.
         """
@@ -3769,17 +3769,17 @@ class TestIsPrestoDir:
         fs.create_file(str(src / "rip.log"), contents=_make_whipper_log())
         _flac_with_isrc(src / "01.flac", "GBAYE0000001")
 
-        assert is_presto_dir(src) is False
+        assert is_download_dir(src) is False
 
-    def test_empty_dir_not_presto(self, fs: FakeFilesystem) -> None:
-        """An empty directory (no audio files) is not recognised as Presto.
+    def test_empty_dir_not_download(self, fs: FakeFilesystem) -> None:
+        """An empty directory (no audio files) is not recognised as a download.
 
         :param fs: pyfakefs fixture.
         """
         src = Path("/music/Empty")
         fs.create_dir(str(src))
 
-        assert is_presto_dir(src) is False
+        assert is_download_dir(src) is False
 
 
 # ---------------------------------------------------------------------------
@@ -4131,16 +4131,16 @@ class TestAccurateRipThreadedToJournal:
         _, kwargs = mock_run.call_args
         assert kwargs["origin_source"] == ""
 
-    def test_discover_passes_origin_source_presto_to_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """When is_presto_dir returns True, discover() passes origin_source='presto' to run().
+    def test_discover_passes_origin_source_download_to_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When is_download_dir returns True, discover() passes origin_source='download' to run().
 
-        A dir with an ISRC-bearing FLAC and no rip-provenance artifact is recognised as Presto;
-        discover() must pass origin_source='presto' to run() (C-PRESTO wiring KAT).
+        A dir with an ISRC-bearing FLAC and no rip-provenance artifact is recognised as a download;
+        discover() must pass origin_source='download' to run() (C-DL wiring KAT).
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
         """
-        src = Path("/music/PrestoAlbum")
+        src = Path("/music/DownloadAlbum")
         fs.create_dir(str(src))
         _flac_with_isrc(src / "01.flac", "GBAYE0000001")
 
@@ -4153,13 +4153,13 @@ class TestAccurateRipThreadedToJournal:
 
         mock_run.assert_called_once()
         _, kwargs = mock_run.call_args
-        assert kwargs["origin_source"] == "presto"
+        assert kwargs["origin_source"] == "download"
 
     def test_whipper_precedence_over_presto(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """When a dir has both a whipper log and ISRCs, discover() passes origin_source='whipper'.
 
-        Whipper recognition takes precedence over Presto (C-PRESTO mutual exclusion KAT):
-        a dir matching both signatures is whipper, not Presto.
+        Whipper recognition takes precedence over download recognition (C-WHIP mutual exclusion KAT):
+        a dir matching both signatures is whipper, not a generic download.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.

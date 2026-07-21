@@ -22,7 +22,7 @@ from pytest_mock import MockerFixture
 import music_annotator
 from music_annotator import JOURNAL_FILENAME, CollisionPolicy
 from music_annotator._audit import _audit_tier_pass, _make_audit_counts, detect_fragmented_releases
-from music_annotator._discover import DiscoverUI, is_presto_dir
+from music_annotator._discover import DiscoverUI, is_download_dir
 from music_annotator._pipeline_io import (
     PROVENANCE_FILENAME,
     _find_freedb_sidecar,
@@ -2305,8 +2305,8 @@ class TestAuditDistinguishesIsrcVerified:
     """KAT (S3): _audit_tier_pass surfaces ISRC-promoted entries distinctly from search-resolved ones.
 
     An ISRC-promoted entry has ``annotation_tier == full-mb-verified`` and
-    ``origin_source == "presto"`` in its provenance sidecar.  The audit must log
-    ``audit_tier_full`` with ``origin_source="presto"`` for that entry, and
+    ``origin_source == "download"`` in its provenance sidecar.  The audit must log
+    ``audit_tier_full`` with ``origin_source="download"`` for that entry, and
     ``audit_tier_provisional`` (not ``audit_tier_full``) for a search-resolved entry.
 
     This test calls :func:`_audit_tier_pass` directly with fabricated sidecars and journal
@@ -2317,11 +2317,11 @@ class TestAuditDistinguishesIsrcVerified:
         """ISRC-promoted entry logs audit_tier_full with origin_source; search-resolved logs audit_tier_provisional.
 
         Fixture:
-        - Work-ISRC: ``full-mb-verified``, ``origin_source="presto"`` (ISRC-promoted Presto dir).
+        - Work-ISRC: ``full-mb-verified``, ``origin_source="download"`` (ISRC-promoted download dir).
         - Work-Search: ``mb-search-resolved``, ``origin_source=""`` (bare search-resolved entry).
 
         Asserts:
-        (a) ``audit_tier_full`` is logged for Work-ISRC with ``origin_source="presto"``.
+        (a) ``audit_tier_full`` is logged for Work-ISRC with ``origin_source="download"``.
         (b) ``audit_tier_provisional`` is logged for Work-Search (not ``audit_tier_full``).
         (c) ``tier_full == 1``, ``tier_search == 1``, ``provisional_total == 1``.
 
@@ -2331,14 +2331,14 @@ class TestAuditDistinguishesIsrcVerified:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        # Work-ISRC: full-mb-verified, origin_source="presto" (ISRC-promoted Presto dir)
+        # Work-ISRC: full-mb-verified, origin_source="download" (ISRC-promoted download dir)
         work_isrc = dest_root / "Composer - Performer" / "Work-ISRC [2024]"
         work_isrc.mkdir(parents=True, exist_ok=True)
         _write_provenance_fields(
             work_isrc / PROVENANCE_FILENAME,
             ProvenanceSidecar(
                 origin_time="2024-01-01T00:00:00+00:00",
-                origin_source="presto",
+                origin_source="download",
                 annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
                 needs_spot_check=False,
             ),
@@ -2382,12 +2382,12 @@ class TestAuditDistinguishesIsrcVerified:
         counts = _make_audit_counts()
         _audit_tier_pass(dest_root, journal_entries, counts)
 
-        # (a) audit_tier_full logged for Work-ISRC with origin_source="presto"
+        # (a) audit_tier_full logged for Work-ISRC with origin_source="download"
         full_calls = [c for c in mock_log.debug.call_args_list if c.args[0] == "audit_tier_full"]
         assert len(full_calls) == 1, f"expected 1 audit_tier_full call, got {len(full_calls)}"
         full_kwargs = full_calls[0].kwargs
-        assert full_kwargs.get("origin_source") == "presto", (
-            f"audit_tier_full must include origin_source='presto', got {full_kwargs.get('origin_source')!r}"
+        assert full_kwargs.get("origin_source") == "download", (
+            f"audit_tier_full must include origin_source='download', got {full_kwargs.get('origin_source')!r}"
         )
 
         # (b) audit_tier_provisional logged for Work-Search (not audit_tier_full)
@@ -2401,11 +2401,11 @@ class TestAuditDistinguishesIsrcVerified:
 
 
 # ---------------------------------------------------------------------------
-# S3 primary KAT: Presto end-to-end integration test
+# S1 primary KAT: other-download end-to-end integration test (C-DL)
 # ---------------------------------------------------------------------------
 
 
-def _make_presto_release(isrc_track1: str, isrc_track2: str) -> MBRelease:
+def _make_download_release(isrc_track1: str, isrc_track2: str) -> MBRelease:
     """Return a 2-track release with ISRC codes in the recording stubs.
 
     The ``isrc-list`` field on each recording stub is populated so that the ISRC-match
@@ -2417,8 +2417,8 @@ def _make_presto_release(isrc_track1: str, isrc_track2: str) -> MBRelease:
     """
     return MBRelease.model_validate(
         {
-            "id": "rel-presto",
-            "title": "Presto Test Album",
+            "id": "rel-download",
+            "title": "Download Test Album",
             "date": "2022",
             "status": "Official",
             "barcode": "",
@@ -2426,7 +2426,7 @@ def _make_presto_release(isrc_track1: str, isrc_track2: str) -> MBRelease:
                 {
                     "name": "Test Artist",
                     "artist": {
-                        "id": "artist-p1",
+                        "id": "artist-d1",
                         "name": "Test Artist",
                         "sort-name": "Artist, Test",
                         "type": "Person",
@@ -2434,7 +2434,7 @@ def _make_presto_release(isrc_track1: str, isrc_track2: str) -> MBRelease:
                 }
             ],
             "release-group": {
-                "id": "rg-presto",
+                "id": "rg-download",
                 "primary-type": "Album",
                 "first-release-date": "2022",
             },
@@ -2446,21 +2446,21 @@ def _make_presto_release(isrc_track1: str, isrc_track2: str) -> MBRelease:
                     "format": "Digital Media",
                     "track-list": [
                         {
-                            "id": "trk-p1",
+                            "id": "trk-d1",
                             "position": 1,
                             "recording": {
-                                "id": "rec-p1",
-                                "title": "Presto Track 1",
+                                "id": "rec-d1",
+                                "title": "Download Track 1",
                                 "artist-credit": [],
                                 "isrc-list": [isrc_track1],
                             },
                         },
                         {
-                            "id": "trk-p2",
+                            "id": "trk-d2",
                             "position": 2,
                             "recording": {
-                                "id": "rec-p2",
-                                "title": "Presto Track 2",
+                                "id": "rec-d2",
+                                "title": "Download Track 2",
                                 "artist-credit": [],
                                 "isrc-list": [isrc_track2],
                             },
@@ -2472,13 +2472,13 @@ def _make_presto_release(isrc_track1: str, isrc_track2: str) -> MBRelease:
     )
 
 
-class TestPrestoIsrcIntegration:
-    """Primary KAT (S3): end-to-end Presto pipeline integration test.
+class TestOtherDownloadIsrcIntegration:
+    """Primary KAT (S1/C-DL): end-to-end other-download pipeline integration test.
 
-    Exercises the full public path on an embedded Presto-shaped fixture: ISRC-bearing FLAC
-    files, no whipper log, no disc info yaml.  The pipeline must:
+    Exercises the full public path on an other-download-shaped fixture: ISRC-bearing FLAC
+    files, no booklet PDF, no whipper log, no disc info yaml.  The pipeline must:
 
-    1. Recognise the directory as a Presto download (``origin_source == "presto"``).
+    1. Recognise the directory as a generic download (``is_download_dir`` True; ``origin_source == "download"``).
     2. Resolve the release via MB search (mocked).
     3. Promote the annotation tier to ``full-mb-verified`` via ISRC-match (C-ISRC).
     4. Write and read back tags through the real mutagen path.
@@ -2488,28 +2488,28 @@ class TestPrestoIsrcIntegration:
     mutagen write-and-read-back path executes, per the integration convention.
     """
 
-    def test_presto_full_pipeline(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Full Presto pipeline: ISRC recognition → ISRC-match promotion → tags → journal.
+    def test_other_download_full_pipeline(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Full other-download pipeline: ISRC recognition → ISRC-match promotion → tags → journal.
 
         Fixture:
-        - Source dir with 2 FLAC files carrying ISRC tags (``"GB-A00-22-00001"`` and
-          ``"GB-A00-22-00002"``).  No whipper log, no ``00 - disc info.yaml``.
+        - Source dir with 2 FLAC files carrying ISRC tags (``"GBA002200001"`` and
+          ``"GBA002200002"``).  No booklet PDF, no whipper log, no ``00 - disc info.yaml``.
         - MB API mocked to return a release whose recording stubs carry matching ISRC lists.
         - ``discover()`` called with a stub UI that selects the candidate.
 
         Asserts:
-        (a) ``origin_source == "presto"`` in the provenance sidecar (C-PRESTO recognition).
+        (a) ``is_download_dir`` returns ``True`` for the source dir (C-DL recognition).
         (b) Annotation tier is ``full-mb-verified`` (ISRC-match promotion fired, C-ISRC).
         (c) ``needs_spot_check == False`` (ISRC-promoted entries are not spot-check candidates).
         (d) FLAC tags are written and readable (TITLE and ALBUMARTIST present).
         (e) Journal has ``"tagged"`` entries for both FLACs (provenance-chain invariant).
-        (f) No ``"sidecar"`` entries for a whipper log (Presto has no rip log).
+        (f) No ``"sidecar"`` entries for a whipper log (download has no rip log).
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs filesystem fixture.
         """
-        src_dir = Path("/src/presto_album")
-        dest_root = Path("/dest_presto")
+        src_dir = Path("/src/download_album")
+        dest_root = Path("/dest_download")
         fs.create_dir(str(src_dir))
         fs.create_dir(str(dest_root))
 
@@ -2519,12 +2519,13 @@ class TestPrestoIsrcIntegration:
 
         # Create source FLAC files and embed ISRC tags via mutagen.
         # pyfakefs intercepts the file I/O; mutagen reads/writes through the fake filesystem.
+        # No booklet PDF — other-download fixture has ISRC-bearing audio only.
         flac1_path = src_dir / "01 - track1.flac"
         flac2_path = src_dir / "02 - track2.flac"
         fs.create_file(str(flac1_path), contents=_MINIMAL_FLAC)
         fs.create_file(str(flac2_path), contents=_MINIMAL_FLAC)
 
-        # Embed ISRC tags so is_presto_dir() recognises the directory (C-PRESTO condition 1)
+        # Embed ISRC tags so is_download_dir() recognises the directory (C-DL condition 1)
         # and _isrc_matches() can confirm the match against the release's isrc_list.
         audio1 = FLAC(str(flac1_path))
         audio1["isrc"] = [isrc_1]
@@ -2535,7 +2536,7 @@ class TestPrestoIsrcIntegration:
         audio2.save()
 
         # Release with matching ISRC lists in the recording stubs.
-        release = _make_presto_release(isrc_1, isrc_2)
+        release = _make_download_release(isrc_1, isrc_2)
 
         # Mock MB API calls.  No whipper log → no AR data → no fetch_acoustid_id needed.
         mocker.patch("music_annotator._mb_api.mb.set_useragent")
@@ -2545,15 +2546,15 @@ class TestPrestoIsrcIntegration:
             "music_annotator._pipeline.fetch_recording_detail",
             side_effect=lambda rec_id, no_cache=False: _make_recording_detail(
                 rec_id,
-                {"rec-p1": "Presto Track 1", "rec-p2": "Presto Track 2"}.get(rec_id, "Unknown"),
+                {"rec-d1": "Download Track 1", "rec-d2": "Download Track 2"}.get(rec_id, "Unknown"),
             ),
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
-        # search_releases_by_dir is called by discover(); return the Presto release as a candidate.
-        candidate = MBReleaseCandidate(release_id="rel-presto", score=95, title="Presto Test Album", artist="Test Artist")
+        # search_releases_by_dir is called by discover(); return the download release as a candidate.
+        candidate = MBReleaseCandidate(release_id="rel-download", score=95, title="Download Test Album", artist="Test Artist")
         mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[candidate])
 
         class _AutoSelectUI:
@@ -2593,12 +2594,12 @@ class TestPrestoIsrcIntegration:
         assert prov_path.exists(), f"provenance sidecar must be written at {prov_path}"
         sidecar = _read_provenance_sidecar(prov_path)
 
-        # --- (a) origin_source == "presto": verify that discover() recognised the dir as Presto.
+        # --- (a) is_download_dir returns True: verify that discover() recognised the dir as a download.
         # The pipeline does not write origin_source to the sidecar during normal ingest (it is
-        # written by the enrich_origin_time maintenance pass).  Instead, assert that is_presto_dir()
+        # written by the enrich_origin_time maintenance pass).  Instead, assert that is_download_dir()
         # returns True for the source dir — this is the exact predicate that discover() evaluates
-        # to set origin_source = "presto" before calling run().
-        assert is_presto_dir(src_dir), "source dir must be recognised as a Presto download (is_presto_dir returned False)"
+        # to set origin_source = "download" before calling run().
+        assert is_download_dir(src_dir), "source dir must be recognised as a download (is_download_dir returned False)"
 
         # --- (b) Annotation tier is full-mb-verified (ISRC-match promotion) ---
         assert sidecar.annotation_tier == AnnotationTier.FULL_MB_VERIFIED, (
@@ -2606,7 +2607,7 @@ class TestPrestoIsrcIntegration:
         )
 
         # --- (c) needs_spot_check == False ---
-        assert sidecar.needs_spot_check is False, "ISRC-promoted Presto entry must not be flagged for spot-check"
+        assert sidecar.needs_spot_check is False, "ISRC-promoted download entry must not be flagged for spot-check"
 
         # --- (d) FLAC tags written and readable ---
         for flac_path in flac_files:
@@ -2624,6 +2625,6 @@ class TestPrestoIsrcIntegration:
         assert str(flac1_path) in tagged_sources, f"source {flac1_path} not in tagged sources"
         assert str(flac2_path) in tagged_sources, f"source {flac2_path} not in tagged sources"
 
-        # --- (f) No "sidecar" entries for a whipper log (Presto has no rip log) ---
+        # --- (f) No "sidecar" entries for a whipper log (download has no rip log) ---
         sidecar_entries = [e for e in entries if e["action"] == "sidecar" and e["destination"].endswith(".log")]
-        assert not sidecar_entries, f"Presto dir must not produce whipper log sidecar entries, got {sidecar_entries}"
+        assert not sidecar_entries, f"download dir must not produce whipper log sidecar entries, got {sidecar_entries}"
