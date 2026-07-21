@@ -5,6 +5,10 @@ from __future__ import annotations
 import pytest
 
 from music_annotator.models import (
+    AccurateRipResult,
+    AccurateRipSummary,
+    AccurateRipTrack,
+    AccurateRipTrackResult,
     AnnotationTier,
     ArtistEntry,
     CeaPerformers,
@@ -31,6 +35,7 @@ from music_annotator.models import (
     MBUrlRelation,
     MBWork,
     MBWorkRelation,
+    ProvenanceSidecar,
     RoleBuckets,
     TrackTags,
     TransactionEntry,
@@ -1337,3 +1342,145 @@ class TestTierClassifierMapsCensusSignals:
         assert CensusSignal.SEARCH_HIT.value == "search-hit"
         assert CensusSignal.MISMATCH.value == "mismatch"
         assert CensusSignal.NOT_IN_MB.value == "not-in-mb"
+
+
+# ---------------------------------------------------------------------------
+# AccurateRip provenance models (C-AR KATs — R3b S1)
+# ---------------------------------------------------------------------------
+
+
+class TestAccurateRipResultEnum:
+    """KAT: AccurateRipResult enum values round-trip (value ↔ enum member)."""
+
+    def test_accuraterip_result_enum_exhaustive(self) -> None:
+        """All three AccurateRipResult values round-trip between string and enum member.
+
+        Pins the C-AR contract: the three whipper WhipperLogger result strings are the
+        exact enum values, and constructing from the string yields the correct member.
+        """
+        assert AccurateRipResult("exact-match") is AccurateRipResult.EXACT_MATCH
+        assert AccurateRipResult("no-exact-match") is AccurateRipResult.NO_EXACT_MATCH
+        assert AccurateRipResult("not-present") is AccurateRipResult.NOT_PRESENT
+
+        assert AccurateRipResult.EXACT_MATCH.value == "exact-match"
+        assert AccurateRipResult.NO_EXACT_MATCH.value == "no-exact-match"
+        assert AccurateRipResult.NOT_PRESENT.value == "not-present"
+
+    def test_accuraterip_result_all_members_covered(self) -> None:
+        """Exactly three AccurateRipResult members exist (no silent additions)."""
+        members = list(AccurateRipResult)
+        assert len(members) == 3
+        assert set(members) == {AccurateRipResult.EXACT_MATCH, AccurateRipResult.NO_EXACT_MATCH, AccurateRipResult.NOT_PRESENT}
+
+
+class TestAccurateRipTrackResult:
+    """Tests for AccurateRipTrackResult model defaults and field types."""
+
+    def test_defaults(self) -> None:
+        """AccurateRipTrackResult defaults to NOT_PRESENT with zero confidence and empty CRCs."""
+        r = AccurateRipTrackResult()
+        assert r.version == ""
+        assert r.result is AccurateRipResult.NOT_PRESENT
+        assert r.confidence == 0
+        assert r.local_crc == ""
+        assert r.remote_crc == ""
+
+    def test_exact_match_construction(self) -> None:
+        """AccurateRipTrackResult can be constructed with an exact-match result."""
+        r = AccurateRipTrackResult(
+            version="v1", result=AccurateRipResult.EXACT_MATCH, confidence=42, local_crc="AABBCCDD", remote_crc="AABBCCDD"
+        )
+        assert r.result is AccurateRipResult.EXACT_MATCH
+        assert r.confidence == 42
+        assert r.local_crc == "AABBCCDD"
+
+
+class TestAccurateRipTrack:
+    """Tests for AccurateRipTrack model defaults and nested structure."""
+
+    def test_defaults(self) -> None:
+        """AccurateRipTrack defaults to empty v1/v2 results and empty CRC/status fields."""
+        t = AccurateRipTrack()
+        assert t.v1.result is AccurateRipResult.NOT_PRESENT
+        assert t.v2.result is AccurateRipResult.NOT_PRESENT
+        assert t.test_crc == ""
+        assert t.copy_crc == ""
+        assert t.status == ""
+
+    def test_populated_track(self) -> None:
+        """AccurateRipTrack can carry populated v1/v2 results and rip CRCs."""
+        t = AccurateRipTrack(
+            v1=AccurateRipTrackResult(
+                version="v1", result=AccurateRipResult.EXACT_MATCH, confidence=10, local_crc="AABB1122", remote_crc="AABB1122"
+            ),
+            v2=AccurateRipTrackResult(
+                version="v2", result=AccurateRipResult.NO_EXACT_MATCH, confidence=5, local_crc="CCDD3344", remote_crc="EEFF5566"
+            ),
+            test_crc="12345678",
+            copy_crc="12345678",
+            status="Copy OK",
+        )
+        assert t.v1.result is AccurateRipResult.EXACT_MATCH
+        assert t.v2.result is AccurateRipResult.NO_EXACT_MATCH
+        assert t.test_crc == "12345678"
+        assert t.status == "Copy OK"
+
+
+class TestAccurateRipSummary:
+    """Tests for AccurateRipSummary model and monotonic-upgrade rule."""
+
+    def test_defaults(self) -> None:
+        """AccurateRipSummary defaults to empty strings and zero counters."""
+        s = AccurateRipSummary()
+        assert s.mb_disc_id == ""
+        assert s.cddb_disc_id == ""
+        assert s.log_sha256 == ""
+        assert s.accurately_ripped == 0
+        assert s.in_ar_database == 0
+        assert s.summary_text == ""
+
+    def test_is_populated_empty(self) -> None:
+        """is_populated() returns False for a default (empty) AccurateRipSummary."""
+        assert AccurateRipSummary().is_populated() is False
+
+    def test_is_populated_with_log_sha256(self) -> None:
+        """is_populated() returns True when log_sha256 is set."""
+        assert AccurateRipSummary(log_sha256="ABCDEF01").is_populated() is True
+
+    def test_is_populated_with_counts(self) -> None:
+        """is_populated() returns True when accurately_ripped or in_ar_database is non-zero."""
+        assert AccurateRipSummary(accurately_ripped=10).is_populated() is True
+        assert AccurateRipSummary(in_ar_database=5).is_populated() is True
+
+    def test_is_populated_with_text(self) -> None:
+        """is_populated() returns True when summary_text is set."""
+        assert AccurateRipSummary(summary_text="All tracks accurately ripped").is_populated() is True
+
+    def test_accuraterip_summary_monotonic(self) -> None:
+        """A present accuraterip_summary on ProvenanceSidecar survives a later empty-summary merge.
+
+        Pins the C-AR monotonic-upgrade rule: an incoming empty AccurateRipSummary must not
+        overwrite a populated one.  The caller is responsible for checking is_populated() before
+        overwriting; this test verifies the sentinel method and the sidecar field coexist correctly.
+        """
+        populated = AccurateRipSummary(
+            mb_disc_id="abc123",
+            cddb_disc_id="deadbeef",
+            log_sha256="AABBCCDD" * 8,
+            accurately_ripped=12,
+            in_ar_database=12,
+            summary_text="All tracks accurately ripped",
+        )
+        empty = AccurateRipSummary()
+
+        sidecar = ProvenanceSidecar(accuraterip_summary=populated)
+        assert sidecar.accuraterip_summary.is_populated() is True
+
+        # Simulate the monotonic-upgrade rule: only overwrite when incoming is populated.
+        if empty.is_populated():
+            sidecar.accuraterip_summary = empty  # pragma: no cover
+
+        # The populated summary must survive the empty-summary "merge".
+        assert sidecar.accuraterip_summary.mb_disc_id == "abc123"
+        assert sidecar.accuraterip_summary.log_sha256 == "AABBCCDD" * 8
+        assert sidecar.accuraterip_summary.accurately_ripped == 12

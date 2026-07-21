@@ -123,6 +123,128 @@ def classify_annotation_tier(signal: CensusSignal) -> tuple[AnnotationTier, bool
 
 
 # ---------------------------------------------------------------------------
+# AccurateRip provenance models (C-AR — frozen at R3b S1)
+# ---------------------------------------------------------------------------
+
+
+class AccurateRipResult(StrEnum):
+    """Per-version AccurateRip verification outcome (whipper ``WhipperLogger.trackLog`` ``Result``).
+
+    Values mirror whipper's native logger strings exactly.  Consumers that ``match``/``case`` on this
+    enum must include a ``case _: # pragma: no cover`` arm per house style.
+    """
+
+    EXACT_MATCH = "exact-match"
+    """Whipper "Found, exact match" — track CRC matches the AccurateRip database entry."""
+
+    NO_EXACT_MATCH = "no-exact-match"
+    """Whipper "Found, NO exact match" — track is in the database but CRC differs."""
+
+    NOT_PRESENT = "not-present"
+    """Whipper "Track not present in AccurateRip database" — no database entry for this track."""
+
+
+class AccurateRipTrackResult(BaseModel):
+    """One AccurateRip DB generation (v1 or v2) result for a single track (S2 parse product).
+
+    Carries the verification outcome, confidence counter, and both CRC values as emitted by
+    whipper's ``WhipperLogger.trackLog``.  All fields default to empty/zero so a missing DB
+    generation can be represented without ``None``.
+
+    Important attributes: ``version``, ``result``, ``confidence``, ``local_crc``, ``remote_crc``.
+    """
+
+    version: str = ""
+    """DB generation identifier: ``"v1"`` or ``"v2"``."""
+
+    result: AccurateRipResult = AccurateRipResult.NOT_PRESENT
+    """Verification outcome for this DB generation."""
+
+    confidence: int = 0
+    """Whipper ``DBConfidence`` counter; 0 when ``not-present``."""
+
+    local_crc: str = ""
+    """Whipper "Local CRC" (uppercase hex); empty when ``not-present``."""
+
+    remote_crc: str = ""
+    """Whipper "Remote CRC" (uppercase hex); empty when ``not-present``."""
+
+
+class AccurateRipTrack(BaseModel):
+    """Per-track AccurateRip container: both DB generations + rip CRCs + status (S2 parse product).
+
+    Carries the full per-track AccurateRip data from a whipper native log.  S4 projects the
+    structured fields onto the flat ``str`` tag fields on ``TrackTags``/``TransactionEntry``
+    (the tag round-trip surface); this model is the typed intermediate.
+
+    Important attributes: ``v1``, ``v2``, ``test_crc``, ``copy_crc``, ``status``.
+    """
+
+    v1: AccurateRipTrackResult = Field(default_factory=AccurateRipTrackResult)
+    """AccurateRip v1 result for this track."""
+
+    v2: AccurateRipTrackResult = Field(default_factory=AccurateRipTrackResult)
+    """AccurateRip v2 result for this track."""
+
+    test_crc: str = ""
+    """Whipper "Test CRC" (``%08X`` uppercase hex); empty when not ripped."""
+
+    copy_crc: str = ""
+    """Whipper "Copy CRC" (``%08X`` uppercase hex); empty when not ripped."""
+
+    status: str = ""
+    """Whipper "Status" text verbatim: ``"Copy OK"``, ``"Error, CRC mismatch"``, or ``"Track not ripped (skipped)"``."""
+
+
+class AccurateRipSummary(BaseModel):
+    """Per-release AccurateRip summary (whipper "CD metadata" + "Conclusive status report").
+
+    Persisted in the ``freedb_disc_N.yaml`` / ``music_annotator_provenance.yaml`` sidecar as a
+    nested YAML object (the flat-``str`` constraint is a tag-layer constraint only; nested models
+    are fine in the sidecar).  Subject to the monotonic-upgrade rule: an incoming empty summary
+    must not overwrite a populated one (check ``log_sha256`` or any non-empty field).
+
+    Important attributes: ``mb_disc_id``, ``cddb_disc_id``, ``log_sha256``, ``accurately_ripped``,
+    ``in_ar_database``, ``summary_text``.
+    """
+
+    mb_disc_id: str = ""
+    """Whipper "MusicBrainz Disc ID" from the CD metadata block."""
+
+    cddb_disc_id: str = ""
+    """Whipper "CDDB Disc ID" from the CD metadata block."""
+
+    log_sha256: str = ""
+    """Trailing "SHA-256 hash:" line from the whipper log (uppercase hex); used as the populated-summary sentinel."""
+
+    accurately_ripped: int = 0
+    """Whipper ``_accuratelyRipped`` counter from the conclusive status report."""
+
+    in_ar_database: int = 0
+    """Whipper ``_inARDatabase`` counter from the conclusive status report."""
+
+    summary_text: str = ""
+    """Whipper "AccurateRip summary" message line verbatim."""
+
+    def is_populated(self) -> bool:
+        """Return ``True`` when this summary carries real data (any non-empty/non-zero field).
+
+        Used by the monotonic-upgrade rule: an incoming empty ``AccurateRipSummary`` must not
+        overwrite a populated one.
+
+        :returns: ``True`` if any field is non-empty or non-zero.
+        """
+        return bool(
+            self.log_sha256
+            or self.mb_disc_id
+            or self.cddb_disc_id
+            or self.summary_text
+            or self.accurately_ripped
+            or self.in_ar_database
+        )
+
+
+# ---------------------------------------------------------------------------
 # MusicBrainz API response models
 # ---------------------------------------------------------------------------
 
@@ -1335,6 +1457,20 @@ class TrackTags(BaseModel):
     # --- archival identity (extensible: 4th dim slots in here) ---
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
     chromaprint_fp: str = ""  # Chromaprint fingerprint string (populated in F3)
+    # AccurateRip per-track flat fields (C-AR, R3b S1).  Field names == lowercased FLAC/MP3 tag keys.
+    # Tag keys are ACCURATERIP_V1_RESULT etc. (uppercase); desc == key in _MP3_TXXX_MAP.
+    # confidence serializes as decimal string, empty string when 0/absent (not "0").
+    accuraterip_v1_result: str = ""
+    accuraterip_v1_confidence: str = ""
+    accuraterip_v1_local_crc: str = ""
+    accuraterip_v1_remote_crc: str = ""
+    accuraterip_v2_result: str = ""
+    accuraterip_v2_confidence: str = ""
+    accuraterip_v2_local_crc: str = ""
+    accuraterip_v2_remote_crc: str = ""
+    accuraterip_test_crc: str = ""
+    accuraterip_copy_crc: str = ""
+    accuraterip_status: str = ""
     # Internal flag: set to "1" when cwp_composers / cwp_composer_lastnames were populated from
     # the additional_composers fallback (i.e. no plain primary composer relation was found).  Used
     # by the cross-track composer unification pass in _pipeline.py to identify movements whose
@@ -1644,6 +1780,18 @@ class TransactionEntry(BaseModel):
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
     chromaprint_fp: str = ""  # Chromaprint fingerprint string (populated in F3)
     acoustid_id: str = ""  # AcoustID UUID for this track
+    # AccurateRip per-track flat fields (C-AR, R3b S1).  Mirrors TrackTags flat fields exactly.
+    accuraterip_v1_result: str = ""
+    accuraterip_v1_confidence: str = ""
+    accuraterip_v1_local_crc: str = ""
+    accuraterip_v1_remote_crc: str = ""
+    accuraterip_v2_result: str = ""
+    accuraterip_v2_confidence: str = ""
+    accuraterip_v2_local_crc: str = ""
+    accuraterip_v2_remote_crc: str = ""
+    accuraterip_test_crc: str = ""
+    accuraterip_copy_crc: str = ""
+    accuraterip_status: str = ""
     # --- provenance (W1b rebuild) ---
     origin_time: str = ""  # ISO-8601 rip/download origin time from freedb_disc_N.yaml sidecar
 
@@ -1690,3 +1838,6 @@ class ProvenanceSidecar(BaseModel):
     """Annotation completeness tier (C-TIER).  ``""`` = unset (defect).  Overwritable only upward."""
     needs_spot_check: bool = False
     """``True`` for ``mb-search-resolved`` entries awaiting human confirmation."""
+    accuraterip_summary: AccurateRipSummary = Field(default_factory=AccurateRipSummary)
+    """Per-release AccurateRip summary (C-AR).  Monotonic-upgrade: an incoming empty summary must not overwrite a
+    populated one."""

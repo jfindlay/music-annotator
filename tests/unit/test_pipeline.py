@@ -83,6 +83,7 @@ from music_annotator._pipeline_io import (
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator.models import (
     JSON,
+    AccurateRipResult,
     AnnotationTier,
     CensusSignal,
     CopyPlanEntry,
@@ -10584,3 +10585,109 @@ class TestAnnotationTierWritePath:
         result = _read_provenance_sidecar(prov_path)
         assert result.annotation_tier == AnnotationTier.FULL_MB_VERIFIED
         assert result.needs_spot_check is False
+
+
+# ---------------------------------------------------------------------------
+# AccurateRip tag round-trip KAT (C-AR — R3b S1)
+# ---------------------------------------------------------------------------
+
+
+class TestAccurateRipTagRoundtrip:
+    """KAT: AccurateRip flat fields survive the mutagen write-and-read-back path.
+
+    Pins C-AR: the 11 flat AccurateRip fields on TrackTags are written to FLAC (Vorbis Comment)
+    and MP3 (TXXX) by apply_tags_flac / apply_tags_mp3, and read back identically by
+    _read_tags_flac / _read_tags_mp3.  Uses the real mutagen path (no mocks).
+    """
+
+    def _ar_tags(self) -> TrackTags:
+        """Build a TrackTags with populated v1 exact-match + v2 no-match AccurateRip fields.
+
+        :returns: A :class:`~music_annotator.models.TrackTags` instance with AR fields set.
+        """
+        return TrackTags(
+            title="Allegro",
+            tracknumber="1",
+            # v1: exact match, confidence 42, matching CRCs
+            accuraterip_v1_result=AccurateRipResult.EXACT_MATCH,
+            accuraterip_v1_confidence="42",
+            accuraterip_v1_local_crc="AABB1122",
+            accuraterip_v1_remote_crc="AABB1122",
+            # v2: no exact match, confidence 5, differing CRCs
+            accuraterip_v2_result=AccurateRipResult.NO_EXACT_MATCH,
+            accuraterip_v2_confidence="5",
+            accuraterip_v2_local_crc="CCDD3344",
+            accuraterip_v2_remote_crc="EEFF5566",
+            # rip CRCs and status
+            accuraterip_test_crc="12345678",
+            accuraterip_copy_crc="12345678",
+            accuraterip_status="Copy OK",
+        )
+
+    def test_accuraterip_track_tag_roundtrip_flac(self, fs: FakeFilesystem) -> None:
+        """AccurateRip flat fields survive apply_tags_flac → _read_tags_flac round-trip.
+
+        Writes a TrackTags with populated v1 exact-match + v2 no-match AR fields to a FLAC file
+        using the real mutagen path, reads back with _read_tags_flac, and asserts equality with
+        to_file_dict() including all 11 AccurateRip keys.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.flac")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        tags = self._ar_tags()
+        apply_tags_flac(path, tags)
+        read_back = _read_tags_flac(path)
+        expected = tags.to_file_dict()
+        # Assert all 11 AR keys are present and correct
+        for key in (
+            "ACCURATERIP_V1_RESULT",
+            "ACCURATERIP_V1_CONFIDENCE",
+            "ACCURATERIP_V1_LOCAL_CRC",
+            "ACCURATERIP_V1_REMOTE_CRC",
+            "ACCURATERIP_V2_RESULT",
+            "ACCURATERIP_V2_CONFIDENCE",
+            "ACCURATERIP_V2_LOCAL_CRC",
+            "ACCURATERIP_V2_REMOTE_CRC",
+            "ACCURATERIP_TEST_CRC",
+            "ACCURATERIP_COPY_CRC",
+            "ACCURATERIP_STATUS",
+        ):
+            assert read_back.get(key) == expected.get(key), f"FLAC round-trip mismatch for {key}"
+        assert read_back == expected
+
+    def test_accuraterip_track_tag_roundtrip_mp3(self, fs: FakeFilesystem) -> None:
+        """AccurateRip flat fields survive apply_tags_mp3 → _read_tags_mp3 round-trip.
+
+        Writes a TrackTags with populated v1 exact-match + v2 no-match AR fields to an MP3 file
+        using the real mutagen path, reads back with _read_tags_mp3, and asserts equality with
+        to_file_dict() filtered to the writable MP3 key set (including all 11 AccurateRip TXXX keys).
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/out/track.mp3")
+        fs.create_dir("/out")
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        tags = self._ar_tags()
+        apply_tags_mp3(path, tags)
+        read_back = _read_tags_mp3(path)
+        # pylint: disable-next=protected-access
+        writable = music_annotator._tagger._MP3_STD_KEYS | frozenset(music_annotator._tagger._MP3_TXXX_MAP)
+        expected = {k: v for k, v in tags.to_file_dict().items() if k in writable}
+        # Assert all 11 AR keys are present and correct
+        for key in (
+            "ACCURATERIP_V1_RESULT",
+            "ACCURATERIP_V1_CONFIDENCE",
+            "ACCURATERIP_V1_LOCAL_CRC",
+            "ACCURATERIP_V1_REMOTE_CRC",
+            "ACCURATERIP_V2_RESULT",
+            "ACCURATERIP_V2_CONFIDENCE",
+            "ACCURATERIP_V2_LOCAL_CRC",
+            "ACCURATERIP_V2_REMOTE_CRC",
+            "ACCURATERIP_TEST_CRC",
+            "ACCURATERIP_COPY_CRC",
+            "ACCURATERIP_STATUS",
+        ):
+            assert read_back.get(key) == expected.get(key), f"MP3 round-trip mismatch for {key}"
+        assert read_back == expected
