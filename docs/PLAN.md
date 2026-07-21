@@ -147,37 +147,121 @@ patching per the integration convention): a count-mismatched fixture → gate fi
 
 ## Cross-session contracts
 
-### C-OVR — track-count-mismatch operator override *(to be frozen at S1)*
+### C-OVR — track-count-mismatch operator override *(FROZEN S1 — juncture-design 2026-07-21)*
 
 The operator decision surface for a track-count mismatch, and the tier an accepted mismatch
 receives.  **Flavour: compiler-enforced** (the `confirm_count_mismatch` Protocol method — every
-`DiscoverUI` implementation and test double must implement it or mypy fails) + **test-enforced** (KAT
-per branch: accept / decline / dry-run / no-ui / multi-disc-no-match).
+`DiscUI`/`DiscoverUI` implementation and test double must implement it or mypy fails) +
+**test-enforced** (KAT per branch: accept / decline / dry-run / no-ui / multi-disc-no-match).
 
-**Protocol method (compiler contract).**  `confirm_count_mismatch(self, src_dir, release,
-selected_medium, n_src, n_medium, diagnostic) -> bool` on `DiscoverUI` (`_discover.py:70`).  Returns
-`True` to accept (proceed at `mb-partial`), `False` to decline (skip).  `@architect` may adjust the
-parameter set at freeze, but the return type is `bool` and the method is mandatory on all doubles.
+**Frozen signature (compiler contract).**
 
-**Gate behavior (prose+test contract).**  On `len(src_files) != len(copy_subset)` (or a multi-disc
-`_select_medium_with_reason` no-match): if `ui is not None and not dry_run`, prompt via
-`confirm_count_mismatch`; accept → `census_signal = CensusSignal.MISMATCH`, ingest the selected
-medium's subset at `mb-partial` under the positional-map rule fixed in S1; decline → skip (the
-existing `discover()` catch logs and continues).  `ui is None` or `dry_run` → the original hard-fail
-`RuntimeError`/`ValueError` (non-interactive contract preserved).
+```python
+def confirm_count_mismatch(
+    self,
+    src_dir: Path,
+    release: MBRelease,
+    selected_medium: MBMedium | None,
+    n_src: int,
+    n_medium: int,
+    diagnostic: str,
+) -> bool: ...
+```
 
-**Tier outcome (consumes C-TIER unchanged).**  Accept → `classify_annotation_tier(MISMATCH)` →
-`(MB_PARTIAL, False)`.  No new tier, no new signal, no new classifier arm — R2 froze all three.  An
-adapter that appears to need a new *tier* here is a destructive-HALT signal that C-TIER was
-mis-frozen (per the R3b boundary discovery).
+Returns `True` to accept (proceed at `mb-partial`), `False` to decline (skip).
 
-- **Defined-in:** S1 (`_discover.py`: `confirm_count_mismatch` on Protocol + `TerminalDiscoverUI`;
-  `_pipeline.py`: gate rewrite + `MISMATCH` wiring).  **Consumed-by:** S1's own integration test and
-  every `DiscoverUI` test double (compiler-forced to implement the method).  Downstream: none within
-  this roadmap — R3d is the last R3 code node.
-- **KATs that pin C-OVR (S1):** `test_count_mismatch_accept_ingests_partial`,
+**Freeze-time adjustments to the PLAN's proposed signature (against live code):**
+
+1. **`selected_medium` is `MBMedium | None`, not `MBMedium`.**  The multi-disc no-match path
+   (`_select_medium_with_reason` raises `ValueError` at `_pipeline.py:334` *before* a medium is
+   returned) has **no** selected medium at the raise site.  To route that path to the same prompt
+   the parameter must admit `None`.  On the count-mismatch gate path (`_pipeline.py:1554`)
+   `selected_medium` is always bound and non-`None` (guaranteed by the `if selected_medium is None:
+   raise` guard at `_pipeline.py:1519`); on the no-match path it is `None` (or a best-effort
+   nearest-count medium if the executor chooses to compute one for display — see the no-match
+   handling below).  `n_medium` carries the count regardless (`0` or the best-medium count when
+   `selected_medium is None`), so the prompt can render without dereferencing a possibly-`None`
+   medium.
+
+2. **The method lands on TWO protocols, not one.**  The PLAN named only
+   `DiscoverUI` (`_discover.py:70`).  But the gate lives in `run()`, whose `ui` parameter is typed
+   `DiscUI` (`_pipeline.py:108`) — a **deliberately separate structural-subset Protocol** kept in
+   `_pipeline.py` to avoid the `_discover → run` circular import (documented at `_pipeline.py:113`).
+   `run()` can only call `confirm_count_mismatch` if it is declared on `DiscUI`.  Freeze:
+   **`confirm_count_mismatch` is added to both `DiscUI` (`_pipeline.py:108`, the callable contract)
+   and `DiscoverUI` (`_discover.py:70`, the full surface), and implemented on `TerminalDiscoverUI`
+   (`_discover.py:126`) mirroring `confirm_disc`.**  Every test double for *either* protocol must
+   implement it or mypy fails.  This is an interface-surface detail within `@architect`'s
+   confirm/adjust latitude — no scope change.
+
+**Gate behavior (prose+test contract).**  Two entry points converge on one prompt:
+
+- **Single-medium / disc-override count mismatch** (`_pipeline.py:1554`, condition
+  `len(src_files) != len(copy_subset)`): if `ui is not None and not dry_run`, call
+  `ui.confirm_count_mismatch(src_dir, release, selected_medium, len(src_files), len(copy_subset),
+  diagnostic)`.  Accept → set an `accepted_mismatch` flag, force `census_signal =
+  CensusSignal.MISMATCH`, and truncate to the positional-min subset (below); decline → the original
+  `raise RuntimeError`.  `ui is None` or `dry_run` → the original `raise RuntimeError`
+  (non-interactive contract preserved).
+
+- **Multi-disc no-match** (`_pipeline.py:334` `ValueError` out of `_select_medium_with_reason`, seen
+  at the `_pipeline.py:1505` call site): wrap the call in `try/except ValueError`.  On `ValueError`,
+  if `ui is not None and not dry_run`, choose a **best medium** for ingest (the medium whose
+  `len(track_list)` is nearest to `n_src`; ties → lowest `position`) and call
+  `confirm_count_mismatch(..., selected_medium=best_medium, n_src=len(src_files),
+  n_medium=len(best_medium.track_list), diagnostic=...)`.  Accept → proceed with `best_medium` as
+  `selected_medium` under the same `MISMATCH` + positional-min rule; decline → re-`raise` the
+  original `ValueError`.  `ui is None` or `dry_run` → re-`raise` the original `ValueError`.  (The
+  executor MAY instead pass `selected_medium=None` and defer best-medium choice into the prompt-body
+  return contract, but the frozen decision is: the pipeline picks the nearest-count medium so the
+  ingest is deterministic and the KAT can pin it.  Nearest-count is display-and-ingest; the operator
+  keystroke is the authority.)
+
+**Positional-min mapping rule (R-3 behavioral core — FROZEN).**  On an accepted override the ingest
+copies exactly `k = min(len(src_files), len(selected_medium.track_list))` tracks, positionally
+aligned: source file `i` ↔ selected-medium track `i` for `i` in `range(k)`.  This is forced against
+live code because **three loops in `run()` index positionally and will `IndexError` otherwise**:
+
+- copy-plan build (`_pipeline.py:1653`): iterates `copy_subset` and reads `src_files[copy_subset_pos]`
+  → `IndexError` when `n_src < n_medium`.
+- embedded-MBID tier probe (`_pipeline.py:1734`): `_read_recording_id_tag(f) for f in src_files`
+  then membership-tests against the medium track-id set — safe on length but semantically must be
+  scoped to the copied `k`.
+- ISRC tier probe (`_pipeline.py:1745`): `src_files[i]` vs `selected_medium.track_list[i]` for
+  `range(len(src_files))` → `IndexError` when `n_src > n_medium`.
+
+Freeze: on an accepted mismatch, truncate **both** `src_files` and `copy_subset` to the first `k`
+(build a `copy_subset` restricted to the first `k` selected-medium tracks, and slice `src_files[:k]`
+for the plan/tier probes) so every positional loop stays in-bounds and the copied set is
+deterministic.  The `mb-partial` sidecar tier records that the ingest is partial; `audit` surfaces
+it.  The dropped tail (whichever side is longer) is **not** copied and **not** journaled —
+consistent with "operator owns the discrepancy."  This is within R-2/R-3's anticipated "positional
+min" envelope — **not** an additive-reshard: no aggregation, no smart merge, one deterministic rule.
+
+**Diagnostic string (display-only, not persisted).**  Human-readable edition-vs-structure context:
+whether local layout is flat vs the release is multi-disc (structure mismatch), or a single-medium
+count disagreement (edition mismatch), plus the `n_src` vs `n_medium` counts.  Does not branch
+behavior; not written to the sidecar (deferral honored).
+
+**Tier outcome (consumes C-TIER unchanged).**  Accept → `census_signal = CensusSignal.MISMATCH` →
+`classify_annotation_tier(MISMATCH)` → `(MB_PARTIAL, False)` (verified live at `models.py:120`).
+Written through the existing monotonic-upgrade path (`_pipeline_io.py:1538`), so a dir already at a
+higher tier is not lowered (C-TIER carve-out honored automatically — no new code needed).  No new
+tier, no new signal, no new classifier arm — R2 froze all three.  An adapter that appears to need a
+new *tier* here is a destructive-HALT signal that C-TIER was mis-frozen (per the R3b boundary
+discovery).
+
+- **Defined-in:** S1 (`_discover.py`: `confirm_count_mismatch` on `DiscoverUI` Protocol +
+  `TerminalDiscoverUI`; `_pipeline.py`: `confirm_count_mismatch` on `DiscUI` Protocol + gate rewrite
+  + no-match `try/except` + positional-min truncation + `MISMATCH` wiring).  **Consumed-by:** S1's
+  own integration test and every `DiscUI`/`DiscoverUI` test double (compiler-forced to implement the
+  method on both protocols).  Downstream: none within this roadmap — R3d is the last R3 code node.
+- **KATs that pin C-OVR (S1):** `test_count_mismatch_accept_ingests_partial` (should cover **both**
+  min directions: `n_src < n_medium` and `n_src > n_medium`, since each exercises a different
+  positional loop's `IndexError` guard and each needs branch coverage),
   `test_count_mismatch_decline_skips`, `test_count_mismatch_dry_run_still_raises`,
-  `test_count_mismatch_no_ui_still_raises`, `test_multidisc_no_match_reaches_override`,
+  `test_count_mismatch_no_ui_still_raises`, `test_multidisc_no_match_reaches_override` (+ a
+  dry-run/no-ui counterpart so the no-match re-`raise ValueError` branch is covered),
   `test_confirm_count_mismatch_terminal_accept`, `test_confirm_count_mismatch_terminal_decline`, and
   the mismatch integration test.
 
@@ -203,7 +287,7 @@ mis-frozen (per the R3b boundary discovery).
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Add operator override to the track-count-mismatch gate; ingest accepted mismatches at mb-partial | pending | — | C-OVR (to freeze) |
+| 1 | Add operator override to the track-count-mismatch gate; ingest accepted mismatches at mb-partial | interface-frozen (impl pending) | — | C-OVR (design frozen 2026-07-21) |
 
 ## Action-frame digest
 
