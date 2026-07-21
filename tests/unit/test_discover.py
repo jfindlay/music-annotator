@@ -3,12 +3,13 @@
 Covers :func:`~music_annotator.parse_disc_info_yaml`, :func:`~music_annotator.parse_disc_toc`,
 :func:`~music_annotator.parse_disc_title`, :func:`~music_annotator.parse_dir_hint`,
 :func:`~music_annotator.search_releases_by_dir`, :func:`~music_annotator._format_candidate`,
-and :func:`~music_annotator.discover`.
+:func:`~music_annotator._discover.is_whipper_dir`, and :func:`~music_annotator.discover`.
 """
 # pylint: disable=duplicate-code  # _make_single_track_release helper intentionally mirrors test_pipeline.py scaffolding
 
 from __future__ import annotations
 
+import hashlib
 import struct
 import textwrap
 from http.client import HTTPMessage
@@ -18,6 +19,7 @@ from urllib.error import HTTPError
 
 import musicbrainzngs as mb
 import pytest
+import yaml
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
@@ -31,17 +33,35 @@ from music_annotator._discover import (
     _enrich_candidates_with_acoustid_seed,
     _enrich_candidates_with_sequence_corroboration,
     _format_candidate,
+    _parse_whipper_ar,
     _score_toc_release,
     _toc_lookup_mb_releases,
+    is_whipper_dir,
 )
+from music_annotator._pipeline import _copy_tag_verify_journal_pass, _write_whipper_sidecars
 from music_annotator._pipeline_io import (
     AudioCompareResult,
     _corroborate_candidate_medium,
     _corroborate_medium_sequence,
     _read_recording_id_tag,
+    _write_provenance_fields,
 )
 from music_annotator._tags import _NAME_MAX
-from music_annotator.models import MBMedium, MBRelease, MBReleaseCandidate, TransactionEntry, TransactionLog
+from music_annotator.models import (
+    AccurateRipResult,
+    AccurateRipSummary,
+    AccurateRipTrack,
+    AccurateRipTrackResult,
+    CopyPlanEntry,
+    CoverArt,
+    MBMedium,
+    MBRelease,
+    MBReleaseCandidate,
+    ProvenanceSidecar,
+    TrackTags,
+    TransactionEntry,
+    TransactionLog,
+)
 
 # ---------------------------------------------------------------------------
 # Minimal FLAC factory (same technique as test_example.py)
@@ -3511,3 +3531,679 @@ class TestCorroborateCandidateMedium:
         # Source says rec-WRONG, candidate says rec-correct → match=True but IDs differ → contradicted
         assert result.match is False
         assert "contradicted=1/1" in result.detail
+
+
+# ---------------------------------------------------------------------------
+# Whipper log fixture
+# ---------------------------------------------------------------------------
+
+#: Minimal whipper native log body (before the SHA-256 line).
+#: The SHA-256 line is appended by the test helpers.
+_WHIPPER_LOG_BODY = """\
+Log created by: whipper 0.10.0 (2023-01-01)
+Log creation date: 2023-01-01 12:00:00
+
+Ripping phase information:
+  Drive: /dev/sr0
+  Extraction speed: 40 X
+  Extraction quality: Secure
+
+CD metadata:
+  MusicBrainz Disc ID: abc123discid
+  CDDB Disc ID: 0x12345678
+
+Tracks:
+  1:
+    AccurateRip v1:
+      Result: exact-match
+      Confidence: 42
+      Local CRC: AABBCCDD
+      Remote CRC: AABBCCDD
+    AccurateRip v2:
+      Result: exact-match
+      Confidence: 38
+      Local CRC: 11223344
+      Remote CRC: 11223344
+    Test CRC: AABBCCDD
+    Copy CRC: AABBCCDD
+    Status: Copy OK
+
+Conclusive status report:
+  AccurateRip summary: All tracks accurately ripped
+  Accurately ripped: 1
+  Tracks in AR database: 1
+
+"""
+
+
+def _make_whipper_log(body: str = _WHIPPER_LOG_BODY) -> str:
+    """Return a complete whipper log string with a valid self-attesting SHA-256 line.
+
+    :param body: The log body (everything before the SHA-256 line).
+    :returns: The complete log string including the trailing SHA-256 line.
+    """
+    sha256 = hashlib.sha256(body.encode("utf-8")).hexdigest().upper()
+    return f"{body}SHA-256 hash: {sha256}\n"
+
+
+# ---------------------------------------------------------------------------
+# is_whipper_dir — C-WHIP recognition KATs
+# ---------------------------------------------------------------------------
+
+
+class TestIsWhipperDir:
+    """Tests for is_whipper_dir (C-WHIP recognition heuristic).
+
+    KATs named in C-WHIP:
+    (a) dir with only a whipper .log (trailing SHA-256 line) → recognised.
+    (b) dir with only 00 - disc info.yaml → recognised.
+    (c) dir with only .0x… suffix and neither strong signature → NOT recognised.
+    (d) plain .log without trailing SHA-256 line → NOT recognised.
+    """
+
+    def test_strong_sig1_whipper_log_recognised(self, fs: FakeFilesystem) -> None:
+        """KAT (a): dir with only a whipper .log (trailing SHA-256 line) is recognised.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album.0xe212b212")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "rip.log"), contents=_make_whipper_log())
+        assert is_whipper_dir(src) is True
+
+    def test_strong_sig2_disc_info_yaml_recognised(self, fs: FakeFilesystem) -> None:
+        """KAT (b): dir with only 00 - disc info.yaml is recognised.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "00 - disc info.yaml"), contents="disc_id: [1, 1, 150, 200]\n")
+        assert is_whipper_dir(src) is True
+
+    def test_weak_signal_alone_not_recognised(self, fs: FakeFilesystem) -> None:
+        """KAT (c): dir with only .0x… suffix and no strong signature is NOT recognised.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album.0xe212b212")
+        fs.create_dir(str(src))
+        # No .log file, no 00 - disc info.yaml — only the freedb hex suffix
+        assert is_whipper_dir(src) is False
+
+    def test_plain_log_without_sha256_not_recognised(self, fs: FakeFilesystem) -> None:
+        """KAT (d): plain .log without trailing SHA-256 line is NOT recognised.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        # A .log file that does NOT end with the SHA-256 hash line
+        fs.create_file(str(src / "rip.log"), contents="This is an EAC log without a SHA-256 line.\n")
+        assert is_whipper_dir(src) is False
+
+    def test_empty_dir_not_recognised(self, fs: FakeFilesystem) -> None:
+        """An empty directory is not recognised as a whipper dir.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Empty")
+        fs.create_dir(str(src))
+        assert is_whipper_dir(src) is False
+
+    def test_both_strong_signatures_recognised(self, fs: FakeFilesystem) -> None:
+        """A dir with both strong signatures is recognised (any is sufficient).
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "rip.log"), contents=_make_whipper_log())
+        fs.create_file(str(src / "00 - disc info.yaml"), contents="disc_id: [1, 1, 150, 200]\n")
+        assert is_whipper_dir(src) is True
+
+    def test_log_without_sha256_line_not_recognised(self, fs: FakeFilesystem) -> None:
+        """A .log file without the trailing SHA-256 line is not recognised as a whipper log.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        # A .log file that does not end with the SHA-256 hash line
+        fs.create_file(str(src / "rip.log"), contents="Some log content without SHA-256 line.\n")
+        assert is_whipper_dir(src) is False
+
+    def test_parse_whipper_ar_returns_empty_when_no_log(self, fs: FakeFilesystem) -> None:
+        """_parse_whipper_ar returns empty defaults when no whipper log is found.
+
+        Exercises the FileNotFoundError branch in _parse_whipper_ar.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        # No .log file → parse_whipper_log raises FileNotFoundError → empty defaults returned
+        summary, tracks = _parse_whipper_ar(src)
+        assert summary.log_sha256 == ""
+        assert tracks == {}
+
+
+# ---------------------------------------------------------------------------
+# test_whipper_log_preserved_with_integrity — C-MOVE sidecar provenance KAT
+# ---------------------------------------------------------------------------
+
+
+class TestWhipperLogPreservedWithIntegrity:
+    """KAT: whipper log is copied with SHA-256 integrity check and a 'sidecar' journal entry.
+
+    The 'sidecar' entry must NOT feed the 'safe to delete source' message (C-MOVE invariant).
+    """
+
+    def test_whipper_log_preserved_with_integrity(self, fs: FakeFilesystem) -> None:
+        """Whipper log is copied to work_top_dir with SHA-256 integrity check and sidecar journal entry.
+
+        Verifies:
+        - The .log file is present in the destination work directory.
+        - The SHA-256 of the copied file matches the source.
+        - A 'sidecar' journal entry is present for the log.
+        - The 'sidecar' entry does NOT appear in the 'safe to delete' count (action == 'tagged').
+
+        :param fs: pyfakefs fixture.
+        """
+        src_dir = Path("/src/Album")
+        work_top_dir = Path("/dest/Composer/Work")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(work_top_dir))
+
+        log_content = _make_whipper_log()
+        fs.create_file(str(src_dir / "rip.log"), contents=log_content)
+
+        journal_entries: list[TransactionEntry] = []
+        whipper_sidecars_written: set[Path] = set()
+        now = "2026-01-01T00:00:00+00:00"
+
+        _write_whipper_sidecars(src_dir, work_top_dir, whipper_sidecars_written, journal_entries, now, "rel-1")
+
+        # Log file must be present in the destination
+        dest_log = work_top_dir / "rip.log"
+        assert dest_log.exists()
+
+        # SHA-256 of copied file must match source
+        src_sha256 = hashlib.sha256(log_content.encode("utf-8")).hexdigest()
+        dest_sha256 = hashlib.sha256(dest_log.read_bytes()).hexdigest()
+        assert dest_sha256 == src_sha256
+
+        # A 'sidecar' journal entry must be present
+        sidecar_entries = [e for e in journal_entries if e.action == "sidecar"]
+        assert len(sidecar_entries) == 1
+        assert sidecar_entries[0].destination == str(dest_log)
+
+        # The 'sidecar' entry must NOT feed the 'safe to delete' count
+        tagged_entries = [e for e in journal_entries if e.action == "tagged"]
+        assert len(tagged_entries) == 0
+
+    def test_whipper_sidecars_deduplication(self, fs: FakeFilesystem) -> None:
+        """_write_whipper_sidecars is idempotent: calling twice for the same work_top_dir is a no-op.
+
+        :param fs: pyfakefs fixture.
+        """
+        src_dir = Path("/src/Album")
+        work_top_dir = Path("/dest/Composer/Work")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(work_top_dir))
+        fs.create_file(str(src_dir / "rip.log"), contents=_make_whipper_log())
+
+        journal_entries: list[TransactionEntry] = []
+        whipper_sidecars_written: set[Path] = set()
+        now = "2026-01-01T00:00:00+00:00"
+
+        _write_whipper_sidecars(src_dir, work_top_dir, whipper_sidecars_written, journal_entries, now, "rel-1")
+        _write_whipper_sidecars(src_dir, work_top_dir, whipper_sidecars_written, journal_entries, now, "rel-1")
+
+        # Only one journal entry despite two calls
+        assert len(journal_entries) == 1
+
+    def test_whipper_sidecars_cue_and_toc_also_copied(self, fs: FakeFilesystem) -> None:
+        """_write_whipper_sidecars copies .cue and .toc files in addition to .log.
+
+        :param fs: pyfakefs fixture.
+        """
+        src_dir = Path("/src/Album")
+        work_top_dir = Path("/dest/Composer/Work")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(work_top_dir))
+        fs.create_file(str(src_dir / "rip.log"), contents=_make_whipper_log())
+        fs.create_file(str(src_dir / "disc.cue"), contents='FILE "disc.wav" WAVE\n')
+        fs.create_file(str(src_dir / "disc.toc"), contents="CD_DA\n")
+
+        journal_entries: list[TransactionEntry] = []
+        whipper_sidecars_written: set[Path] = set()
+        now = "2026-01-01T00:00:00+00:00"
+
+        _write_whipper_sidecars(src_dir, work_top_dir, whipper_sidecars_written, journal_entries, now, "rel-1")
+
+        # All three sidecar types should be copied
+        assert (work_top_dir / "rip.log").exists()
+        assert (work_top_dir / "disc.cue").exists()
+        assert (work_top_dir / "disc.toc").exists()
+        assert len(journal_entries) == 3
+
+    def test_whipper_sidecars_integrity_failure_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_write_whipper_sidecars raises RuntimeError when SHA-256 of copied file does not match.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src_dir = Path("/src/Album")
+        work_top_dir = Path("/dest/Composer/Work")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(work_top_dir))
+        fs.create_file(str(src_dir / "rip.log"), contents=_make_whipper_log())
+
+        # Patch hashlib.sha256 to return different digests for src and dest reads
+        original_sha256 = hashlib.sha256
+
+        call_count = 0
+
+        def _fake_sha256(data: bytes) -> object:
+            """Return a fake digest that differs on the second call."""
+            nonlocal call_count
+            call_count += 1
+            result = original_sha256(data)
+            if call_count == 2:  # noqa: PLR2004 — second call is the dest read
+                # Return a mock with a different hexdigest
+                class _FakeDigest:
+                    def hexdigest(self) -> str:
+                        """Return a deliberately wrong digest."""
+                        return "0" * 64
+
+                return _FakeDigest()
+            return result
+
+        mocker.patch("music_annotator._pipeline.hashlib.sha256", side_effect=_fake_sha256)
+
+        journal_entries: list[TransactionEntry] = []
+        whipper_sidecars_written: set[Path] = set()
+        now = "2026-01-01T00:00:00+00:00"
+
+        with pytest.raises(RuntimeError, match="whipper sidecar copy integrity failure"):
+            _write_whipper_sidecars(src_dir, work_top_dir, whipper_sidecars_written, journal_entries, now, "rel-1")
+
+
+# ---------------------------------------------------------------------------
+# test_accuraterip_threaded_to_journal — C-AR per-track threading KAT
+# ---------------------------------------------------------------------------
+
+
+class TestAccurateRipThreadedToJournal:
+    """KAT: per-track AccurateRip data reaches TransactionEntry flat fields.
+
+    Tests that when ar_tracks is provided to _copy_tag_verify_journal_pass (via run()),
+    the 11 flat AR fields are populated on the resulting TransactionEntry.
+    """
+
+    def test_accuraterip_threaded_to_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Per-track AR data from ar_tracks reaches the TransactionEntry flat fields.
+
+        Uses _copy_tag_verify_journal_pass directly with a minimal plan to verify that
+        the 11 flat AccurateRip fields are projected from ar_tracks onto the journal entry.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src_dir = Path("/src/Album")
+        dest_root = Path("/dest")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(dest_root))
+
+        # Create a minimal FLAC source file
+        src_file = src_dir / "01.flac"
+        fs.create_file(str(src_file), contents=_saveable_flac())
+
+        # Build a minimal TrackTags with tracknumber=1 so ar_tracks[1] is looked up
+        tags = TrackTags(
+            title="Track 1",
+            tracknumber="1",
+            musicbrainz_albumid="rel-1",
+            musicbrainz_recordingid="rec-1",
+        )
+        tags_map = {0: tags}
+
+        # Build a minimal CopyPlanEntry
+        dest_file = dest_root / "Composer" / "Work" / "01.flac"
+        plan = [CopyPlanEntry(idx=0, src_file=src_file, dest_file=dest_file)]
+
+        # Build AccurateRip data for track 1
+        ar_track = AccurateRipTrack(
+            v1=AccurateRipTrackResult(
+                version="v1",
+                result=AccurateRipResult.EXACT_MATCH,
+                confidence=42,
+                local_crc="AABBCCDD",
+                remote_crc="AABBCCDD",
+            ),
+            v2=AccurateRipTrackResult(
+                version="v2",
+                result=AccurateRipResult.NO_EXACT_MATCH,
+                confidence=0,
+                local_crc="",
+                remote_crc="",
+            ),
+            test_crc="AABBCCDD",
+            copy_crc="AABBCCDD",
+            status="Copy OK",
+        )
+        ar_tracks = {1: ar_track}
+        ar_summary = AccurateRipSummary(
+            mb_disc_id="abc123discid",
+            cddb_disc_id="0x12345678",
+            log_sha256="A" * 64,
+            accurately_ripped=1,
+            in_ar_database=1,
+            summary_text="All tracks accurately ripped",
+        )
+
+        # Patch apply_tags_flac and _verify_copy to avoid real mutagen operations
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")
+        mocker.patch("music_annotator._pipeline._audio_hash", return_value="flac-md5:00000000000000000000000000000000")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline.os.utime")
+
+        journal_entries = _copy_tag_verify_journal_pass(
+            plan=plan,
+            tags_map=tags_map,
+            cover=CoverArt(),
+            src_dir=src_dir,
+            dest_root=dest_root,
+            release_id="rel-1",
+            medium_pos=1,
+            skip_dest=set(),
+            dry_run=False,
+            acoustid_key="",
+            ar_summary=ar_summary,
+            ar_tracks=ar_tracks,
+        )
+
+        # Find the 'tagged' entry
+        tagged = [e for e in journal_entries if e.action == "tagged"]
+        assert len(tagged) == 1
+        entry = tagged[0]
+
+        # Verify all 11 flat AR fields are populated on the TransactionEntry
+        assert entry.accuraterip_v1_result == "exact-match"
+        assert entry.accuraterip_v1_confidence == "42"
+        assert entry.accuraterip_v1_local_crc == "AABBCCDD"
+        assert entry.accuraterip_v1_remote_crc == "AABBCCDD"
+        assert entry.accuraterip_v2_result == "no-exact-match"
+        assert entry.accuraterip_v2_confidence == ""  # 0 → empty string
+        assert entry.accuraterip_v2_local_crc == ""
+        assert entry.accuraterip_v2_remote_crc == ""
+        assert entry.accuraterip_test_crc == "AABBCCDD"
+        assert entry.accuraterip_copy_crc == "AABBCCDD"
+        assert entry.accuraterip_status == "Copy OK"
+
+    def test_accuraterip_not_present_when_no_ar_tracks(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When ar_tracks is None, AR flat fields on TransactionEntry are empty strings.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src_dir = Path("/src/Album")
+        dest_root = Path("/dest")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(dest_root))
+
+        src_file = src_dir / "01.flac"
+        fs.create_file(str(src_file), contents=_saveable_flac())
+
+        tags = TrackTags(title="Track 1", tracknumber="1", musicbrainz_albumid="rel-1")
+        tags_map = {0: tags}
+        dest_file = dest_root / "Composer" / "Work" / "01.flac"
+        plan = [CopyPlanEntry(idx=0, src_file=src_file, dest_file=dest_file)]
+
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")
+        mocker.patch("music_annotator._pipeline._audio_hash", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline.os.utime")
+
+        journal_entries = _copy_tag_verify_journal_pass(
+            plan=plan,
+            tags_map=tags_map,
+            cover=CoverArt(),
+            src_dir=src_dir,
+            dest_root=dest_root,
+            release_id="rel-1",
+            medium_pos=1,
+            skip_dest=set(),
+            dry_run=False,
+            acoustid_key="",
+            ar_summary=None,
+            ar_tracks=None,
+        )
+
+        tagged = [e for e in journal_entries if e.action == "tagged"]
+        assert len(tagged) == 1
+        entry = tagged[0]
+
+        # All AR fields should be empty when no ar_tracks provided
+        assert entry.accuraterip_v1_result == ""
+        assert entry.accuraterip_v1_confidence == ""
+        assert entry.accuraterip_status == ""
+
+    def test_discover_passes_origin_source_whipper_to_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When is_whipper_dir returns True, discover() passes origin_source='whipper' to run().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album.0xe212b212")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        # Create a whipper log to trigger recognition
+        fs.create_file(str(src / "rip.log"), contents=_make_whipper_log())
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[_candidate()])
+        mock_run = mocker.patch("music_annotator._discover.run")
+        mocker.patch("builtins.input", return_value="1")
+
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
+
+        mock_run.assert_called_once()
+        _, kwargs = mock_run.call_args
+        assert kwargs["origin_source"] == "whipper"
+
+    def test_discover_passes_empty_origin_source_for_non_whipper(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When is_whipper_dir returns False, discover() passes origin_source='' to run().
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        # No whipper log, no disc info yaml
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[_candidate()])
+        mock_run = mocker.patch("music_annotator._discover.run")
+        mocker.patch("builtins.input", return_value="1")
+
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
+
+        mock_run.assert_called_once()
+        _, kwargs = mock_run.call_args
+        assert kwargs["origin_source"] == ""
+
+    def test_whipper_sidecar_dir_entry_skipped(self, fs: FakeFilesystem) -> None:
+        """_write_whipper_sidecars skips directory entries with .log extension.
+
+        Exercises the 'if not src_file.is_file(): continue' branch.
+
+        :param fs: pyfakefs fixture.
+        """
+        src_dir = Path("/src/Album")
+        work_top_dir = Path("/dest/Composer/Work")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(work_top_dir))
+        # Create a directory named rip.log (not a file) — should be skipped
+        fs.create_dir(str(src_dir / "rip.log"))
+
+        journal_entries: list[TransactionEntry] = []
+        whipper_sidecars_written: set[Path] = set()
+        now = "2026-01-01T00:00:00+00:00"
+
+        _write_whipper_sidecars(src_dir, work_top_dir, whipper_sidecars_written, journal_entries, now, "rel-1")
+
+        # No journal entries — the directory entry was skipped
+        assert len(journal_entries) == 0
+
+    def test_accuraterip_empty_tracknumber_no_ar_fields(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When tracknumber is empty, AR fields are not set on the TransactionEntry.
+
+        Exercises the 'if _track_pos_str:' false branch in _copy_tag_verify_journal_pass.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src_dir = Path("/src/Album")
+        dest_root = Path("/dest")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(dest_root))
+
+        src_file = src_dir / "01.flac"
+        fs.create_file(str(src_file), contents=_saveable_flac())
+
+        # tracknumber is empty — AR lookup should be skipped
+        tags = TrackTags(title="Track 1", tracknumber="", musicbrainz_albumid="rel-1")
+        tags_map = {0: tags}
+        dest_file = dest_root / "Composer" / "Work" / "01.flac"
+        plan = [CopyPlanEntry(idx=0, src_file=src_file, dest_file=dest_file)]
+
+        ar_track = AccurateRipTrack(
+            v1=AccurateRipTrackResult(version="v1", result=AccurateRipResult.EXACT_MATCH, confidence=42),
+        )
+        ar_tracks = {1: ar_track}
+
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")
+        mocker.patch("music_annotator._pipeline._audio_hash", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline.os.utime")
+
+        journal_entries = _copy_tag_verify_journal_pass(
+            plan=plan,
+            tags_map=tags_map,
+            cover=CoverArt(),
+            src_dir=src_dir,
+            dest_root=dest_root,
+            release_id="rel-1",
+            medium_pos=1,
+            skip_dest=set(),
+            dry_run=False,
+            acoustid_key="",
+            ar_tracks=ar_tracks,
+        )
+
+        tagged = [e for e in journal_entries if e.action == "tagged"]
+        assert len(tagged) == 1
+        # AR fields should be empty since tracknumber was empty
+        assert tagged[0].accuraterip_v1_result == ""
+
+    def test_accuraterip_non_integer_tracknumber_no_ar_fields(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When tracknumber is non-integer, ValueError is caught and AR fields are not set.
+
+        Exercises the ValueError branch in _copy_tag_verify_journal_pass.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src_dir = Path("/src/Album")
+        dest_root = Path("/dest")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(dest_root))
+
+        src_file = src_dir / "01.flac"
+        fs.create_file(str(src_file), contents=_saveable_flac())
+
+        # tracknumber is non-integer — ValueError should be caught
+        tags = TrackTags(title="Track 1", tracknumber="A1", musicbrainz_albumid="rel-1")
+        tags_map = {0: tags}
+        dest_file = dest_root / "Composer" / "Work" / "01.flac"
+        plan = [CopyPlanEntry(idx=0, src_file=src_file, dest_file=dest_file)]
+
+        ar_track = AccurateRipTrack(
+            v1=AccurateRipTrackResult(version="v1", result=AccurateRipResult.EXACT_MATCH, confidence=42),
+        )
+        ar_tracks = {1: ar_track}
+
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")
+        mocker.patch("music_annotator._pipeline._audio_hash", return_value="")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._pipeline.os.utime")
+
+        journal_entries = _copy_tag_verify_journal_pass(
+            plan=plan,
+            tags_map=tags_map,
+            cover=CoverArt(),
+            src_dir=src_dir,
+            dest_root=dest_root,
+            release_id="rel-1",
+            medium_pos=1,
+            skip_dest=set(),
+            dry_run=False,
+            acoustid_key="",
+            ar_tracks=ar_tracks,
+        )
+
+        tagged = [e for e in journal_entries if e.action == "tagged"]
+        assert len(tagged) == 1
+        # AR fields should be empty since tracknumber was non-integer
+        assert tagged[0].accuraterip_v1_result == ""
+
+    def test_accuraterip_summary_monotonic_upgrade_not_overwritten(self, fs: FakeFilesystem) -> None:
+        """AccurateRip summary monotonic-upgrade rule: existing populated summary is not overwritten.
+
+        Exercises the branch in _write_provenance_fields where existing_ar_sha256 is non-empty.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar_path = Path("/dest/Composer/Work/freedb_disc_1.yaml")
+        fs.create_dir(str(sidecar_path.parent))
+
+        # Write an existing sidecar with a populated accuraterip_summary
+        existing_summary = {
+            "mb_disc_id": "existing-disc-id",
+            "cddb_disc_id": "0xABCDEF01",
+            "log_sha256": "B" * 64,
+            "accurately_ripped": 5,
+            "in_ar_database": 5,
+            "summary_text": "All tracks accurately ripped",
+        }
+        sidecar_path.write_text(
+            yaml.dump({"origin_time": "", "origin_source": "", "accuraterip_summary": existing_summary}),
+            encoding="utf-8",
+        )
+
+        # Try to write a new (different) summary — should NOT overwrite the existing one
+        new_summary = AccurateRipSummary(
+            mb_disc_id="new-disc-id",
+            cddb_disc_id="0x12345678",
+            log_sha256="A" * 64,
+            accurately_ripped=3,
+            in_ar_database=3,
+            summary_text="Partial",
+        )
+        _write_provenance_fields(sidecar_path, ProvenanceSidecar(accuraterip_summary=new_summary))
+
+        # Read back and verify the existing summary was NOT overwritten
+        with sidecar_path.open(encoding="utf-8") as fh:
+            data: object = yaml.full_load(fh)
+        assert isinstance(data, dict)
+        ar_data: object = data.get("accuraterip_summary")
+        assert isinstance(ar_data, dict)
+        assert ar_data.get("log_sha256") == "B" * 64  # original, not overwritten
+        assert ar_data.get("mb_disc_id") == "existing-disc-id"

@@ -23,19 +23,30 @@ from music_annotator._mb_api import _fetch_acoustid_lookup_raw, _mb_data_classif
 from music_annotator._net import NetPolicy, retrieve
 from music_annotator._pipeline import CollisionPolicy, run
 from music_annotator._pipeline_io import (
+    _DISC_INFO_FILENAME,
     JOURNAL_FILENAME,
     AudioCompareResult,
     _corroborate_candidate_medium,
+    _find_whipper_log,
     _load_disc_info_yaml,
     _preferred_disc_record,
     _read_duration_ms,
     _run_fpcalc,
     find_source_files,
     parse_disc_toc,
+    parse_whipper_log,
     read_journal,
 )
 from music_annotator._tags import _NAME_MAX
-from music_annotator.models import JSON, DirHint, MBMedium, MBReleaseCandidate, TransactionLog
+from music_annotator.models import (
+    JSON,
+    AccurateRipSummary,
+    AccurateRipTrack,
+    DirHint,
+    MBMedium,
+    MBReleaseCandidate,
+    TransactionLog,
+)
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
@@ -419,6 +430,47 @@ def parse_dir_hint(src_dir: Path) -> DirHint:
             query = max(stems, key=len)
 
     return DirHint(query=query, artist="")
+
+
+def is_whipper_dir(src_dir: Path) -> bool:
+    """Return ``True`` when ``src_dir`` is recognised as a whipper rip (C-WHIP strong signatures).
+
+    A directory is a whipper rip when **either** of the two strong signatures is present:
+
+    1. A ``*.log`` file whose last non-empty line matches ``SHA-256 hash: <UPPERHEX>`` (the
+       whipper native-logger self-attesting hash appended by ``WhipperLogger.logRip``).  Detection
+       delegates to :func:`~music_annotator._pipeline_io._find_whipper_log`.
+    2. A ``00 - disc info.yaml`` file (``_DISC_INFO_FILENAME``) is present.
+
+    The ``.0x…`` freedb-CRC dir-name suffix is a weak corroborating signal only — it is never
+    sufficient alone to establish a whipper rip (C-WHIP).
+
+    :param src_dir: Directory to inspect.
+    :returns: ``True`` when at least one strong signature is present.
+    """
+    # Strong signature (2): 00 - disc info.yaml present.
+    if (src_dir / _DISC_INFO_FILENAME).is_file():
+        return True
+
+    # Strong signature (1): *.log file with trailing SHA-256 hash line.
+    # Delegates to _find_whipper_log to avoid duplicating the detection logic.
+    return _find_whipper_log(src_dir) is not None
+
+
+def _parse_whipper_ar(src_dir: Path) -> tuple[AccurateRipSummary, dict[int, AccurateRipTrack]]:
+    """Parse the whipper log in ``src_dir`` and return the AccurateRip summary and per-track data.
+
+    Wraps :func:`~music_annotator._pipeline_io.parse_whipper_log` and returns empty defaults when
+    no whipper log is found (e.g. when only strong signature (2) is present and no log exists).
+
+    :param src_dir: Directory containing the whipper rip.
+    :returns: A ``(AccurateRipSummary, dict[int, AccurateRipTrack])`` tuple; both are empty/default
+        when no whipper native log is found.
+    """
+    try:
+        return parse_whipper_log(src_dir)
+    except FileNotFoundError:
+        return AccurateRipSummary(), {}
 
 
 def _search_mb_releases(query: str, tracks: int, limit: int) -> dict[str, JSON]:
@@ -961,6 +1013,16 @@ def discover(
             continue
 
         log.info("discover_selected", release_id=release_id, src_dir=str(src_dir))
+
+        # Whipper recognition (C-WHIP): set origin_source and parse AccurateRip data when
+        # either strong signature is present.  The AR data is passed to run() so it can be
+        # threaded into TransactionEntry flat fields and ProvenanceSidecar.accuraterip_summary.
+        whipper = is_whipper_dir(src_dir)
+        origin_source = "whipper" if whipper else ""
+        ar_summary, ar_tracks = _parse_whipper_ar(src_dir) if whipper else (AccurateRipSummary(), {})
+        if whipper:
+            log.info("whipper_dir_recognised", src_dir=str(src_dir))
+
         try:
             run(
                 release_id=release_id,
@@ -973,6 +1035,9 @@ def discover(
                 ui=ui,
                 no_cache=no_cache,
                 acoustid_key=acoustid_key,
+                origin_source=origin_source,
+                ar_summary=ar_summary,
+                ar_tracks=ar_tracks,
             )
         except (ValueError, mb.WebServiceError, RuntimeError, OSError) as exc:
             log.error("discover_run_error", release_id=release_id, error=str(exc), exc_info=True)

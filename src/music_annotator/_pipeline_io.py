@@ -1515,6 +1515,9 @@ def _write_provenance_fields(sidecar_path: Path, provenance: ProvenanceSidecar) 
       or when the incoming tier ranks strictly higher than the current one.  A re-resolve may raise
       the tier but never lower it.  An empty incoming tier is not written.
     - ``needs_spot_check`` is written whenever ``annotation_tier`` is written.
+    - ``accuraterip_summary`` follows the **monotonic-upgrade rule** (C-AR): an incoming populated
+      summary (``log_sha256`` non-empty) is written; an incoming empty summary never overwrites a
+      populated one.
 
     :param sidecar_path: Absolute path to the YAML sidecar file to update or create.
     :param provenance: The :class:`~music_annotator.models.ProvenanceSidecar` whose fields are
@@ -1554,6 +1557,17 @@ def _write_provenance_fields(sidecar_path: Path, provenance: ProvenanceSidecar) 
             if should_write:
                 existing["annotation_tier"] = str(incoming_tier)
                 existing["needs_spot_check"] = provenance.needs_spot_check
+
+    # accuraterip_summary: monotonic-upgrade rule (C-AR) — write only when incoming is populated
+    # (log_sha256 non-empty) and the existing summary is absent or empty.
+    incoming_ar = provenance.accuraterip_summary
+    if incoming_ar.log_sha256:
+        existing_ar_raw = existing.get("accuraterip_summary")
+        existing_ar_sha256 = ""
+        if isinstance(existing_ar_raw, dict):
+            existing_ar_sha256 = str(existing_ar_raw.get("log_sha256", ""))
+        if not existing_ar_sha256:
+            existing["accuraterip_summary"] = incoming_ar.model_dump()
 
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     with sidecar_path.open("w", encoding="utf-8") as fh:

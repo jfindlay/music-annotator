@@ -64,6 +64,8 @@ from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import _NAME_MAX, _proposed_short, build_dest_path, build_track_tags
 from music_annotator._works import build_work_hierarchy, select_primary_performance_work
 from music_annotator.models import (
+    AccurateRipSummary,
+    AccurateRipTrack,
     CensusSignal,
     CopyPlanEntry,
     CoverArt,
@@ -671,6 +673,68 @@ def _write_freedb_yaml(
     )
 
 
+def _write_whipper_sidecars(
+    src_dir: Path,
+    work_top_dir: Path,
+    whipper_sidecars_written: set[Path],
+    journal_entries: list[TransactionEntry],
+    now: str,
+    release_id: str,
+) -> None:
+    """Copy whipper sidecar files (``.log``, ``.cue``, ``.toc``) from ``src_dir`` to ``work_top_dir``.
+
+    Preserves whipper rip provenance files losslessly in the destination library.  Each file is
+    copied with a SHA-256 integrity check; a mismatch raises :exc:`RuntimeError`.  A ``"sidecar"``
+    journal entry is appended for each file successfully copied.
+
+    A set ``whipper_sidecars_written`` keyed on ``work_top_dir`` ensures the copy is performed at
+    most once per work directory across all tracks in the copy loop.
+
+    The ``"sidecar"`` journal entries produced here are **not** ``"tagged"`` entries and must not
+    feed the "safe to delete source" message (C-MOVE provenance invariant).
+
+    :param src_dir: Source directory containing the whipper rip files.
+    :param work_top_dir: Work top directory (``dest_root / composer-dir / work-dir``) where the
+        sidecar files are written.
+    :param whipper_sidecars_written: Mutable set of work_top_dirs already processed this run.
+    :param journal_entries: Mutable list to which new ``"sidecar"`` entries are appended.
+    :param now: ISO-format timestamp string for journal entries.
+    :param release_id: MusicBrainz release MBID for journal entries.
+    :raises RuntimeError: When the SHA-256 of a written file does not match the source.
+    """
+    if work_top_dir in whipper_sidecars_written:
+        return
+    whipper_sidecars_written.add(work_top_dir)
+
+    _whipper_sidecar_extensions: frozenset[str] = frozenset({".log", ".cue", ".toc"})
+    for src_file in sorted(src_dir.iterdir()):
+        if src_file.suffix.lower() not in _whipper_sidecar_extensions:
+            continue
+        if not src_file.is_file():
+            continue
+        dest_file = work_top_dir / src_file.name
+        src_data = src_file.read_bytes()
+        src_hash = hashlib.sha256(src_data).hexdigest()
+        work_top_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_file, dest_file)
+        dest_hash = hashlib.sha256(dest_file.read_bytes()).hexdigest()
+        if dest_hash != src_hash:
+            raise RuntimeError(
+                f"whipper sidecar copy integrity failure for '{dest_file.name}': "
+                f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_hash[:12]}…"
+            )
+        log.debug("whipper_sidecar_written", dest=str(dest_file))
+        journal_entries.append(
+            TransactionEntry(
+                timestamp=now,
+                release_id=release_id,
+                source=str(src_file),
+                destination=str(dest_file),
+                action="sidecar",
+            )
+        )
+
+
 def _warn_long_names(plan: list[CopyPlanEntry], dest_root: Path) -> None:
     """Log a warning for every path component in ``plan`` that exceeds :data:`~music_annotator._tags._NAME_MAX` bytes.
 
@@ -1014,6 +1078,8 @@ def _copy_tag_verify_journal_pass(
     dry_run: bool,
     acoustid_key: str,
     census_signal: CensusSignal = CensusSignal.SEARCH_HIT,
+    ar_summary: AccurateRipSummary | None = None,
+    ar_tracks: dict[int, AccurateRipTrack] | None = None,
 ) -> list[TransactionEntry]:
     """Execute the copy / tag / verify / journal loop for the selected medium's tracks.
 
@@ -1025,14 +1091,16 @@ def _copy_tag_verify_journal_pass(
     4. Compute ``audio_hash`` and ``chromaprint_fp`` from the source.
     5. Optionally confirm the AcoustID identity (read-only diagnostic; never raises).
     6. Set cover-art sidecar reference tags on ``final_tags``.
-    7. Apply tags via :func:`~music_annotator._tagger.apply_tags_flac` or
+    7. Apply AccurateRip flat fields to ``final_tags`` from ``ar_tracks`` (when provided).
+    8. Apply tags via :func:`~music_annotator._tagger.apply_tags_flac` or
        :func:`~music_annotator._tagger.apply_tags_mp3`.
-    8. Restore source timestamps via ``os.utime``.
-    9. Verify the copy via :func:`~music_annotator._pipeline_io._verify_copy` — raise
-       :exc:`RuntimeError` on any mismatch.
-    10. Write the annotation tier to the provenance sidecar (once per work directory).
-    11. Write sidecar cover-art files and the FreeDB YAML (once per work directory).
-    12. Append a ``"tagged"`` :class:`~music_annotator.models.TransactionEntry` to the result list.
+    9. Restore source timestamps via ``os.utime``.
+    10. Verify the copy via :func:`~music_annotator._pipeline_io._verify_copy` — raise
+        :exc:`RuntimeError` on any mismatch.
+    11. Write the annotation tier and AccurateRip summary to the provenance sidecar (once per
+        work directory).
+    12. Write sidecar cover-art files, the FreeDB YAML, and whipper sidecars (once per work dir).
+    13. Append a ``"tagged"`` :class:`~music_annotator.models.TransactionEntry` to the result list.
 
     Dry-run and skip-dest entries are handled before step 1 and produce ``"dry_run"`` or
     ``"skipped"`` journal entries respectively.
@@ -1056,6 +1124,12 @@ def _copy_tag_verify_journal_pass(
     :param census_signal: The identity evidence signal for this ingest, used to derive the
         annotation tier written to the provenance sidecar.  Defaults to
         :attr:`~music_annotator.models.CensusSignal.SEARCH_HIT` (``mb-search-resolved``).
+    :param ar_summary: Optional per-release AccurateRip summary (C-AR) from
+        :func:`~music_annotator._pipeline_io.parse_whipper_log`.  When provided, written to the
+        provenance sidecar under the monotonic-upgrade rule.
+    :param ar_tracks: Optional per-track AccurateRip data (C-AR) keyed by 1-based track position.
+        When provided, the 11 flat fields are projected onto each ``TransactionEntry`` and the
+        corresponding ``TrackTags`` before tagging.
     :returns: List of :class:`~music_annotator.models.TransactionEntry` objects produced during
         this pass (one per plan entry, plus sidecar entries).
     :raises RuntimeError: If copy integrity fails, tag write fails, or ``_verify_copy`` fails.
@@ -1064,9 +1138,12 @@ def _copy_tag_verify_journal_pass(
     journal_entries: list[TransactionEntry] = []
     sidecars_written: set[Path] = set()
     freedb_written: set[Path] = set()
+    whipper_sidecars_written: set[Path] = set()
     tier_written: set[Path] = set()
     now = datetime.datetime.now(datetime.UTC).isoformat()
     annotation_tier, needs_spot_check = classify_annotation_tier(census_signal)
+    _ar_tracks: dict[int, AccurateRipTrack] = ar_tracks if ar_tracks is not None else {}
+    _ar_summary: AccurateRipSummary = ar_summary if ar_summary is not None else AccurateRipSummary()
 
     for entry in plan:
         idx, src_file, dest_file = entry.idx, entry.src_file, entry.dest_file
@@ -1194,6 +1271,29 @@ def _copy_tag_verify_journal_pass(
         final_tags.coverart_other_files = _filenames(cover.other)
         final_tags.coverart_unknown_files = _filenames(cover.unknown)
 
+        # Project AccurateRip flat fields onto final_tags (C-AR, S4).  The track position is
+        # the 1-based tracknumber from the MB medium; ar_tracks is keyed by that position.
+        # confidence serializes as decimal string, empty when 0/absent (never "0").
+        _track_pos_str = final_tags.tracknumber
+        _ar_track: AccurateRipTrack | None = None
+        if _track_pos_str:
+            try:
+                _ar_track = _ar_tracks.get(int(_track_pos_str))
+            except ValueError:
+                pass
+        if _ar_track is not None:
+            final_tags.accuraterip_v1_result = _ar_track.v1.result.value
+            final_tags.accuraterip_v1_confidence = str(_ar_track.v1.confidence) if _ar_track.v1.confidence else ""
+            final_tags.accuraterip_v1_local_crc = _ar_track.v1.local_crc
+            final_tags.accuraterip_v1_remote_crc = _ar_track.v1.remote_crc
+            final_tags.accuraterip_v2_result = _ar_track.v2.result.value
+            final_tags.accuraterip_v2_confidence = str(_ar_track.v2.confidence) if _ar_track.v2.confidence else ""
+            final_tags.accuraterip_v2_local_crc = _ar_track.v2.local_crc
+            final_tags.accuraterip_v2_remote_crc = _ar_track.v2.remote_crc
+            final_tags.accuraterip_test_crc = _ar_track.test_crc
+            final_tags.accuraterip_copy_crc = _ar_track.copy_crc
+            final_tags.accuraterip_status = _ar_track.status
+
         ext = src_file.suffix.lower()
         try:
             match ext:
@@ -1217,19 +1317,31 @@ def _copy_tag_verify_journal_pass(
 
         _write_sidecars(cover, work_top_dir, sidecars_written, journal_entries, now, release_id)
         _write_freedb_yaml(src_dir, work_top_dir, medium_pos, freedb_written, journal_entries, now, release_id)
+        _write_whipper_sidecars(src_dir, work_top_dir, whipper_sidecars_written, journal_entries, now, release_id)
 
-        # Step 5.5 (C-PROV invariant): write annotation_tier to the provenance sidecar after
-        # _verify_copy succeeds and before journal_entries.append.  Runs after _write_freedb_yaml
-        # so that the tier is merged into the freedb sidecar when one exists, consistent with the
-        # enrich_origin_time convention.  Once per work directory.
+        # Step 5.5 (C-PROV invariant): write annotation_tier and AccurateRip summary to the
+        # provenance sidecar after _verify_copy succeeds and before journal_entries.append.
+        # Runs after _write_freedb_yaml so that the tier is merged into the freedb sidecar when
+        # one exists, consistent with the enrich_origin_time convention.  Once per work directory.
+        # AccurateRip summary monotonic-upgrade rule: an incoming empty summary must not overwrite
+        # a populated one (C-AR).
         if work_top_dir not in tier_written:
             tier_written.add(work_top_dir)
             _sidecar_path = _find_freedb_sidecar(work_top_dir)
             if _sidecar_path is None:
                 _sidecar_path = work_top_dir / PROVENANCE_FILENAME
+            # Apply monotonic-upgrade rule for accuraterip_summary: only write when the incoming
+            # summary is populated (log_sha256 non-empty) or no existing summary is present.
+            _prov_to_write = ProvenanceSidecar(annotation_tier=annotation_tier, needs_spot_check=needs_spot_check)
+            if _ar_summary.log_sha256:
+                _prov_to_write = ProvenanceSidecar(
+                    annotation_tier=annotation_tier,
+                    needs_spot_check=needs_spot_check,
+                    accuraterip_summary=_ar_summary,
+                )
             _write_provenance_fields(
                 _sidecar_path,
-                ProvenanceSidecar(annotation_tier=annotation_tier, needs_spot_check=needs_spot_check),
+                _prov_to_write,
             )
             log.debug(
                 "annotation_tier_written",
@@ -1247,6 +1359,17 @@ def _copy_tag_verify_journal_pass(
                 action="tagged",
                 audio_hash=final_tags.audio_hash,
                 chromaprint_fp=final_tags.chromaprint_fp,
+                accuraterip_v1_result=final_tags.accuraterip_v1_result,
+                accuraterip_v1_confidence=final_tags.accuraterip_v1_confidence,
+                accuraterip_v1_local_crc=final_tags.accuraterip_v1_local_crc,
+                accuraterip_v1_remote_crc=final_tags.accuraterip_v1_remote_crc,
+                accuraterip_v2_result=final_tags.accuraterip_v2_result,
+                accuraterip_v2_confidence=final_tags.accuraterip_v2_confidence,
+                accuraterip_v2_local_crc=final_tags.accuraterip_v2_local_crc,
+                accuraterip_v2_remote_crc=final_tags.accuraterip_v2_remote_crc,
+                accuraterip_test_crc=final_tags.accuraterip_test_crc,
+                accuraterip_copy_crc=final_tags.accuraterip_copy_crc,
+                accuraterip_status=final_tags.accuraterip_status,
             )
         )
 
@@ -1266,6 +1389,8 @@ def run(
     disc_override: int | None = None,
     acoustid_key: str = "",
     origin_source: str = "",
+    ar_summary: AccurateRipSummary | None = None,
+    ar_tracks: dict[int, AccurateRipTrack] | None = None,
 ) -> None:
     """Copy and tag an album directory using MusicBrainz metadata.
 
@@ -1330,6 +1455,13 @@ def run(
         (``CensusSignal.EMBEDDED_MBID``) rather than the conservative ``mb-search-resolved`` default.  This is the
         C-WHIP trust anchor: whipper rips carry hardware-level TOC identity, so a resolving disc-ID is equivalent to
         an embedded MBID.  A bare non-whipper single-disc TOC match keeps the conservative tier.  Defaults to ``""``.
+    :param ar_summary: Optional per-release AccurateRip summary (C-AR) from
+        :func:`~music_annotator._pipeline_io.parse_whipper_log`.  When provided and populated
+        (``log_sha256`` non-empty), written to the provenance sidecar under the monotonic-upgrade
+        rule.  Defaults to ``None`` (no AccurateRip data).
+    :param ar_tracks: Optional per-track AccurateRip data (C-AR) keyed by 1-based track position.
+        When provided, the 11 flat fields are projected onto each ``TrackTags`` before tagging and
+        onto each ``TransactionEntry``.  Defaults to ``None`` (no per-track AccurateRip data).
     :raises mb.ResponseError: On a non-retryable MusicBrainz API error.
     :raises RuntimeError: If all retry attempts are exhausted for any API call, or if post-copy verification fails (copy
         integrity, tag round-trip, cover art, or mtime mismatch).
@@ -1616,6 +1748,8 @@ def run(
         dry_run=dry_run,
         acoustid_key=acoustid_key,
         census_signal=census_signal,
+        ar_summary=ar_summary,
+        ar_tracks=ar_tracks,
     )
 
     if not dry_run:
