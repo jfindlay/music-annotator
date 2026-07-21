@@ -183,7 +183,7 @@ ISRCs don't match the resolved release is `origin_source == "download"` but stay
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Rename ISRC-presence provenance label presto→download; add other-download integration test | pending | — | C-DL |
+| 1 | Rename ISRC-presence provenance label presto→download; add other-download integration test | done | b0acf73 | C-DL (frozen) |
 
 ## Action-frame digest
 
