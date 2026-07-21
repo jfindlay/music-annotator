@@ -287,11 +287,15 @@ discovery).
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Add operator override to the track-count-mismatch gate; ingest accepted mismatches at mb-partial | interface-frozen (impl pending) | — | C-OVR (design frozen 2026-07-21) |
+| 1 | Add operator override to the track-count-mismatch gate; ingest accepted mismatches at mb-partial | done | 55fa104 | C-OVR (frozen 2026-07-21) |
 
 ## Action-frame digest
 
-*(none yet)*
+### S1 — 2026-07-21
+Discovery/flex: Inflection fork found `selected_medium` must be `MBMedium | None` (multi-disc no-match path has no medium at raise site) and that the method must land on TWO protocols (`DiscUI` in `_pipeline.py` + `DiscoverUI` in `_discover.py`) — PLAN named only `DiscoverUI`.
+Affected: C-OVR (adjusted at freeze; within `@architect` confirm/adjust latitude — no scope change)
+Deferred: no
+Texture: R-3 positional-min rule resolved deterministically (no additive-reshard); all KATs green first pass; tox -m analyze clean.
 
 ## Discoveries & risks
 
