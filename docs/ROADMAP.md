@@ -78,7 +78,7 @@ search/disc-ID calls (`_search_mb_releases` → `mb.search_releases`; `_toc_look
 completes the "uniformly on `_net`" property R3 leans on; freezes no new contract; consumes
 C-NET-CORE / C-NET-TERM.  Sequence before any R3 adapter.
 
-### Pre-R3 hardening  (Category A fix; 1 session; J1 additive-reshard; before any R3 adapter; IN PROGRESS 2026-07-20)
+### Pre-R3 hardening  (Category A fix; 1 session; J1 additive-reshard; before any R3 adapter; DONE 2026-07-20)
 
 **Added by J1 (2026-07-20).**  Fix the `_discover.py` `_parse_release_item` search-result track-count
 bug (`len(track-list)` yields 0 for MB search results, which return `track-list: []` + `track-count:
@@ -87,12 +87,12 @@ N`) with a regression test.  Standalone, *not* folded into R2: the annotation-ti
 tier contract freezes on it.  Sequence alongside/after PLAN R1-F, before any R3 adapter.  Distinct from
 R1-F (transport routing) — this is response *parsing*.  → ROADMAP Discoveries appendix (R0 boundary).
 
-**Sharded as PLAN pre-R3 (2026-07-20).**  R1-F is done (commit `e7370b7`); this fix is the sole
-remaining R3 prerequisite.  It did **not** fold into R2 — R2 closed on C-TIER without it, so the
-`mb-search-resolved` tier's track-count denominator is currently mis-derived for search results
-(`_parse_release_item` reads `len(track-list: [])` = 0 instead of `track-count: N`, the search-result
-shape; the census script already proved the correct precedence in `_extract_track_count`).  Sequenced
-standalone before any R3 adapter, as J1 prescribed.
+**DONE (commit `ca75aaf`, PLAN pre-R3 1/1 row).**  `_parse_release_item` now uses `track-list` length
+only when non-empty, else falls back to `track-count` — matching the census `_extract_track_count`
+reference.  C-TIER's `mb-search-resolved` denominator is repaired for the search-resolved population;
+R1-F (`e7370b7`) was the other prerequisite.  **All R3 gates are now clear.**  Froze no new contract
+(scope-completeness on C-TIER's input path).  ◆ handed off to the R3b whipper adapter shard (this
+reconciliation).
 
 ### R2 — Annotation-tier substrate  (Category A substrate; 3 sessions; DONE 2026-07-20)
 
@@ -131,7 +131,11 @@ be annotated*.  The two are orthogonal; R2 keeps "rung" for identity-confidence 
 **J1 order (descending clean population → maximises R5 drain-unlock per session):**
 
 1. **R3b** whipper / MakeMKV rips — **first** (52 clean dirs; embedded MBID + TOC disc-ID = highest
-   identity confidence; unlocks the reserved AccurateRip 4th archival dimension).  ~3 sessions.
+   identity confidence; unlocks the reserved AccurateRip 4th archival dimension).  ~3 → **5 sessions**
+   (IN PROGRESS 2026-07-20; sharded as PLAN R3b).  Survey found the TOC→MB→tier machinery already
+   exists; the genuinely-new work is C-AR (AccurateRip provenance, per-track→tags + per-release→sidecar),
+   whipper dir recognition (C-WHIP), single-disc TOC→full-verified promotion, and the J1 spot-check gate.
+   MakeMKV deferred (census population is all whipper; MakeMKV emits no AccurateRip).
 2. **R3a** PrestoMusic downloads (ISRC-bearing; 36 dirs; simplest single-source).  ~2 sessions.
 3. **R3e** other-download/amazon clean (19 dirs; may collapse into R3a as a source-variant).  ~1-2.
 4. **R3d** Track-mismatch-tolerant ingest — **after** the strict clean adapters prove C-TIER.
@@ -217,9 +221,10 @@ derivation re-reads them.
 
 ## Scope estimate (static frame; R3 tightened by J1 2026-07-20)
 
-R0 2 ✓ · R1 3-5 ✓ · pre-R3 fix 1 · R2 3 · R3 9-10 · R4 3-6 · R6 5-8 → **~24-35 agent sessions**, plus
-the operator-paced R5 drain.  J1 tightened the R3 range from the provisional 8-16 to **9-10** on the
-census distribution: pre-R3 fix 1 · R2 3 · R3b 3 · R3a 2 · R3e 1-2 · R3d 3 · R3c 0 (pruned).  The
+R0 2 ✓ · R1 3-5 ✓ · pre-R3 fix 1 ✓ · R2 3 ✓ · R3 11-12 · R4 3-6 · R6 5-8 → **~26-37 agent sessions**, plus
+the operator-paced R5 drain.  J1 tightened the R3 range from the provisional 8-16 to 9-10 on the
+census distribution; the R3b survey (2026-07-20) then re-sized R3b 3→5, giving **11-12**: pre-R3 fix 1 ✓ ·
+R2 3 ✓ · R3b 5 · R3a 2 · R3e 1-2 · R3d 3 · R3c 0 (pruned).  The
 clean-ingest adapters (R3a/R3b/R3e ≈ 107 dirs) dominate; R3d (18) is sub-classified; R3c (Discogs) is
 pruned to BACKLOG.
 
@@ -286,3 +291,15 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   (see exit report).  R2 also established the **monotonic-upgrade carve-out** on `ProvenanceSidecar`
   idempotency (annotation_tier may rise, never silently lower) — a durable prose sub-contract of C-TIER for
   Act III-b.
+
+- **pre-R3 boundary (2026-07-20) — R3b substrate mostly pre-exists; MakeMKV deferred.**  The R3b survey
+  found `parse_disc_toc` / `_toc_lookup_mb_releases` / `_match_medium_by_toc` / `CensusSignal.EMBEDDED_MBID`
+  already in place, so R3b's new work is narrower than the ~3-session estimate implied and sharpens to 5
+  contract-bounded sessions (C-AR + C-WHIP frozen at R3b S1).  Static-frame consequences: (1) the reserved
+  "4th archival dimension" (BACKLOG) is realised as **C-AR** — per-track AccurateRip in the `TrackTags`/
+  `TransactionEntry` 4th-dim slot (tags), per-release summary in `ProvenanceSidecar`; (2) `run()` currently
+  gates TOC→`full-mb-verified` to multi-disc only — R3b S3 lifts this to single-disc under whipper
+  provenance; (3) MakeMKV is deferred (zero census population, no AccurateRip) — **C-WHIP names whipper
+  only**.  C-AR mirrors whipper's `WhipperLogger` schema 1:1 (v1/v2 per-track Result+Confidence+CRC;
+  release-level MB/CDDB disc-ID + self-attesting log SHA-256) — a faithful capture of the AccurateRip
+  convention, verified against the whipper source, not a nonstandard invention.
