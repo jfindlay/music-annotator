@@ -131,12 +131,21 @@ be annotated*.  The two are orthogonal; R2 keeps "rung" for identity-confidence 
 **J1 order (descending clean population → maximises R5 drain-unlock per session):**
 
 1. **R3b** whipper / MakeMKV rips — **first** (52 clean dirs; embedded MBID + TOC disc-ID = highest
-   identity confidence; unlocks the reserved AccurateRip 4th archival dimension).  ~3 → **5 sessions**
-   (IN PROGRESS 2026-07-20; sharded as PLAN R3b).  Survey found the TOC→MB→tier machinery already
-   exists; the genuinely-new work is C-AR (AccurateRip provenance, per-track→tags + per-release→sidecar),
-   whipper dir recognition (C-WHIP), single-disc TOC→full-verified promotion, and the J1 spot-check gate.
-   MakeMKV deferred (census population is all whipper; MakeMKV emits no AccurateRip).
-2. **R3a** PrestoMusic downloads (ISRC-bearing; 36 dirs; simplest single-source).  ~2 sessions.
+   identity confidence; unlocks the reserved AccurateRip 4th archival dimension).  ~3 → 5 sessions
+   (**DONE 2026-07-21**, commits `92d9f7c`–`e326b5f`, PLAN R3b 5/5 rows).  Froze **C-AR** (AccurateRip
+   provenance: per-track→tags flat-`str` fields + per-release→`ProvenanceSidecar` summary) and **C-WHIP**
+   (whipper dir signature).  Delivered single-disc TOC→`full-mb-verified` promotion (whipper-anchored),
+   whipper `.log`/`.cue`/`.toc` sidecar preservation, and the J1 spot-check gate (audit tier-pass extended
+   with AR status).  MakeMKV deferred (census all whipper; MakeMKV emits no AccurateRip).  ◆ handed off to
+   the R3a Presto adapter shard (this reconciliation).
+2. **R3a** PrestoMusic downloads (ISRC-bearing; 36 dirs; simplest single-source).  ~2 → **3 sessions**
+   (**IN PROGRESS 2026-07-21**; sharded as PLAN R3a).  Survey found ISRC identity infra already exists
+   (`_isrc_matches` rung 1, `TrackTags.isrc`, TSRC round-trip), so R3a's genuinely-new work narrows to:
+   **C-ISRC** (an `ISRC_MATCH` `CensusSignal` promoting ISRC-match-against-the-selected-medium to
+   `full-mb-verified` — the ISRC analogue of R3b's TOC promotion; additive to C-TIER, not a re-freeze),
+   **C-PRESTO** (download-dir recognition on per-track ISRC presence → `origin_source`), and incremental
+   audit surfacing + a Presto integration test.  The +1 over the ~2 estimate is lever 3/4 (isolate the
+   tier-promotion substrate); net still below R3b because ISRC infra pre-exists.
 3. **R3e** other-download/amazon clean (19 dirs; may collapse into R3a as a source-variant).  ~1-2.
 4. **R3d** Track-mismatch-tolerant ingest — **after** the strict clean adapters prove C-TIER.
    **Sub-classified (J1):** **R3d-edition** (genuine edition/pressing mismatch, single-medium) vs
@@ -303,3 +312,21 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   only**.  C-AR mirrors whipper's `WhipperLogger` schema 1:1 (v1/v2 per-track Result+Confidence+CRC;
   release-level MB/CDDB disc-ID + self-attesting log SHA-256) — a faithful capture of the AccurateRip
   convention, verified against the whipper source, not a nonstandard invention.
+
+- **R3b boundary (2026-07-21) — ISRC is an unwired tier signal (static-frame fact for R3a/R3e).**  The
+  R3a survey found ISRC identity machinery already present (`_isrc_matches` = identity rung 1) but **not
+  connected to the annotation-tier signal**: `run()`'s census-signal ladder (`_pipeline.py:1729–1735`)
+  promotes on TOC-match or embedded-MBID else falls to `SEARCH_HIT`, so an ISRC-matching download lands at
+  `mb-search-resolved` + `needs_spot_check`.  Static-frame consequence: the ISRC→tier promotion is R3a's
+  core deliverable (C-ISRC), and the **recognition signature (per-track ISRC presence) is broader than
+  Presto** — R3e (other-download/amazon, 19 dirs) will likely carry ISRCs too, so C-PRESTO's recogniser is
+  reusable by R3e and R3e may collapse further into R3a's mechanism than J1 estimated.  Additive, no
+  contract invalidated.
+
+- **R3b boundary (2026-07-21) — the `CensusSignal` enum is the extensible seam, `AnnotationTier` is
+  frozen.**  C-TIER froze the *tier vocabulary* (`AnnotationTier` + `ANNOTATION_TIER_ORDER` +
+  `classify_annotation_tier`'s signature), but the `CensusSignal` enum and the classifier's match arms are
+  the designed growth points (R2 left `alternate-source` signal-less by intent).  New identity evidence
+  (ISRC now; Discogs later at R3c) enters by adding a `CensusSignal` + a mapping arm — **never** by editing
+  `AnnotationTier`.  An adapter that appears to need a new *tier* (not a new signal) is a destructive-HALT
+  signal that C-TIER was mis-frozen.  Durable through all remaining R3 adapters.
