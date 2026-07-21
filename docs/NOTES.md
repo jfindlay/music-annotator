@@ -32,6 +32,21 @@ marking is what keeps deliberate degradation consistent with the lossless princi
 churn on upgrade, which is acceptable because journalled `repath` (C-PROV/C-MOVE) already owns
 exactly that.
 
+## Structural / physical-media disagreements are owned by the operator layer
+
+The annotator surfaces-and-defers, never guesses (operator, 2026-07-21; R3d shard boundary).  When
+the local dir and the MB release disagree on **structure** — a track-count mismatch: genuine
+edition/pressing difference, or flat-local-vs-multi-disc-MB layout — the disagreement is a
+physical-world fact the annotator cannot adjudicate.  Resolving it needs physical-medium inspection
+or a re-rip, which is the **operator's** responsibility.  So the pipeline does not auto-reconcile
+(no positional "smart merge", no automatic flat→multi-disc mapping); it surfaces the discrepancy
+(counts + an edition-vs-structure diagnostic) and lets the operator **accept** (ingest the best
+medium at `mb-partial`, taking ownership) or **decline** (leave the dir in `Original/` for physical
+handling).  This is the layer-routing rule (below) applied one layer deeper than data: a
+class-of-defect whose owning layer is *the physical media / the operator*, not the renderer, MB, or
+scholarship layers.  Contract: C-OVR (R3d).  It is the deliberate boundary of "coverage before
+quality" (above) — automatic inclusion stops where structural ground-truth requires a human.
+
 ## Path is a handle, not a manifest
 
 The destination directory and filename are *handles* — short, stable identifiers a user

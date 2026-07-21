@@ -148,22 +148,31 @@ be annotated*.  The two are orthogonal; R2 keeps "rung" for identity-confidence 
    runs (no discoveries, no contract flexes).  ◆ handed off to the R3e other-download adapter shard
    (this reconciliation).
 3. **R3e** other-download clean (19 dirs; the source-variant collapse J1 anticipated — CONFIRMED).
-   ~1-2 → **1 session** (**IN PROGRESS 2026-07-21**; sharded as PLAN R3e).  Survey confirmed the R3e
-   dirs are already functionally ingested by R3a's mechanism: they are ISRC-bearing, already recognised
-   by `is_presto_dir` (ISRC-presence only — no Presto-specific check), and already ISRC-promoted to
-   `full-mb-verified`.  R3e's genuinely-new work is therefore **provenance-label truthfulness, not a new
-   ingest path**: the ISRC-presence label was mislabelled `"presto"` (the census's presto-vs-other axis
-   is booklet-PDF-based and offline-only; the runtime recogniser never checked PDFs, so `"presto"` was
-   always a generic-download label).  R3e renames it to the honest `"download"` and adds an
-   other-download integration test.  Freezes **C-DL** (generic download recognition + label), which
-   supersedes C-PRESTO's `"presto"` literal.  1 session: lever 4 low (label-only, no tier/identity/
-   provenance-chain impact), lever 5 excellent; net below the ~1-2 estimate because the ingest path
-   pre-exists whole.  The single `amazon` dir is non-classical-other (R4a), not in R3e's in-mb-clean set.
-4. **R3d** Track-mismatch-tolerant ingest — **after** the strict clean adapters prove C-TIER.
-   **Sub-classified (J1):** **R3d-edition** (genuine edition/pressing mismatch, single-medium) vs
-   **R3d-structure** (flat-local dir vs multi-disc-MB layout — Grieg, Tchaikovsky, Karajan Sampler,
-   Puccini; needs multi-disc reconciliation, consumes C-S0).  The R3d PLAN reads `census-r0.json`
-   deltas to size the two sub-classes.  ~3 sessions.
+   ~1-2 → **1 session** (**DONE 2026-07-21**, commit `b0acf73`, PLAN R3e 1/1 rows).  Renamed the
+   ISRC-presence label `"presto"`→`"download"` (`is_presto_dir`→`is_download_dir`; recognition
+   heuristic unchanged) and added the `test_other_download_full_pipeline` integration test.  Froze
+   **C-DL** (generic download recognition + label), superseding C-PRESTO's `"presto"` literal.  The
+   collapse was total (same recogniser, same ladder, honest label) — no new ingest path, no compiler
+   contract touched (`origin_source` is free-form `str`).  ◆ handed off to the R3d shard (this
+   reconciliation).
+4. **R3d** Track-mismatch operator-override — **after** the strict clean adapters prove C-TIER.
+   ~3 → **1 session** (**IN PROGRESS 2026-07-21**; sharded as PLAN R3d).  **Collapsed at the shard
+   boundary by an operator-policy decision (2026-07-21):** a track-count mismatch cannot be
+   auto-reconciled — it needs physical-medium inspection or a re-rip, which is the operator's
+   responsibility.  So R3d does **not** build multi-disc aggregation or an edition-vs-structure copy
+   fork (both dropped).  Instead it gives the hard-fail track-count gate (`_pipeline.py:1554`
+   `RuntimeError`, plus `_select_medium_with_reason`'s `ValueError`) an **operator override**,
+   following the existing `_prompt_duration_warnings` / `confirm_disc` precedents: on mismatch,
+   surface local-vs-MB counts (with an edition-vs-structure diagnostic derived from
+   `shape.disc_subdirs` + count ratio, shown for context only) → operator **accepts** (ingest the
+   selected/best medium at `mb-partial`, operator owns the discrepancy) or **declines** (skip; stays
+   in `Original/` for physical-medium handling on the operator backlog).  Freezes **C-OVR** (the
+   `confirm_count_mismatch` `DiscoverUI` Protocol method + the accept→`CensusSignal.MISMATCH` wiring).
+   Consumes C-TIER's `mb-partial` tier and `CensusSignal.MISMATCH` **unchanged** (R2 over-specified
+   them; no C-TIER re-freeze).  1 session: the `mb-partial`/`MISMATCH`/audit machinery already exists
+   (R2), so the only new work is the Protocol method, the terminal prompt, the gate rewrite, and the
+   integration test.  The 18 `in-mb-mismatch` dirs (9 presto, 5 whipper, 4 other-download) are worked
+   by the operator via R5 drain, not auto-ingested.
 - **R3c Discogs adapter — PRUNED to BACKLOG (J1).**  Census refuted its premise: all 6 not-in-mb dirs
   are personal recordings, none Discogs-suitable.  Returns to BACKLOG as trigger-based (fires if a
   future census surfaces Discogs-suitable commercial releases).  The `alternate-source` tier is
@@ -242,12 +251,13 @@ derivation re-reads them.
 
 ## Scope estimate (static frame; R3 tightened by J1 2026-07-20)
 
-R0 2 ✓ · R1 3-5 ✓ · pre-R3 fix 1 ✓ · R2 3 ✓ · R3 11-12 · R4 3-6 · R6 5-8 → **~26-37 agent sessions**, plus
+R0 2 ✓ · R1 3-5 ✓ · pre-R3 fix 1 ✓ · R2 3 ✓ · R3 9-10 · R4 3-6 · R6 5-8 → **~24-35 agent sessions**, plus
 the operator-paced R5 drain.  J1 tightened the R3 range from the provisional 8-16 to 9-10 on the
-census distribution; the R3b survey (2026-07-20) then re-sized R3b 3→5, giving **11-12**: pre-R3 fix 1 ✓ ·
-R2 3 ✓ · R3b 5 ✓ · R3a 3 ✓ · R3e 1 · R3d 3 · R3c 0 (pruned).  The
-clean-ingest adapters (R3a/R3b/R3e ≈ 107 dirs) dominate; R3d (18) is sub-classified; R3c (Discogs) is
-pruned to BACKLOG.
+census distribution; the R3b survey (2026-07-20) then re-sized R3b 3→5, and R3d collapsed 3→1 at its
+shard boundary (operator-override, no auto-reconciliation), giving **9-10**: pre-R3 fix 1 ✓ ·
+R2 3 ✓ · R3b 5 ✓ · R3a 3 ✓ · R3e 1 ✓ · R3d 1 · R3c 0 (pruned).  The
+clean-ingest adapters (R3a/R3b/R3e ≈ 107 dirs) dominate; R3d (18) is an operator-override gate (no
+sub-class code fork); R3c (Discogs) is pruned to BACKLOG.
 
 ## Out of scope (stays in BACKLOG)
 
@@ -283,6 +293,16 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   These are not data errors; they need different adapter handling.  Static-frame consequence: **R3d may
   need sub-classification** (edition-mismatch vs structure-mismatch) before adapter ordering, and R3d
   must handle multi-disc reconciliation.  For J1 to decide.
+
+  **RESOLVED at R3d shard boundary (2026-07-21):** the sub-classification does **not** drive two
+  adapter code paths after all.  Operator policy (a count mismatch needs physical-medium
+  verification) makes both sub-classes share one outcome — surface the discrepancy for operator
+  accept/override, never auto-reconcile.  R3d therefore needs **no** multi-disc reconciliation code;
+  the edition-vs-structure distinction survives only as diagnostic display context in the override
+  prompt.  The multi-disc-MB structure cases are handled by the operator against the physical media
+  (R5), exactly as edition mismatches are.  Durable axiom (NOTES prose-contract): structural /
+  physical-media disagreements are owned by the operator layer — the annotator surfaces-and-defers,
+  never guesses.
 
 - **R0 boundary (2026-07-20) — search-only vs embedded-MBID confidence asymmetry.**  Of the 107
   `in-mb-clean` dirs, only 8 carry an embedded `MUSICBRAINZ_ALBUMID`; 99 were resolved by Pass 2 MB
