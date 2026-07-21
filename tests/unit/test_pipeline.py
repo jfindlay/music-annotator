@@ -62,8 +62,11 @@ from music_annotator._pipeline_io import (
     _chromaprint_similarity,
     _collect_work_dir_provenance,
     _find_freedb_sidecar,
+    _find_whipper_log,
     _isrc_matches,
     _mtime_iso,
+    _parse_ar_track,
+    _parse_ar_track_result,
     _read_acoustid_tag,
     _read_albumid_from_tags,
     _read_duration_ms,
@@ -78,6 +81,7 @@ from music_annotator._pipeline_io import (
     check_duration_preflight,
     compare_audio_collision,
     enrich_origin_time,
+    parse_whipper_log,
     rebuild_journal,
 )
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
@@ -10691,3 +10695,556 @@ class TestAccurateRipTagRoundtrip:
         ):
             assert read_back.get(key) == expected.get(key), f"MP3 round-trip mismatch for {key}"
         assert read_back == expected
+
+
+# ---------------------------------------------------------------------------
+# parse_whipper_log KATs (C-AR + C-WHIP — R3b S2)
+# ---------------------------------------------------------------------------
+
+# Minimal whipper-log YAML body (without the trailing SHA-256 line).
+# The body is the content over which the self-attesting SHA-256 is computed.
+# Format mirrors whipper's WhipperLogger schema 1:1.
+_WHIPPER_LOG_BODY_FULL = """\
+Log created by: whipper 0.10.0
+Log creation date: 2024-01-15T10:30:00
+CD metadata:
+  MusicBrainz Disc ID: TestDiscID123
+  CDDB Disc ID: 1234abcd
+Tracks:
+  1:
+    AccurateRip v1:
+      Result: exact-match
+      Confidence: 42
+      Local CRC: AABB1122
+      Remote CRC: AABB1122
+    AccurateRip v2:
+      Result: no-exact-match
+      Confidence: 5
+      Local CRC: CCDD3344
+      Remote CRC: EEFF5566
+    Test CRC: 12345678
+    Copy CRC: 12345678
+    Status: Copy OK
+  2:
+    AccurateRip v1:
+      Result: exact-match
+      Confidence: 10
+      Local CRC: DEADBEEF
+      Remote CRC: DEADBEEF
+    AccurateRip v2:
+      Result: exact-match
+      Confidence: 8
+      Local CRC: CAFEBABE
+      Remote CRC: CAFEBABE
+    Test CRC: 87654321
+    Copy CRC: 87654321
+    Status: Copy OK
+Conclusive status report:
+  AccurateRip summary: All tracks accurately ripped
+  Accurately ripped: 2
+  Tracks in AR database: 2
+"""
+
+_WHIPPER_LOG_BODY_NO_AR = """\
+Log created by: whipper 0.10.0
+Log creation date: 2024-01-15T10:30:00
+CD metadata:
+  MusicBrainz Disc ID: NoARDiscID
+  CDDB Disc ID: "00000000"
+Tracks:
+  1:
+    Test CRC: AAAABBBB
+    Copy CRC: AAAABBBB
+    Status: Copy OK
+  2:
+    Test CRC: CCCCDDDD
+    Copy CRC: CCCCDDDD
+    Status: Copy OK
+Conclusive status report:
+  AccurateRip summary: No tracks found in AccurateRip database
+  Accurately ripped: 0
+  Tracks in AR database: 0
+"""
+
+_WHIPPER_LOG_BODY_PARTIAL = """\
+Log created by: whipper 0.10.0
+Log creation date: 2024-01-15T10:30:00
+CD metadata:
+  MusicBrainz Disc ID: PartialDiscID
+  CDDB Disc ID: abcdef01
+Tracks:
+  1:
+    AccurateRip v1:
+      Result: exact-match
+      Confidence: 15
+      Local CRC: 11223344
+      Remote CRC: 11223344
+    AccurateRip v2:
+      Result: exact-match
+      Confidence: 12
+      Local CRC: 55667788
+      Remote CRC: 55667788
+    Test CRC: AABBCCDD
+    Copy CRC: AABBCCDD
+    Status: Copy OK
+  2:
+    AccurateRip v1:
+      Result: no-exact-match
+      Confidence: 3
+      Local CRC: DEADBEEF
+      Remote CRC: CAFEBABE
+    AccurateRip v2:
+      Result: not-present
+      Confidence: 0
+      Local CRC: ''
+      Remote CRC: ''
+    Test CRC: 99887766
+    Copy CRC: 99887766
+    Status: Copy OK
+Conclusive status report:
+  AccurateRip summary: 1 of 2 tracks accurately ripped
+  Accurately ripped: 1
+  Tracks in AR database: 2
+"""
+
+
+def _make_whipper_log(body: str) -> str:
+    """Append the self-attesting SHA-256 hash line to a whipper log body.
+
+    Computes the SHA-256 of the body bytes (UTF-8) and appends the trailing
+    ``SHA-256 hash: <UPPERHEX>`` line, matching whipper's ``WhipperLogger.logRip`` behaviour.
+
+    :param body: The YAML body text (everything before the hash line).
+    :returns: The complete whipper log text including the trailing SHA-256 line.
+    """
+    digest = hashlib.sha256(body.encode("utf-8")).hexdigest().upper()
+    return body + f"SHA-256 hash: {digest}\n"
+
+
+class TestParseWhipperLogFull:
+    """KAT: parse_whipper_log against a minimal all-accurate whipper log fixture.
+
+    Covers: both tracks exact-match on v1 and v2; summary counts; MB/CDDB disc IDs;
+    SHA-256 verification (matching hash); per-track CRCs and status.
+    """
+
+    def test_parse_whipper_log_full(self, fs: FakeFilesystem) -> None:
+        """parse_whipper_log returns correct AccurateRipSummary and per-track dict for all-accurate case.
+
+        Writes a minimal whipper log with two tracks (both exact-match on v1 and v2) to a fake
+        filesystem, calls parse_whipper_log, and asserts the summary and per-track data.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        log_text = _make_whipper_log(_WHIPPER_LOG_BODY_FULL)
+        fs.create_file(str(src / "album.log"), contents=log_text)
+
+        summary, tracks = parse_whipper_log(src)
+
+        # Summary fields
+        assert summary.mb_disc_id == "TestDiscID123"
+        assert summary.cddb_disc_id == "1234abcd"
+        assert summary.accurately_ripped == 2
+        assert summary.in_ar_database == 2
+        assert summary.summary_text == "All tracks accurately ripped"
+        assert len(summary.log_sha256) == 64
+        assert summary.log_sha256 == summary.log_sha256.upper()
+        assert summary.is_populated()
+
+        # Track 1: v1 exact-match, v2 no-exact-match
+        assert 1 in tracks
+        t1 = tracks[1]
+        assert t1.v1.version == "v1"
+        assert t1.v1.result is AccurateRipResult.EXACT_MATCH
+        assert t1.v1.confidence == 42
+        assert t1.v1.local_crc == "AABB1122"
+        assert t1.v1.remote_crc == "AABB1122"
+        assert t1.v2.version == "v2"
+        assert t1.v2.result is AccurateRipResult.NO_EXACT_MATCH
+        assert t1.v2.confidence == 5
+        assert t1.v2.local_crc == "CCDD3344"
+        assert t1.v2.remote_crc == "EEFF5566"
+        assert t1.test_crc == "12345678"
+        assert t1.copy_crc == "12345678"
+        assert t1.status == "Copy OK"
+
+        # Track 2: v1 and v2 exact-match
+        assert 2 in tracks
+        t2 = tracks[2]
+        assert t2.v1.result is AccurateRipResult.EXACT_MATCH
+        assert t2.v1.confidence == 10
+        assert t2.v2.result is AccurateRipResult.EXACT_MATCH
+        assert t2.v2.confidence == 8
+        assert t2.test_crc == "87654321"
+        assert t2.copy_crc == "87654321"
+        assert t2.status == "Copy OK"
+
+    def test_parse_whipper_log_sha256_verified(self, fs: FakeFilesystem) -> None:
+        """parse_whipper_log verifies the self-attesting SHA-256 without warning when it matches.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        log_text = _make_whipper_log(_WHIPPER_LOG_BODY_FULL)
+        fs.create_file(str(src / "album.log"), contents=log_text)
+
+        # Should not raise; SHA-256 matches
+        summary, tracks = parse_whipper_log(src)
+        assert summary.log_sha256 != ""
+        assert len(tracks) == 2
+
+    def test_parse_whipper_log_sha256_mismatch_warns(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """parse_whipper_log logs a WARNING when the SHA-256 does not match the body hash.
+
+        A mismatch means the log was edited after whipper wrote it.  The dir is still recognised
+        as whipper and the parse continues (not a hard failure per C-WHIP).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        # Corrupt the hash line so it doesn't match the body
+        body = _WHIPPER_LOG_BODY_FULL
+        bad_hash = "A" * 64
+        log_text = body + f"SHA-256 hash: {bad_hash}\n"
+        fs.create_file(str(src / "album.log"), contents=log_text)
+
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+        summary, tracks = parse_whipper_log(src)
+
+        mock_log.warning.assert_called_once()
+        call_kwargs = mock_log.warning.call_args
+        assert call_kwargs[0][0] == "whipper_log_sha256_mismatch"
+        # Parse still succeeds despite mismatch
+        assert summary.mb_disc_id == "TestDiscID123"
+        assert len(tracks) == 2
+
+    def test_parse_whipper_log_no_log_raises(self, fs: FakeFilesystem) -> None:
+        """parse_whipper_log raises FileNotFoundError when no whipper log is present.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        # No .log file at all
+        with pytest.raises(FileNotFoundError):
+            parse_whipper_log(src)
+
+    def test_parse_whipper_log_plain_log_no_sha256_raises(self, fs: FakeFilesystem) -> None:
+        """parse_whipper_log raises FileNotFoundError for a .log without the trailing SHA-256 line.
+
+        A plain .log without the C-WHIP strong signature (1) is not a whipper native log.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "rip.log"), contents="some other ripper log\nno sha256 here\n")
+        with pytest.raises(FileNotFoundError):
+            parse_whipper_log(src)
+
+
+class TestParseWhipperLogNoARDatabase:
+    """KAT: parse_whipper_log when no tracks are in the AccurateRip database.
+
+    Covers: tracks with no AccurateRip blocks; summary counts are zero; summary_text set.
+    """
+
+    def test_parse_whipper_log_no_ar_database(self, fs: FakeFilesystem) -> None:
+        """parse_whipper_log returns zero AR counts and not-present results when no tracks are in the DB.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        log_text = _make_whipper_log(_WHIPPER_LOG_BODY_NO_AR)
+        fs.create_file(str(src / "album.log"), contents=log_text)
+
+        summary, tracks = parse_whipper_log(src)
+
+        assert summary.mb_disc_id == "NoARDiscID"
+        assert summary.cddb_disc_id == "00000000"
+        assert summary.accurately_ripped == 0
+        assert summary.in_ar_database == 0
+        assert "No tracks found" in summary.summary_text
+
+        # Both tracks present but with default NOT_PRESENT AR results
+        assert 1 in tracks
+        assert 2 in tracks
+        assert tracks[1].v1.result is AccurateRipResult.NOT_PRESENT
+        assert tracks[1].v2.result is AccurateRipResult.NOT_PRESENT
+        assert tracks[1].v1.confidence == 0
+        assert tracks[1].v1.local_crc == ""
+        assert tracks[1].v1.remote_crc == ""
+        assert tracks[1].test_crc == "AAAABBBB"
+        assert tracks[1].copy_crc == "AAAABBBB"
+        assert tracks[1].status == "Copy OK"
+
+
+class TestParseWhipperLogPartialMatch:
+    """KAT: parse_whipper_log with mixed AR results (some exact-match, some no-match, some not-present).
+
+    Covers: track 1 exact-match on both versions; track 2 no-exact-match on v1, not-present on v2.
+    """
+
+    def test_parse_whipper_log_partial_match(self, fs: FakeFilesystem) -> None:
+        """parse_whipper_log correctly parses mixed AR results across tracks.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        log_text = _make_whipper_log(_WHIPPER_LOG_BODY_PARTIAL)
+        fs.create_file(str(src / "album.log"), contents=log_text)
+
+        summary, tracks = parse_whipper_log(src)
+
+        assert summary.accurately_ripped == 1
+        assert summary.in_ar_database == 2
+        assert "1 of 2" in summary.summary_text
+
+        # Track 1: exact-match on both
+        assert tracks[1].v1.result is AccurateRipResult.EXACT_MATCH
+        assert tracks[1].v1.confidence == 15
+        assert tracks[1].v2.result is AccurateRipResult.EXACT_MATCH
+        assert tracks[1].v2.confidence == 12
+
+        # Track 2: no-exact-match on v1, not-present on v2
+        assert tracks[2].v1.result is AccurateRipResult.NO_EXACT_MATCH
+        assert tracks[2].v1.confidence == 3
+        assert tracks[2].v1.local_crc == "DEADBEEF"
+        assert tracks[2].v1.remote_crc == "CAFEBABE"
+        assert tracks[2].v2.result is AccurateRipResult.NOT_PRESENT
+        assert tracks[2].v2.confidence == 0
+
+
+class TestParseWhipperLogHelpers:
+    """Unit tests for internal parse helpers: _find_whipper_log, _parse_ar_track_result, _parse_ar_track."""
+
+    def test_find_whipper_log_returns_none_when_absent(self, fs: FakeFilesystem) -> None:
+        """_find_whipper_log returns None when no .log file is present.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        assert _find_whipper_log(src) is None
+
+    def test_find_whipper_log_returns_none_for_non_whipper_log(self, fs: FakeFilesystem) -> None:
+        """_find_whipper_log returns None for a .log without the trailing SHA-256 line.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "eac.log"), contents="EAC log content\nno sha256\n")
+        assert _find_whipper_log(src) is None
+
+    def test_find_whipper_log_returns_path_for_whipper_log(self, fs: FakeFilesystem) -> None:
+        """_find_whipper_log returns the path of a valid whipper log.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        log_text = _make_whipper_log(_WHIPPER_LOG_BODY_FULL)
+        fs.create_file(str(src / "album.log"), contents=log_text)
+        result = _find_whipper_log(src)
+        assert result is not None
+        assert result.name == "album.log"
+
+    def test_parse_ar_track_result_missing_block(self) -> None:
+        """_parse_ar_track_result returns NOT_PRESENT defaults when block is None.
+
+        :returns: None.
+        """
+        result = _parse_ar_track_result("v1", None)
+        assert result.version == "v1"
+        assert result.result is AccurateRipResult.NOT_PRESENT
+        assert result.confidence == 0
+        assert result.local_crc == ""
+        assert result.remote_crc == ""
+
+    def test_parse_ar_track_result_invalid_result_string(self) -> None:
+        """_parse_ar_track_result falls back to NOT_PRESENT for an unrecognised Result string.
+
+        :returns: None.
+        """
+        block = {"Result": "unknown-value", "Confidence": 0, "Local CRC": "", "Remote CRC": ""}
+        result = _parse_ar_track_result("v2", block)
+        assert result.result is AccurateRipResult.NOT_PRESENT
+
+    def test_parse_ar_track_non_dict_yields_defaults(self) -> None:
+        """_parse_ar_track returns default AccurateRipTrack when track_dict is not a dict.
+
+        :returns: None.
+        """
+        track = _parse_ar_track("not a dict")
+        assert track.v1.result is AccurateRipResult.NOT_PRESENT
+        assert track.v2.result is AccurateRipResult.NOT_PRESENT
+        assert track.test_crc == ""
+        assert track.copy_crc == ""
+        assert track.status == ""
+
+    def test_parse_whipper_log_htoa_track_zero(self, fs: FakeFilesystem) -> None:
+        """parse_whipper_log maps HTOA track 0 to key 0 in the returned dict.
+
+        Whipper may emit a track keyed 0 (hidden track one audio).  It is mapped to key 0
+        in the returned dict, not skipped.
+
+        :param fs: pyfakefs fixture.
+        """
+        body = """\
+Log created by: whipper 0.10.0
+CD metadata:
+  MusicBrainz Disc ID: HTOADisc
+  CDDB Disc ID: "00000001"
+Tracks:
+  0:
+    Test CRC: "00000000"
+    Copy CRC: "00000000"
+    Status: Copy OK
+  1:
+    AccurateRip v1:
+      Result: exact-match
+      Confidence: 5
+      Local CRC: AABBCCDD
+      Remote CRC: AABBCCDD
+    AccurateRip v2:
+      Result: exact-match
+      Confidence: 3
+      Local CRC: EEFF0011
+      Remote CRC: EEFF0011
+    Test CRC: AABBCCDD
+    Copy CRC: AABBCCDD
+    Status: Copy OK
+Conclusive status report:
+  AccurateRip summary: All tracks accurately ripped
+  Accurately ripped: 1
+  Tracks in AR database: 1
+"""
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        log_text = _make_whipper_log(body)
+        fs.create_file(str(src / "album.log"), contents=log_text)
+
+        _summary, tracks = parse_whipper_log(src)
+
+        # HTOA track 0 is present in the dict
+        assert 0 in tracks
+        assert tracks[0].test_crc == "00000000"
+        assert tracks[0].v1.result is AccurateRipResult.NOT_PRESENT
+        # Regular track 1 is also present
+        assert 1 in tracks
+        assert tracks[1].v1.result is AccurateRipResult.EXACT_MATCH
+
+    def test_find_whipper_log_oserror_skips_file(self, fs: FakeFilesystem) -> None:
+        """_find_whipper_log skips a .log file that raises OSError on read and returns None.
+
+        Exercises the OSError branch in _find_whipper_log (lines 996-997).
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        # Create a .log file but make it unreadable by removing read permission
+        log_path = src / "unreadable.log"
+        fs.create_file(str(log_path), contents="some content")
+        os.chmod(str(log_path), 0o000)
+        result = _find_whipper_log(src)
+        assert result is None
+
+    def test_parse_whipper_log_minimal_yaml_body(self, fs: FakeFilesystem) -> None:
+        """parse_whipper_log handles a log with minimal YAML body (no CD metadata, no tracks, no status).
+
+        Exercises the branches where cd_meta, status_report, and tracks_raw are not dicts.
+
+        :param fs: pyfakefs fixture.
+        """
+        # Minimal body with only the required SHA-256 structure but no meaningful YAML content
+        body = "Log created by: whipper 0.10.0\n"
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        log_text = _make_whipper_log(body)
+        fs.create_file(str(src / "album.log"), contents=log_text)
+
+        summary, tracks = parse_whipper_log(src)
+
+        # All fields default to empty/zero when blocks are absent
+        assert summary.mb_disc_id == ""
+        assert summary.cddb_disc_id == ""
+        assert summary.accurately_ripped == 0
+        assert summary.in_ar_database == 0
+        assert summary.summary_text == ""
+        assert tracks == {}
+
+    def test_parse_whipper_log_non_dict_yaml_body(self, fs: FakeFilesystem) -> None:
+        """parse_whipper_log handles a log whose YAML body parses to a non-dict (e.g. a list).
+
+        Exercises the doc = {} fallback branch when yaml.safe_load returns a non-dict.
+
+        :param fs: pyfakefs fixture.
+        """
+        # YAML body that parses to a list, not a dict
+        body = "- item1\n- item2\n"
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        log_text = _make_whipper_log(body)
+        fs.create_file(str(src / "album.log"), contents=log_text)
+
+        summary, tracks = parse_whipper_log(src)
+
+        assert summary.mb_disc_id == ""
+        assert tracks == {}
+
+    def test_parse_whipper_log_non_integer_track_key(self, fs: FakeFilesystem) -> None:
+        """parse_whipper_log skips track entries with non-integer keys.
+
+        Exercises the ValueError/TypeError branch in the track-key conversion loop.
+
+        :param fs: pyfakefs fixture.
+        """
+        body = """\
+Log created by: whipper 0.10.0
+CD metadata:
+  MusicBrainz Disc ID: TestDisc
+  CDDB Disc ID: 12345678
+Tracks:
+  not_a_number:
+    Test CRC: AABBCCDD
+    Copy CRC: AABBCCDD
+    Status: Copy OK
+  1:
+    AccurateRip v1:
+      Result: exact-match
+      Confidence: 5
+      Local CRC: AABBCCDD
+      Remote CRC: AABBCCDD
+    AccurateRip v2:
+      Result: exact-match
+      Confidence: 3
+      Local CRC: EEFF0011
+      Remote CRC: EEFF0011
+    Test CRC: AABBCCDD
+    Copy CRC: AABBCCDD
+    Status: Copy OK
+Conclusive status report:
+  AccurateRip summary: All tracks accurately ripped
+  Accurately ripped: 1
+  Tracks in AR database: 1
+"""
+        src = Path("/src/album")
+        fs.create_dir(str(src))
+        log_text = _make_whipper_log(body)
+        fs.create_file(str(src / "album.log"), contents=log_text)
+
+        _summary, tracks = parse_whipper_log(src)
+
+        # The non-integer key is skipped; only track 1 is present
+        assert "not_a_number" not in str(tracks)
+        assert 1 in tracks
+        assert tracks[1].v1.result is AccurateRipResult.EXACT_MATCH

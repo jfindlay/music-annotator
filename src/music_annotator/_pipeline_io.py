@@ -12,6 +12,7 @@ import base64
 import datetime
 import hashlib
 import json
+import re
 import shutil
 import struct
 import subprocess
@@ -27,6 +28,10 @@ from mutagen.id3 import ID3
 from music_annotator._tagger import _MP3_STD_KEYS, _MP3_TXXX_MAP
 from music_annotator.models import (
     JSON,
+    AccurateRipResult,
+    AccurateRipSummary,
+    AccurateRipTrack,
+    AccurateRipTrackResult,
     AnnotationTier,
     CoverArt,
     MBTrack,
@@ -970,6 +975,199 @@ def parse_disc_toc(src_dir: Path) -> tuple[int, int, list[int]] | None:
     if not isinstance(disc_id, list):
         return None
     return _parse_disc_id_list(disc_id)
+
+
+def _find_whipper_log(src_dir: Path) -> Path | None:
+    """Return the path of the whipper native log in ``src_dir``, or ``None``.
+
+    Scans ``src_dir`` for ``*.log`` files whose last non-empty line matches the whipper
+    self-attesting SHA-256 signature (``SHA-256 hash: <UPPERHEX>``).  This is the C-WHIP strong
+    signature (1): the trailing SHA-256 line distinguishes a whipper native log from any other
+    ``.log`` file in the directory.
+
+    :param src_dir: Directory to scan.
+    :returns: The path of the first matching log file (sorted for determinism), or ``None``.
+    """
+    _sha256_line_re = re.compile(r"^SHA-256 hash: [0-9A-F]{64}$")
+    for log_path in sorted(src_dir.glob("*.log")):
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        # Find the last non-empty line
+        lines = text.splitlines()
+        last_nonempty = next((ln for ln in reversed(lines) if ln.strip()), "")
+        if _sha256_line_re.match(last_nonempty):
+            return log_path
+    return None
+
+
+def _parse_ar_track_result(version: str, block: object) -> AccurateRipTrackResult:
+    """Parse one AccurateRip version block (v1 or v2) from a whipper log track dict.
+
+    Handles the case where the block is absent (``None``) or is a dict with a ``Result`` key.
+    A missing or non-dict block yields a default ``NOT_PRESENT`` result.
+
+    :param version: DB generation identifier: ``"v1"`` or ``"v2"``.
+    :param block: The raw YAML value for the ``AccurateRip v1`` / ``AccurateRip v2`` key.
+    :returns: A typed :class:`~music_annotator.models.AccurateRipTrackResult`.
+    """
+    if not isinstance(block, dict):
+        return AccurateRipTrackResult(version=version)
+
+    raw_result: object = block.get("Result", "")
+    try:
+        result = AccurateRipResult(str(raw_result))
+    except ValueError:
+        result = AccurateRipResult.NOT_PRESENT
+
+    raw_confidence: object = block.get("Confidence", 0)
+    confidence = int(raw_confidence) if isinstance(raw_confidence, int) else 0
+
+    local_crc_raw: object = block.get("Local CRC")
+    local_crc = str(local_crc_raw) if local_crc_raw is not None else ""
+    remote_crc_raw: object = block.get("Remote CRC")
+    remote_crc = str(remote_crc_raw) if remote_crc_raw is not None else ""
+
+    return AccurateRipTrackResult(
+        version=version,
+        result=result,
+        confidence=confidence,
+        local_crc=local_crc,
+        remote_crc=remote_crc,
+    )
+
+
+def _parse_ar_track(track_dict: object) -> AccurateRipTrack:
+    """Parse a single track entry from the whipper log ``Tracks`` block.
+
+    Extracts ``AccurateRip v1``, ``AccurateRip v2``, ``Test CRC``, ``Copy CRC``, and ``Status``
+    from the raw YAML dict.  Missing keys yield empty/default values per the C-AR contract.
+
+    :param track_dict: The raw YAML value for one track number key in the ``Tracks`` block.
+    :returns: A typed :class:`~music_annotator.models.AccurateRipTrack`.
+    """
+    if not isinstance(track_dict, dict):
+        return AccurateRipTrack()
+
+    v1 = _parse_ar_track_result("v1", track_dict.get("AccurateRip v1"))
+    v2 = _parse_ar_track_result("v2", track_dict.get("AccurateRip v2"))
+
+    test_crc_raw: object = track_dict.get("Test CRC")
+    copy_crc_raw: object = track_dict.get("Copy CRC")
+    status_raw: object = track_dict.get("Status")
+
+    return AccurateRipTrack(
+        v1=v1,
+        v2=v2,
+        test_crc=str(test_crc_raw) if test_crc_raw is not None else "",
+        copy_crc=str(copy_crc_raw) if copy_crc_raw is not None else "",
+        status=str(status_raw) if status_raw is not None else "",
+    )
+
+
+def parse_whipper_log(src_dir: Path) -> tuple[AccurateRipSummary, dict[int, AccurateRipTrack]]:
+    """Parse the whipper native-logger YAML log in ``src_dir`` into C-AR models.
+
+    Locates the whipper log via the C-WHIP strong signature (1): a ``*.log`` file whose last
+    non-empty line is ``SHA-256 hash: <UPPERHEX>``.  Parses the ``CD metadata`` block (MB disc-ID,
+    CDDB disc-ID), the per-track ``Tracks`` ``AccurateRip v1``/``v2`` blocks, the ``Conclusive
+    status report`` summary, and the trailing ``SHA-256 hash`` line.
+
+    The log's self-attesting SHA-256 is verified against the recomputed hash of the log body
+    (everything before the ``SHA-256 hash:`` line, including the trailing newline).  A mismatch
+    is logged as a WARNING — the dir is still recognised as whipper and the parse continues.
+
+    HTOA (track 0 / hidden track one audio): whipper may emit a track keyed ``0`` in the
+    ``Tracks`` block.  It is mapped to key ``0`` in the returned dict (not skipped), so callers
+    can decide whether to use it.
+
+    :param src_dir: Directory containing the whipper rip (must pass C-WHIP strong signature 1).
+    :returns: A ``(AccurateRipSummary, dict[int, AccurateRipTrack])`` tuple where the dict key
+        is the track number (``0`` for HTOA, ``1``–``N`` for regular tracks).
+    :raises FileNotFoundError: If no whipper native log is found in ``src_dir``.
+    """
+    log_path = _find_whipper_log(src_dir)
+    if log_path is None:
+        raise FileNotFoundError(f"No whipper native log found in {src_dir}")
+
+    raw_text = log_path.read_text(encoding="utf-8", errors="replace")
+
+    # Split body (everything before the SHA-256 hash line) from the trailing hash line.
+    # The hash is computed over the body including its trailing newline.
+    sha256_marker = "SHA-256 hash: "
+    body_text: str
+    log_sha256: str
+    if sha256_marker in raw_text:
+        split_idx = raw_text.rfind(sha256_marker)
+        # Body is everything up to and including the newline before the SHA-256 line.
+        # Find the start of the SHA-256 line (the newline before it is part of the body).
+        body_text = raw_text[:split_idx]
+        hash_line = raw_text[split_idx:].splitlines()[0]
+        log_sha256 = hash_line[len(sha256_marker) :].strip()
+    else:  # pragma: no cover — _find_whipper_log guarantees the marker is present
+        body_text = raw_text
+        log_sha256 = ""
+
+    # Verify the self-attesting SHA-256 (C-WHIP: mismatch → WARNING, not hard failure).
+    # log_sha256 is always non-empty here: _find_whipper_log's regex requires 64 uppercase hex chars.
+    computed = hashlib.sha256(body_text.encode("utf-8")).hexdigest().upper()
+    if computed != log_sha256:
+        log.warning(
+            "whipper_log_sha256_mismatch",
+            log_path=str(log_path),
+            expected=log_sha256,
+            computed=computed,
+        )
+
+    # Parse the YAML body.  yaml.safe_load returns object; narrow to dict for field access.
+    yaml_data: object = yaml.safe_load(body_text)
+    doc: dict[str, object] = dict(yaml_data) if isinstance(yaml_data, dict) else {}
+
+    # --- CD metadata block ---
+    cd_meta: object = doc.get("CD metadata")
+    mb_disc_id = ""
+    cddb_disc_id = ""
+    if isinstance(cd_meta, dict):
+        mb_raw: object = cd_meta.get("MusicBrainz Disc ID")
+        mb_disc_id = str(mb_raw) if mb_raw is not None else ""
+        cddb_raw: object = cd_meta.get("CDDB Disc ID")
+        cddb_disc_id = str(cddb_raw) if cddb_raw is not None else ""
+
+    # --- Conclusive status report block ---
+    status_report: object = doc.get("Conclusive status report")
+    accurately_ripped = 0
+    in_ar_database = 0
+    summary_text = ""
+    if isinstance(status_report, dict):
+        ar_summary_raw: object = status_report.get("AccurateRip summary")
+        summary_text = str(ar_summary_raw) if ar_summary_raw is not None else ""
+        ar_ripped_raw: object = status_report.get("Accurately ripped", 0)
+        accurately_ripped = int(ar_ripped_raw) if isinstance(ar_ripped_raw, int) else 0
+        ar_db_raw: object = status_report.get("Tracks in AR database", 0)
+        in_ar_database = int(ar_db_raw) if isinstance(ar_db_raw, int) else 0
+
+    summary = AccurateRipSummary(
+        mb_disc_id=mb_disc_id,
+        cddb_disc_id=cddb_disc_id,
+        log_sha256=log_sha256,
+        accurately_ripped=accurately_ripped,
+        in_ar_database=in_ar_database,
+        summary_text=summary_text,
+    )
+
+    # --- Tracks block ---
+    tracks_raw: object = doc.get("Tracks")
+    tracks: dict[int, AccurateRipTrack] = {}
+    if isinstance(tracks_raw, dict):
+        for track_key, track_val in tracks_raw.items():
+            try:
+                track_num = int(track_key)
+            except (ValueError, TypeError):
+                continue
+            tracks[track_num] = _parse_ar_track(track_val)
+
+    return summary, tracks
 
 
 def write_transaction_log(journal_path: Path, new_entries: list[TransactionEntry]) -> None:
