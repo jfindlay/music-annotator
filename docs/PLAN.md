@@ -180,7 +180,7 @@ rides the confirmation-provenance invariant unchanged (Presto has no sidecar to 
 
 ## Cross-session contracts
 
-### C-ISRC — ISRC-match tier promotion *(to be frozen at S1 — resolved by @architect juncture fork)*
+### C-ISRC — ISRC-match tier promotion *(FROZEN at S1)*
 
 The rule by which an ISRC match against the reconciled MB release promotes the annotation tier to
 `full-mb-verified`.  **Flavour: compiler-enforced** (the `CensusSignal.ISRC_MATCH` enum value + the
@@ -192,18 +192,61 @@ it to the **existing** `AnnotationTier.FULL_MB_VERIFIED`.  It does **not** alter
 R2 (C-TIER).  The `CensusSignal` enum and the classifier's match arms are C-TIER's designed growth points (R2
 left `alternate-source` signal-less by intent).
 
-*To be frozen at S1.  The @architect fork resolves and writes here:*
-- the **`ISRC_MATCH` literal** (proposed `"isrc-match"`);
-- the **evidence rule** — proposed: promote iff **every source track that carries an ISRC matches** an ISRC in
-  the corresponding selected-medium recording's `isrc_list`, and **at least one** track matches; a single
-  mismatch drops to `SEARCH_HIT`; tracks lacking a source ISRC do not block promotion;
-- the **match target** — the **selected medium's** recordings (the reconciled release), never a raw search
-  candidate, so promotion claims *release*-identity, not merely recording-identity.
+**The `ISRC_MATCH` literal.**  `CensusSignal.ISRC_MATCH = "isrc-match"` — the exact string `"isrc-match"`
+(lowercase, hyphenated).  Added as a member of the `CensusSignal` StrEnum in `models.py`.
+
+**The classifier arm.**  `case CensusSignal.ISRC_MATCH: return AnnotationTier.FULL_MB_VERIFIED, False` — added to
+`classify_annotation_tier` **immediately before** the `case _: # pragma: no cover` wildcard (which is retained).
+No signature change, no tier-vocabulary change, no order-map change (parallels the existing
+`case CensusSignal.EMBEDDED_MBID` arm exactly).
+
+**The ladder placement.**  The rung is inserted in `run()`'s signal ladder (`_pipeline.py`, the `else` branch at
+~1731–1735) **after** the `has_embedded_mbid` check and **before** the `SEARCH_HIT` fallback assignment.  The
+resolved ladder order is therefore: TOC / embedded-MBID → **ISRC-match** → `SEARCH_HIT`.  The rung is evaluated
+only when neither TOC nor embedded-MBID already fired.
+
+**The match target.**  The **selected medium's recordings** — each source track's embedded ISRC is checked
+against its corresponding `selected_medium.track_list[*].recording.isrc_list` (the reconciled release), **never**
+a raw search candidate.  This is why the promotion licenses *release*-identity, not mere recording-identity
+(R-3): a dir whose ISRCs match some MB recording but not the recordings on the reconciled selected medium does
+**not** promote.  Per-track correspondence is positional — `src_files[i]` maps to the selected medium's `i`-th
+track (`copy_subset`), and `src_files`/`copy_subset` are guaranteed equal-length by the `RuntimeError` track-count
+guard that precedes the ladder (`_pipeline.py:1553`).
+
+**The evidence rule (frozen — all edge cases enumerated).**  Over the selected medium's tracks paired
+positionally with the source files, evaluate each source track's embedded ISRC against its corresponding
+recording's `isrc_list` via `_isrc_matches` (archival identity rung 1, `_pipeline_io.py:331`; its tri-state
+`.match` is `True` = source ISRC ∈ `isrc_list`, `False` = source ISRC present but not in a non-empty `isrc_list`,
+`None` = source ISRC unreadable/absent **or** candidate `isrc_list` empty).  Promote to `CensusSignal.ISRC_MATCH`
+iff **both**:
+- **(a) no mismatch** — no track yields `.match == False`; a single `False` drops the whole dir to `SEARCH_HIT`;
+  **and**
+- **(b) at least one confirmed match** — at least one track yields `.match == True`.
+
+Edge cases:
+- a track with no source ISRC, or whose corresponding recording has an empty `isrc_list`, yields `.match == None`
+  (inconclusive) — it neither blocks promotion (does not violate (a)) nor counts toward (b); a **partial-ISRC**
+  dir still promotes provided ≥1 track matches and none mismatch;
+- a dir where **no** track produces `.match == True` (all `None`) does **not** promote — it stays `SEARCH_HIT`.
+  This subsumes both the "no source ISRCs at all" case and the `isrc_list`-unpopulated caveat below.
+
+**Implementation note (not a contract — conservative fallthrough).**  `MBRecording.isrc_list` populates only when
+the `"isrcs"` include is passed to the recording fetch (models.py:960); an unpopulated list is `[]`, which
+`_isrc_matches` treats as inconclusive (`None`).  By rule (b) this keeps the tier at `SEARCH_HIT` rather than
+over-promoting — a safe fallthrough.  S1's implementer must ensure ISRCs are available on the compared recordings
+(or accept the conservative fallthrough); this is an availability concern for the implementer, not a widening of
+C-ISRC.
+
+**Reuses the identity rung, does not alter it.**  The rung reads `_isrc_matches`'s per-track ISRC verdict to
+drive the orthogonal **annotation-tier** axis; it does **not** modify the archival **identity-confidence** rung
+ladder (`_IDENTITY_METHODS`, rung 1).  Never conflate the two ladders.
 
 - **Defined-in:** S1 (`models.py`: `CensusSignal.ISRC_MATCH` + classifier arm; `_pipeline.py`: the ladder rung).
   **Consumed-by:** S3 (audit surfacing reads the ISRC identity basis; integration test asserts the promotion).
 - **KATs that pin C-ISRC (S1):** `test_isrc_all_match_yields_full_verified`,
-  `test_isrc_mismatch_stays_search_resolved`, `test_classify_isrc_match_arm` (named above).
+  `test_isrc_mismatch_stays_search_resolved`, `test_classify_isrc_match_arm` (named above).  Coverage
+  (`fail_under = 100`, R-5) additionally requires branch KATs for the **partial-ISRC-no-mismatch** promotion path
+  and the **all-inconclusive** (no confirmed match → `SEARCH_HIT`) path.
 
 ### C-PRESTO — PrestoMusic download recognition *(to be frozen at S2)*
 
