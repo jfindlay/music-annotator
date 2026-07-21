@@ -3,7 +3,8 @@
 Covers :func:`~music_annotator.parse_disc_info_yaml`, :func:`~music_annotator.parse_disc_toc`,
 :func:`~music_annotator.parse_disc_title`, :func:`~music_annotator.parse_dir_hint`,
 :func:`~music_annotator.search_releases_by_dir`, :func:`~music_annotator._format_candidate`,
-:func:`~music_annotator._discover.is_whipper_dir`, and :func:`~music_annotator.discover`.
+:func:`~music_annotator._discover.is_whipper_dir`, :func:`~music_annotator._discover.is_presto_dir`,
+and :func:`~music_annotator.discover`.
 """
 # pylint: disable=duplicate-code  # _make_single_track_release helper intentionally mirrors test_pipeline.py scaffolding
 
@@ -20,6 +21,7 @@ from urllib.error import HTTPError
 import musicbrainzngs as mb
 import pytest
 import yaml
+from mutagen.flac import FLAC
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
@@ -36,6 +38,7 @@ from music_annotator._discover import (
     _parse_whipper_ar,
     _score_toc_release,
     _toc_lookup_mb_releases,
+    is_presto_dir,
     is_whipper_dir,
 )
 from music_annotator._pipeline import _copy_tag_verify_journal_pass, _write_whipper_sidecars
@@ -3360,8 +3363,6 @@ class TestReadRecordingIdTag:
 
         :param fs: pyfakefs fixture.
         """
-        from mutagen.flac import FLAC  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
-
         path = Path("/music/01.flac")
         fs.create_file(str(path), contents=_saveable_flac())
         audio = FLAC(str(path))
@@ -3485,8 +3486,6 @@ class TestCorroborateCandidateMedium:
 
         :param fs: pyfakefs fixture.
         """
-        from mutagen.flac import FLAC  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
-
         paths = [Path(f"/music/0{i}.flac") for i in range(1, 4)]
         recording_ids = ["rec-a", "rec-b", "rec-c"]
         for path, rec_id in zip(paths, recording_ids):
@@ -3519,8 +3518,6 @@ class TestCorroborateCandidateMedium:
 
         :param fs: pyfakefs fixture.
         """
-        from mutagen.flac import FLAC  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
-
         path = Path("/music/01.flac")
         fs.create_file(str(path), contents=_saveable_flac())
         audio = FLAC(str(path))
@@ -3686,6 +3683,103 @@ class TestIsWhipperDir:
         summary, tracks = _parse_whipper_ar(src)
         assert summary.log_sha256 == ""
         assert tracks == {}
+
+
+# ---------------------------------------------------------------------------
+# is_presto_dir — C-PRESTO recognition KATs
+# ---------------------------------------------------------------------------
+
+
+def _flac_with_isrc(path: Path, isrc: str) -> None:
+    """Write a minimal FLAC file at ``path`` with the given ISRC Vorbis Comment tag.
+
+    Uses :func:`_saveable_flac` bytes so mutagen can both read and write the file.
+
+    :param path: Destination path for the FLAC file.
+    :param isrc: ISRC string to embed as a Vorbis Comment ``isrc`` tag.
+    """
+    path.write_bytes(_saveable_flac())
+    audio = FLAC(str(path))
+    audio["isrc"] = [isrc]
+    audio.save()
+
+
+class TestIsPrestoDir:
+    """Tests for is_presto_dir (C-PRESTO recognition heuristic).
+
+    KATs named in C-PRESTO:
+    (a) dir with ISRC-bearing FLACs and no rip-provenance artifact → recognised.
+    (b) dir with a whipper log and ISRCs → NOT recognised (is_presto_dir returns False; whipper
+        mutual exclusion is also enforced at the discover() wiring level).
+    (c) dir with no ISRC tags → NOT recognised.
+    (d) dir with 00 - disc info.yaml → NOT recognised (competing strong rip-provenance signature;
+        also subsumes the "no resolvable TOC" condition since parse_disc_toc reads only from that file).
+    """
+
+    def test_presto_dir_recognised(self, fs: FakeFilesystem) -> None:
+        """KAT (a): dir with ISRC-bearing FLACs and no rip-provenance artifact is recognised.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/PrestoAlbum")
+        fs.create_dir(str(src))
+        _flac_with_isrc(src / "01.flac", "GBAYE0000001")
+
+        assert is_presto_dir(src) is True
+
+    def test_no_isrc_not_presto(self, fs: FakeFilesystem) -> None:
+        """KAT (c): dir with no ISRC tags is not recognised as Presto.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/NoIsrcAlbum")
+        fs.create_dir(str(src))
+        # Write a FLAC with no ISRC tag — _saveable_flac bytes, no tag written.
+        (src / "01.flac").write_bytes(_saveable_flac())
+
+        assert is_presto_dir(src) is False
+
+    def test_disc_info_yaml_blocks_presto(self, fs: FakeFilesystem) -> None:
+        """KAT (d): dir with 00 - disc info.yaml is not recognised as Presto.
+
+        The disc info yaml is a strong rip-provenance signature (whipper); its presence
+        disqualifies the Presto heuristic even when ISRCs are present.  This check also
+        subsumes the "no resolvable TOC" condition from C-PRESTO because parse_disc_toc
+        reads exclusively from 00 - disc info.yaml.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/WhipperWithIsrc")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "00 - disc info.yaml"), contents="disc_id: [1, 1, 150, 200]\n")
+        _flac_with_isrc(src / "01.flac", "GBAYE0000001")
+
+        assert is_presto_dir(src) is False
+
+    def test_whipper_log_blocks_presto(self, fs: FakeFilesystem) -> None:
+        """KAT (b): dir with a whipper log is not recognised as Presto.
+
+        A whipper native log (trailing SHA-256 line) is a strong rip-provenance signature;
+        its presence disqualifies the Presto heuristic even when ISRCs are present.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/WhipperLogWithIsrc")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "rip.log"), contents=_make_whipper_log())
+        _flac_with_isrc(src / "01.flac", "GBAYE0000001")
+
+        assert is_presto_dir(src) is False
+
+    def test_empty_dir_not_presto(self, fs: FakeFilesystem) -> None:
+        """An empty directory (no audio files) is not recognised as Presto.
+
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Empty")
+        fs.create_dir(str(src))
+
+        assert is_presto_dir(src) is False
 
 
 # ---------------------------------------------------------------------------
@@ -4036,6 +4130,55 @@ class TestAccurateRipThreadedToJournal:
         mock_run.assert_called_once()
         _, kwargs = mock_run.call_args
         assert kwargs["origin_source"] == ""
+
+    def test_discover_passes_origin_source_presto_to_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When is_presto_dir returns True, discover() passes origin_source='presto' to run().
+
+        A dir with an ISRC-bearing FLAC and no rip-provenance artifact is recognised as Presto;
+        discover() must pass origin_source='presto' to run() (C-PRESTO wiring KAT).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/PrestoAlbum")
+        fs.create_dir(str(src))
+        _flac_with_isrc(src / "01.flac", "GBAYE0000001")
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[_candidate()])
+        mock_run = mocker.patch("music_annotator._discover.run")
+        mocker.patch("builtins.input", return_value="1")
+
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
+
+        mock_run.assert_called_once()
+        _, kwargs = mock_run.call_args
+        assert kwargs["origin_source"] == "presto"
+
+    def test_whipper_precedence_over_presto(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When a dir has both a whipper log and ISRCs, discover() passes origin_source='whipper'.
+
+        Whipper recognition takes precedence over Presto (C-PRESTO mutual exclusion KAT):
+        a dir matching both signatures is whipper, not Presto.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/WhipperWithIsrc")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "rip.log"), contents=_make_whipper_log())
+        _flac_with_isrc(src / "01.flac", "GBAYE0000001")
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[_candidate()])
+        mock_run = mocker.patch("music_annotator._discover.run")
+        mocker.patch("builtins.input", return_value="1")
+
+        music_annotator.discover(src_dirs=[src], dest_root=Path("/dest"), user_agent="Test/1.0")
+
+        mock_run.assert_called_once()
+        _, kwargs = mock_run.call_args
+        assert kwargs["origin_source"] == "whipper"
 
     def test_whipper_sidecar_dir_entry_skipped(self, fs: FakeFilesystem) -> None:
         """_write_whipper_sidecars skips directory entries with .log extension.

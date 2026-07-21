@@ -31,6 +31,7 @@ from music_annotator._pipeline_io import (
     _load_disc_info_yaml,
     _preferred_disc_record,
     _read_duration_ms,
+    _read_isrc_tag,
     _run_fpcalc,
     find_source_files,
     parse_disc_toc,
@@ -455,6 +456,36 @@ def is_whipper_dir(src_dir: Path) -> bool:
     # Strong signature (1): *.log file with trailing SHA-256 hash line.
     # Delegates to _find_whipper_log to avoid duplicating the detection logic.
     return _find_whipper_log(src_dir) is not None
+
+
+def is_presto_dir(src_dir: Path) -> bool:
+    """Return ``True`` when ``src_dir`` is recognised as a PrestoMusic download (C-PRESTO).
+
+    A directory is a Presto download when **both** conditions hold:
+
+    1. At least one audio file yields a non-empty ISRC via :func:`~music_annotator._pipeline_io._read_isrc_tag`.
+    2. No competing strong rip-provenance signature is present — no whipper native log
+       (:func:`~music_annotator._pipeline_io._find_whipper_log` returns ``None``) and no
+       ``00 - disc info.yaml`` (:data:`~music_annotator._pipeline_io._DISC_INFO_FILENAME`).  The
+       ``00 - disc info.yaml`` check subsumes the "no resolvable TOC" condition from C-PRESTO because
+       :func:`~music_annotator._pipeline_io.parse_disc_toc` reads exclusively from that file.
+
+    Whipper recognition takes precedence (C-WHIP mutual exclusion): callers must check
+    :func:`is_whipper_dir` first and skip this function when whipper is recognised.
+
+    :param src_dir: Directory to inspect.
+    :returns: ``True`` when the Presto heuristic matches; ``False`` otherwise.
+    """
+    # Condition 2: reject if any strong rip-provenance signature is present.
+    # The disc info yaml check subsumes the "no resolvable TOC" condition because parse_disc_toc
+    # reads exclusively from 00 - disc info.yaml.
+    if (src_dir / _DISC_INFO_FILENAME).is_file():
+        return False
+    if _find_whipper_log(src_dir) is not None:
+        return False
+
+    # Condition 1: at least one audio file must carry a non-empty ISRC tag.
+    return any(_read_isrc_tag(f) for f in find_source_files(src_dir))
 
 
 def _parse_whipper_ar(src_dir: Path) -> tuple[AccurateRipSummary, dict[int, AccurateRipTrack]]:
@@ -1017,11 +1048,17 @@ def discover(
         # Whipper recognition (C-WHIP): set origin_source and parse AccurateRip data when
         # either strong signature is present.  The AR data is passed to run() so it can be
         # threaded into TransactionEntry flat fields and ProvenanceSidecar.accuraterip_summary.
+        # Presto recognition (C-PRESTO) runs only when whipper is not recognised — mutual exclusion.
         whipper = is_whipper_dir(src_dir)
-        origin_source = "whipper" if whipper else ""
-        ar_summary, ar_tracks = _parse_whipper_ar(src_dir) if whipper else (AccurateRipSummary(), {})
         if whipper:
+            origin_source = "whipper"
             log.info("whipper_dir_recognised", src_dir=str(src_dir))
+        elif is_presto_dir(src_dir):
+            origin_source = "presto"
+            log.info("presto_dir_recognised", src_dir=str(src_dir))
+        else:
+            origin_source = ""
+        ar_summary, ar_tracks = _parse_whipper_ar(src_dir) if whipper else (AccurateRipSummary(), {})
 
         try:
             run(
