@@ -305,13 +305,13 @@ label or get their own.  Do not widen R3a for R3e.
 |---|---------|--------|--------|-------|
 | 1 | Promote ISRC-match identity to full-mb-verified | done | 80d0908 | C-ISRC |
 | 2 | Recognise Presto download dirs and set origin_source | done | 501da52 | C-PRESTO |
-| 3 | ISRC-verified audit surfacing + Presto integration test | pending | — | — |
+| 3 | ISRC-verified audit surfacing + Presto integration test | done | 973577d | — |
 
 **Frozen contracts:** C-ISRC (S1) — `CensusSignal.ISRC_MATCH = "isrc-match"`, classifier arm → `(FULL_MB_VERIFIED, False)`, ladder rung after embedded-MBID, evidence rule: ≥1 `.match==True` + no `.match==False`. `MBRecordingStub.isrc_list` field added (additive, default `[]`, within models.py scope). C-PRESTO (S2) — `is_presto_dir` recogniser: any-ISRC-present + no whipper log + no disc-info yaml; `origin_source = "presto"`; whipper precedence.
 
 ## Action-frame digest
 
-*(none — S1 was a clean green run; no discoveries, no contract flexes beyond the additive MBRecordingStub.isrc_list field which is safe and within scope)*
+*(none — all three sessions were clean green runs; no discoveries, no contract flexes. Additive MBRecordingStub.isrc_list field (default [], safe conservative fallthrough) and sidecar_cache 4-tuple extension (incremental) were the only structural additions. ◆ boundary fork returned still-on-intent; R-4 watch item forwarded to R5 operator drain.)*
 
 ## Discoveries & risks
 
