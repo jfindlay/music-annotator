@@ -797,6 +797,76 @@ class TestSearchReleasesByDir:
         candidates = music_annotator.search_releases_by_dir(src)
         assert candidates[0].tracks == 0
 
+    def test_parse_release_item_empty_track_list_uses_track_count(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT: search-shaped medium with track-list: [] uses track-count, not len([]) == 0.
+
+        MB search responses carry track-count: N alongside track-list: [] (present but empty).
+        The fix ensures the empty-list case falls through to track-count so the candidate's
+        tracks field reflects the real count rather than 0.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/Album")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        raw = [
+            {
+                "id": "r1",
+                "ext:score": "80",
+                "title": "Album",
+                "artist-credit-phrase": "Artist",
+                "date": "2000",
+                "status": "Official",
+                "country": "DE",
+                # Search-result shape: track-count present, track-list present but empty.
+                "medium-list": [{"format": "CD", "track-count": 12, "track-list": []}],
+                "label-info-list": [],
+            }
+        ]
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": raw})
+
+        candidates = music_annotator.search_releases_by_dir(src)
+        assert candidates[0].tracks == 12
+
+    def test_parse_release_item_multi_medium_empty_track_lists_sum_track_counts(
+        self, mocker: MockerFixture, fs: FakeFilesystem
+    ) -> None:
+        """Search box-set: two media each with track-count + empty track-list; tracks == sum.
+
+        Verifies the multi-medium case of the empty-list fallback: each medium's track-count is
+        summed correctly when all media carry track-list: [] (the search-result shape).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/music/BoxSet")
+        fs.create_dir(str(src))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        raw = [
+            {
+                "id": "r1",
+                "ext:score": "75",
+                "title": "Box Set",
+                "artist-credit-phrase": "Artist",
+                "date": "1998",
+                "status": "Official",
+                "country": "DE",
+                # Two media, both search-shaped: track-count present, track-list empty.
+                "medium-list": [
+                    {"format": "CD", "track-count": 10, "track-list": []},
+                    {"format": "CD", "track-count": 8, "track-list": []},
+                ],
+                "label-info-list": [],
+            }
+        ]
+        mocker.patch("music_annotator._discover._search_mb_releases", return_value={"release-list": raw})
+
+        candidates = music_annotator.search_releases_by_dir(src)
+        assert candidates[0].tracks == 18
+
     def test_limit_passed_to_mb_search(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """The limit parameter is forwarded to _search_mb_releases.
 

@@ -464,10 +464,14 @@ def _parse_release_item(item: Mapping[str, object], score: int) -> MBReleaseCand
             if not isinstance(medium, dict):
                 continue
             tl: object = medium.get("track-list")
-            if isinstance(tl, list):
+            # MB search responses shape each medium as track-count: N alongside track-list: []
+            # (present but empty).  Use track-list length only when the list is non-empty;
+            # otherwise fall back to track-count (which is always correct in search results).
+            if isinstance(tl, list) and tl:
                 total_tracks += len(tl)
             else:
-                # TOC responses carry track-count as an int instead of track-list.
+                # Covers both the absent-list case (TOC responses) and the empty-list case
+                # (search responses where track-list: [] accompanies track-count: N).
                 tc_raw: object = medium.get("track-count")
                 if isinstance(tc_raw, int):
                     total_tracks += tc_raw
