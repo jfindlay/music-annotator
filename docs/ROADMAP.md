@@ -138,15 +138,27 @@ be annotated*.  The two are orthogonal; R2 keeps "rung" for identity-confidence 
    whipper `.log`/`.cue`/`.toc` sidecar preservation, and the J1 spot-check gate (audit tier-pass extended
    with AR status).  MakeMKV deferred (census all whipper; MakeMKV emits no AccurateRip).  ◆ handed off to
    the R3a Presto adapter shard (this reconciliation).
-2. **R3a** PrestoMusic downloads (ISRC-bearing; 36 dirs; simplest single-source).  ~2 → **3 sessions**
-   (**IN PROGRESS 2026-07-21**; sharded as PLAN R3a).  Survey found ISRC identity infra already exists
-   (`_isrc_matches` rung 1, `TrackTags.isrc`, TSRC round-trip), so R3a's genuinely-new work narrows to:
-   **C-ISRC** (an `ISRC_MATCH` `CensusSignal` promoting ISRC-match-against-the-selected-medium to
-   `full-mb-verified` — the ISRC analogue of R3b's TOC promotion; additive to C-TIER, not a re-freeze),
-   **C-PRESTO** (download-dir recognition on per-track ISRC presence → `origin_source`), and incremental
-   audit surfacing + a Presto integration test.  The +1 over the ~2 estimate is lever 3/4 (isolate the
-   tier-promotion substrate); net still below R3b because ISRC infra pre-exists.
-3. **R3e** other-download/amazon clean (19 dirs; may collapse into R3a as a source-variant).  ~1-2.
+2. **R3a** PrestoMusic downloads (ISRC-bearing; 36 dirs; simplest single-source).  ~2 → 3 sessions
+   (**DONE 2026-07-21**, commits `80d0908`–`973577d`, PLAN R3a 3/3 rows).  Froze **C-ISRC** (an
+   `ISRC_MATCH` `CensusSignal` promoting ISRC-match-against-the-selected-medium's-recordings to
+   `full-mb-verified`; additive to C-TIER, not a re-freeze) and **C-PRESTO** (ISRC-presence download
+   recognition → `origin_source`).  Delivered the ISRC-match tier rung (after embedded-MBID, before
+   `SEARCH_HIT`; evidence rule: ≥1 confirmed match, no mismatch), the `is_presto_dir` recogniser,
+   ISRC-verified audit surfacing, and a Presto integration test.  All three sessions were clean green
+   runs (no discoveries, no contract flexes).  ◆ handed off to the R3e other-download adapter shard
+   (this reconciliation).
+3. **R3e** other-download clean (19 dirs; the source-variant collapse J1 anticipated — CONFIRMED).
+   ~1-2 → **1 session** (**IN PROGRESS 2026-07-21**; sharded as PLAN R3e).  Survey confirmed the R3e
+   dirs are already functionally ingested by R3a's mechanism: they are ISRC-bearing, already recognised
+   by `is_presto_dir` (ISRC-presence only — no Presto-specific check), and already ISRC-promoted to
+   `full-mb-verified`.  R3e's genuinely-new work is therefore **provenance-label truthfulness, not a new
+   ingest path**: the ISRC-presence label was mislabelled `"presto"` (the census's presto-vs-other axis
+   is booklet-PDF-based and offline-only; the runtime recogniser never checked PDFs, so `"presto"` was
+   always a generic-download label).  R3e renames it to the honest `"download"` and adds an
+   other-download integration test.  Freezes **C-DL** (generic download recognition + label), which
+   supersedes C-PRESTO's `"presto"` literal.  1 session: lever 4 low (label-only, no tier/identity/
+   provenance-chain impact), lever 5 excellent; net below the ~1-2 estimate because the ingest path
+   pre-exists whole.  The single `amazon` dir is non-classical-other (R4a), not in R3e's in-mb-clean set.
 4. **R3d** Track-mismatch-tolerant ingest — **after** the strict clean adapters prove C-TIER.
    **Sub-classified (J1):** **R3d-edition** (genuine edition/pressing mismatch, single-medium) vs
    **R3d-structure** (flat-local dir vs multi-disc-MB layout — Grieg, Tchaikovsky, Karajan Sampler,
@@ -233,7 +245,7 @@ derivation re-reads them.
 R0 2 ✓ · R1 3-5 ✓ · pre-R3 fix 1 ✓ · R2 3 ✓ · R3 11-12 · R4 3-6 · R6 5-8 → **~26-37 agent sessions**, plus
 the operator-paced R5 drain.  J1 tightened the R3 range from the provisional 8-16 to 9-10 on the
 census distribution; the R3b survey (2026-07-20) then re-sized R3b 3→5, giving **11-12**: pre-R3 fix 1 ✓ ·
-R2 3 ✓ · R3b 5 · R3a 2 · R3e 1-2 · R3d 3 · R3c 0 (pruned).  The
+R2 3 ✓ · R3b 5 ✓ · R3a 3 ✓ · R3e 1 · R3d 3 · R3c 0 (pruned).  The
 clean-ingest adapters (R3a/R3b/R3e ≈ 107 dirs) dominate; R3d (18) is sub-classified; R3c (Discogs) is
 pruned to BACKLOG.
 
@@ -330,3 +342,24 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   (ISRC now; Discogs later at R3c) enters by adding a `CensusSignal` + a mapping arm — **never** by editing
   `AnnotationTier`.  An adapter that appears to need a new *tier* (not a new signal) is a destructive-HALT
   signal that C-TIER was mis-frozen.  Durable through all remaining R3 adapters.
+
+- **R3a boundary (2026-07-21) — the ISRC-presence recogniser never distinguished Presto from
+  other-download (static-frame fact resolving R3e).**  C-PRESTO's runtime recogniser (`is_presto_dir`)
+  keys on ISRC-presence alone; the census's presto-vs-other-download axis keys on booklet-PDF presence
+  (offline only) — the two never aligned.  Since no Presto-specific runtime artifact was confirmed
+  across the 36 R3a dirs, `origin_source="presto"` was in fact a *generic ISRC-bearing-download* label
+  all along.  Static-frame consequence: R3e is not a new adapter but a **label-truthfulness rename**
+  (`"presto"`→`"download"`), and J1's "R3e may collapse into R3a as a source-variant" is CONFIRMED — the
+  collapse is total (same recogniser, same ladder, honest label).  Additive-reshard; no compiler contract
+  touched (`origin_source` is free-form `str`, not an enum).  Resolved by PLAN R3e (freezes C-DL,
+  supersedes C-PRESTO's label).
+
+- **R3a boundary (2026-07-21) — wrong-pressing false-promotion watch item (forwarded to R5 drain).**
+  ISRC-promoted dirs become `full-mb-verified` + `needs_spot_check=False`, exiting the spot-check
+  population.  Because an ISRC identifies a *recording* (not a *release*), a dir on a different pressing
+  that shares recordings with the reconciled release could in principle over-promote.  R3a gated this by
+  matching against the *selected medium's* recordings (not bare presence), which is the correct guard,
+  but the residual risk (same recording legitimately on multiple releases) is a **static-frame watch
+  item for the R5 operator drain**: if the drain surfaces wrong-pressing full-verified entries, tighten
+  the C-ISRC evidence rule (additive-reshard) or reconsider whether ISRC-match alone licenses
+  `full-mb-verified` (destructive-HALT on C-ISRC).  Durable through R5 and Act III-b.
