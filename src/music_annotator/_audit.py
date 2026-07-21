@@ -307,6 +307,9 @@ def _audit_tier_pass(
     * ``audit_tier_unset`` — sidecar exists but ``annotation_tier`` is empty (defect state per
       the lossless principle; S3 write path must always set it).
     * ``audit_tier_full`` — ``full-mb-verified`` (logged at DEBUG; expected clean state).
+      Includes ``origin_source`` from the sidecar so an operator can see the identity basis:
+      ``"presto"`` for ISRC-promoted entries, ``"whipper"`` for TOC-promoted entries, ``""``
+      for embedded-MBID entries.
     * ``audit_tier_provisional`` — any below-``full-mb-verified`` tier (logged at INFO).
     * ``audit_tier_needs_spot_check`` — ``needs_spot_check=True`` (logged at INFO), with
       AccurateRip status attached: ``ar_verified`` (``True`` when ``log_sha256`` is non-empty),
@@ -338,10 +341,12 @@ def _audit_tier_pass(
         dest_to_work_top[dest] = dest_root / rel.parts[0] / rel.parts[1]
 
     # Cache sidecar reads per work_top_dir to avoid re-reading for multi-track work dirs.
-    # Tuple: (annotation_tier, needs_spot_check, accuraterip_summary) — the AR summary is
-    # attached to the spot-check log event so AR-verified search-resolved entries are
-    # visibly distinguished from those with no AR data (J1 spot-check gate, S5).
-    sidecar_cache: dict[Path, tuple[AnnotationTier | str, bool, AccurateRipSummary]] = {}
+    # Tuple: (annotation_tier, needs_spot_check, accuraterip_summary, origin_source) — the AR
+    # summary is attached to the spot-check log event so AR-verified search-resolved entries are
+    # visibly distinguished from those with no AR data (J1 spot-check gate, S5).  origin_source
+    # is included in the audit_tier_full event so an operator can see the identity basis (e.g.
+    # "presto" for ISRC-promoted entries, "whipper" for TOC-promoted entries).
+    sidecar_cache: dict[Path, tuple[AnnotationTier | str, bool, AccurateRipSummary, str]] = {}
 
     for dest, work_top_dir in dest_to_work_top.items():
         if work_top_dir not in sidecar_cache:
@@ -349,9 +354,14 @@ def _audit_tier_pass(
             if sidecar_path is None:
                 sidecar_path = work_top_dir / PROVENANCE_FILENAME
             sidecar = _read_provenance_sidecar(sidecar_path)
-            sidecar_cache[work_top_dir] = (sidecar.annotation_tier, sidecar.needs_spot_check, sidecar.accuraterip_summary)
+            sidecar_cache[work_top_dir] = (
+                sidecar.annotation_tier,
+                sidecar.needs_spot_check,
+                sidecar.accuraterip_summary,
+                sidecar.origin_source,
+            )
 
-        tier_raw, spot_check, ar_summary = sidecar_cache[work_top_dir]
+        tier_raw, spot_check, ar_summary, origin_source = sidecar_cache[work_top_dir]
 
         if not tier_raw:
             log.warning(
@@ -375,7 +385,7 @@ def _audit_tier_pass(
         match tier:
             case AnnotationTier.FULL_MB_VERIFIED:
                 counts["tier_full"] += 1
-                log.debug("audit_tier_full", path=dest, tier=str(tier))
+                log.debug("audit_tier_full", path=dest, tier=str(tier), origin_source=origin_source)
             case AnnotationTier.MB_SEARCH_RESOLVED:
                 counts["tier_search"] += 1
                 counts["provisional_total"] += 1
