@@ -10592,6 +10592,197 @@ class TestAnnotationTierWritePath:
 
 
 # ---------------------------------------------------------------------------
+# Single-disc TOC → full-mb-verified KATs (S3 / C-WHIP — R3b S3)
+# ---------------------------------------------------------------------------
+
+#: CD frame offsets for a fictional single-disc release (4 tracks).
+_SINGLE_DISC_OFFSETS: list[int] = [182, 45000, 90000, 135000]
+
+#: Minimal valid disc info YAML for the single-disc fixture above.
+_SINGLE_DISC_YAML: str = (
+    "disc_id: [777777777, 4, 182, 45000, 90000, 135000, 3600]\n"
+    "record:\n"
+    "- disc_info: {category: classical, disc_id: 'aabbccdd', title: 'Composer / Symphony 1'}\n"
+    "  preferred: true\n"
+    "  track_info: {DTITLE: 'Composer / Symphony 1', DISCID: 'aabbccdd'}\n"
+)
+
+
+def _make_release_with_toc(n_tracks: int = 4, disc_offsets: list[int] | None = None) -> MBRelease:
+    """Build a minimal single-disc release model with optional TOC disc entries.
+
+    :param n_tracks: Number of tracks on the single medium.
+    :param disc_offsets: Per-track CD frame offsets for the disc entry.  When ``None``, no disc
+        entries are added (empty disc_list).
+    :returns: An :class:`~music_annotator.models.MBRelease` instance with one medium.
+    """
+    tracks: list[JSON] = []
+    for i in range(1, n_tracks + 1):
+        tracks.append(
+            {
+                "id": f"trk-{i}",
+                "position": i,
+                "recording": {
+                    "id": f"rec-{i}",
+                    "title": f"Track {i}",
+                    "artist-credit": [],
+                },
+            }
+        )
+    medium: dict[str, JSON] = {"position": 1, "format": "CD", "track-list": tracks}
+    if disc_offsets is not None:
+        disc_entries: list[dict[str, object]] = [{"offset-list": disc_offsets, "sectors": str(disc_offsets[-1] + 1000)}]
+        medium["disc-list"] = disc_entries  # type: ignore[assignment]
+    return MBRelease.model_validate(
+        {
+            "id": "rel-single",
+            "title": "Single Disc Album",
+            "date": "2001",
+            "status": "Official",
+            "barcode": "",
+            "artist-credit": [
+                {
+                    "name": "Composer B",
+                    "artist": {"id": "a2", "name": "Composer B", "sort-name": "B, Composer"},
+                }
+            ],
+            "release-group": {"id": "rg-2", "primary-type": "Album", "first-release-date": "2001"},
+            "label-info-list": [],
+            "text-representation": {"script": "Latn", "language": "eng"},
+            "medium-list": [medium],
+        }
+    )
+
+
+class TestSingleDiscTocPromotion:
+    """KATs for S3: single-disc TOC disc-ID → full-mb-verified when whipper provenance is present.
+
+    Pins the C-WHIP trust anchor: ``origin_source == "whipper"`` is required for the single-disc
+    TOC promotion.  A bare non-whipper single-disc TOC match keeps the conservative
+    ``mb-search-resolved`` tier.  Multi-disc TOC promotion is unchanged.
+    """
+
+    def _patch_mb_for_run(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API calls and internal helpers used by run().
+
+        :param mocker: pytest-mock fixture.
+        :param release: MBRelease model to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", return_value=MBRecording())
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+    def test_single_disc_toc_yields_full_verified(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Single-disc TOC match + whipper provenance → full-mb-verified, needs_spot_check=False.
+
+        A single-medium release whose 00 - disc info.yaml TOC offsets resolve against the medium's
+        disc entries, with origin_source="whipper", and source FLACs carrying NO embedded MBID,
+        must yield CensusSignal.EMBEDDED_MBID → AnnotationTier.FULL_MB_VERIFIED + needs_spot_check=False.
+        This was previously mb-search-resolved + True (the conservative default for single-disc).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/whipper-rip")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 5):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / _DISC_INFO_FILENAME), contents=_SINGLE_DISC_YAML)
+
+        release = _make_release_with_toc(n_tracks=4, disc_offsets=_SINGLE_DISC_OFFSETS)
+        self._patch_mb_for_run(mocker, release)
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info",
+            side_effect=lambda event, **kw: log_events.append({"event": event, **kw}),
+        )
+
+        music_annotator.run(
+            release_id="rel-single",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+            origin_source="whipper",
+        )
+
+        tier_events = [e for e in log_events if e["event"] == "annotation_tier_signal"]
+        assert tier_events, "annotation_tier_signal must be logged"
+        assert tier_events[0]["signal"] == CensusSignal.EMBEDDED_MBID
+
+        # The disc info YAML causes a freedb sidecar to be written; the tier lands there.
+        flac_files = list(dest.rglob("*.flac"))
+        assert flac_files
+        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        sidecar_path = _find_freedb_sidecar(work_top)
+        assert sidecar_path is not None, "freedb sidecar must exist (disc info YAML was present)"
+        result = _read_provenance_sidecar(sidecar_path)
+        assert result.annotation_tier == AnnotationTier.FULL_MB_VERIFIED
+        assert result.needs_spot_check is False
+
+    def test_single_disc_toc_no_whipper_stays_search_resolved(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Single-disc TOC match without whipper provenance stays at mb-search-resolved.
+
+        The same single-medium release with a resolving TOC but no whipper origin_source must NOT
+        be promoted — the conservative tier (mb-search-resolved, needs_spot_check=True) is kept.
+        This pins the C-WHIP trust anchor: the promotion is whipper-anchored, not a blanket loosening.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/non-whipper-rip")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 5):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / _DISC_INFO_FILENAME), contents=_SINGLE_DISC_YAML)
+
+        release = _make_release_with_toc(n_tracks=4, disc_offsets=_SINGLE_DISC_OFFSETS)
+        self._patch_mb_for_run(mocker, release)
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info",
+            side_effect=lambda event, **kw: log_events.append({"event": event, **kw}),
+        )
+
+        music_annotator.run(
+            release_id="rel-single",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+            # origin_source not set (defaults to "") — no whipper provenance
+        )
+
+        tier_events = [e for e in log_events if e["event"] == "annotation_tier_signal"]
+        assert tier_events, "annotation_tier_signal must be logged"
+        assert tier_events[0]["signal"] == CensusSignal.SEARCH_HIT
+
+        # The disc info YAML causes a freedb sidecar to be written; the tier lands there.
+        flac_files = list(dest.rglob("*.flac"))
+        assert flac_files
+        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        sidecar_path = _find_freedb_sidecar(work_top)
+        assert sidecar_path is not None, "freedb sidecar must exist (disc info YAML was present)"
+        result = _read_provenance_sidecar(sidecar_path)
+        assert result.annotation_tier == AnnotationTier.MB_SEARCH_RESOLVED
+        assert result.needs_spot_check is True
+
+
+# ---------------------------------------------------------------------------
 # AccurateRip tag round-trip KAT (C-AR — R3b S1)
 # ---------------------------------------------------------------------------
 

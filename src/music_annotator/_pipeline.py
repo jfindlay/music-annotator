@@ -1265,6 +1265,7 @@ def run(
     no_cache: bool = False,
     disc_override: int | None = None,
     acoustid_key: str = "",
+    origin_source: str = "",
 ) -> None:
     """Copy and tag an album directory using MusicBrainz metadata.
 
@@ -1324,6 +1325,11 @@ def run(
     :param acoustid_key: AcoustID application API key.  When set, performs a keyed fingerprint lookup for each source
         file after the per-track :func:`fetch_acoustid_id` loop and logs whether the selected recording MBID is
         confirmed or contradicted by the AcoustID results.  Never alters the copy/tag/verify path.
+    :param origin_source: Provenance source identifier for this ingest.  When set to ``"whipper"`` and a TOC disc-ID
+        match is found for a single-disc release, the annotation tier is promoted to ``full-mb-verified``
+        (``CensusSignal.EMBEDDED_MBID``) rather than the conservative ``mb-search-resolved`` default.  This is the
+        C-WHIP trust anchor: whipper rips carry hardware-level TOC identity, so a resolving disc-ID is equivalent to
+        an embedded MBID.  A bare non-whipper single-disc TOC match keeps the conservative tier.  Defaults to ``""``.
     :raises mb.ResponseError: On a non-retryable MusicBrainz API error.
     :raises RuntimeError: If all retry attempts are exhausted for any API call, or if post-copy verification fails (copy
         integrity, tag round-trip, cover art, or mtime mismatch).
@@ -1381,6 +1387,16 @@ def run(
         raise ValueError(f"release '{release.title}' has no mediums")
 
     medium_pos = selected_medium.position
+
+    # Single-disc whipper TOC promotion (S3 / C-WHIP).
+    # For multi-disc releases, toc_matched is set above by _select_medium_with_reason.
+    # For single-disc releases that path is skipped, so toc_matched stays False even when a
+    # matching 00 - disc info.yaml is present.  When the source is a whipper rip (origin_source
+    # == "whipper") and the TOC resolves against the single medium's disc entries, the identity
+    # evidence is hardware-level — equivalent to an embedded MBID — so promote to EMBEDDED_MBID.
+    # A bare non-whipper single-disc TOC match keeps the conservative tier (C-WHIP trust anchor).
+    if not toc_matched and origin_source == "whipper" and track_frames is not None and len(mediums) == 1:
+        toc_matched = _match_medium_by_toc([selected_medium], track_frames) is not None
 
     # Build all_media_pairs: (MBTrack, medium_pos) for every track on every medium, in
     # medium-then-track order.  This is the aggregation surface for work-grouping and the three
@@ -1568,7 +1584,10 @@ def run(
     # annotation_tier written to the provenance sidecar inside _copy_tag_verify_journal_pass.
     #
     # Evidence hierarchy (strongest first):
-    #   1. TOC disc-ID match (multi-disc only) — hardware-level identity, equivalent to embedded MBID.
+    #   1. TOC disc-ID match — hardware-level identity, equivalent to embedded MBID.
+    #      Multi-disc: always promoted (set by _select_medium_with_reason above).
+    #      Single-disc: promoted only when origin_source == "whipper" (C-WHIP trust anchor);
+    #      a bare non-whipper single-disc TOC match keeps the conservative tier.
     #   2. Embedded recording MBIDs in source files that match the selected medium's track list.
     #   3. Default: search-resolved (user supplied a release_id; no stronger identity evidence).
     #
