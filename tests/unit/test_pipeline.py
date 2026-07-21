@@ -10783,6 +10783,265 @@ class TestSingleDiscTocPromotion:
 
 
 # ---------------------------------------------------------------------------
+# ISRC-match tier promotion KATs (C-ISRC — S1)
+# ---------------------------------------------------------------------------
+
+
+def _make_release_with_isrcs(isrcs_per_track: list[list[str]]) -> MBRelease:
+    """Build a minimal single-medium release whose recordings carry ISRC lists.
+
+    Each element of ``isrcs_per_track`` is the ``isrc_list`` for the corresponding track's
+    recording.  An empty inner list means the recording has no ISRCs (``isrc_list == []``).
+
+    :param isrcs_per_track: Per-track ISRC lists; length determines the track count.
+    :returns: An :class:`~music_annotator.models.MBRelease` instance with one medium.
+    """
+    tracks: list[JSON] = []
+    for i, isrcs in enumerate(isrcs_per_track, start=1):
+        isrc_json: list[JSON] = list(isrcs)
+        recording: dict[str, JSON] = {
+            "id": f"rec-isrc-{i}",
+            "title": f"ISRC Track {i}",
+            "artist-credit": [],
+            "isrc-list": isrc_json,
+        }
+        tracks.append({"id": f"trk-isrc-{i}", "position": i, "recording": recording})
+    return MBRelease.model_validate(
+        {
+            "id": "rel-isrc",
+            "title": "ISRC Album",
+            "date": "2020",
+            "status": "Official",
+            "barcode": "",
+            "artist-credit": [
+                {
+                    "name": "Composer ISRC",
+                    "artist": {"id": "a-isrc", "name": "Composer ISRC", "sort-name": "ISRC, Composer"},
+                }
+            ],
+            "release-group": {"id": "rg-isrc", "primary-type": "Album", "first-release-date": "2020"},
+            "label-info-list": [],
+            "text-representation": {"script": "Latn", "language": "eng"},
+            "medium-list": [{"position": 1, "format": "CD", "track-list": tracks}],
+        }
+    )
+
+
+class TestIsrcMatchTierPromotion:
+    """KATs for C-ISRC S1: ISRC-match rung in run()'s signal ladder.
+
+    Covers:
+    - All source ISRCs match → CensusSignal.ISRC_MATCH → full-mb-verified, needs_spot_check=False.
+    - One source ISRC mismatches → SEARCH_HIT (no promotion).
+    - Partial ISRCs (some tracks have no ISRC, ≥1 match, no mismatch) → ISRC_MATCH (promotion).
+    - All inconclusive (no track has a source ISRC) → SEARCH_HIT (all-inconclusive rule).
+    """
+
+    def _patch_mb_for_run(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch all MB API calls and internal helpers used by run().
+
+        :param mocker: pytest-mock fixture.
+        :param release: MBRelease model to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", return_value=MBRecording())
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+    def test_isrc_all_match_yields_full_verified(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """All source ISRCs match → CensusSignal.ISRC_MATCH → full-mb-verified, needs_spot_check=False.
+
+        Single-medium release; source FLACs carry ISRC tags that appear in the corresponding
+        recording's isrc_list; no embedded MBID, no TOC.  Asserts the signal is ISRC_MATCH and
+        the provenance sidecar carries full-mb-verified + needs_spot_check=False.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/isrc-all-match")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+
+        # Write two FLACs with ISRC tags matching the release's recording ISRC lists.
+        for i, isrc in enumerate(["USRC12345678", "USRC87654321"], start=1):
+            flac_path = src / f"0{i}.flac"
+            fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+            audio = FLAC(str(flac_path))
+            audio["isrc"] = [isrc]
+            audio.save()
+
+        release = _make_release_with_isrcs([["USRC12345678"], ["USRC87654321"]])
+        self._patch_mb_for_run(mocker, release)
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info",
+            side_effect=lambda event, **kw: log_events.append({"event": event, **kw}),
+        )
+
+        music_annotator.run(
+            release_id="rel-isrc",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        tier_events = [e for e in log_events if e["event"] == "annotation_tier_signal"]
+        assert tier_events, "annotation_tier_signal must be logged"
+        assert tier_events[0]["signal"] == CensusSignal.ISRC_MATCH
+
+        flac_files = list(dest.rglob("*.flac"))
+        assert flac_files
+        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        prov_path = work_top / PROVENANCE_FILENAME
+        result = _read_provenance_sidecar(prov_path)
+        assert result.annotation_tier == AnnotationTier.FULL_MB_VERIFIED
+        assert result.needs_spot_check is False
+
+    def test_isrc_mismatch_stays_search_resolved(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """One source ISRC not in the candidate list → SEARCH_HIT (no promotion).
+
+        The first track's ISRC matches; the second track's ISRC does not appear in the recording's
+        isrc_list.  A single mismatch drops the whole dir to SEARCH_HIT.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/isrc-mismatch")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+
+        # Track 1 matches; track 2 carries a wrong ISRC.
+        for i, isrc in enumerate(["USRC12345678", "USRC00000000"], start=1):
+            flac_path = src / f"0{i}.flac"
+            fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+            audio = FLAC(str(flac_path))
+            audio["isrc"] = [isrc]
+            audio.save()
+
+        # Track 2's recording has "USRC99999999", not "USRC00000000" → mismatch.
+        release = _make_release_with_isrcs([["USRC12345678"], ["USRC99999999"]])
+        self._patch_mb_for_run(mocker, release)
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info",
+            side_effect=lambda event, **kw: log_events.append({"event": event, **kw}),
+        )
+
+        music_annotator.run(
+            release_id="rel-isrc",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        tier_events = [e for e in log_events if e["event"] == "annotation_tier_signal"]
+        assert tier_events, "annotation_tier_signal must be logged"
+        assert tier_events[0]["signal"] == CensusSignal.SEARCH_HIT
+
+    def test_isrc_partial_no_mismatch_promotes(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Partial ISRCs (some tracks have no ISRC, ≥1 match, no mismatch) → ISRC_MATCH.
+
+        Track 1 has a matching ISRC; track 2 has no ISRC tag (inconclusive, match=None).
+        The partial-ISRC dir still promotes because no mismatch and ≥1 confirmed match.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/isrc-partial")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+
+        # Track 1: ISRC tag present and matching.
+        flac1 = src / "01.flac"
+        fs.create_file(str(flac1), contents=_MINIMAL_FLAC)
+        audio1 = FLAC(str(flac1))
+        audio1["isrc"] = ["USRC12345678"]
+        audio1.save()
+
+        # Track 2: no ISRC tag → inconclusive (match=None).
+        flac2 = src / "02.flac"
+        fs.create_file(str(flac2), contents=_MINIMAL_FLAC)
+
+        # Track 2's recording has an isrc_list, but the source has no ISRC → inconclusive.
+        release = _make_release_with_isrcs([["USRC12345678"], ["USRC99999999"]])
+        self._patch_mb_for_run(mocker, release)
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info",
+            side_effect=lambda event, **kw: log_events.append({"event": event, **kw}),
+        )
+
+        music_annotator.run(
+            release_id="rel-isrc",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        tier_events = [e for e in log_events if e["event"] == "annotation_tier_signal"]
+        assert tier_events, "annotation_tier_signal must be logged"
+        assert tier_events[0]["signal"] == CensusSignal.ISRC_MATCH
+
+    def test_isrc_all_inconclusive_stays_search_hit(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """All tracks inconclusive (no source ISRC) → SEARCH_HIT (all-inconclusive rule).
+
+        No source file carries an ISRC tag; all _isrc_matches calls return match=None.
+        The all-inconclusive dir does not promote — it stays at SEARCH_HIT.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src/isrc-all-inconclusive")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+
+        # Two FLACs with no ISRC tags.
+        for i in range(1, 3):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+
+        # Recordings have ISRCs, but source files don't → all inconclusive.
+        release = _make_release_with_isrcs([["USRC12345678"], ["USRC87654321"]])
+        self._patch_mb_for_run(mocker, release)
+
+        log_events: list[dict[str, object]] = []
+        mocker.patch(
+            "music_annotator._pipeline.log.info",
+            side_effect=lambda event, **kw: log_events.append({"event": event, **kw}),
+        )
+
+        music_annotator.run(
+            release_id="rel-isrc",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+        )
+
+        tier_events = [e for e in log_events if e["event"] == "annotation_tier_signal"]
+        assert tier_events, "annotation_tier_signal must be logged"
+        assert tier_events[0]["signal"] == CensusSignal.SEARCH_HIT
+
+
+# ---------------------------------------------------------------------------
 # AccurateRip tag round-trip KAT (C-AR — R3b S1)
 # ---------------------------------------------------------------------------
 

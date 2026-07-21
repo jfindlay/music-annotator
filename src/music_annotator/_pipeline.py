@@ -48,6 +48,7 @@ from music_annotator._pipeline_io import (
     _assess_collisions,
     _audio_hash,
     _find_freedb_sidecar,
+    _isrc_matches,
     _read_duration_ms,
     _read_recording_id_tag,
     _run_fpcalc,
@@ -1732,7 +1733,23 @@ def run(
         selected_medium_track_ids: set[str] = {t.recording.id for t in selected_medium.track_list}
         embedded_ids = [_read_recording_id_tag(f) for f in src_files]
         has_embedded_mbid = any(eid and eid in selected_medium_track_ids for eid in embedded_ids)
-        census_signal = CensusSignal.EMBEDDED_MBID if has_embedded_mbid else CensusSignal.SEARCH_HIT
+        if has_embedded_mbid:
+            census_signal = CensusSignal.EMBEDDED_MBID
+        else:
+            # ISRC-match rung (C-ISRC): promote to full-mb-verified when all present-ISRC tracks
+            # match the selected medium's recording ISRC lists and at least one confirms.
+            # Tracks with no source ISRC or an empty isrc_list are inconclusive (match=None) and
+            # neither block promotion nor count toward confirmation.  A dir where no track yields
+            # match=True stays at SEARCH_HIT (all-inconclusive rule, C-ISRC §evidence rule).
+            isrc_results = [
+                _isrc_matches(src_files[i], selected_medium.track_list[i].recording.isrc_list) for i in range(len(src_files))
+            ]
+            has_mismatch = any(r.match is False for r in isrc_results)
+            has_confirmed = any(r.match is True for r in isrc_results)
+            if not has_mismatch and has_confirmed:
+                census_signal = CensusSignal.ISRC_MATCH
+            else:
+                census_signal = CensusSignal.SEARCH_HIT
     log.info("annotation_tier_signal", signal=str(census_signal))
 
     # --- Copy, tag, and journal ---

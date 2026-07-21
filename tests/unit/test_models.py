@@ -1339,9 +1339,20 @@ class TestTierClassifierMapsCensusSignals:
     def test_census_signal_string_values(self) -> None:
         """CensusSignal members have the expected string values."""
         assert CensusSignal.EMBEDDED_MBID.value == "embedded-mbid"
+        assert CensusSignal.ISRC_MATCH.value == "isrc-match"
         assert CensusSignal.SEARCH_HIT.value == "search-hit"
         assert CensusSignal.MISMATCH.value == "mismatch"
         assert CensusSignal.NOT_IN_MB.value == "not-in-mb"
+
+    def test_classify_isrc_match_arm(self) -> None:
+        """isrc-match signal → full-mb-verified, needs_spot_check=False (C-ISRC KAT).
+
+        Pins the C-ISRC classifier arm: CensusSignal.ISRC_MATCH maps to
+        AnnotationTier.FULL_MB_VERIFIED with needs_spot_check=False, identical to EMBEDDED_MBID.
+        """
+        tier, spot_check = classify_annotation_tier(CensusSignal.ISRC_MATCH)
+        assert tier == AnnotationTier.FULL_MB_VERIFIED
+        assert spot_check is False
 
 
 # ---------------------------------------------------------------------------

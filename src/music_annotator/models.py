@@ -89,6 +89,9 @@ class CensusSignal(StrEnum):
     EMBEDDED_MBID = "embedded-mbid"
     """Source file carries an embedded MusicBrainz recording MBID — strongest identity signal."""
 
+    ISRC_MATCH = "isrc-match"
+    """Source file ISRCs match the selected medium's recording ISRC lists — offline identity confirmation."""
+
     SEARCH_HIT = "search-hit"
     """Release resolved via MB search (track-count reconciliation, no embedded MBID)."""
 
@@ -118,6 +121,8 @@ def classify_annotation_tier(signal: CensusSignal) -> tuple[AnnotationTier, bool
             return AnnotationTier.MB_PARTIAL, False
         case CensusSignal.NOT_IN_MB:
             return AnnotationTier.SOURCE_TAGS_ONLY, False
+        case CensusSignal.ISRC_MATCH:
+            return AnnotationTier.FULL_MB_VERIFIED, False
         case _:  # pragma: no cover
             return AnnotationTier.SOURCE_TAGS_ONLY, False
 
@@ -817,12 +822,15 @@ class MBTextRepresentation(BaseModel):
 class MBRecordingStub(BaseModel):
     """Minimal recording reference embedded in a track entry within a release.
 
-    Important attributes: ``id`` (recording MBID), ``title``, ``artist_credit``.
+    Important attributes: ``id`` (recording MBID), ``title``, ``artist_credit``,
+    ``isrc_list`` (ISRC codes; populated only when the ``"isrcs"`` include is passed to the
+    release fetch — defaults to ``[]`` so ISRC-match logic treats absent data as inconclusive).
     """
 
     id: str = ""
     title: str = ""
     artist_credit: list[MBArtistCredit | str] = Field(default_factory=list, alias="artist-credit")
+    isrc_list: list[str] = Field(default_factory=list, alias="isrc-list")
 
     model_config = {"populate_by_name": True}
 
