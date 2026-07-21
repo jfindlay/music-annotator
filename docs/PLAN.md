@@ -110,7 +110,7 @@ J1), not this session.
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Fix `_parse_release_item` empty-`track-list` fallback | pending | — | — |
+| 1 | Fix `_parse_release_item` empty-`track-list` fallback | done | ca75aaf | — |
 
 ## Action-frame digest
 
