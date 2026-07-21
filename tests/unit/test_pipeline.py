@@ -6842,6 +6842,403 @@ class TestRunTitleMediumSelection:
 
 
 # ---------------------------------------------------------------------------
+# run() — track-count mismatch operator override (C-OVR)
+# ---------------------------------------------------------------------------
+
+
+class TestRunCountMismatch:
+    """Tests for the track-count mismatch gate and operator override (C-OVR).
+
+    KATs: test_count_mismatch_accept_ingests_partial, test_count_mismatch_decline_skips,
+    test_count_mismatch_dry_run_still_raises, test_count_mismatch_no_ui_still_raises,
+    test_multidisc_no_match_reaches_override, test_multidisc_no_match_dry_run_still_raises.
+    """
+
+    def _patch_mb_single(self, mocker: MockerFixture, n_medium: int) -> None:
+        """Patch MB API for a single-medium release with ``n_medium`` tracks.
+
+        :param mocker: pytest-mock fixture.
+        :param n_medium: Number of tracks on the single medium.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_release(n_medium))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_make_rec_detail)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+    def _patch_mb_multi_no_match(self, mocker: MockerFixture) -> None:
+        """Patch MB API for a 2-medium release where neither medium matches 3 source files.
+
+        Medium 1 has 4 tracks; medium 2 has 5 tracks.  Source has 3 files — no match.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_multi_disc_release([4, 5]))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_make_rec_detail)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+    def test_count_mismatch_accept_ingests_partial_src_fewer(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Accepted mismatch with n_src < n_medium ingests k=n_src tracks at mb-partial.
+
+        KAT: test_count_mismatch_accept_ingests_partial (n_src < n_medium direction).
+        Exercises the copy-plan build IndexError guard: src_files is shorter than copy_subset.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        # 2 source files, but medium has 3 tracks → n_src < n_medium
+        for i in range(1, 3):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb_single(mocker, n_medium=3)
+
+        mock_ui = MagicMock()
+        mock_ui.confirm_count_mismatch.return_value = True
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+            ui=mock_ui,
+        )
+
+        mock_ui.confirm_count_mismatch.assert_called_once()
+        # Verify annotation_tier is mb-partial in the sidecar
+        flac_files = sorted(dest.rglob("*.flac"))
+        assert len(flac_files) == 2, f"expected 2 FLAC files (k=min(2,3)=2), got {len(flac_files)}"
+        work_top = dest / flac_files[0].relative_to(dest).parts[0] / flac_files[0].relative_to(dest).parts[1]
+        prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
+        sidecar = _read_provenance_sidecar(prov_path)
+        assert sidecar.annotation_tier == AnnotationTier.MB_PARTIAL
+
+    def test_count_mismatch_accept_ingests_partial_src_more(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Accepted mismatch with n_src > n_medium ingests k=n_medium tracks at mb-partial.
+
+        KAT: test_count_mismatch_accept_ingests_partial (n_src > n_medium direction).
+        Exercises the ISRC tier-probe IndexError guard: src_files is longer than track_list.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        # 4 source files, but medium has 3 tracks → n_src > n_medium
+        for i in range(1, 5):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb_single(mocker, n_medium=3)
+
+        mock_ui = MagicMock()
+        mock_ui.confirm_count_mismatch.return_value = True
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+            ui=mock_ui,
+        )
+
+        mock_ui.confirm_count_mismatch.assert_called_once()
+        flac_files = sorted(dest.rglob("*.flac"))
+        assert len(flac_files) == 3, f"expected 3 FLAC files (k=min(4,3)=3), got {len(flac_files)}"
+        work_top = dest / flac_files[0].relative_to(dest).parts[0] / flac_files[0].relative_to(dest).parts[1]
+        prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
+        sidecar = _read_provenance_sidecar(prov_path)
+        assert sidecar.annotation_tier == AnnotationTier.MB_PARTIAL
+
+    def test_count_mismatch_decline_skips(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When the operator declines the mismatch override, RuntimeError is raised.
+
+        KAT: test_count_mismatch_decline_skips.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 3):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb_single(mocker, n_medium=3)
+
+        mock_ui = MagicMock()
+        mock_ui.confirm_count_mismatch.return_value = False
+
+        with pytest.raises(RuntimeError, match="track count mismatch"):
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=False,
+                ui=mock_ui,
+            )
+
+        mock_ui.confirm_count_mismatch.assert_called_once()
+
+    def test_count_mismatch_dry_run_still_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """In dry-run mode the mismatch gate raises RuntimeError without prompting.
+
+        KAT: test_count_mismatch_dry_run_still_raises.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 3):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb_single(mocker, n_medium=3)
+
+        mock_ui = MagicMock()
+
+        with pytest.raises(RuntimeError, match="track count mismatch"):
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=True,
+                fetch_rels=False,
+                ui=mock_ui,
+            )
+
+        mock_ui.confirm_count_mismatch.assert_not_called()
+
+    def test_count_mismatch_no_ui_still_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When ui=None the mismatch gate raises RuntimeError without prompting.
+
+        KAT: test_count_mismatch_no_ui_still_raises.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 3):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb_single(mocker, n_medium=3)
+
+        with pytest.raises(RuntimeError, match="track count mismatch"):
+            music_annotator.run(
+                release_id="rel-1",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=False,
+                ui=None,
+            )
+
+    def test_multidisc_no_match_reaches_override(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Multi-disc no-match path reaches confirm_count_mismatch and ingests at mb-partial on accept.
+
+        KAT: test_multidisc_no_match_reaches_override.
+        Source has 3 files; medium 1 has 4 tracks, medium 2 has 5 tracks — no exact match.
+        Best medium is disc 1 (nearest count: |4-3|=1 < |5-3|=2).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 4):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb_multi_no_match(mocker)
+
+        mock_ui = MagicMock()
+        mock_ui.confirm_count_mismatch.return_value = True
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+            ui=mock_ui,
+        )
+
+        mock_ui.confirm_count_mismatch.assert_called_once()
+        # Best medium is disc 1 (4 tracks, nearest to 3); k = min(3, 4) = 3
+        call_args = mock_ui.confirm_count_mismatch.call_args
+        assert call_args.args[3] == 3  # n_src
+        assert call_args.args[4] == 4  # n_medium (disc 1)
+        flac_files = sorted(dest.rglob("*.flac"))
+        assert len(flac_files) == 3, f"expected 3 FLAC files (k=min(3,4)=3), got {len(flac_files)}"
+        work_top = dest / flac_files[0].relative_to(dest).parts[0] / flac_files[0].relative_to(dest).parts[1]
+        prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
+        sidecar = _read_provenance_sidecar(prov_path)
+        assert sidecar.annotation_tier == AnnotationTier.MB_PARTIAL
+
+    def test_multidisc_no_match_dry_run_still_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """In dry-run mode the multi-disc no-match path re-raises ValueError without prompting.
+
+        KAT: test_multidisc_no_match_dry_run_still_raises.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 4):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb_multi_no_match(mocker)
+
+        mock_ui = MagicMock()
+
+        with pytest.raises(ValueError, match="track count mismatch"):
+            music_annotator.run(
+                release_id="rel-multi",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=True,
+                fetch_rels=False,
+                ui=mock_ui,
+            )
+
+        mock_ui.confirm_count_mismatch.assert_not_called()
+
+    def test_multidisc_no_match_no_ui_still_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When ui=None the multi-disc no-match path re-raises ValueError without prompting.
+
+        Covers the no-ui branch of the no-match ValueError re-raise.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 4):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb_multi_no_match(mocker)
+
+        with pytest.raises(ValueError, match="track count mismatch"):
+            music_annotator.run(
+                release_id="rel-multi",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=False,
+                ui=None,
+            )
+
+    def test_multidisc_no_match_decline_reraises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When the operator declines the multi-disc no-match override, ValueError is re-raised.
+
+        Covers the decline branch (line 1567) of the no-match ValueError path.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 4):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        self._patch_mb_multi_no_match(mocker)
+
+        mock_ui = MagicMock()
+        mock_ui.confirm_count_mismatch.return_value = False
+
+        with pytest.raises(ValueError, match="track count mismatch"):
+            music_annotator.run(
+                release_id="rel-multi",
+                src_dir=src,
+                dest_root=dest,
+                user_agent="Test/1.0",
+                dry_run=False,
+                fetch_rels=False,
+                ui=mock_ui,
+            )
+
+        mock_ui.confirm_count_mismatch.assert_called_once()
+
+    def test_multidisc_selected_medium_count_mismatch_diagnostic(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Multi-disc release with disc_override: selected medium count mismatch uses multi-disc diagnostic.
+
+        Covers the ``n_disc > 1`` branch of the diagnostic string in the single-medium mismatch gate.
+        disc_override selects disc 1 (4 tracks) but source has 3 files → mismatch gate fires with
+        the multi-disc diagnostic string.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        # 3 source files; disc_override=1 selects disc 1 (4 tracks) → mismatch
+        for i in range(1, 4):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+        # 2-medium release: disc 1 has 4 tracks, disc 2 has 3 tracks
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=_make_multi_disc_release([4, 3]))
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_make_rec_detail)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+        mock_ui = MagicMock()
+        mock_ui.confirm_count_mismatch.return_value = True
+
+        music_annotator.run(
+            release_id="rel-multi",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=False,
+            ui=mock_ui,
+            disc_override=1,  # force disc 1 (4 tracks) even though source has 3 files
+        )
+
+        mock_ui.confirm_count_mismatch.assert_called_once()
+        # Verify the diagnostic string mentions the multi-disc context
+        call_args = mock_ui.confirm_count_mismatch.call_args
+        diagnostic: str = call_args.args[5]
+        assert "disc 1 of 2" in diagnostic
+
+
+# ---------------------------------------------------------------------------
 # compare_audio_collision / _assess_collisions / _collision_suffix /
 # _apply_collision_suffix
 # ---------------------------------------------------------------------------

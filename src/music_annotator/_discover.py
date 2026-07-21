@@ -45,6 +45,7 @@ from music_annotator.models import (
     AccurateRipTrack,
     DirHint,
     MBMedium,
+    MBRelease,
     MBReleaseCandidate,
     TransactionLog,
 )
@@ -101,6 +102,31 @@ class DiscoverUI(Protocol):
         :param release_url: MusicBrainz release URL, displayed so the user can inspect the release.
         :returns: The confirmed or user-chosen :class:`~music_annotator.models.MBMedium`, or ``None``
             to abort the run for this directory.
+        """
+
+    def confirm_count_mismatch(
+        self,
+        src_dir: Path,
+        release: MBRelease,
+        selected_medium: MBMedium | None,
+        n_src: int,
+        n_medium: int,
+        diagnostic: str,
+    ) -> bool:
+        """Prompt the operator to accept or decline a track-count mismatch.
+
+        Called when the number of source files does not match the selected medium's track count,
+        or when no medium in a multi-disc release matches the source file count.  The operator
+        may accept (ingest at ``mb-partial``) or decline (skip this directory).
+
+        :param src_dir: The source directory being processed.
+        :param release: The MusicBrainz release being ingested.
+        :param selected_medium: The best-candidate medium for ingest, or ``None`` when no medium
+            matched the source file count (multi-disc no-match path).
+        :param n_src: Number of source audio files in ``src_dir``.
+        :param n_medium: Number of tracks on ``selected_medium`` (0 when ``selected_medium`` is ``None``).
+        :param diagnostic: Human-readable edition-vs-structure context string (display only).
+        :returns: ``True`` to accept (ingest at ``mb-partial``), ``False`` to decline (skip).
         """
 
     def confirm_shortened_name(self, original: str, proposed: str) -> str | None:
@@ -208,6 +234,60 @@ class TerminalDiscoverUI:
                     _console.print(f"  [bold yellow]No disc at position {pos}.[/]")
                 case _:
                     _console.print("  [bold yellow]Please enter y, n, or a disc number.[/]")
+
+    def confirm_count_mismatch(
+        self,
+        src_dir: Path,
+        release: MBRelease,
+        selected_medium: MBMedium | None,
+        n_src: int,
+        n_medium: int,
+        diagnostic: str,
+    ) -> bool:
+        """Display a track-count mismatch warning and prompt the operator to accept or decline.
+
+        Prints the source directory, release title, selected medium (if any), source and medium
+        track counts, and the edition-vs-structure diagnostic string.  Accepts ``y`` / ``yes`` to
+        ingest at ``mb-partial``, ``n`` / ``no`` / ``s`` / ``skip`` to decline.  Re-prompts until
+        a valid choice is entered.
+
+        :param src_dir: The source directory being processed.
+        :param release: The MusicBrainz release being ingested.
+        :param selected_medium: The best-candidate medium for ingest, or ``None`` when no medium
+            matched the source file count.
+        :param n_src: Number of source audio files in ``src_dir``.
+        :param n_medium: Number of tracks on ``selected_medium`` (0 when ``selected_medium`` is ``None``).
+        :param diagnostic: Human-readable edition-vs-structure context string.
+        :returns: ``True`` to accept (ingest at ``mb-partial``), ``False`` to decline (skip).
+        """
+        _console.print("\n[bold yellow]WARNING:[/] [yellow]Track-count mismatch — source files do not match the MB release.[/]")
+        _console.print(f"  [dim]Source dir  :[/] {_markup_escape(str(src_dir))}")
+        _console.print(f"  [dim]Release     :[/] {_markup_escape(release.title)}")
+        if selected_medium is not None:
+            _console.print(f"  [dim]Medium      :[/] disc {selected_medium.position}")
+        else:
+            _console.print("  [dim]Medium      :[/] (no medium matched source count)")
+        _console.print(f"  [dim]Source files:[/] {n_src}")
+        _console.print(f"  [dim]Medium tracks:[/] {n_medium}")
+        _console.print(f"  [dim]Diagnostic  :[/] {diagnostic}")
+        k = min(n_src, n_medium)
+        _console.print(
+            f"\n  [yellow]Accepting will ingest the first [bold]{k}[/] positionally-aligned track(s) "
+            "at tier [bold]mb-partial[/].  The tail is not copied.[/]"
+        )
+        _console.print("\n  [dim]Enter [bold]y[/] to accept (ingest at mb-partial) or [bold]n[/] to skip:[/]")
+        while True:
+            _console.print("\n[bold cyan]>[/] ", end="")
+            choice = input("").strip().lower()
+            match choice:
+                case "y" | "yes":
+                    log.info("count_mismatch_accepted", src_dir=str(src_dir), n_src=n_src, n_medium=n_medium)
+                    return True
+                case "n" | "no" | "s" | "skip":
+                    log.info("count_mismatch_declined", src_dir=str(src_dir), n_src=n_src, n_medium=n_medium)
+                    return False
+                case _:
+                    _console.print("  [bold yellow]Please enter y or n.[/]")
 
     def confirm_shortened_name(self, original: str, proposed: str) -> str | None:
         """Display the too-long component, show the proposed shortened name, and prompt for confirmation.

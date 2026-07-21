@@ -106,10 +106,11 @@ class CollisionPolicy(enum.Enum):
 
 
 class DiscUI(Protocol):
-    """Minimal UI protocol for disc-selection and name-shortening confirmation in :func:`run`.
+    """Minimal UI protocol for disc-selection, name-shortening, and count-mismatch confirmation in :func:`run`.
 
     A structural subset of :class:`~music_annotator._discover.DiscoverUI` — any object that
-    implements :meth:`confirm_disc` and :meth:`confirm_shortened_name` satisfies this protocol.
+    implements :meth:`confirm_disc`, :meth:`confirm_shortened_name`, and
+    :meth:`confirm_count_mismatch` satisfies this protocol.
     Defined here (rather than importing from ``_discover``) to avoid a circular import:
     ``_discover`` imports :func:`run` from this module.
     """
@@ -129,6 +130,30 @@ class DiscUI(Protocol):
         :param release_url: MusicBrainz release URL.
         :returns: The confirmed or user-chosen :class:`~music_annotator.models.MBMedium`, or ``None``
             to abort.
+        """  # pragma: no cover
+
+    def confirm_count_mismatch(
+        self,
+        src_dir: Path,
+        release: MBRelease,
+        selected_medium: MBMedium | None,
+        n_src: int,
+        n_medium: int,
+        diagnostic: str,
+    ) -> bool:
+        """Prompt the operator to accept or decline a track-count mismatch.
+
+        Called when the number of source files does not match the selected medium's track count,
+        or when no medium in a multi-disc release matches the source file count.
+
+        :param src_dir: The source directory being processed.
+        :param release: The MusicBrainz release being ingested.
+        :param selected_medium: The best-candidate medium for ingest, or ``None`` when no medium
+            matched the source file count.
+        :param n_src: Number of source audio files in ``src_dir``.
+        :param n_medium: Number of tracks on ``selected_medium`` (0 when ``selected_medium`` is ``None``).
+        :param diagnostic: Human-readable edition-vs-structure context string (display only).
+        :returns: ``True`` to accept (ingest at ``mb-partial``), ``False`` to decline (skip).
         """  # pragma: no cover
 
     def confirm_shortened_name(self, original: str, proposed: str) -> str | None:
@@ -1488,6 +1513,10 @@ def run(
 
     mediums = release.medium_list
 
+    # accepted_mismatch: set to True when the operator accepts a track-count mismatch override.
+    # Forces census_signal = CensusSignal.MISMATCH so the ingest lands at mb-partial (C-OVR).
+    accepted_mismatch: bool = False
+
     toc_matched: bool = False  # True when the medium was selected via TOC disc-ID match.
     if disc_override is not None:
         hits = [m for m in mediums if m.position == disc_override]
@@ -1502,19 +1531,53 @@ def run(
         selected_medium = mediums[0] if mediums else None
 
         if len(mediums) > 1:
-            selected_medium, selection_method = _select_medium_with_reason(
-                mediums, len(src_files), src_dir.name, track_frames=track_frames, dtitle=dtitle
-            )
-            toc_matched = selection_method == SelectionMethod.TOC
-            # When a heuristic (title or fallback) selected the medium, prompt for confirmation
-            # unless we're in dry-run mode or no UI was provided.
-            if selection_method in {SelectionMethod.TITLE, SelectionMethod.FALLBACK} and ui is not None and not dry_run:
-                release_url = f"https://musicbrainz.org/release/{release_id}"
-                confirmed = ui.confirm_disc(mediums, selected_medium, dtitle, release_url)
-                if confirmed is None:
-                    log.warning("disc_selection_aborted", release_id=release_id)
-                    raise SystemExit(1)
-                selected_medium = confirmed
+            try:
+                selected_medium, selection_method = _select_medium_with_reason(
+                    mediums, len(src_files), src_dir.name, track_frames=track_frames, dtitle=dtitle
+                )
+            except ValueError as _no_match_exc:
+                # Multi-disc no-match: no medium's track count equals n_src.
+                # Offer the operator an override via confirm_count_mismatch when interactive.
+                if ui is not None and not dry_run:
+                    n_src_val = len(src_files)
+                    # Pick the best medium: nearest track count to n_src; ties → lowest position.
+                    best_medium = min(
+                        mediums,
+                        key=lambda m: (abs(len(m.track_list) - n_src_val), m.position),
+                    )
+                    n_medium_val = len(best_medium.track_list)
+                    n_disc = len(mediums)
+                    diagnostic = (
+                        f"multi-disc release ({n_disc} media) — no medium matches {n_src_val} source file(s); "
+                        f"nearest medium is disc {best_medium.position} with {n_medium_val} track(s)"
+                    )
+                    if ui.confirm_count_mismatch(src_dir, release, best_medium, n_src_val, n_medium_val, diagnostic):
+                        selected_medium = best_medium
+                        accepted_mismatch = True
+                        k = min(n_src_val, n_medium_val)
+                        src_files = src_files[:k]
+                        log.info(
+                            "count_mismatch_override_accepted",
+                            medium_pos=best_medium.position,
+                            n_src=n_src_val,
+                            n_medium=n_medium_val,
+                            k=k,
+                        )
+                    else:
+                        raise _no_match_exc
+                else:
+                    raise _no_match_exc
+            else:
+                toc_matched = selection_method == SelectionMethod.TOC
+                # When a heuristic (title or fallback) selected the medium, prompt for confirmation
+                # unless we're in dry-run mode or no UI was provided.
+                if selection_method in {SelectionMethod.TITLE, SelectionMethod.FALLBACK} and ui is not None and not dry_run:
+                    release_url = f"https://musicbrainz.org/release/{release_id}"
+                    confirmed = ui.confirm_disc(mediums, selected_medium, dtitle, release_url)
+                    if confirmed is None:
+                        log.warning("disc_selection_aborted", release_id=release_id)
+                        raise SystemExit(1)
+                    selected_medium = confirmed
 
     if selected_medium is None:
         raise ValueError(f"release '{release.title}' has no mediums")
@@ -1549,13 +1612,50 @@ def run(
     ]
     log.info("release_tracks", count=len(copy_subset), disc=medium_pos)
 
-    # Track-count mismatch check uses the copy-subset count (selected medium only), not the
-    # all-media count, so the error message and guard remain scoped to the actioned medium.
-    if len(src_files) != len(copy_subset):
-        raise RuntimeError(
-            f"track count mismatch for release '{release.title}': "
-            f"{len(src_files)} source file(s) but {len(copy_subset)} track(s) on disc {medium_pos}"
-        )
+    # Track-count mismatch gate (C-OVR).
+    # When interactive (ui is not None and not dry_run), offer the operator an override that ingests
+    # the positionally-aligned min(n_src, n_medium) tracks at mb-partial.  Under automation
+    # (ui is None or dry_run) the original hard-fail is preserved (non-interactive contract).
+    if len(src_files) != len(copy_subset) and not accepted_mismatch:
+        if ui is not None and not dry_run:
+            n_src_val = len(src_files)
+            n_medium_val = len(copy_subset)
+            n_disc = len(mediums)
+            if n_disc > 1:
+                diagnostic = (
+                    f"single-medium count mismatch on disc {medium_pos} of {n_disc} — "
+                    f"{n_src_val} source file(s) vs {n_medium_val} track(s) on this medium"
+                )
+            else:
+                diagnostic = (
+                    f"edition/pressing mismatch — {n_src_val} source file(s) vs {n_medium_val} track(s) on the MB release"
+                )
+            if ui.confirm_count_mismatch(src_dir, release, selected_medium, n_src_val, n_medium_val, diagnostic):
+                accepted_mismatch = True
+                k = min(n_src_val, n_medium_val)
+                src_files = src_files[:k]
+                copy_subset = copy_subset[:k]
+                log.info(
+                    "count_mismatch_override_accepted",
+                    medium_pos=medium_pos,
+                    n_src=n_src_val,
+                    n_medium=n_medium_val,
+                    k=k,
+                )
+            else:
+                raise RuntimeError(
+                    f"track count mismatch for release '{release.title}': "
+                    f"{n_src_val} source file(s) but {n_medium_val} track(s) on disc {medium_pos}"
+                )
+        else:
+            raise RuntimeError(
+                f"track count mismatch for release '{release.title}': "
+                f"{len(src_files)} source file(s) but {len(copy_subset)} track(s) on disc {medium_pos}"
+            )
+    elif accepted_mismatch:
+        # Multi-disc no-match path already truncated src_files; truncate copy_subset to match.
+        k = len(src_files)
+        copy_subset = copy_subset[:k]
 
     # Duration pre-flight: warn when any source file's duration deviates from the corresponding
     # MB track length by more than 10 s.  Skipped in dry-run mode to preserve non-interactive
@@ -1717,6 +1817,8 @@ def run(
     # annotation_tier written to the provenance sidecar inside _copy_tag_verify_journal_pass.
     #
     # Evidence hierarchy (strongest first):
+    #   0. Accepted count-mismatch override (C-OVR) — operator accepted a partial ingest;
+    #      forced to MISMATCH regardless of other evidence, yielding mb-partial tier.
     #   1. TOC disc-ID match — hardware-level identity, equivalent to embedded MBID.
     #      Multi-disc: always promoted (set by _select_medium_with_reason above).
     #      Single-disc: promoted only when origin_source == "whipper" (C-WHIP trust anchor);
@@ -1724,10 +1826,11 @@ def run(
     #   2. Embedded recording MBIDs in source files that match the selected medium's track list.
     #   3. Default: search-resolved (user supplied a release_id; no stronger identity evidence).
     #
-    # NOTE: track/structure mismatch (mb-partial) and no-MB (source-tags-only) are not reachable
-    # from run() — the former raises RuntimeError before this point; the latter requires no
-    # release_id at all.  Both are handled by classify_annotation_tier for completeness.
-    if toc_matched:
+    # NOTE: no-MB (source-tags-only) is not reachable from run() — it requires no release_id.
+    # mb-partial is now reachable via the accepted_mismatch path (C-OVR).
+    if accepted_mismatch:
+        census_signal = CensusSignal.MISMATCH
+    elif toc_matched:
         census_signal = CensusSignal.EMBEDDED_MBID
     else:
         selected_medium_track_ids: set[str] = {t.recording.id for t in selected_medium.track_list}

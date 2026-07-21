@@ -1454,6 +1454,10 @@ class TestDiscover:
                 """Always accept the proposed disc."""
                 return proposed
 
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
+
             def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
                 """Always accept the proposed shortened name."""
                 return proposed
@@ -2623,6 +2627,156 @@ class TestTerminalDiscoverUIConfirmShortenedName:
 
 
 # ---------------------------------------------------------------------------
+# TerminalDiscoverUI.confirm_count_mismatch
+# ---------------------------------------------------------------------------
+
+
+def _make_mismatch_medium(position: int = 1, n_tracks: int = 3) -> MBMedium:
+    """Build a minimal MBMedium for confirm_count_mismatch tests.
+
+    :param position: Disc position (1-based).
+    :param n_tracks: Number of tracks on the medium.
+    :returns: An :class:`~music_annotator.models.MBMedium` instance.
+    """
+    from music_annotator.models import JSON  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+    tracks: list[JSON] = [
+        {"id": f"trk-{i}", "position": i, "recording": {"id": f"rec-{i}", "title": f"Track {i}", "artist-credit": []}}
+        for i in range(1, n_tracks + 1)
+    ]
+    return MBMedium.model_validate({"position": position, "format": "CD", "track-list": tracks})
+
+
+def _make_mismatch_release(n_tracks: int = 3) -> MBRelease:
+    """Build a minimal MBRelease for confirm_count_mismatch tests.
+
+    :param n_tracks: Number of tracks on the single medium.
+    :returns: An :class:`~music_annotator.models.MBRelease` instance.
+    """
+    from music_annotator.models import JSON  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+    tracks: list[JSON] = [
+        {"id": f"trk-{i}", "position": i, "recording": {"id": f"rec-{i}", "title": f"Track {i}", "artist-credit": []}}
+        for i in range(1, n_tracks + 1)
+    ]
+    return MBRelease.model_validate(
+        {
+            "id": "rel-mismatch",
+            "title": "Mismatch Album",
+            "date": "2000",
+            "status": "Official",
+            "barcode": "",
+            "artist-credit": [],
+            "release-group": {"id": "rg-1", "primary-type": "Album", "first-release-date": "2000"},
+            "label-info-list": [],
+            "text-representation": {"script": "Latn", "language": "eng"},
+            "medium-list": [{"position": 1, "format": "CD", "track-list": tracks}],
+        }
+    )
+
+
+class TestTerminalDiscoverUIConfirmCountMismatch:
+    """Tests for TerminalDiscoverUI.confirm_count_mismatch.
+
+    KATs: test_confirm_count_mismatch_terminal_accept, test_confirm_count_mismatch_terminal_decline.
+    """
+
+    def _ui(self) -> TerminalDiscoverUI:
+        """Return a fresh TerminalDiscoverUI instance.
+
+        :returns: A :class:`~music_annotator._discover.TerminalDiscoverUI` instance.
+        """
+        return TerminalDiscoverUI()
+
+    def test_confirm_count_mismatch_terminal_accept(self, mocker: MockerFixture) -> None:
+        """Entering 'y' returns True (accept the mismatch override).
+
+        KAT: test_confirm_count_mismatch_terminal_accept.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="y")
+        mocker.patch("music_annotator._discover._console.print")
+        release = _make_mismatch_release(n_tracks=3)
+        medium = _make_mismatch_medium(position=1, n_tracks=3)
+        result = self._ui().confirm_count_mismatch(Path("/src/album"), release, medium, 2, 3, "edition mismatch")
+        assert result is True
+
+    def test_confirm_count_mismatch_terminal_yes_accepts(self, mocker: MockerFixture) -> None:
+        """Entering 'yes' also returns True.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="yes")
+        mocker.patch("music_annotator._discover._console.print")
+        release = _make_mismatch_release(n_tracks=3)
+        medium = _make_mismatch_medium(position=1, n_tracks=3)
+        result = self._ui().confirm_count_mismatch(Path("/src/album"), release, medium, 2, 3, "edition mismatch")
+        assert result is True
+
+    def test_confirm_count_mismatch_terminal_decline(self, mocker: MockerFixture) -> None:
+        """Entering 'n' returns False (decline the mismatch override).
+
+        KAT: test_confirm_count_mismatch_terminal_decline.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="n")
+        mocker.patch("music_annotator._discover._console.print")
+        release = _make_mismatch_release(n_tracks=3)
+        medium = _make_mismatch_medium(position=1, n_tracks=3)
+        result = self._ui().confirm_count_mismatch(Path("/src/album"), release, medium, 2, 3, "edition mismatch")
+        assert result is False
+
+    def test_confirm_count_mismatch_terminal_no_declines(self, mocker: MockerFixture) -> None:
+        """Entering 'no' returns False.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="no")
+        mocker.patch("music_annotator._discover._console.print")
+        release = _make_mismatch_release(n_tracks=3)
+        medium = _make_mismatch_medium(position=1, n_tracks=3)
+        result = self._ui().confirm_count_mismatch(Path("/src/album"), release, medium, 2, 3, "edition mismatch")
+        assert result is False
+
+    def test_confirm_count_mismatch_terminal_skip_declines(self, mocker: MockerFixture) -> None:
+        """Entering 's' or 'skip' returns False.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="s")
+        mocker.patch("music_annotator._discover._console.print")
+        release = _make_mismatch_release(n_tracks=3)
+        medium = _make_mismatch_medium(position=1, n_tracks=3)
+        result = self._ui().confirm_count_mismatch(Path("/src/album"), release, medium, 2, 3, "edition mismatch")
+        assert result is False
+
+    def test_confirm_count_mismatch_terminal_invalid_reprompts(self, mocker: MockerFixture) -> None:
+        """Invalid input triggers a re-prompt; subsequent 'y' is accepted.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", side_effect=["x", "y"])
+        mocker.patch("music_annotator._discover._console.print")
+        release = _make_mismatch_release(n_tracks=3)
+        medium = _make_mismatch_medium(position=1, n_tracks=3)
+        result = self._ui().confirm_count_mismatch(Path("/src/album"), release, medium, 2, 3, "edition mismatch")
+        assert result is True
+
+    def test_confirm_count_mismatch_terminal_none_medium(self, mocker: MockerFixture) -> None:
+        """When selected_medium is None (multi-disc no-match path), the prompt renders without crashing.
+
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("builtins.input", return_value="n")
+        mocker.patch("music_annotator._discover._console.print")
+        release = _make_mismatch_release(n_tracks=3)
+        result = self._ui().confirm_count_mismatch(Path("/src/album"), release, None, 5, 0, "no medium matched")
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
 # _build_journal_release_ids
 # ---------------------------------------------------------------------------
 
@@ -2824,6 +2978,10 @@ class TestDiscoverJournalIntegration:
             def confirm_disc(self, *_: object) -> None:  # pragma: no cover
                 """Not called in this test."""
 
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
+
             def confirm_shortened_name(self, *_: object) -> None:  # pragma: no cover
                 """Not called in this test."""
 
@@ -2870,6 +3028,10 @@ class TestDiscoverJournalIntegration:
 
             def confirm_disc(self, *_: object) -> None:  # pragma: no cover
                 """Not called in this test."""
+
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
 
             def confirm_shortened_name(self, *_: object) -> None:  # pragma: no cover
                 """Not called in this test."""
@@ -2932,6 +3094,10 @@ class TestDiscoverJournalIntegration:
 
             def confirm_disc(self, *_: object) -> None:  # pragma: no cover
                 """Not called in this test."""
+
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
 
             def confirm_shortened_name(self, *_: object) -> None:  # pragma: no cover
                 """Not called in this test."""

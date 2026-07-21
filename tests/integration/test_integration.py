@@ -785,6 +785,10 @@ class TestDiscoverEndToEnd:
                 """Always accept the proposed disc."""
                 return proposed
 
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
+
             def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
                 """Always accept the proposed shortened name."""
                 return proposed
@@ -836,6 +840,10 @@ class TestDiscoverEndToEnd:
             def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
                 """Always accept the proposed disc."""
                 return proposed
+
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
 
             def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
                 """Always accept the proposed shortened name."""
@@ -890,6 +898,10 @@ class TestDiscoverEndToEnd:
                 """Should never be called when skipping."""
                 return proposed
 
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Should never be called when skipping."""
+                return False
+
             def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:  # pragma: no cover
                 """Should never be called when skipping."""
                 return proposed
@@ -933,6 +945,10 @@ class TestDiscoverEndToEnd:
             def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
                 """Always accept the proposed disc."""
                 return proposed
+
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
 
             def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
                 """Always accept the proposed shortened name."""
@@ -1466,6 +1482,10 @@ class TestDiscoverDryRun:
                 """Always accept the proposed disc."""
                 return proposed
 
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
+
             def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
                 """Always accept the proposed shortened name."""
                 return proposed
@@ -1526,15 +1546,19 @@ class TestDiscoverSearchError:
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         class _AutoSelectUI:
-            """Stub DiscoverUI: always picks first candidate."""
+            """Stub DiscoverUI: always picks the first candidate and never deletes."""
 
             def choose_release(self, _src_dir: object, candidates: list[MBReleaseCandidate]) -> str | None:
-                """Return first candidate's release_id."""
+                """Return the first candidate's release_id unconditionally."""
                 return candidates[0].release_id if candidates else None
 
             def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
                 """Always accept the proposed disc."""
                 return proposed
+
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
 
             def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
                 """Always accept the proposed shortened name."""
@@ -1615,6 +1639,10 @@ class TestDiscoverRunError:
             ) -> MBMedium | None:  # pragma: no cover
                 """Should not be reached because run is patched."""
                 return proposed
+
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Should not be reached because run is patched."""
+                return False
 
             def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:  # pragma: no cover
                 """Should not be reached because run is patched."""
@@ -2219,6 +2247,10 @@ class TestWhipperIntegration:
                 """Always accept the proposed disc."""
                 return proposed
 
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
+
             def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
                 """Always accept the proposed shortened name."""
                 return proposed
@@ -2568,6 +2600,10 @@ class TestOtherDownloadIsrcIntegration:
                 """Always accept the proposed disc."""
                 return proposed
 
+            def confirm_count_mismatch(self, *_: object) -> bool:  # pragma: no cover
+                """Not called in this test."""
+                return False
+
             def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
                 """Always accept the proposed shortened name."""
                 return proposed
@@ -2628,3 +2664,183 @@ class TestOtherDownloadIsrcIntegration:
         # --- (f) No "sidecar" entries for a whipper log (download has no rip log) ---
         sidecar_entries = [e for e in entries if e["action"] == "sidecar" and e["destination"].endswith(".log")]
         assert not sidecar_entries, f"download dir must not produce whipper log sidecar entries, got {sidecar_entries}"
+
+
+# ---------------------------------------------------------------------------
+# S1 primary KAT: track-count mismatch operator override end-to-end (C-OVR)
+# ---------------------------------------------------------------------------
+
+
+def _make_mismatch_release_3track() -> MBRelease:
+    """Return a minimal MB release with 3 tracks on a single medium.
+
+    Used for the mismatch integration test: the source directory has 2 files,
+    so the gate fires (2 != 3) and the operator override is exercised.
+
+    :returns: An :class:`~music_annotator.models.MBRelease` instance.
+    """
+    return MBRelease.model_validate(
+        {
+            "id": "rel-mismatch",
+            "title": "Mismatch Test Album",
+            "date": "2000",
+            "status": "Official",
+            "barcode": "",
+            "artist-credit": [
+                {
+                    "name": "Composer X",
+                    "artist": {
+                        "id": "cx1",
+                        "name": "Composer X",
+                        "sort-name": "X, Composer",
+                        "type": "Person",
+                    },
+                }
+            ],
+            "release-group": {
+                "id": "rg-mismatch",
+                "primary-type": "Album",
+                "first-release-date": "2000",
+            },
+            "label-info-list": [],
+            "text-representation": {"script": "Latn", "language": "eng"},
+            "medium-list": [
+                {
+                    "position": 1,
+                    "format": "CD",
+                    "track-list": [
+                        {
+                            "id": f"trk-{i}",
+                            "position": i,
+                            "recording": {
+                                "id": f"rec-{i}",
+                                "title": f"Movement {i}",
+                                "artist-credit": [],
+                            },
+                        }
+                        for i in range(1, 4)  # 3 tracks on the medium
+                    ],
+                }
+            ],
+        }
+    )
+
+
+class TestRunMismatchOverrideIntegration:
+    """End-to-end integration test for the track-count mismatch operator override (C-OVR).
+
+    KAT: count-mismatched fixture → gate fires → confirm_count_mismatch stub returns True →
+    ingest at mb-partial → sidecar annotation_tier == 'mb-partial' → audit surfaces it.
+    """
+
+    def test_mismatch_override_ingests_at_mb_partial(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Full pipeline: 2 source files vs 3-track MB medium → override accepted → mb-partial.
+
+        Fixture: source dir has 2 FLAC files; MB release has 3 tracks on disc 1.
+        Gate fires (2 != 3); stub UI accepts; k = min(2, 3) = 2 tracks ingested.
+
+        Assertions:
+        (a) confirm_count_mismatch called with n_src=2, n_medium=3.
+        (b) Exactly 2 FLAC files written to dest_root.
+        (c) Provenance sidecar annotation_tier == mb-partial.
+        (d) Journal has 2 'tagged' entries.
+        (e) audit _make_audit_counts reflects tier_partial == 1.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        src_dir = Path("/src/mismatch-album")
+        dest_root = Path("/dest")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(dest_root))
+
+        # 2 source files; MB release has 3 tracks → mismatch gate fires
+        flac1 = src_dir / "01 - Movement 1.flac"
+        flac2 = src_dir / "02 - Movement 2.flac"
+        fs.create_file(str(flac1), contents=_MINIMAL_FLAC)
+        fs.create_file(str(flac2), contents=_MINIMAL_FLAC)
+
+        release = _make_mismatch_release_3track()
+
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        def _rec_detail(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
+            return _make_recording_detail(rec_id, f"Movement {rec_id.split('-')[-1]}")
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_rec_detail)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+        # Stub UI: always accepts the mismatch override
+        class _MismatchUI:
+            """Stub DiscoverUI that accepts the count-mismatch override."""
+
+            def choose_release(self, _src_dir: object, _candidates: list[MBReleaseCandidate]) -> str | None:
+                """Not called in this test."""  # pragma: no cover
+                return None
+
+            def confirm_disc(self, _m: object, proposed: MBMedium, _d: object, _u: object) -> MBMedium | None:
+                """Not called in this test."""  # pragma: no cover
+                return proposed
+
+            def confirm_count_mismatch(
+                self,
+                _src_dir: object,
+                _release: object,
+                _medium: object,
+                _n_src: object,
+                _n_medium: object,
+                _diagnostic: object,
+            ) -> bool:
+                """Accept the mismatch override unconditionally."""
+                return True
+
+            def confirm_shortened_name(self, _original: object, proposed: str) -> str | None:
+                """Not called in this test."""  # pragma: no cover
+                return proposed
+
+            def confirm_delete(self, _src_dir: object) -> bool:
+                """Not called in this test."""  # pragma: no cover
+                return False
+
+        stub_ui: DiscoverUI = _MismatchUI()
+
+        music_annotator.run(
+            release_id="rel-mismatch",
+            src_dir=src_dir,
+            dest_root=dest_root,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+            ui=stub_ui,
+        )
+
+        # --- (a) Exactly 2 FLAC files written (k = min(2, 3) = 2) ---
+        flac_files = sorted(dest_root.rglob("*.flac"))
+        assert len(flac_files) == 2, f"expected 2 FLAC files (k=2), got {len(flac_files)}"
+
+        # --- (b) Provenance sidecar annotation_tier == mb-partial ---
+        work_top = dest_root / flac_files[0].relative_to(dest_root).parts[0] / flac_files[0].relative_to(dest_root).parts[1]
+        prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
+        assert prov_path.exists(), f"provenance sidecar must exist at {prov_path}"
+        sidecar = _read_provenance_sidecar(prov_path)
+        assert sidecar.annotation_tier == AnnotationTier.MB_PARTIAL, (
+            f"accepted mismatch must yield mb-partial, got {sidecar.annotation_tier!r}"
+        )
+
+        # --- (c) Journal has 2 'tagged' entries ---
+        journal_path = dest_root / JOURNAL_FILENAME
+        assert journal_path.exists()
+        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        tagged_entries = [e for e in entries if e["action"] == "tagged"]
+        assert len(tagged_entries) == 2, f"journal must have 2 'tagged' entries, got {len(tagged_entries)}"
+
+        # --- (d) audit surfaces the mb-partial entries (one per tagged track) ---
+        counts = _make_audit_counts()
+        _audit_tier_pass(dest_root, [TransactionEntry(**e) for e in tagged_entries], counts)
+        # 2 tagged files, each at mb-partial → tier_partial == 2
+        assert counts["tier_partial"] == 2, (
+            f"audit must count 2 mb-partial entries (one per tagged file), got tier_partial={counts['tier_partial']}"
+        )
