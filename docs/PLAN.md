@@ -221,24 +221,188 @@ scoring), possibly a destructive-HALT if it invalidates C-TIER's `mb-search-reso
 
 ## Cross-session contracts
 
-### C-AR — AccurateRip provenance *(to be frozen at S1)*
+### C-AR — AccurateRip provenance *(FROZEN at S1 — resolved by @architect juncture fork)*
 
-The per-track + per-release AccurateRip provenance contract, mirroring whipper's `WhipperLogger` schema.
-**Flavour: compiler-enforced** (Pydantic models + tag-key mapping) at the per-track/`TrackTags`/`TransactionEntry`
-and per-release/`ProvenanceSidecar` surfaces; **test-enforced** at the mutagen round-trip (KAT pins tag survival).
-- **Per-track (tags):** `AccurateRipTrackResult` (v1+v2: version, result-enum, confidence, local/remote CRC) +
-  test/copy CRC + status, on `TrackTags` and `TransactionEntry` in the reserved 4th-dim slot.
-- **Per-release (sidecar):** `AccurateRipSummary` (mb_disc_id, cddb_disc_id, log_sha256, accurately_ripped,
-  in_ar_database, summary_text) on `ProvenanceSidecar`, monotonic-upgrade.
-- **Defined-in:** S1 (`models.py`, `_tagger.py`).  **Consumed-by:** S2 (parse target), S4 (populate), S5 (audit
-  surfacing).  *The @architect fork writes the resolved field shapes into this subsection at S1 execution time.*
+The per-track + per-release AccurateRip provenance contract, mirroring whipper's `WhipperLogger` schema
+(`whipper/result/logger.py`, read 1:1 at freeze time).  **Flavour: compiler-enforced** (Pydantic models +
+tag-key mapping) at the per-track/`TrackTags`/`TransactionEntry` and per-release/`ProvenanceSidecar` surfaces;
+**test-enforced** at the mutagen round-trip (KAT pins tag survival).
 
-### C-WHIP — whipper source signature *(to be frozen at S1)*
+#### Load-bearing resolution — the flat-`str` round-trip constraint (read before implementing)
 
-What makes a source dir a whipper rip: whipper native `.log` present, `00 - disc info.yaml` present, `.0x…`
-freedb-CRC dir-name suffix.  **Flavour: prose-enforced** (recognition heuristic) + **test-enforced** (KAT per
-signature).  **Defined-in:** S1 (named), S4 (recogniser implemented).  **Consumed-by:** S2 (parse gating), S3
-(single-disc-promotion trust anchor), S4 (discovery routing).
+The tag round-trip layer is a **flat `dict[str, str]`**, not a nested-object channel.  `_read_tags_flac`
+returns `{KEY.upper(): first_value}`; `_read_tags_mp3` inverts `_MP3_TXXX_MAP`; `_verify_copy` asserts
+`_read_tags_*(dest) == tags.to_file_dict()`; `_tags_from_file_dict` (enrich/repath) maps each lowercase key back
+to a `TrackTags` field.  **Consequence:** the per-track AccurateRip data carried *on the tags* cannot be a nested
+Pydantic model — it must be **flat scalar `str` fields** on `TrackTags`/`TransactionEntry` (exactly like the
+existing `audio_hash`/`chromaprint_fp`/`acoustid_id` triple in the same 4th-dim slot).  The **structured nested
+models** (`AccurateRipResult`, `AccurateRipTrackResult`, `AccurateRipTrack`) exist for the S2 parse product and
+typed manipulation; S4 **projects** their content onto the flat tag fields (write) and reconstructs where needed.
+This is not a departure from the PLAN sketch — it *is* "per-track data lands in the tags, round-trips through
+mutagen, verified by `_verify_copy`" made concrete against the actual round-trip machinery.
+
+#### 1. Structured models (`models.py`) — S2 parse product + typed surface
+
+```python
+class AccurateRipResult(StrEnum):
+    """Per-version AccurateRip verification outcome (whipper WhipperLogger.trackLog `Result`)."""
+    EXACT_MATCH   = "exact-match"    # whipper "Found, exact match"
+    NO_EXACT_MATCH = "no-exact-match" # whipper "Found, NO exact match"
+    NOT_PRESENT   = "not-present"    # whipper "Track not present in AccurateRip database"
+    # match/case consumers add `case _: # pragma: no cover` per house style.
+
+class AccurateRipTrackResult(BaseModel):
+    """One AccurateRip DB generation (v1 or v2) for one track."""
+    version: str = ""                        # "v1" | "v2"
+    result: AccurateRipResult = AccurateRipResult.NOT_PRESENT
+    confidence: int = 0                      # whipper DBConfidence; 0 when not-present
+    local_crc: str = ""                      # whipper "Local CRC", uppercase hex ("" when not-present)
+    remote_crc: str = ""                     # whipper "Remote CRC", uppercase hex ("" when not-present)
+
+class AccurateRipTrack(BaseModel):
+    """Per-track AccurateRip container: both DB generations + rip CRCs + status (S2 parse product)."""
+    v1: AccurateRipTrackResult = Field(default_factory=AccurateRipTrackResult)
+    v2: AccurateRipTrackResult = Field(default_factory=AccurateRipTrackResult)
+    test_crc: str = ""                       # whipper "Test CRC" (%08X), uppercase hex
+    copy_crc: str = ""                       # whipper "Copy CRC" (%08X), uppercase hex
+    status: str = ""                         # whipper "Status": "Copy OK" | "Error, CRC mismatch" |
+                                             #   "Track not ripped (skipped)"
+
+class AccurateRipSummary(BaseModel):
+    """Per-release AccurateRip summary (whipper "CD metadata" + "Conclusive status report")."""
+    mb_disc_id: str = ""                     # whipper "MusicBrainz Disc ID"
+    cddb_disc_id: str = ""                   # whipper "CDDB Disc ID"
+    log_sha256: str = ""                     # trailing "SHA-256 hash:" line (uppercase hex)
+    accurately_ripped: int = 0               # whipper _accuratelyRipped counter
+    in_ar_database: int = 0                  # whipper _inARDatabase counter
+    summary_text: str = ""                   # whipper "AccurateRip summary" message line
+```
+**Over-specified (Category-A):** `test_crc`, `copy_crc`, `status`, `local_crc`, `remote_crc` are carried now even
+though S2–S5 don't all consume them — adding a field later re-freezes C-AR (a tag-schema migration through the
+confirmation-provenance chain).  The `JSON` alias appears only at the S2 YAML-parse boundary, never in these
+models.
+
+#### 2. Flat per-track fields on `TrackTags` and `TransactionEntry` (the tag round-trip surface)
+
+Landing **inside the existing `# --- archival identity (extensible: 4th dim slots in here) ---` slot**
+(models.py:1335 on `TrackTags`, models.py:1643 on `TransactionEntry`), appended after
+`acoustid_id`/`chromaprint_fp` — the append-without-restructure guarantee.  All fields are `str` (default `""`),
+so `to_file_dict()` emits them only when non-empty and `_read_tags_*` round-trips them unchanged.  Field names
+are the lowercased tag keys (so `_tags_from_file_dict` reconstructs them as named fields, not extras):
+
+| `TrackTags`/`TransactionEntry` field | FLAC Vorbis key / MP3 TXXX key (identical) | MP3 TXXX desc | serialized as |
+|---|---|---|---|
+| `accuraterip_v1_result`      | `ACCURATERIP_V1_RESULT`      | `ACCURATERIP_V1_RESULT`      | `str` (enum value: `exact-match`/`no-exact-match`/`not-present`) |
+| `accuraterip_v1_confidence`  | `ACCURATERIP_V1_CONFIDENCE`  | `ACCURATERIP_V1_CONFIDENCE`  | `str` (decimal int; `""` when 0/absent) |
+| `accuraterip_v1_local_crc`   | `ACCURATERIP_V1_LOCAL_CRC`   | `ACCURATERIP_V1_LOCAL_CRC`   | `str` (uppercase hex) |
+| `accuraterip_v1_remote_crc`  | `ACCURATERIP_V1_REMOTE_CRC`  | `ACCURATERIP_V1_REMOTE_CRC`  | `str` (uppercase hex) |
+| `accuraterip_v2_result`      | `ACCURATERIP_V2_RESULT`      | `ACCURATERIP_V2_RESULT`      | `str` (enum value) |
+| `accuraterip_v2_confidence`  | `ACCURATERIP_V2_CONFIDENCE`  | `ACCURATERIP_V2_CONFIDENCE`  | `str` (decimal int; `""` when 0/absent) |
+| `accuraterip_v2_local_crc`   | `ACCURATERIP_V2_LOCAL_CRC`   | `ACCURATERIP_V2_LOCAL_CRC`   | `str` (uppercase hex) |
+| `accuraterip_v2_remote_crc`  | `ACCURATERIP_V2_REMOTE_CRC`  | `ACCURATERIP_V2_REMOTE_CRC`  | `str` (uppercase hex) |
+| `accuraterip_test_crc`       | `ACCURATERIP_TEST_CRC`       | `ACCURATERIP_TEST_CRC`       | `str` (uppercase hex) |
+| `accuraterip_copy_crc`       | `ACCURATERIP_COPY_CRC`       | `ACCURATERIP_COPY_CRC`       | `str` (uppercase hex) |
+| `accuraterip_status`         | `ACCURATERIP_STATUS`         | `ACCURATERIP_STATUS`         | `str` (whipper Status text verbatim) |
+
+**All tag values are `str`.** `confidence` is an `int` in `AccurateRipTrackResult` but serializes to a **decimal
+string** in the tag layer (empty string when 0/absent, so `to_file_dict()`'s non-empty filter drops it and the
+round-trip stays exact — do not emit `"0"`).  Wiring: add each key to `_MP3_TXXX_MAP` with desc == key (the
+project's own-namespace convention, as with `AUDIO_HASH`/`CHROMAPRINT_FP`); FLAC needs no table (it writes every
+`to_file_dict()` key lowercased).  A convenience projection helper (`AccurateRipTrack.to_tag_fields() ->
+dict[str, str]` and inverse) may live on the model or in `_tagger.py` — implementation choice, not contract; the
+contract is the field names, keys, and `str`-serialization above.
+
+**Tag-key naming is whipper-faithful, Picard alignment deferred (R5-R6c owns any rename).**  These keys are an
+own-namespace choice; R6c may map/alias them to Picard conventions later.  Recorded here so R6c can find them.
+
+#### 3. Per-release summary on `ProvenanceSidecar` (YAML sidecar, not tag round-trip)
+
+Add `accuraterip_summary: AccurateRipSummary = Field(default_factory=AccurateRipSummary)` to `ProvenanceSidecar`.
+Serialized in the `freedb_disc_N.yaml` / `music_annotator_provenance.yaml` sidecar (YAML — nested model is fine
+here; the flat-`str` constraint is a *tag-layer* constraint only).
+
+**Monotonic-upgrade rule** (extends the existing `ProvenanceSidecar` carve-out): a re-resolve may **enrich** the
+summary but must **never silently drop a present one**.  Concretely, when merging a new summary into an existing
+sidecar, treat a present `log_sha256` (or any non-empty summary) as authoritative: an incoming **empty**
+`AccurateRipSummary` must not overwrite a populated one (the S1 KAT `test_accuraterip_summary_monotonic` pins
+this).  Field-level enrichment (filling a previously-empty field) is permitted; wholesale replacement of a
+populated summary with an empty one is forbidden.  This mirrors the `annotation_tier` upward-only rule already on
+the model.
+
+#### Surfaces & pins
+
+- **Defined-in:** S1 (`models.py`: the four models + flat fields + sidecar field; `_tagger.py`: `_MP3_TXXX_MAP`
+  additions).  **Consumed-by:** S2 (parse target — produces `AccurateRipTrack` + `AccurateRipSummary`), S4
+  (projects per-track onto `TransactionEntry` flat fields; sets `accuraterip_summary`), S5 (audit surfacing reads
+  summary + per-track status).
+- **KATs that pin C-AR (S1):** (a) `test_accuraterip_track_tag_roundtrip` — a `TrackTags` with populated v1
+  exact-match + v2 no-match flat fields; `apply_tags_flac` **and** `apply_tags_mp3`, read back via the real
+  mutagen path (not a mock), assert `_read_tags_*(dest) == tags.to_file_dict()` including the AR keys.  (b)
+  `test_accuraterip_summary_monotonic` — a present `accuraterip_summary` survives a later empty-summary merge.
+  (c) `test_accuraterip_result_enum_exhaustive` — the three `AccurateRipResult` values round-trip (value ↔ enum).
+  Coverage (`fail_under = 100`) additionally requires the per-branch KATs named in PLAN R-4 (each Result state,
+  v1/v2 present/absent combinations) — those land with the S2 parser, not S1.
+
+### C-WHIP — whipper source signature *(FROZEN at S1 — resolved by @architect juncture fork)*
+
+What makes a source dir a whipper rip.  **Flavour: prose-enforced** (recognition heuristic) + **test-enforced**
+(KAT per signature).  Recognition is implemented in S4 (`_discover.py`, a helper alongside `parse_dir_hint`);
+S1 freezes the definition so S2/S3/S4 consume a stable contract.
+
+#### 1. Recognition heuristic
+
+A source directory is a **whipper rip** when **either** of the two strong signatures is present (`any`, not
+`all` — real dirs may lack one):
+
+1. **Whipper native log present** — a `*.log` file whose body ends with a trailing `SHA-256 hash: <UPPERHEX>`
+   line (the self-attesting hash `WhipperLogger.logRip` appends).  The `.log` extension **plus** the trailing
+   SHA-256 line together constitute the strong whipper-log signature; the SHA-256 line distinguishes a whipper
+   native log from an arbitrary `.log` (e.g. an EAC or foreign-ripper log).  *(S2 verifies this hash against the
+   recomputed body hash; a mismatch is a warning, not a rejection — the dir is still whipper.)*
+2. **`00 - disc info.yaml` present** — the existing `_DISC_INFO_FILENAME` (`_pipeline_io.py:54`), already known to
+   the codebase and already in `_EXCLUDED_FILENAMES`.
+
+A **weak corroborating** signal (never sufficient alone — `parse_dir_hint` already strips it as search noise via
+`_FREEDB_HEX_SUFFIX_RE`, `_discover.py:46`):
+
+3. **`.0x…` freedb-CRC dir-name suffix** — e.g. `Album Name.0xe212b212`.  Corroborates but does not by itself
+   establish a whipper rip (other freedb-era rippers use it too); it raises confidence when combined with (1) or
+   (2) but a bare suffix with neither strong signature is **not** recognized as whipper.
+
+**Rationale for the `SHA-256`-line qualifier on signature (1):** S2 defers the EAC-logger-plugin variant
+(whipper's `eac` logger) out of scope and additive-reshards if encountered.  The native-logger trailing-hash line
+is the cheapest robust discriminator between the native log (in scope) and any other `.log` in the tree, and it
+reuses the same artifact S2 already parses — no new probe.
+
+#### 2. `origin_source` value
+
+On recognition, the discovery path sets `ProvenanceSidecar.origin_source = "whipper"` (and
+`TransactionEntry`-adjacent provenance follows the existing `origin_time`/`origin_source` idempotent-write rule:
+written once, never overwritten).  The literal string is **`"whipper"`** (lowercase, exact).  This is the trust
+anchor S3 gates its single-disc TOC→`full-mb-verified` promotion on: the promotion fires only when
+`origin_source == "whipper"` (or an equivalently-validated whipper log is present), never on a bare non-whipper
+single-disc TOC match.
+
+#### 3. KATs that pin C-WHIP (implemented S4, named here)
+
+- `test_whipper_dir_recognised` — **each strong signature independently** yields recognition → `origin_source ==
+  "whipper"`: (a) a dir with only a whipper `.log` (trailing SHA-256 line present); (b) a dir with only
+  `00 - disc info.yaml`.  Plus a negative: (c) a dir with **only** the `.0x…` suffix and neither strong signature
+  is **not** recognized (weak-signal-alone rejection); (d) a plain `.log` **without** the trailing SHA-256 line is
+  not recognized as a whipper native log.
+- `test_whipper_log_preserved_with_integrity` (S4) — the recognized log is copied with a SHA-256 integrity check
+  and a `"sidecar"` journal entry, riding the C-MOVE chain (and **not** feeding the "safe to delete source"
+  message, which derives only from verified `action == "tagged"` entries).
+
+#### Surfaces & pins
+
+- **Defined-in:** S1 (this freeze), S4 (recogniser + sidecar preservation implemented).  **Consumed-by:** S2
+  (parse gating — only parse the whipper log when the dir is recognized), S3 (single-disc-promotion trust anchor:
+  `origin_source == "whipper"`), S4 (discovery routing).
+- **Deferrals (from PLAN, restated so consumers don't widen scope):** MakeMKV is **not** whipper — C-WHIP names
+  whipper only; MakeMKV recognition is deferred (no census population).  The whipper `eac` logger variant is out
+  of scope — signature (1) is the *native* logger; an `eac`-logger dir is an additive-reshard signal, not a
+  silent widening.
 
 ### Consumed (frozen upstream — invalidation is a destructive-HALT)
 
@@ -261,7 +425,7 @@ signature).  **Defined-in:** S1 (named), S4 (recogniser implemented).  **Consume
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Add AccurateRip provenance models + tag/sidecar round-trip | pending | — | C-AR, C-WHIP |
+| 1 | Add AccurateRip provenance models + tag/sidecar round-trip | done | 92d9f7c | C-AR, C-WHIP |
 | 2 | Parse whipper log into C-AR models | pending | — | — |
 | 3 | Promote TOC-disc-ID identity to full-mb-verified | pending | — | — |
 | 4 | Wire whipper adapter into discovery + preserve sidecars | pending | — | — |
