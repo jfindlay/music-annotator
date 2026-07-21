@@ -1,230 +1,156 @@
-<!-- juncture-tier: opus -->
-<!-- sub-track: R2 (annotation-tier substrate) — ROADMAP critical-path; after J1, before R3 adapters -->
+<!-- juncture-tier: sonnet -->
+<!-- sub-track: pre-R3 (Category-A hardening) — ROADMAP critical-path; after R1-F, gates all R3 adapters -->
 
-# PLAN — R2: annotation-tier substrate
+# PLAN — pre-R3: `_parse_release_item` track-count fix
 
 ## Purpose (design intent)
 
 *(Re-read at every ◆ boundary — anti-defocus anchor.)*
 
-Build the **annotation-tier substrate**: the present-state authority that records, for every ingested
-release, *how completely it could be annotated* — so that coverage-before-quality is honored (every dir
-ingested at its best achievable tier, provisionality persisted as a first-class fact) and upgrades are
-enumerable (Act III-b re-resolves below-full entries as better data appears).  R2 freezes **C-TIER**, the
-annotation-tier contract every R3 adapter consumes, and adds an `audit` pass that enumerates provisional
-entries.  This is the Category-A substrate on the critical path: **J1 → R2 → R3 (binding adapter) → R5**.
+Repair the **search-result track-count derivation** in `_discover._parse_release_item` so that the count
+feeding C-TIER's `mb-search-resolved` classification is correct.  This is the sole remaining prerequisite
+gating every R3 adapter (R1-F, the other prerequisite, is done — commit `e7370b7`).
 
-**Annotation tier ≠ identity rung (the two-ladder distinction — do not conflate).**  The codebase already
-uses "rung" for an **archival-identity-confidence** ladder (rung 0 embedded tags → rung 1 ISRC → … → rung
-5 keyed AcoustID, in `_pipeline_io.py`/`__main__.py`): *how confidently a file matches an MB recording*.
-R2's **annotation tier** is the orthogonal axis: *how completely a release could be annotated*.  A dir can
-be high-tier / low-rung (full MB annotation, identity only from source tags) or low-tier / high-rung
-(source-tags-only ingest, but a strong AcoustID identity).  **Keep "rung" for identity; use "tier" (never
-"rung") for annotation completeness throughout R2.**  Reusing "rung" would collide with load-bearing
-existing code.
+The bug: MB **search** responses shape each medium as `track-count: N` **alongside** `track-list: []`
+(present but empty).  `_parse_release_item` reads `len(track-list)` = 0 and never consults `track-count`,
+so every search-resolved release is reported with 0 tracks.  The census script already proved the correct
+precedence in `scripts/census_original.py:_extract_track_count` (use `track-list` length only when
+non-empty; else fall back to `track-count`) — this session aligns the production path to that proven logic.
 
-**Substrate over-specification (Category-A discipline).**  C-TIER carries all five tiers — including the
-`alternate-source` tier that has **zero census population today** (R3c Discogs pruned by J1).  Carrying the
-empty tier now is deliberate: adding it later would re-freeze the contract every adapter consumes.  Same
-for the `needs-spot-check` flag on `mb-search-resolved` — it exists to make the search-only-confidence
-concern (J1) persisted and `audit`-discoverable, even though the spot-check itself lands in R3.
+**Why this gates R3, not just hygiene.**  R2 froze C-TIER with `mb-search-resolved` as the entry criterion
+for **99 of 107** clean dirs, keyed on *track-count reconciliation*.  With the bug live, that reconciliation
+compares the local file count against 0 for the entire search-resolved population — C-TIER's most-populated
+tier is behaviourally broken until this lands.  This is a Category-A fix on the critical path: **R1-F ✓ →
+pre-R3 (this) → R3b → R5**.
+
+**No design surface.**  The correct algorithm exists and is proven (census `_extract_track_count`).  This
+session is mechanical alignment plus a regression test that pins the search-result shape — not a design
+decision.  That is why `juncture-tier` opts down to `sonnet` (below).
 
 ## Verify gate
 
-R2 touches `src/` and `tests/` and is **fully gated** (unlike R0, which lived in `scripts/` outside the
-gates — this is a KAT-enforced substrate, not a deliverable-checked artifact).  `/plan-run` re-discovers
+Touches `src/` and `tests/`; fully gated (100% branch coverage, strict mypy).  `/plan-run` re-discovers
 these; stated here to document the gate:
 
 - **VERIFY_TEST**: `~/.local/bin/tox -e test` — pytest, **100% branch coverage enforced** (`fail_under =
-  100`).  Every new tier value, every audit-pass branch, every match/case arm needs an explicit test.
+  100`).  The new fallback branch (`track-list` empty → `track-count`) needs an explicit regression test,
+  or coverage fails.
 - **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` — mypy strict on `src/ tests/`, **zero errors**.  No
   `Any`, no `cast()`.
-- Full gate before any ◆ close: `~/.local/bin/tox -m analyze` (build + test + check_type + check_format +
+- Full gate before ◆ close: `~/.local/bin/tox -m analyze` (build + test + check_type + check_format +
   check_lint 10.00/10 + check_upgrade) must be green.
 
 ## Session list
 
 | # | Session | Cat | Tier | Consumes | Expected files |
 |---|---------|-----|------|----------|----------------|
-| 1 | Freeze annotation-tier vocabulary + persist `ANNOTATION_TIER` on the sidecar | A | Sonnet | C-PROV/C-MOVE, ProvenanceSidecar (models.py), PROVENANCE_FILENAME (`_pipeline_io.py`) | `src/music_annotator/models.py`, `src/music_annotator/_pipeline_io.py`, `tests/unit/test_models.py`, `tests/unit/test_pipeline.py` |
-| 2 | `audit` pass: enumerate provisional (below-full) entries + upgrade candidates | A | Sonnet | **C-TIER** (S1), `_audit.py` counter/pass structure, journal action vocabulary | `src/music_annotator/_audit.py`, `src/music_annotator/__init__.py`, `tests/unit/test_annotator.py` |
-| 3 ◆ | Wire tier assignment into the ingest/tag write path (default `mb-search-resolved`/`full`) | A | Sonnet | **C-TIER** (S1), `_tags.py`/`_tagger.py` write path, `_pipeline.py` provenance-append ordering | `src/music_annotator/_tags.py`, `src/music_annotator/_pipeline.py`, `tests/unit/test_pipeline.py`, `tests/integration/test_integration.py` |
+| 1 ◆ | Fix `_parse_release_item` empty-`track-list` fallback to `track-count` | A | Sonnet | C-TIER (`mb-search-resolved` keys on track-count), `_discover._parse_release_item`, census `_extract_track_count` (proven reference) | `src/music_annotator/_discover.py`, `tests/unit/test_discover.py` |
 
-`Cat`: A = substrate (all three — R2 is one Category-A unit split at contract-sharp boundaries: S1 freezes
-the interface S2/S3 consume).  `Tier`: Sonnet throughout — no session carries an open design surface once
-C-TIER is frozen at S1 (the one design decision, the tier vocabulary, is J1 output + this derivation, not
-an executor's call).  `◆` = sub-track-final row; **no juncture fires at R2's ◆** — R2 hands off to the R3
-adapter shards (each its own `/plan-shard`), not to an adjudication juncture.  No `@architect` inflection
-row: the substrate shape is fixed by J1 + this PLAN, so no executor faces an interface-design decision.
+`Cat`: A = substrate hardening (repairs C-TIER's search-tier denominator).  `Tier`: Sonnet — no open design
+surface; the correct algorithm is proven in the census script.  `◆` = sub-track-final row (and the only
+row).  **No juncture fires**: pre-R3 is a single-session Category-A fix; its ◆ hands off to the R3b adapter
+shard (a separate `/plan-shard`), not to an adjudication fork.  No `@architect` inflection row — there is no
+interface-design decision.
 
 ## Session detail
 
-### S1 — freeze annotation-tier vocabulary + persist `ANNOTATION_TIER`
+### S1 ◆ — fix `_parse_release_item` empty-`track-list` fallback
 
-**Deliverable.**  The C-TIER contract frozen in code: (a) the five tier identifiers as a closed vocabulary
-(a `StrEnum` or `Literal` union — an enum is preferred for match/case exhaustiveness and mypy), (b) an
-`annotation_tier: str = ""` field (defaulting to unset) plus a `needs_spot_check: bool = False` field on
-`ProvenanceSidecar` (models.py), (c) read/write support in `_read_provenance_sidecar` /
-`_write_provenance_sidecar` preserving the existing idempotent "written once, other keys preserved"
-invariant, (d) a helper that maps a census-style classification to a tier (pure, unit-testable).
+**Deliverable.**  `_parse_release_item` (`_discover.py`) derives per-medium track count using `track-list`
+length **only when the list is non-empty**, falling back to `track-count` otherwise — matching
+`scripts/census_original.py:_extract_track_count`.  The core change is the guard: `if isinstance(tl, list)
+and tl:` (was `if isinstance(tl, list):`), routing the empty-list case into the existing `else` branch that
+already reads `track-count`.  Verify the `else` still handles both the empty-list and absent-list cases
+correctly after the guard tightens.
 
-Tier vocabulary (frozen — R3 adapters and `audit` consume these exact strings):
-
-| Tier | Meaning | Entry criterion | `needs_spot_check` |
-|------|---------|-----------------|--------------------|
-| `full-mb-verified` | identity-confirmed full MB annotation | embedded MBID **or** TOC disc-ID identity match; track count reconciles | `false` |
-| `mb-search-resolved` | search-reconciled MB annotation, *lower confidence* | in-mb-clean via MB **search** (track-count reconciliation, not identity) | **`true`** until spot-checked |
-| `mb-partial` | declared track/structure mismatch tolerated | MB release identified but track/structure disagrees; mismatch recorded | `false` |
-| `alternate-source` | non-MB external identity (Discogs-style) — **reserved, empty today** | identity from external source; no MB | `false` |
-| `source-tags-only` | no MB identity; provisional minimal | ingest from embedded/source tags only | `false` |
-
-**≥1 KAT.**  `test_annotation_tier_vocabulary_roundtrips` — write each tier + `needs_spot_check` to a sidecar,
-read back, assert equality; `test_tier_classifier_maps_census_signals` — the classification→tier helper maps
-each census axis-2 signal (embedded-MBID → `full-mb-verified`, search-hit → `mb-search-resolved`, mismatch →
-`mb-partial`, not-in-mb → `source-tags-only`) to the correct tier.  (C-TIER's deliverable *is* a KAT — the
-contract is behavioural.)
+**≥1 KAT.**  `test_parse_release_item_empty_track_list_uses_track_count` — a search-shaped release dict with
+`medium-list: [{"track-count": 12, "track-list": []}]`; assert the resulting `MBReleaseCandidate.tracks ==
+12` (not 0).  Add the multi-medium case (search box set: two media each with `track-count` + empty
+`track-list`) asserting the sum.  Retain the existing tests for non-empty `track-list` (uses length) and the
+neither-present case (yields 0) — the fix must not regress them.
 
 **Subtleties.**
-- **Idempotency invariant** (existing, `ProvenanceSidecar`): fields written once, never overwritten; other
-  keys preserved.  Adding `annotation_tier` must not break this — but a *tier upgrade* (Act III-b) is a
-  legitimate overwrite.  Resolve now: `annotation_tier` is overwritable **only monotonically upward** (a
-  re-resolve may raise the tier, never silently lower it); record the design in the field docstring.  This
-  is a prose sub-contract of C-TIER.
-- **Lossless principle**: an unset/empty `annotation_tier` on an ingested entry is a *defect*, not a valid
-  state — the whole point is that provisionality is persisted, never silent.  S3 makes the write path always
-  set it; S2's audit flags any empty one.
-- **No `Any` / no `cast()`**: the tier enum + `populate_by_name` model config keep this clean.
+- **Precedence asymmetry with `_score_toc_release`** (same file, ~line 371): `_score_toc_release` already
+  prefers `track-count` first, then falls back to `track-list`.  After this fix, `_parse_release_item` and
+  `_score_toc_release` agree on the empty-list case (both consult `track-count`).  Do **not** "unify" them
+  into one helper in this session — that is a refactor with its own design surface; keep the fix surgical.
+- **The census `_extract_track_count` stays as-is.**  It lives in `scripts/` (outside the src gate) and is
+  the reference, not a shared dependency.  Do not import it into `_discover.py`; the production path owns its
+  own (now-correct) copy.  Any dedupe is an R3-era refactor, not this fix.
+- **Coverage.**  The tightened guard creates a newly-reachable `else` for the empty-list-present case.  The
+  KAT must exercise it or `fail_under = 100` breaks.
 
-### S2 — `audit` pass: enumerate provisional entries + upgrade candidates
-
-**Deliverable.**  A new `audit` pass (following the existing `_make_audit_counts` / `_audit_*` multi-pass
-structure in `_audit.py`) that reads `annotation_tier` from each entry's sidecar and enumerates: count per
-tier, the below-`full-mb-verified` (provisional) population, and the `needs_spot_check` population.  New
-counter keys in `_AUDIT_COUNT_KEYS` (e.g. `tier_full`, `tier_search`, `tier_partial`, `tier_alt`,
-`tier_source_only`, `provisional_total`, `needs_spot_check`).  Logs one event per finding, consistent with
-the existing audit event vocabulary.  This is the "`audit` enumerates provisional entries cheaply / upgrade
-candidates discoverable" ROADMAP requirement.
-
-**≥1 KAT.**  `test_audit_enumerates_tiers` — a fixture library with a mix of tiers; assert the per-tier
-counts and the provisional total; `test_audit_flags_needs_spot_check` — assert the search-resolved
-population is surfaced.
-
-**Subtleties.**
-- **Journal action vocabulary** (repeated R0 hazard, now `src/`-side): `_audit_journal_scan` filters
-  `action in {"tagged", "enriched"}`.  The tier pass keys off the *sidecar*, not the journal action — but
-  confirm the eligible-entry set matches so tier counts and existing audit counts reconcile against the same
-  denominator.
-- **Sidecar-per-work-dir vs entry-per-file**: `ProvenanceSidecar` is per work_top_dir; audit counts are per
-  destination.  State the aggregation explicitly (a work_dir's tier applies to all its tracks) and test the
-  multi-track case.
-
-### S3 ◆ — wire tier assignment into the ingest/tag write path
-
-**Deliverable.**  The ingest path (`_pipeline.py` / `_tags.py`) sets `annotation_tier` on the provenance
-sidecar at ingest time, derived from the identity evidence available (embedded MBID/TOC → `full-mb-verified`;
-search hit → `mb-search-resolved` + `needs_spot_check=true`; mismatch → `mb-partial`; no MB →
-`source-tags-only`).  The default clean-ingest path assigns `full-mb-verified` or `mb-search-resolved` per
-the evidence.  End-to-end integration test proves the real write-and-read-back path (per the integration-test
-convention: no internal helpers patched).
-
-**≥1 KAT.**  Integration test `test_ingest_persists_annotation_tier` — run the pipeline on a fixture release
-with an embedded MBID, assert the sidecar carries `full-mb-verified`; a second fixture resolved by search
-asserts `mb-search-resolved` + `needs_spot_check`.
-
-**Subtleties.**
-- **Confirmation-provenance invariant (FROZEN — repo AGENTS.md).**  The tier write must slot into the
-  copy/tag/verify/journal-append ordering **without disturbing it**: the `action="copied"` journal entry and
-  the "Verified OK" message still derive exclusively from post-verification in-memory state.  Write the tier
-  to the sidecar *within* the already-verified region (after `_verify_copy` succeeds), never before.  A tier
-  write that appends before verification, or that becomes a new source for the confirmation message, violates
-  the invariant → destructive-HALT.
-- **Layer-routing rule** (NOTES): tier assignment is a policy/provenance concern — keep it in the
-  provenance-sidecar layer, not smeared into the MB-data or renderer layers.
-
-**Deferrals.**  The **spot-check gate** on the `mb-search-resolved` population lands in the **first R3
-adapter** (R3b), not R2 — R2 only persists the `needs_spot_check` flag that makes it discoverable.  Tier
-*upgrades* (re-resolve below-full entries) are Act III-b.  The `alternate-source` tier stays adapter-less
-until R3c is un-pruned.
+**Deferrals.**  Any consolidation of the three track-count readers (`_parse_release_item` /
+`_score_toc_release` / census `_extract_track_count`) into one shared helper is deferred — it is a refactor,
+out of scope for a gating fix.  The spot-check gate on the `mb-search-resolved` population remains R3b's (per
+J1), not this session.
 
 ## Cross-session contracts
 
 ### Consumed (frozen upstream — invalidation is a destructive-HALT)
 
-- **C-PROV / C-MOVE** (move/verify/journal provenance, NOTES + repo AGENTS.md) — the tier write is a new
-  sidecar field *inside* the existing verified region; it must not alter the provenance chain.
-- **Confirmation-provenance invariant** (repo AGENTS.md) — S3 writes the tier only after `_verify_copy`
-  succeeds; the "safe to delete source" message's evidence basis is unchanged.
-- **`ProvenanceSidecar` idempotency** (existing, models.py / `_pipeline_io.py`) — written-once, other-keys-
-  preserved; `annotation_tier` extends it with a *monotonic-upgrade* carve-out (S1 subtlety).
-- **The identity-rung ladder** (`_pipeline_io.py` `_IDENTITY_METHODS`, rungs 0–5) — R2 must **not** rename,
-  reuse, or collide with "rung"; annotation tier is a distinct axis (Purpose two-ladder note).
-- **Prose contracts** (NOTES): lossless principle (unset tier = defect, not silent state); "journal detects,
-  tag adjudicates" (tier is present-state authority on the sidecar; journal is the detector); layer-routing.
+- **C-TIER** (frozen at R2 S1, `AnnotationTier` + `classify_annotation_tier`): the `mb-search-resolved`
+  tier's entry criterion is *track-count reconciliation*.  This session repairs the input to that
+  reconciliation; it does **not** alter C-TIER itself.  If the fix appears to require changing the tier
+  vocabulary or classifier signature, HALT — that means C-TIER was mis-frozen (a destructive signal), not
+  that this fix grew.  **Flavour: test-enforced** at this consumer (the KAT pins the search-result shape).
+- **C-NET-CORE / C-NET-TERM** (R1 / R1-F): `_parse_release_item` consumes results already routed through
+  `_net`; this fix touches only the parsing of those results, not the transport.  Untouched.
+- **`MBReleaseCandidate`** (models.py): the `tracks` field type and meaning are unchanged; only the value
+  produced is corrected.
 
 ### Produced
 
-- **C-TIER** (frozen at S1; consumed by S2, S3, and every R3 adapter): the five-value annotation-tier
-  vocabulary (`full-mb-verified` / `mb-search-resolved` / `mb-partial` / `alternate-source` /
-  `source-tags-only`), the `ANNOTATION_TIER` + `needs_spot_check` persistence on `ProvenanceSidecar`, the
-  classification→tier mapping, and the monotonic-upgrade rule.  **Flavour: compiler-enforced** (the tier enum
-  is a closed type mypy checks at every consumer) **+ test-enforced** (KATs on round-trip and classification)
-  **+ prose** (monotonic-upgrade rule, unset=defect).  Over-specified: carries the empty `alternate-source`
-  tier and the `needs_spot_check` flag whose consumer (spot-check gate) is in R3.  Stability horizon:
-  runtime contract for all of R3 and Act III-b.
+- **None.**  This session freezes no new contract — it is scope-completeness on C-TIER's input path (the
+  same shape as R1-F: a gating fix that consumes existing contracts and freezes nothing).  The regression
+  test pins the search-result shape (`track-count` + empty `track-list`) as a test-enforced behavioural
+  guard, but that is C-TIER's guarantee made whole, not a new contract.
 
 ## Progress ledger
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Freeze annotation-tier vocabulary + persist `ANNOTATION_TIER` | done | d679394 | C-TIER (AnnotationTier StrEnum, annotation_tier + needs_spot_check on ProvenanceSidecar, classify_annotation_tier helper, monotonic-upgrade rule) |
-| 2 | `audit` pass: enumerate provisional + upgrade candidates | done | 8ad5c70 | — (extra: tests/unit/test_audit.py — regression fix for existing audit tests after new tier pass added) |
-| 3 ◆ | Wire tier assignment into the ingest/tag write path | done | dab0343 | — (note: _tags.py not modified — tier assigned in _pipeline.py per layer-routing rule; fix-loop iter 1 for ruff format + pylint unused-import/reimport) |
+| 1 | Fix `_parse_release_item` empty-`track-list` fallback | pending | — | — |
 
 ## Action-frame digest
 
-### S3 — 2026-07-20
-Discovery/flex: _tags.py not modified — tier assignment implemented entirely in _pipeline.py, consistent with layer-routing rule (tier is provenance/policy, not tag-rendering).
-Affected: none (expected-files prediction was conservative; implementation is correct)
-Deferred: no
-Texture: Fix-loop iteration 1 consumed for ruff format + pylint (unused import + reimport in test_pipeline.py); gate green on second pass.
+*(none yet)*
 
 ## Discoveries & risks
 
-- **R-1 (two-ladder collision — resolved in derivation, watch in execution).**  "rung" is taken by the
-  identity-confidence ladder; annotation completeness is "tier".  If an executor reaches for "rung" for tier,
-  or the two ladders get wired into one field, HALT and surface — this is the contract's central naming
-  invariant.  (internal-continue if caught early; the collision itself is already adjudicated.)
-- **R-2 (idempotency vs upgrade tension).**  `ProvenanceSidecar` is written-once; annotation-tier needs a
-  monotonic-upgrade carve-out (Act III-b re-resolves upward).  S1 must state this precisely; a naive "never
-  overwrite" breaks Act III-b, a naive "always overwrite" breaks the idempotency invariant.  If S1 cannot
-  reconcile cleanly, surface at ◆ (additive-reshard: the upgrade semantics may want their own small session).
-- **R-3 (confirmation-provenance is a destructive-risk surface).**  S3 touches the copy/tag/verify loop.  A
-  tier write placed before `_verify_copy` succeeds, or feeding the confirmation message, is a
-  **destructive-HALT** — the invariant is frozen (repo AGENTS.md).  Never ride through.
-- **R-4 (empty `alternate-source` tier).**  Carrying a tier with zero population and no adapter is deliberate
-  over-specification, not dead code to prune.  If an executor proposes removing it "because it's unused,"
-  that's a contract regression — refuse and cite Category-A over-specification.
-- **R-5 (search-confidence is real, not paranoia).**  The `needs_spot_check` flag exists because R0
-  adjudication caught score-100-but-wrong MB matches.  If S3's classifier marks search hits as
-  `full-mb-verified` (dropping the distinction), the whole point of the tier is lost — the search/identity
-  boundary is load-bearing.
+- **R-1 (the fix is provably correct — low design risk).**  `scripts/census_original.py:_extract_track_count`
+  is the proven reference and its docstring already diagnoses the exact bug (lines 1104-1107).  Divergence
+  from that logic in the fix is the signal to watch.  internal-continue if the fix matches the reference;
+  surface only if the production path needs behaviour the reference lacks.
+- **R-2 (do not scope-creep into a refactor — additive-reshard risk).**  The temptation to unify the three
+  track-count readers is real and wrong for a gating fix.  If an executor consolidates them, that is scope
+  drift: additive-reshard the dedupe into its own R3-era session; keep this one surgical.  The
+  one-commit-title corollary is the guard — "Fix `_parse_release_item` …" is one title; "Fix and unify the
+  track-count readers" is two.
+- **R-3 (C-TIER is consumed, not touched — destructive-HALT boundary).**  If the fix seems to require editing
+  `AnnotationTier` or `classify_annotation_tier`, stop: C-TIER is frozen (R2).  The fix lives entirely in
+  `_discover.py` upstream of the classifier.  A change to the tier contract from this session is a
+  destructive-HALT signal.
+- **R-4 (coverage on the new branch).**  `fail_under = 100` means the newly-reachable empty-list `else` path
+  must be tested.  A green `check_type` with a red `test` on coverage is the expected failure mode if the KAT
+  is forgotten — not a surprise, a checklist item.
 
 ## Notes for executors
 
-- **Tier routing.**  S1/S2/S3 are all Sonnet (`@build`).  No juncture fires inside R2; the ◆ boundary hands
-  off to the R3 adapter shards (each a separate `/plan-shard`), not to an adjudication fork.  ROADMAP
-  `juncture-tier: opus` stands but is not exercised here.
-- **Register: PEDAGOGY off** — thin mechanical docstrings per house style (Sphinx/PEP 257, 128-col); the
-  design exposition lives in this PLAN and the ROADMAP, not inline.
-- **Invariants to preserve (do not regress):** confirmation-provenance ordering (S3), `ProvenanceSidecar`
-  idempotency + monotonic-upgrade (S1), the identity-rung / annotation-tier axis separation (all), lossless
-  principle (unset tier = defect).  All are C-TIER's consumed or produced contracts above.
-- **Full gate before each ◆ / commit:** `~/.local/bin/tox -m analyze` green (100% branch cov, mypy strict,
-  pylint 10.00/10, pyupgrade clean).  R2 is `src/`-side — the R0 "outside the gates" posture does **not**
-  apply.
-- **Sequencing:** the **pre-R3 `_parse_release_item` fix** (ROADMAP; own session) and **PLAN R1-F** both
-  sequence before any R3 adapter but are **independent of R2** — R2 can proceed in parallel with or before
-  them; only R3 depends on all three.
-- **Suggested `/plan-run` invocation:** `/plan-run halt-at-boundaries` — R2 is a fresh shard pattern
-  (first `src/`-side substrate sharded under this tuning law); halting at the ◆ hands the C-TIER-frozen
-  substrate to the user for review before the R3 adapter shards derive from it.
+- **Tier routing.**  S1 is Sonnet (`@build`).  No juncture fires; the ◆ boundary hands off to the R3b
+  whipper/MakeMKV adapter shard (a separate `/plan-shard` — the first J1-ordered R3 adapter, 52 clean dirs,
+  highest identity confidence).  ROADMAP `juncture-tier: opus` stands at the roadmap level but this sub-track
+  opts down to `sonnet` (see header): strong inner loop (lever 5) coincides with a fix that has no design
+  surface.
+- **Register: PEDAGOGY off** — thin mechanical docstrings per house style (Sphinx/PEP 257, 128-col).  The
+  design rationale lives in this PLAN, not inline; a one-line code comment noting the search-result shape is
+  sufficient at the fix site.
+- **Invariants to preserve (do not regress):** the existing `_parse_release_item` behaviour for non-empty
+  `track-list` (uses length) and the neither-present case (yields 0); C-TIER's classifier signature
+  (untouched); `_net` transport routing (untouched).
+- **Full gate before ◆ / commit:** `~/.local/bin/tox -m analyze` green (100% branch cov, mypy strict, pylint
+  10.00/10, pyupgrade clean).
+- **Sequencing:** this is the **last** R3 prerequisite.  R1-F is done (`e7370b7`).  On this ◆, all R3 gates
+  are clear and R3b may be sharded.
+- **Suggested `/plan-run` invocation:** `/plan-run halt-at-boundaries` — a single-session shard; halting at
+  the ◆ hands the C-TIER-repaired search path to the user before R3b derives from it.

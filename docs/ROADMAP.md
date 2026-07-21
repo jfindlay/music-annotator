@@ -36,7 +36,7 @@ until then (renderer/policy = class A, MB data = class B, scholarship = class C)
 ```
 R0 census ──► J1 (adjudicate adapter order + rung ladder)
                 │
-R1 _net ✓ ──────┼──► R2 rung substrate ──► R3 adapters (J1-ordered) ──► R5 drain ──► J3 ──► R6 re-derivation
+R1 _net ✓ ──────┼──► R2 tier substrate ✓ ─► R3 adapters (J1-ordered) ──► R5 drain ──► J3 ──► R6 re-derivation
                 │                                                                     ▲
 R4 Act II convergence ──────────────► J2 (naming-policy freeze) ──────────────────────┘
 ```
@@ -78,7 +78,7 @@ search/disc-ID calls (`_search_mb_releases` → `mb.search_releases`; `_toc_look
 completes the "uniformly on `_net`" property R3 leans on; freezes no new contract; consumes
 C-NET-CORE / C-NET-TERM.  Sequence before any R3 adapter.
 
-### Pre-R3 hardening  (Category A fix; 1 session; J1 additive-reshard; before any R3 adapter)
+### Pre-R3 hardening  (Category A fix; 1 session; J1 additive-reshard; before any R3 adapter; IN PROGRESS 2026-07-20)
 
 **Added by J1 (2026-07-20).**  Fix the `_discover.py` `_parse_release_item` search-result track-count
 bug (`len(track-list)` yields 0 for MB search results, which return `track-list: []` + `track-count:
@@ -87,7 +87,14 @@ N`) with a regression test.  Standalone, *not* folded into R2: the annotation-ti
 tier contract freezes on it.  Sequence alongside/after PLAN R1-F, before any R3 adapter.  Distinct from
 R1-F (transport routing) — this is response *parsing*.  → ROADMAP Discoveries appendix (R0 boundary).
 
-### R2 — Annotation-tier substrate  (Category A substrate; ~3 sessions; after J1)
+**Sharded as PLAN pre-R3 (2026-07-20).**  R1-F is done (commit `e7370b7`); this fix is the sole
+remaining R3 prerequisite.  It did **not** fold into R2 — R2 closed on C-TIER without it, so the
+`mb-search-resolved` tier's track-count denominator is currently mis-derived for search results
+(`_parse_release_item` reads `len(track-list: [])` = 0 instead of `track-count: N`, the search-result
+shape; the census script already proved the correct precedence in `_extract_track_count`).  Sequenced
+standalone before any R3 adapter, as J1 prescribed.
+
+### R2 — Annotation-tier substrate  (Category A substrate; 3 sessions; DONE 2026-07-20)
 
 Finalise the **annotation-tier ladder** (J1 output; renamed from "rung ladder" — see the two-ladder
 note below); persist the tier in the track+sidecars unit (present-state authority) via an
@@ -101,6 +108,15 @@ adapter consumes (over-specified per Category-A).  → BACKLOG "Provisional-inge
 adapter**) → `source-tags-only` (no MB identity; provisional).  The `mb-search-resolved` tier is J1's
 key census-driven addition: 99 of 107 clean dirs are search-resolved, not identity-confirmed, and
 adjudication caught score-100-but-wrong matches, so search-resolution must be a distinct persisted tier.
+
+**DONE (commits `d679394`–`dab0343`, PLAN R2 3/3 rows).**  C-TIER frozen at S1: `AnnotationTier`
+StrEnum (5 tiers incl. reserved-empty `alternate-source`), `annotation_tier` + `needs_spot_check` on
+`ProvenanceSidecar`, `classify_annotation_tier` helper, monotonic-upgrade carve-out on the written-once
+idempotency invariant.  S2 added the `audit` tier-enumeration pass; S3 wired tier assignment into
+`_pipeline.py` (kept out of `_tags.py` per layer-routing — tier is provenance, not tag-rendering).  ◆
+boundary `still-on-intent`; no juncture fired (R2 hands to the R3 adapter shards).  **Note:** C-TIER's
+`mb-search-resolved` denominator depends on the pre-R3 `_parse_release_item` fix (above), un-landed at
+R2 close — R2 froze the contract; pre-R3 repairs its input.
 
 **Two-ladder note (CAPTURE-CANDIDATE, 2026-07-20).**  The codebase already uses "rung" for an
 orthogonal **archival-identity-confidence ladder** (rung 0 embedded tags → rung 1 ISRC → … → rung 5
@@ -265,4 +281,8 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   `_pipeline_io.py`/`__main__.py`); J1's ladder is the orthogonal **annotation-quality** axis.  R2 keeps
   "rung" for identity-confidence and names J1's ladder **annotation tier** (`ANNOTATION_TIER` on
   `ProvenanceSidecar`; contract C-TIER).  A dir can be high-tier / low-rung or vice versa.  This framing
-  is durable through R3 and Act III-b — candidate for `docs/NOTES.md`.
+  is durable through R3 and Act III-b.  **Graduated at the R2 boundary (2026-07-20):** confirmed in code as
+  `AnnotationTier` (annotation) vs `_IDENTITY_METHODS` rungs 0–5 (identity); a NOTES capture is warranted
+  (see exit report).  R2 also established the **monotonic-upgrade carve-out** on `ProvenanceSidecar`
+  idempotency (annotation_tier may rise, never silently lower) — a durable prose sub-contract of C-TIER for
+  Act III-b.
