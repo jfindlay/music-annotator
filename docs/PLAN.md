@@ -1,53 +1,60 @@
 <!-- juncture-tier: opus -->
-<!-- sub-track: R3d (track-mismatch operator-override) — 4th J1-ordered R3 adapter; last R3 code node; 18 in-mb-mismatch dirs; collapsed 3→1 by operator-policy (no auto-reconciliation) -->
+<!-- sub-track: R4a (library-wide taxonomy + initial directory component) — Act II naming-policy; first R4 shard after the R3 code arc closed; introduces the top-level class scheme (Picard release-type-aligned) then refines the within-classical initial component -->
 
-# PLAN — R3d: track-mismatch operator-override
+# PLAN — R4a: library-wide taxonomy + initial directory component
 
 ## Purpose (design intent)
 
 *(Re-read at every ◆ boundary — anti-defocus anchor.)*
 
-Give the track-count-mismatch gate an **operator override** so the 18 `in-mb-mismatch` dirs stop
-being silently skipped-and-forgotten.  Today `run()` hard-fails on any count mismatch
-(`_pipeline.py:1554` `raise RuntimeError`; `_select_medium_with_reason` `ValueError` at :334);
-`discover()` catches it, logs an error, and `continue`s — the dir stays in `Original/` with **no
-record**.  R3d converts that hard fail into an interactive decision.
+Introduce the **top-level library class scheme** so classical art-music is one class among several and
+the library admits everything LoC-style (the *full-inclusion* north star: the filesystem is a catalog,
+nothing stays outside).  Today `build_dest_path` (`_tags.py:857`) has **no** top-level class routing —
+every release lands at `dest_root / "<composer> - <performers>"`, a single classical-shaped scheme.  An
+audiobook, a children's-pop compilation, or a soundtrack has no honest home.  R4a gives the path a
+principled first component and then refines the within-classical initial component (recitals,
+compilations, performer-led releases) that nests under it.
 
-The load-bearing policy decision (operator, 2026-07-21): **a track-count mismatch cannot be
-auto-reconciled.**  It means the local dir and the MB release disagree on structure — a genuine
-edition/pressing difference, or a flat-local-vs-multi-disc-MB layout — and resolving it requires
-**physical-medium inspection or a re-rip**, which is the operator's responsibility, not the
-annotator's.  So R3d builds **no** multi-disc aggregation and **no** edition-vs-structure copy fork
-(both were on the roadmap; both dropped).  It surfaces the discrepancy and lets the operator decide:
+**The routing signal defers to Picard (operator decision, 2026-07-21).**  Picard classifies audio
+artifacts on the MusicBrainz **release-group type** vocabulary — `%_primaryreleasetype%` (Album /
+Single / EP / Broadcast / Other) and `%_secondaryreleasetype%` (Audiobook / Spokenword / Soundtrack /
+Compilation / Live / …) — and the community "Classical music" naming scripts (and Classical Extras)
+branch their top-level directories on exactly these.  R4a follows that precedent: the top-level class is
+derived from the release-group primary/secondary type, refracted through the Classical-Extras
+"is-this-classical-art-music?" stance for the main split.
 
-- **Accept** → ingest the selected (best) medium at the honest **`mb-partial`** tier; the operator
-  has taken ownership of the discrepancy.  `audit` surfaces `mb-partial` entries for later review.
-- **Decline** → skip; the dir stays in `Original/` for physical-medium handling on the operator
-  backlog (R5 drain).
+**Why this sits on ready substrate (why S1 is tighter than it looks).**  The routing signal is *already
+in the models and already tag-persisted*: `MBReleaseGroup.primary_type` + `secondary_type_list`
+(`models.py:802,804`) are mapped into the `releasetype` / `releasetype_secondary` tags at
+`_tags.py:698,702` — the Picard `%_primaryreleasetype%` / `%_secondaryreleasetype%` equivalents.  S1
+does **not** add the signal; it **routes the top-level path component on the signal that already
+exists** and is embedded-tag-derivable (so `repath`/`regroup`/`unify`, which call `build_dest_path` with
+empty stubs and no group context, keep producing correct classes).  Freezes **C-CLASS** (the top-level
+class-routing function + class vocabulary + the tag-derivable signal); S2 then freezes **C-INIT** (the
+within-classical initial-component rule) nesting under it.
 
-This follows two existing precedents verbatim: `_prompt_duration_warnings` (`_pipeline.py:400`,
-proceed/abort on duration drift) and `confirm_disc` (`_discover.py:162`, accept/override/abort on
-heuristic medium selection).  R3d adds a third override of the same shape.
+**The design frame is durable; the immediate non-classical migration is thin.**  Of the 15
+`non-classical-other` census dirs the operator has already elected to manually move most out; the
+genuine residue the class scheme must house is small (audiobook/spoken-word `Aesop_Fables`;
+children's-pop `Kidz Bop` ×2, `Education`; new-age `HypnoBirthing`; the aggregate `Amazon Music`).  So
+C-CLASS is a durable Act-III-a / III-b design frame — **not** a large immediate migration.  Build the
+scheme correctly; do not over-fit it to five directories.
 
-**Why this is an override, not a re-architecture.**  The `mb-partial` tier, the
-`CensusSignal.MISMATCH` signal, and the `classify_annotation_tier(MISMATCH) → (MB_PARTIAL, False)`
-arm **already exist** — R2 over-specified C-TIER for exactly this (`models.py:53,98,120`), and
-`_audit.py:398` already counts `mb-partial`.  The code comment at `_pipeline.py:1727` even documents
-that `mb-partial` is "not reachable from run()" today.  R3d makes it reachable.  Freezes **C-OVR**
-(the `confirm_count_mismatch` Protocol method + accept→`MISMATCH` wiring); touches **no** C-TIER
-contract.
+Every editorial decision here refracts through **Classical Extras** (NOTES "editorial anchor"), **"path
+is a handle, not a manifest"** (NOTES), and the **layer-routing rule** (this is renderer/policy = class
+A — fix top-level classification in the renderer, keep MB-data defects visible until fixed upstream).
 
 ## Verify gate
 
-Touches `src/` and `tests/`; fully gated (100% branch coverage, strict mypy).  `/plan-run`
-re-discovers these; stated here to document the gate:
+Touches `src/` and `tests/`; fully gated (100% branch coverage, strict mypy).  `/plan-run` re-discovers
+these; stated here to document the gate:
 
 - **VERIFY_TEST**: `~/.local/bin/tox -e test` — pytest, **100% branch coverage enforced**
-  (`fail_under = 100`).  The new override has two branches (accept / decline) plus dry-run
-  suppression; each needs an explicit test.
-- **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` — mypy strict on `src/ tests/`, **zero errors**.
-  No `Any`, no `cast()`.  The new Protocol method must be typed and implemented on every
-  `DiscoverUI` double.
+  (`fail_under = 100`).  Every new class-routing arm (each top-level class, the classical default, the
+  non-classical fallback) and each within-classical branch needs an explicit test; a `match/case` on the
+  class needs a `case _: # pragma: no cover` arm per house convention.
+- **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` — mypy strict on `src/ tests/`, **zero errors**.  No
+  `Any`, no `cast()` (the release-type signal is already typed on `MBReleaseGroup`; do not widen).
 - Full gate before ◆ close: `~/.local/bin/tox -m analyze` (build + test + check_type + check_format +
   check_lint 10.00/10 + check_upgrade) green.
 
@@ -55,294 +62,274 @@ re-discovers these; stated here to document the gate:
 
 | # | Session | Cat | Tier | Consumes | Expected files |
 |---|---------|-----|------|----------|----------------|
-| 1 ◆ @architect | Add operator override to the track-count-mismatch gate; ingest accepted mismatches at `mb-partial` (freeze **C-OVR**) | I | Opus | C-TIER (`mb-partial` + `MISMATCH`, unchanged), C-WHIP (whipper precedence unchanged), C-PROV/C-MOVE (copy loop untouched) | `src/music_annotator/_discover.py`, `src/music_annotator/_pipeline.py`, `tests/unit/test_discover.py`, `tests/unit/test_pipeline.py`, `tests/integration/test_integration.py` |
+| 1 @architect | Introduce the top-level library class scheme in `build_dest_path`; route on the MB release-group type (Picard-aligned); nest the classical composer-first scheme under it (freeze **C-CLASS**) | A | Opus | C-PROV/C-MOVE (repath/regroup/unify call `build_dest_path` unchanged), "path is a handle" + CE editorial anchor (NOTES) | `src/music_annotator/_tags.py`, `tests/unit/test_annotator.py`, `tests/unit/test_pipeline_maint.py`, `tests/integration/test_integration.py` |
+| 2 ◆ | Refine the within-classical initial directory component: recitals, compilations, performer-led releases (freeze **C-INIT**) | I | Opus | **C-CLASS** (the classical subtree boundary; the class-routing seam) | `src/music_annotator/_tags.py`, `tests/unit/test_annotator.py`, `tests/integration/test_integration.py` |
 
-`Cat`: I = integrative (an interactive gate + Protocol extension riding entirely on frozen C-TIER
-substrate + end-to-end proof).
-`Tier`: **Opus / `@architect`** — the one live design surface is the `confirm_count_mismatch`
-Protocol signature (a compiler-enforced contract every UI double must satisfy) *and* the accepted-
-override plan-build subtlety (below), which needs judgment against live code.  `◆` on S1 —
-sub-track-final; its boundary closes the R3 code arc and hands off to R5 (operator drain), not to
-another adapter shard.
+`Cat`: **A** = substrate (S1 defines the top-level class interface every downstream path derivation —
+R6b/R6d repath, Act III-b — sits on); **I** = integrative (S2 refines one component riding on frozen
+C-CLASS + end-to-end proof).
+`Tier`: **Opus / `@architect`** on both.  S1: the class vocabulary and the routing predicate are a
+non-obvious substrate design whose cost-of-wrong propagates to the whole-library R6d repath (lever 3+4).
+S2: the within-classical component (composer-first vs performer-first for recitals/compilations) is a
+genuine Classical-Extras editorial judgment against live code, and it freezes a contract R6b/R6d
+consume.  Both are the highest-cost-of-wrong path decisions in the Act II arc; neither is mechanical.
+No `◆` on S1 (mid-sub-track; C-CLASS is still being consumed by S2).  `◆` on S2 — sub-track-final; its
+boundary closes R4a and hands off to R4b/R4c (the remaining Act II design nodes) en route to J2.
 
-**Split/merge rationale (levers named).**  Roadmap estimated ~3 sessions (two-sub-class adapter with
-multi-disc reconciliation); collapsed to **1** by the operator-policy decision that eliminated the
-aggregation-copy path and the edition/structure fork (lever 2 — the irreducible work shrank, it was
-not fractured).  The remaining work — Protocol method + terminal prompt + gate rewrite + MISMATCH
-wiring + tests — is **one conceptual unit**: splitting the Protocol method into its own row would
-leave dead, untestable interface code until its consumer landed (fracturing below the floor, lever
-2), and the two existing precedents (`_prompt_duration_warnings`, `confirm_disc`) were each landed as
-one unit.  **One-line-commit-title corollary** holds: "Add operator override to the track-count-
-mismatch gate; ingest accepted mismatches at `mb-partial`" is one commit-shaped title.  Ambient
-complexity is high (lever 1 — deep `run()`), but the change is localized to one gate + one Protocol
-method (~150 LOC), so lever 1 keeps it tight rather than splitting it.
+**Split/merge rationale (levers named).**  BACKLOG/roadmap estimated R4 at ~3-6 sessions across
+R4a+R4b+R4c; R4a itself is **2**.  The split S1|S2 is the **one-line-commit-title corollary**:
+"Introduce the top-level class scheme" and "Refine the within-classical initial component" are two
+commit-shaped titles — joining them with "and" is the tell that it is two conceptual units.  The split is
+**contract-sharp** (the legitimate split condition, not fracturing a floor): S1 freezes the class
+boundary; S2's within-classical refinement *nests inside* that boundary and consumes it.  Levers 1
+(ambient complexity — `build_dest_path` ~270 lines, deeply branched), 3 (cost of a wrong top-level
+scheme propagates through R6d's full-library repath), and 4 (path policy, high correctness-criticality)
+all push toward the smaller-and-more-reviewable 2-session shape rather than one large substrate diff.
+Lever 2 (the floor) is respected: the `repath`-class-routing correctness folds *into* S1 (the substrate
+is not done if `repath` produces wrong classes), so S1 is not fractured below its irreducible unit.
+Lever 5 (strong inner loop) makes the small commits safe but does **not** license opting the juncture
+tier down here — lever 4 holds it (see header).
 
 ## Session detail
 
-### S1 ◆ @architect — Add operator override to the track-count-mismatch gate (freeze C-OVR)
+### S1 @architect — Introduce the top-level library class scheme (freeze C-CLASS)
 
 **Deliverable.**
-- Add **`confirm_count_mismatch`** to the `DiscoverUI` Protocol (`_discover.py:70`) and implement it
-  on `TerminalDiscoverUI` (`_discover.py:126`), following `confirm_disc`'s structure.  Proposed
-  signature (the C-OVR freeze — `@architect` confirms/adjusts):
-  `def confirm_count_mismatch(self, src_dir: Path, release: MBRelease, selected_medium: MBMedium,
-  n_src: int, n_medium: int, diagnostic: str) -> bool` — returns `True` to accept (ingest at
-  `mb-partial`), `False` to decline (skip).  `diagnostic` is the human-readable edition-vs-structure
-  context string.
-- Rewrite the mismatch gate at `_pipeline.py:1554`: instead of an unconditional `raise RuntimeError`,
-  when `ui is not None and not dry_run` call `ui.confirm_count_mismatch(...)`; on `False` (or when
-  `ui is None` / dry-run — preserve the non-interactive hard-fail contract) keep the raise; on `True`
-  set a flag that forces `census_signal = CensusSignal.MISMATCH` and proceed.
-- Handle the `_select_medium_with_reason` `ValueError` path (`_pipeline.py:334`, multi-disc no-match)
-  under the same override — a multi-disc release where no single medium matches `n_src` is the
-  structure-mismatch case and must reach the same prompt, not die at medium selection.
-- Derive the **edition-vs-structure diagnostic** for the prompt: `shape.disc_subdirs` / local
-  subdir presence + the local-vs-MB count ratio (structure = flat-local vs multi-disc-MB or MB total
-  ≠ local; edition = single-medium count disagreement).  Display-only context; does **not** branch
-  behavior.
-- Force `census_signal = CensusSignal.MISMATCH` on an accepted override so
-  `classify_annotation_tier` yields `(MB_PARTIAL, False)`; ingest proceeds against the selected/best
-  medium's `copy_subset`.
-- Add the KATs (below) and an **end-to-end mismatch integration test** in `test_integration.py`.
+- Add a **top-level class-routing function** (proposed `_top_level_class(release, tags) -> str`, the
+  C-CLASS freeze — `@architect` confirms/adjusts name and signature against live code) that derives the
+  first path component from the **release-group type signal that already exists**:
+  `release.release_group.primary_type` + `release.release_group.secondary_type_list`
+  (`models.py:802,804`; already tag-persisted as `releasetype` / `releasetype_secondary` at
+  `_tags.py:698,702`).  The mapping is Picard-aligned (see the routing table below).
+- Insert the class component at the **top** of the path in `build_dest_path` (`_tags.py:1083`, currently
+  `top_dir = safe_name(f"{composer} - {performers}")`): the path becomes
+  `dest_root / <class> / <composer-performers-or-class-shaped-top_dir> / <work_dir> / …`.  The classical
+  class **nests the existing composer-first `top_dir` unchanged** underneath it; non-classical classes
+  get a class-appropriate top_dir shape (below), which S2 does *not* touch (S2 refines only the
+  *within-classical* component).
+- **Guarantee the class is embedded-tag-derivable** so `repath` / `regroup` / `unify` (which call
+  `build_dest_path` with `MBRelease()` / `MBTrack()` empty stubs and no group context —
+  `_pipeline_maint.py:378-381,591,962`) reconstruct the correct class from tags alone.  Since the class
+  keys on `releasetype` / `releasetype_secondary`, which are written to file (verify they survive
+  `to_file_dict`), the empty-stub path must read them from `tags`, **not** from `release.release_group`.
+  **This is the substrate correctness core** — if the class can only be computed from the live
+  `MBRelease`, `repath` silently mis-classifies the whole library on the next maintenance pass.  Resolve
+  the tag-vs-model source deterministically and pin it with a `repath` KAT.
+- Preserve backward-compat posture per NOTES: the top-level class is a *new* component, so existing
+  annotated releases will re-path under R6b/R6d (the one-pass re-derivation) — R4a does **not**
+  retro-migrate on disk; it fixes the forward path.  State this in the class-routing docstring.
+- Add the KATs (below) and an **end-to-end class-routing integration test**.
 
-**≥1 KAT.**  The mismatch integration test is the primary KAT (end-to-end, no internal-helper
-patching per the integration convention): a count-mismatched fixture → gate fires →
-`confirm_count_mismatch` stub returns `True` → ingest at `mb-partial` → sidecar `annotation_tier ==
-"mb-partial"` → `audit` surfaces it.  Plus unit KATs: `test_count_mismatch_accept_ingests_partial`,
-`test_count_mismatch_decline_skips`, `test_count_mismatch_dry_run_still_raises`,
-`test_count_mismatch_no_ui_still_raises`, `test_multidisc_no_match_reaches_override`,
-`test_confirm_count_mismatch_terminal_accept` / `_decline` (terminal-prompt parsing).
+**≥1 KAT.**  The class-routing integration test is the primary KAT (end-to-end, no internal-helper
+patching per the integration convention): a classical release → path under the classical class with the
+composer-first top_dir intact; an audiobook release (secondary-type `Audiobook`/`Spokenword`) → path
+under the spoken-word class.  Plus unit KATs: `test_top_level_class_classical` (work-type/CE-classical →
+classical class), `test_top_level_class_audiobook`, `test_top_level_class_soundtrack`,
+`test_top_level_class_compilation_nonclassical`, `test_top_level_class_default_fallback` (no
+release-type signal → the honest fallback class), `test_build_dest_path_nests_composer_under_class`
+(classical top_dir unchanged beneath the class), and a **`repath` KAT**
+`test_repath_reconstructs_class_from_tags` (empty-stub `build_dest_path` derives the class from
+`releasetype`/`releasetype_secondary` tags, not the live release).
 
 **Subtleties.**
-- **The accepted-override plan-build is the one genuine design judgment (why `@architect`).**  The
-  gate at :1554 fires when `len(src_files) != len(copy_subset)`.  On accept, the copy/tag/verify loop
-  operates on `copy_subset` (selected medium) — but if `n_src < n_medium` or `n_src > n_medium`, the
-  downstream plan-build (`_build_copy_plan` / `tags_map` zip) will itself hit the count disparity.
-  The executor must decide, against live code, how the accepted partial maps: copy the
-  `min(n_src, n_medium)` positionally-aligned tracks, or copy all `n_src` against the first `n_src`
-  medium tracks, or another rule.  **This is the C-OVR behavioral core** — resolve it so the
-  `mb-partial` ingest is deterministic and the integration test pins it.  Do **not** guess silently;
-  if the mapping is ambiguous beyond a positional min, surface it (additive-reshard signal).
-- **Preserve the non-interactive contract.**  `dry_run` and `ui is None` must keep the hard-fail
-  raise — automation must not hang on a prompt and must not silently ingest partials.  Mirror
-  `_prompt_duration_warnings`' dry-run skip and `confirm_disc`'s `ui is not None` guard exactly.
-- **Whipper precedence unchanged (C-WHIP).**  A whipper dir that also mismatches still routes through
-  whipper recognition first; the override is orthogonal to `origin_source`.
-- **`mb-partial` is monotonic-upgrade safe (C-TIER carve-out).**  Writing `mb-partial` must respect
-  the write-once-monotonic rule; a dir already at a higher tier must not be lowered by an accepted
-  mismatch.  Reuse the existing `annotation_tier_rank` comparison path.
-- **Copy-provenance chain untouched (C-PROV/C-MOVE).**  The override gates *entry to* the copy loop;
-  it must not alter the copy/tag/verify/journal ordering or the confirmation-provenance invariant.
-  An accepted partial still runs the full verify path for the tracks it does copy.
+- **The tag-vs-model class source is the one genuine substrate design point (why `@architect`).**  See
+  the deliverable — the class must be derivable from embedded tags for `repath` correctness.  Confirm
+  `releasetype` / `releasetype_secondary` are in `to_file_dict` (the explorer noted `recording_date_work`
+  and `cea_album_soloists_unified` are *excluded* — do not assume every tag survives).  If the chosen
+  signal is not embedded, either persist it or choose an embedded signal; do not compute the class from a
+  source `repath` cannot see.
+- **The classical-vs-non-classical split refracts through Classical Extras, not a genre string.**  "Is
+  this classical art-music?" is an editorial predicate (CE stance) — the existing `CWP_WORKTYPE_GENRES_TOP`
+  (defaults `"Classical"`) and the presence of MB work structure are the classical signal; a release with
+  a non-classical secondary-type (`Audiobook`, `Spokenword`, `Soundtrack`) or no classical work structure
+  routes to a non-classical class.  Do **not** collapse the top-level class into the free-text `GENRE`
+  tag (uncontrolled, currently hardcoded `"Classical"`); use the controlled release-type vocabulary as
+  Picard does.
+- **Over-specify the class vocabulary (Category-A).**  Carry classes the census does not yet populate if
+  confidence is reasonable (the LoC "class for everything" frame) — adding a class later is cheaper than
+  a mid-library re-route.  But keep the *routing* deterministic and testable; an unused class arm still
+  needs a KAT or a `# pragma: no cover`.
+- **Non-classical top_dir shape is S1's, not S2's.**  For non-classical classes the `<composer> -
+  <performers>` shape is often wrong (an audiobook has an author/narrator, a pop compilation has no
+  composer).  S1 defines a class-appropriate top_dir for the non-classical classes (e.g. artist/album or
+  author-shaped); S2 refines only the *within-classical* component.  Keep the non-classical shapes simple
+  and honest — the population is thin (Discoveries R-3).
+- **Copy-provenance / maintenance loops untouched (C-PROV/C-MOVE).**  S1 changes only the computed
+  destination path; the copy/tag/verify/journal ordering and the `_move_verify_journal` single-site
+  invariant are not touched.  `repath` moving files to the new class-prefixed paths still routes through
+  the frozen primitive.
 
 **Deferrals.**
-- **Multi-disc aggregation / structure reconciliation.**  Explicitly not built — the operator handles
-  structure mismatches against the physical media (R5).  If a future need for automatic flat→multi-
-  disc mapping materializes, that is an additive-reshard consuming C-S0, never a widening of C-OVR.
-- **A persisted mismatch registry / worklist artifact.**  R3d relies on the existing `audit`
-  `mb-partial` enumeration to surface accepted partials; declined dirs are simply left in `Original/`.
-  A dedicated "dirs I declined" registry is a possible R5 convenience, deferred.
-- **The edition-vs-structure diagnostic as a persisted field.**  It is prompt-display context only;
-  not written to the sidecar.  Persisting it is deferred (no consumer yet).
+- **On-disk retro-migration of already-annotated releases.**  Not built — the whole-library re-derivation
+  under the frozen class scheme is R6b/R6d (the "more like itself" pass).  R4a fixes the forward path
+  only; do not disrupt the in-progress library with piecemeal class renames (NOTES / BACKLOG A-a rule).
+- **The within-classical initial component.**  Explicitly S2 (C-INIT) — S1 leaves the classical top_dir
+  exactly as it is today (composer-first) beneath the new class; only the class prefix is added.
+- **Non-music non-audio dirs the operator will hand-move** (`Playlists`, `GarageBand`, `Audiobooks`
+  aggregate, `nachtmusick`, `Lydia *`, …).  The class scheme need not have a bespoke class for each; the
+  operator removes them from the library.  Do not gold-plate a class per personal-collection folder.
+
+### S2 ◆ — Refine the within-classical initial directory component (freeze C-INIT)
+
+*(Lower-fidelity by design — crisply specified only after C-CLASS freezes at S1, per the substrate-first
+rule.  S1's action-frame digest sharpens this.)*
+
+**Deliverable (sketch).**
+- Inside the frozen **classical class** (the C-CLASS subtree), refine the initial component beyond
+  today's unconditional `"<composer> - <performers>"`: handle **recitals** (performer-led, no single
+  composer — a performer-first component), **compilations** (multi-composer — the `_is_composer_split_release`
+  signal at `_pipeline_maint.py:680` already detects this; align the path with it), and **performer-led
+  releases** generally.  The rule answers "what is the primary attribution for a classical release that is
+  not single-composer?" and refracts through CE (primary attribution in path, full credits in tags).
+- Freeze **C-INIT** — the within-classical initial-component rule (composer-first default; performer-first
+  for recitals; compilation handling) — consumed by R6b/R6d's re-derivation.
+- KATs per branch (recital → performer-first; multi-composer compilation → compilation shape;
+  single-composer → composer-first unchanged) + a within-classical integration test.
+
+**Subtleties (anticipated — resolve at execution against live code).**
+- `_is_composer_split_release` (`_pipeline_maint.py:680`, keys on `"Classical" not in cwp_worktype_genres_top`)
+  is an existing compilation signal in the maintenance path; C-INIT should reuse/align with it, not invent
+  a parallel discriminator (avoid two sources of truth).
+- Refracts through "path is a handle" (primary attribution only in path) and the CE editorial anchor
+  (validate the recital/compilation framing against CE; document any divergence).
+- Must not regress the single-composer classical path (the dominant population); the composer-first
+  default stays the fallback.
+
+**Deferrals.**
+- **R4c concerto-like soloist editorial allowlist** — a separate R4 node (BACKLOG A-c follow-on); not
+  folded here.
+- **R4b cross-medium fragmentation inventory** — separate R4 node; inventory-first, sharded later.
 
 ## Cross-session contracts
 
-### C-OVR — track-count-mismatch operator override *(FROZEN S1 — juncture-design 2026-07-21)*
+### C-CLASS — top-level library class scheme *(to be frozen at S1)*
 
-The operator decision surface for a track-count mismatch, and the tier an accepted mismatch
-receives.  **Flavour: compiler-enforced** (the `confirm_count_mismatch` Protocol method — every
-`DiscUI`/`DiscoverUI` implementation and test double must implement it or mypy fails) +
-**test-enforced** (KAT per branch: accept / decline / dry-run / no-ui / multi-disc-no-match).
+The first path component of every destination and the function that derives it.  **Flavour:
+compiler-enforced** (the `_top_level_class` signature — every `build_dest_path` caller reaches it through
+`build_dest_path`, so its return contract is compiler-visible) + **test-enforced** (a KAT per class arm +
+the `repath`-reconstructs-from-tags KAT).
 
-**Frozen signature (compiler contract).**
+**Proposed signature (S1 `@architect` confirms/adjusts against live code):**
 
 ```python
-def confirm_count_mismatch(
-    self,
-    src_dir: Path,
-    release: MBRelease,
-    selected_medium: MBMedium | None,
-    n_src: int,
-    n_medium: int,
-    diagnostic: str,
-) -> bool: ...
+def _top_level_class(release: MBRelease, tags: TrackTags) -> str: ...
 ```
 
-Returns `True` to accept (proceed at `mb-partial`), `False` to decline (skip).
+Returns the top-level class directory name (already `safe_name`-clean or to be wrapped by the caller).
+**The class MUST be reconstructable from `tags` alone** (embedded `releasetype` / `releasetype_secondary`)
+so `repath`/`regroup`/`unify`'s empty-stub `build_dest_path` calls classify correctly — this is the
+freeze's load-bearing property, not an implementation detail.
 
-**Freeze-time adjustments to the PLAN's proposed signature (against live code):**
+**Routing (Picard-aligned; prose+test contract — the concrete vocabulary is S1's to freeze):**
+- **Classical art-music** (CE-classical predicate: classical work structure present / `CWP_WORKTYPE_GENRES_TOP`
+  classical, and no non-classical secondary-type) → the classical class; nests today's composer-first
+  top_dir unchanged.
+- **Non-classical by MB release-type**: `Audiobook`/`Spokenword` → spoken-word class; `Soundtrack` →
+  soundtrack class; other → a popular/other class, per Picard's `%_secondaryreleasetype%` / `%_primaryreleasetype%`
+  branching.
+- **No signal / ambiguous** → an honest default class (do not silently force `"Classical"`).
 
-1. **`selected_medium` is `MBMedium | None`, not `MBMedium`.**  The multi-disc no-match path
-   (`_select_medium_with_reason` raises `ValueError` at `_pipeline.py:334` *before* a medium is
-   returned) has **no** selected medium at the raise site.  To route that path to the same prompt
-   the parameter must admit `None`.  On the count-mismatch gate path (`_pipeline.py:1554`)
-   `selected_medium` is always bound and non-`None` (guaranteed by the `if selected_medium is None:
-   raise` guard at `_pipeline.py:1519`); on the no-match path it is `None` (or a best-effort
-   nearest-count medium if the executor chooses to compute one for display — see the no-match
-   handling below).  `n_medium` carries the count regardless (`0` or the best-medium count when
-   `selected_medium is None`), so the prompt can render without dereferencing a possibly-`None`
-   medium.
+**Defined-in:** S1 (`_tags.py`: `_top_level_class` + `build_dest_path` class-prefix insertion).
+**Consumed-by:** S2 (the classical subtree boundary); every `build_dest_path` caller (`run()`, `repath`,
+`regroup`, `unify`); downstream R6b/R6d full-library repath.  Over-specify the class vocabulary per
+Category-A.
 
-2. **The method lands on TWO protocols, not one.**  The PLAN named only
-   `DiscoverUI` (`_discover.py:70`).  But the gate lives in `run()`, whose `ui` parameter is typed
-   `DiscUI` (`_pipeline.py:108`) — a **deliberately separate structural-subset Protocol** kept in
-   `_pipeline.py` to avoid the `_discover → run` circular import (documented at `_pipeline.py:113`).
-   `run()` can only call `confirm_count_mismatch` if it is declared on `DiscUI`.  Freeze:
-   **`confirm_count_mismatch` is added to both `DiscUI` (`_pipeline.py:108`, the callable contract)
-   and `DiscoverUI` (`_discover.py:70`, the full surface), and implemented on `TerminalDiscoverUI`
-   (`_discover.py:126`) mirroring `confirm_disc`.**  Every test double for *either* protocol must
-   implement it or mypy fails.  This is an interface-surface detail within `@architect`'s
-   confirm/adjust latitude — no scope change.
+### C-INIT — within-classical initial directory component *(to be frozen at S2)*
 
-**Gate behavior (prose+test contract).**  Two entry points converge on one prompt:
-
-- **Single-medium / disc-override count mismatch** (`_pipeline.py:1554`, condition
-  `len(src_files) != len(copy_subset)`): if `ui is not None and not dry_run`, call
-  `ui.confirm_count_mismatch(src_dir, release, selected_medium, len(src_files), len(copy_subset),
-  diagnostic)`.  Accept → set an `accepted_mismatch` flag, force `census_signal =
-  CensusSignal.MISMATCH`, and truncate to the positional-min subset (below); decline → the original
-  `raise RuntimeError`.  `ui is None` or `dry_run` → the original `raise RuntimeError`
-  (non-interactive contract preserved).
-
-- **Multi-disc no-match** (`_pipeline.py:334` `ValueError` out of `_select_medium_with_reason`, seen
-  at the `_pipeline.py:1505` call site): wrap the call in `try/except ValueError`.  On `ValueError`,
-  if `ui is not None and not dry_run`, choose a **best medium** for ingest (the medium whose
-  `len(track_list)` is nearest to `n_src`; ties → lowest `position`) and call
-  `confirm_count_mismatch(..., selected_medium=best_medium, n_src=len(src_files),
-  n_medium=len(best_medium.track_list), diagnostic=...)`.  Accept → proceed with `best_medium` as
-  `selected_medium` under the same `MISMATCH` + positional-min rule; decline → re-`raise` the
-  original `ValueError`.  `ui is None` or `dry_run` → re-`raise` the original `ValueError`.  (The
-  executor MAY instead pass `selected_medium=None` and defer best-medium choice into the prompt-body
-  return contract, but the frozen decision is: the pipeline picks the nearest-count medium so the
-  ingest is deterministic and the KAT can pin it.  Nearest-count is display-and-ingest; the operator
-  keystroke is the authority.)
-
-**Positional-min mapping rule (R-3 behavioral core — FROZEN).**  On an accepted override the ingest
-copies exactly `k = min(len(src_files), len(selected_medium.track_list))` tracks, positionally
-aligned: source file `i` ↔ selected-medium track `i` for `i` in `range(k)`.  This is forced against
-live code because **three loops in `run()` index positionally and will `IndexError` otherwise**:
-
-- copy-plan build (`_pipeline.py:1653`): iterates `copy_subset` and reads `src_files[copy_subset_pos]`
-  → `IndexError` when `n_src < n_medium`.
-- embedded-MBID tier probe (`_pipeline.py:1734`): `_read_recording_id_tag(f) for f in src_files`
-  then membership-tests against the medium track-id set — safe on length but semantically must be
-  scoped to the copied `k`.
-- ISRC tier probe (`_pipeline.py:1745`): `src_files[i]` vs `selected_medium.track_list[i]` for
-  `range(len(src_files))` → `IndexError` when `n_src > n_medium`.
-
-Freeze: on an accepted mismatch, truncate **both** `src_files` and `copy_subset` to the first `k`
-(build a `copy_subset` restricted to the first `k` selected-medium tracks, and slice `src_files[:k]`
-for the plan/tier probes) so every positional loop stays in-bounds and the copied set is
-deterministic.  The `mb-partial` sidecar tier records that the ingest is partial; `audit` surfaces
-it.  The dropped tail (whichever side is longer) is **not** copied and **not** journaled —
-consistent with "operator owns the discrepancy."  This is within R-2/R-3's anticipated "positional
-min" envelope — **not** an additive-reshard: no aggregation, no smart merge, one deterministic rule.
-
-**Diagnostic string (display-only, not persisted).**  Human-readable edition-vs-structure context:
-whether local layout is flat vs the release is multi-disc (structure mismatch), or a single-medium
-count disagreement (edition mismatch), plus the `n_src` vs `n_medium` counts.  Does not branch
-behavior; not written to the sidecar (deferral honored).
-
-**Tier outcome (consumes C-TIER unchanged).**  Accept → `census_signal = CensusSignal.MISMATCH` →
-`classify_annotation_tier(MISMATCH)` → `(MB_PARTIAL, False)` (verified live at `models.py:120`).
-Written through the existing monotonic-upgrade path (`_pipeline_io.py:1538`), so a dir already at a
-higher tier is not lowered (C-TIER carve-out honored automatically — no new code needed).  No new
-tier, no new signal, no new classifier arm — R2 froze all three.  An adapter that appears to need a
-new *tier* here is a destructive-HALT signal that C-TIER was mis-frozen (per the R3b boundary
-discovery).
-
-- **Defined-in:** S1 (`_discover.py`: `confirm_count_mismatch` on `DiscoverUI` Protocol +
-  `TerminalDiscoverUI`; `_pipeline.py`: `confirm_count_mismatch` on `DiscUI` Protocol + gate rewrite
-  + no-match `try/except` + positional-min truncation + `MISMATCH` wiring).  **Consumed-by:** S1's
-  own integration test and every `DiscUI`/`DiscoverUI` test double (compiler-forced to implement the
-  method on both protocols).  Downstream: none within this roadmap — R3d is the last R3 code node.
-- **KATs that pin C-OVR (S1):** `test_count_mismatch_accept_ingests_partial` (should cover **both**
-  min directions: `n_src < n_medium` and `n_src > n_medium`, since each exercises a different
-  positional loop's `IndexError` guard and each needs branch coverage),
-  `test_count_mismatch_decline_skips`, `test_count_mismatch_dry_run_still_raises`,
-  `test_count_mismatch_no_ui_still_raises`, `test_multidisc_no_match_reaches_override` (+ a
-  dry-run/no-ui counterpart so the no-match re-`raise ValueError` branch is covered),
-  `test_confirm_count_mismatch_terminal_accept`, `test_confirm_count_mismatch_terminal_decline`, and
-  the mismatch integration test.
+The rule choosing the initial component *inside* the classical class (composer-first default;
+performer-first recitals; compilation handling).  **Flavour: test-enforced** (KAT per branch) +
+**prose-enforced** (the CE-anchored attribution rule in NOTES).  **Defined-in:** S2 (`_tags.py`).
+**Consumed-by:** R6b/R6d re-derivation.  Nests strictly under C-CLASS — an apparent need to change the
+*class* boundary from S2 is scope drift into C-CLASS: **HALT** (destructive — C-CLASS was mis-frozen).
 
 ### Consumed (frozen upstream — invalidation is a destructive-HALT)
 
-- **C-TIER** (R2 S1): the tier vocabulary (`AnnotationTier`), `CensusSignal.MISMATCH`, and
-  `classify_annotation_tier`.  R3d **consumes them unchanged** — it wires an existing signal, adds no
-  tier and no classifier arm.  If the executor finds they must edit `AnnotationTier` or add a
-  `CensusSignal`, that is scope drift: **HALT**.  **Flavour: compiler+test-enforced.**
-- **C-WHIP** (R3b S1): whipper recognition + precedence.  Unchanged; the override is orthogonal to
-  `origin_source`.  **Flavour: prose+test-enforced.**
-- **C-S0** (aggregation spans media): **not consumed** — R3d builds no aggregation path.  Named here
-  only to record that the roadmap's original "R3d-structure consumes C-S0" plan was dropped.
-- **C-PROV / C-MOVE + confirmation-provenance invariant** (repo `AGENTS.md`): unchanged — the
-  override gates entry to the copy loop; the copy/tag/verify/journal ordering and the
-  confirmation-provenance chain are untouched.  **Flavour: prose+test-enforced.**
+- **C-PROV / C-MOVE + confirmation-provenance invariant** (repo `AGENTS.md`, NOTES): unchanged — R4a
+  changes only the computed destination path; the copy/tag/verify/journal ordering and the single-site
+  `_move_verify_journal` primitive are untouched.  `repath`/`regroup`/`unify` route the new class-prefixed
+  moves through the frozen primitive.  If the executor finds they must edit `_move_verify_journal` or the
+  ordering, that is scope drift: **HALT**.  **Flavour: compiler+test-enforced.**
+- **C-L0 / C-L1 (leaf/intermediate numbering), C-S0 (aggregation spans media)** (ROADMAP consumed set):
+  unchanged — the class prefix is above the work_dir; leaf/intermediate numbering and cross-medium
+  aggregation are untouched.  **Flavour: test-enforced.**
+- **The MB release-group type fields** (`MBReleaseGroup.primary_type`, `secondary_type_list`;
+  `models.py:802,804`): consumed **unchanged** — R4a routes on them, adds no model field and no `Any`.  If
+  the executor finds the signal must be added to the model or a `cast()` is needed, the model is
+  under-typed: fix the model per house style, and note it as a discovery.  **Flavour: compiler-enforced.**
 
 ### Produced
 
-- **C-OVR** (S1).  No other new contract.
+- **C-CLASS** (S1), **C-INIT** (S2).  No other new contract.
 
 ## Progress ledger
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Add operator override to the track-count-mismatch gate; ingest accepted mismatches at mb-partial | done | 55fa104 | C-OVR (frozen 2026-07-21) |
+| 1 | Introduce the top-level library class scheme in build_dest_path; route on MB release-group type; nest classical composer-first under it | pending | | |
+| 2 | Refine the within-classical initial directory component (recitals, compilations, performer-led) | pending | | |
 
 ## Action-frame digest
 
-### S1 — 2026-07-21
-Discovery/flex: Inflection fork found `selected_medium` must be `MBMedium | None` (multi-disc no-match path has no medium at raise site) and that the method must land on TWO protocols (`DiscUI` in `_pipeline.py` + `DiscoverUI` in `_discover.py`) — PLAN named only `DiscoverUI`.
-Affected: C-OVR (adjusted at freeze; within `@architect` confirm/adjust latitude — no scope change)
-Deferred: no
-Texture: R-3 positional-min rule resolved deterministically (no additive-reshard); all KATs green first pass; tox -m analyze clean.
+*(none yet)*
 
 ## Discoveries & risks
 
-- **R-1 (this wires an existing signal — do not add a tier or a CensusSignal).**  `mb-partial`,
-  `CensusSignal.MISMATCH`, and the classifier arm all exist (R2 over-specified C-TIER).  If the
-  executor finds themselves editing `AnnotationTier` or `classify_annotation_tier`'s arms, that is a
-  **destructive-HALT** signal that C-TIER was mis-frozen — surface at the ◆, do not widen in place.
-- **R-2 (no auto-reconciliation — the operator owns the discrepancy).**  A track-count mismatch is a
-  physical-world fact (edition/pressing/structure) the agent cannot adjudicate.  If the executor
-  reaches for a multi-disc aggregation or a positional-guess "smart merge" beyond the deterministic
-  min-map fixed in S1, that is scope drift into the deferred R3d-structure work: **internal-continue
-  only for the settled override + min-map**; anything more is an **additive-reshard** signal.
-- **R-3 (accepted-partial plan-build is the live design point).**  The one judgment the ◆ @architect
-  session must resolve against live code: how `n_src` files map onto the selected medium's
-  `copy_subset` when the counts differ.  Fix it deterministically and pin it with the integration
-  test; if the mapping is ambiguous beyond a positional min, that is an **additive-reshard** signal,
-  not a silent choice.
-- **R-4 (wrong-pressing risk is bounded here, unlike ISRC promotion).**  Unlike C-ISRC's silent
-  full-verified promotion (R3a watch item), an accepted mismatch lands at `mb-partial` +
-  audit-surfaced and required an explicit operator keystroke — the operator has already accepted the
-  discrepancy.  The residual risk is operator error at the prompt, not silent over-promotion; the
-  diagnostic string is the mitigation.
-- **R-5 (non-interactive contract).**  Automation (dry-run, no-UI) must keep the hard fail — a prompt
-  that hangs a batch run or a silent partial ingest under automation would be a regression.  This is
-  a test-enforced invariant (`test_count_mismatch_dry_run_still_raises`, `_no_ui_still_raises`).
+- **R-1 (route on the release-type signal that already exists — do not invent one).**  `MBReleaseGroup.primary_type`
+  + `secondary_type_list` exist and are already tag-persisted (`releasetype`/`releasetype_secondary`,
+  `_tags.py:698,702`).  If the executor finds themselves adding a new model field or a new tag to carry
+  the class, that is a signal the substrate was mis-read — prefer the existing signal.  A genuinely-missing
+  signal is an **additive-reshard** signal (surface at the ◆), not a silent model widening.
+- **R-2 (the class MUST be embedded-tag-derivable — the `repath` trap).**  `repath`/`regroup`/`unify` call
+  `build_dest_path` with empty `MBRelease()`/`MBTrack()` stubs and no group context; a class computed from
+  the live `MBRelease` (not from `tags`) will silently mis-classify the entire library on the next
+  maintenance pass.  This is the S1 substrate correctness core — pin it with `test_repath_reconstructs_class_from_tags`.
+  If `releasetype`/`releasetype_secondary` turn out **not** to survive `to_file_dict`, that is a discovery
+  requiring either persisting the class signal or choosing an embedded one — surface it, do not compute
+  from an unreachable source.
+- **R-3 (the non-classical population is thin — build the frame, not five special cases).**  Most of the 15
+  `non-classical-other` census dirs are operator-hand-moved; the genuine residue is ~5 (audiobook, kidz-bop
+  ×2/education, hypnobirthing, amazon aggregate).  C-CLASS is a durable Act-III design frame; over-fitting
+  it to five directories is defocus/gold-plating.  Over-specify the *vocabulary* (Category-A), but keep the
+  non-classical top_dir shapes simple.
+- **R-4 (no on-disk retro-migration in R4a).**  The forward class prefix changes paths for *new* ingests;
+  already-annotated releases re-path under R6b/R6d, not now (NOTES/BACKLOG A-a: never disrupt an
+  in-progress library with piecemeal renames).  If the executor reaches for a bulk `repath` of the existing
+  library to apply the class scheme, that is scope drift into R6 — **internal-continue only for the forward
+  path**; a bulk re-derivation is an **additive-reshard / R6 handoff** signal.
+- **R-5 (S2 must not touch the class boundary).**  The within-classical refinement nests strictly under
+  C-CLASS.  An apparent need to change the top-level class *from S2* (e.g. "recitals should be their own
+  top-level class, not a within-classical shape") is a **destructive-HALT** signal that C-CLASS was
+  mis-frozen — surface at the ◆, do not widen C-CLASS in place from the integrative session.
+- **R-6 (defer to Picard / Classical Extras; document divergence).**  The routing follows Picard's
+  release-type branching and CE's editorial stance; where the annotator diverges from CE, NOTES requires a
+  documented rationale.  S1 should verify the Picard `%_primaryreleasetype%`/`%_secondaryreleasetype%`
+  branching against current Picard docs/plugins at execution time (this PLAN states the model from
+  `@architect`'s knowledge; confirm before freezing the vocabulary).
 
 ## Notes for executors
 
-- **Tier routing.**  S1 is **Opus / `@architect`** — the live design surface is the C-OVR Protocol
-  signature freeze *and* the accepted-partial plan-build mapping (R-3).  Do not delegate the mapping
-  decision to a mechanical pass.
-- **Register: PEDAGOGY off** — thin mechanical docstrings per house style (Sphinx/PEP 257, 128-col).
-  The `confirm_count_mismatch` docstring mirrors `confirm_disc`'s register (params, return, the
-  accept/decline/abort semantics).
-- **Invariants to preserve (do not regress):** C-TIER's tier vocabulary and classifier (consumed
-  unchanged — no new tier/signal); C-TIER's monotonic-upgrade carve-out on `annotation_tier`;
-  C-WHIP's whipper precedence; the C-PROV/C-MOVE copy/verify ordering and the confirmation-provenance
-  chain (the override gates entry only); the non-interactive hard-fail contract under dry-run/no-UI.
-- **No `Any`, no `cast()`.**  The gate rewrite may introduce a `match/case` on the accept/decline
-  outcome — if so, include the `case _: # pragma: no cover` arm per house convention.
+- **Tier routing.**  Both sessions are **Opus / `@architect`** — S1's class vocabulary + tag-derivable
+  routing predicate is the substrate design (cost-of-wrong propagates to R6d); S2's within-classical
+  refinement is a Classical-Extras editorial judgment freezing a contract.  Do not delegate either freeze
+  to a mechanical pass.
+- **Register: PEDAGOGY off** — thin mechanical docstrings per house style (Sphinx/PEP 257, 128-col).  The
+  `_top_level_class` docstring states the routing table, the tag-derivable-source requirement, and the
+  forward-path-only (no retro-migration) posture.
+- **Invariants to preserve (do not regress):** C-PROV/C-MOVE copy/verify/journal ordering and the
+  single-site `_move_verify_journal` primitive (only the destination path changes); C-L0/C-L1 numbering and
+  C-S0 aggregation (the class prefix is above the work_dir); "path is a handle, not a manifest" (primary
+  attribution only in the path); the CE editorial anchor (document divergences); no `Any`, no `cast()` (the
+  release-type signal is already typed).
+- **`match/case` convention.**  A `match/case` on the class or the within-classical branch needs a
+  `case _: # pragma: no cover` arm per house style.
+- **Sequencing:** R4a is the **first R4 shard** after the R3 code arc closed (R3d ◆).  It is on the Act II
+  critical path to **J2** (naming-policy freeze), which gates R6.  On the S2 ◆, R4a closes and hands off to
+  **R4b** (cross-medium fragmentation inventory — inventory-first, sharded later) and **R4c** (concerto
+  soloist allowlist).  The parallel R5 operator drain and the now-eligible post-R3 structural-audit are
+  independent of this sub-track.
 - **Full gate before ◆ / commit:** `~/.local/bin/tox -m analyze` green (100% branch cov, mypy strict,
   pylint 10.00/10, pyupgrade clean).
-- **Sequencing:** R3d is the **4th** J1-ordered R3 adapter and the **last R3 code node**.  On the S1
-  ◆, the R3 code arc closes; handoff is to **R5** (operator drain of `Original/`, no agent sessions)
-  and eventually **J3 → R6**.  The post-R3 structural-audit trigger (ROADMAP Junctures note) becomes
-  eligible after this ◆.
-- **Suggested `/plan-run` invocation:** `/plan-run halt-at-boundaries` — a single Opus `@architect`
-  session with one live design decision (the C-OVR signature + accepted-partial mapping) benefits
-  from a boundary halt so the freeze and the mapping rule can be reviewed before the ◆ closes the R3
-  arc.  (If you prefer to run straight through, plain `/plan-run` also works — it is one session.)
+- **Suggested `/plan-run` invocation:** `/plan-run halt-at-boundaries` — this is an unproven shard pattern
+  (first Act-II shard; a new top-level path component is a wide substrate surface), and S1 carries the one
+  load-bearing substrate decision (the C-CLASS vocabulary + tag-derivable routing).  A boundary halt lets
+  the class-scheme freeze be reviewed before S2 consumes it and before the ◆ closes R4a.

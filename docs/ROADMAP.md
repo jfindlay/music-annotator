@@ -156,7 +156,7 @@ be annotated*.  The two are orthogonal; R2 keeps "rung" for identity-confidence 
    contract touched (`origin_source` is free-form `str`).  ◆ handed off to the R3d shard (this
    reconciliation).
 4. **R3d** Track-mismatch operator-override — **after** the strict clean adapters prove C-TIER.
-   ~3 → **1 session** (**IN PROGRESS 2026-07-21**; sharded as PLAN R3d).  **Collapsed at the shard
+   ~3 → **1 session** (**DONE 2026-07-21**, commit `55fa104`, PLAN R3d 1/1 rows).  **Collapsed at the shard
    boundary by an operator-policy decision (2026-07-21):** a track-count mismatch cannot be
    auto-reconciled — it needs physical-medium inspection or a re-rip, which is the operator's
    responsibility.  So R3d does **not** build multi-disc aggregation or an edition-vs-structure copy
@@ -172,7 +172,13 @@ be annotated*.  The two are orthogonal; R2 keeps "rung" for identity-confidence 
    them; no C-TIER re-freeze).  1 session: the `mb-partial`/`MISMATCH`/audit machinery already exists
    (R2), so the only new work is the Protocol method, the terminal prompt, the gate rewrite, and the
    integration test.  The 18 `in-mb-mismatch` dirs (9 presto, 5 whipper, 4 other-download) are worked
-   by the operator via R5 drain, not auto-ingested.
+   by the operator via R5 drain, not auto-ingested.  **Froze C-OVR** — `confirm_count_mismatch` on
+   **both** `DiscUI` (`_pipeline.py`, the callable seam) and `DiscoverUI` (`_discover.py`, the full
+   surface) + accept→`MISMATCH` wiring + the positional-min-k truncation rule.  Freeze-time
+   adjustments (within `@architect` latitude, no scope change): `selected_medium` widened to
+   `MBMedium | None` for the multi-disc no-match path; the method lands on two protocols, not one.
+   **The R3 code arc closes here** → handoff to R5 drain + the post-R3 structural-audit trigger (now
+   eligible); the parallel R4/J2 track carries the remaining critical-path design work.
 - **R3c Discogs adapter — PRUNED to BACKLOG (J1).**  Census refuted its premise: all 6 not-in-mb dirs
   are personal recordings, none Discogs-suitable.  Returns to BACKLOG as trigger-based (fires if a
   future census surfaces Discogs-suitable commercial releases).  The `alternate-source` tier is
@@ -194,7 +200,9 @@ step-3 watch item that could reshard R3 order.
 
 - **R4a** Library-wide taxonomy + initial directory component (A-b): top-level class scheme admitting
   the full corpus; within-classical component edge cases.  Design can start now; finalises against the
-  R0 census inventory.
+  R0 census inventory.  **IN PROGRESS 2026-07-21** (sharded as PLAN R4a).  Sharded first among R4
+  after the R3 code arc closed (R5 is operator-paced/no sessions; R4a sits on the existing R0 census
+  substrate, unlike R4b which is inventory-first).
 - **R4b** Cross-medium fragmentation inventory (A-c): enumerate before designing; remedies may route
   to class B or III-b.
 - **R4c** Concerto-like soloist editorial allowlist (small additive; substrate already in place).
@@ -232,7 +240,9 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
 
 Post-R3, the **structural-audit trigger** fires (BACKLOG "Codebase maintenance cadence"): review the
 coherence of the new module boundaries (adapters, rung substrate, `_net`) once settled.  Trigger-based;
-stays in BACKLOG, referenced here for timing.
+stays in BACKLOG, referenced here for timing.  **Now fired-eligible as of the R3d ◆ (2026-07-21)** —
+the R3 adapter arc has settled; the audit may be sharded whenever the operator elects it (it is off
+the critical path, so R4/J2 was sharded first).
 
 ## Cross-session contracts
 
@@ -383,3 +393,25 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   item for the R5 operator drain**: if the drain surfaces wrong-pressing full-verified entries, tighten
   the C-ISRC evidence rule (additive-reshard) or reconsider whether ISRC-match alone licenses
   `full-mb-verified` (destructive-HALT on C-ISRC).  Durable through R5 and Act III-b.
+
+- **R3d boundary (2026-07-21) — C-OVR froze the positional-min-k ingest rule + a two-protocol
+  surface.**  An accepted track-count mismatch copies exactly `k = min(n_src, n_medium)`
+  positionally-aligned tracks at `mb-partial` (three positional loops in `run()` would `IndexError`
+  otherwise); the dropped tail is neither copied nor journaled (operator owns the discrepancy).
+  `confirm_count_mismatch` lands on **both** `DiscUI` (`_pipeline.py`, the callable seam) and
+  `DiscoverUI` (`_discover.py`, the full surface) — the deliberate structural-subset split that avoids
+  the `_discover → run` circular import; every test double for either protocol must implement it.
+  Static-frame consequence: R5's operator drain surfaces accepted `mb-partial` entries via `audit`;
+  any Act III-b re-derivation must preserve the min-k determinism.  No contract invalidated — wires
+  C-TIER's existing `MISMATCH` signal unchanged; closes the R3 code arc.
+
+- **R4a shard boundary (2026-07-21) — the non-classical population the taxonomy must admit is thin
+  (static-frame fact tightening R4a).**  Of the 15 `non-classical-other` census dirs, the operator has
+  already elected to manually move most out (`Audiobooks`, `GarageBand`, `Lydia *`, `nachtmusick`,
+  `Playlists`, `Into The Woods`, `Caro mio ben`, `LDS Youth Music`).  The genuine "must be housed by
+  the top-level class scheme" residue is small — audiobook/spoken-word (`Aesop_Fables`),
+  children's-pop (`Kidz Bop` ×2, `Education`), new-age (`HypnoBirthing`), and the aggregate
+  `Amazon Music` dir.  Consequence: R4a's top-level class scheme must exist and be principled (full
+  inclusion is the north star), but it is **designed against a thin live non-classical population**,
+  not a large one — the LoC-style "class for everything" is a durable design frame, not a large
+  immediate migration.  For the R4a substrate session to weigh.
