@@ -202,37 +202,124 @@ rule.  S1's action-frame digest sharpens this.)*
 
 ## Cross-session contracts
 
-### C-CLASS — top-level library class scheme *(to be frozen at S1)*
+### C-CLASS — top-level library class scheme *(FROZEN at S1)*
 
-The first path component of every destination and the function that derives it.  **Flavour:
-compiler-enforced** (the `_top_level_class` signature — every `build_dest_path` caller reaches it through
-`build_dest_path`, so its return contract is compiler-visible) + **test-enforced** (a KAT per class arm +
-the `repath`-reconstructs-from-tags KAT).
+The first path component of every **newly-computed** destination and the function that derives it.  **Flavour:
+compiler-enforced** (the `_top_level_class` return contract is reached through `build_dest_path`, compiler-visible) +
+**test-enforced** (a KAT per class arm + the `repath`-reconstructs-from-tags KAT + a work-top-dir-depth KAT).
 
-**Proposed signature (S1 `@architect` confirms/adjusts against live code):**
+**Frozen signature.**
 
 ```python
-def _top_level_class(release: MBRelease, tags: TrackTags) -> str: ...
+def _top_level_class(tags: TrackTags) -> str: ...
 ```
 
-Returns the top-level class directory name (already `safe_name`-clean or to be wrapped by the caller).
-**The class MUST be reconstructable from `tags` alone** (embedded `releasetype` / `releasetype_secondary`)
-so `repath`/`regroup`/`unify`'s empty-stub `build_dest_path` calls classify correctly — this is the
-freeze's load-bearing property, not an implementation detail.
+Signature resolved to `(tags: TrackTags) -> str` — **the `release: MBRelease` parameter from the sketch is dropped**.
+The class MUST be derivable from embedded tags alone (the substrate correctness core), so passing `release` would invite
+the exact `repath` mis-classification trap the freeze exists to prevent: `repath`/`regroup`/`unify` call
+`build_dest_path` with an empty `MBRelease()` stub (`_pipeline_maint.py:378-379,588-589,957-958`), so a class computed
+from `release.release_group` would be blank on every maintenance pass.  `build_dest_path` computes `file_dict =
+tags.to_file_dict()` at its head (`_tags.py:934`) and passes `tags` (or `file_dict`) to `_top_level_class`; the class
+reads only tag-derived values, never `release.release_group`.  Returns a `safe_name`-clean single path component (the
+function calls `safe_name` on its result, or the caller wraps once — pin whichever in the KAT).
 
-**Routing (Picard-aligned; prose+test contract — the concrete vocabulary is S1's to freeze):**
-- **Classical art-music** (CE-classical predicate: classical work structure present / `CWP_WORKTYPE_GENRES_TOP`
-  classical, and no non-classical secondary-type) → the classical class; nests today's composer-first
-  top_dir unchanged.
-- **Non-classical by MB release-type**: `Audiobook`/`Spokenword` → spoken-word class; `Soundtrack` →
-  soundtrack class; other → a popular/other class, per Picard's `%_secondaryreleasetype%` / `%_primaryreleasetype%`
-  branching.
-- **No signal / ambiguous** → an honest default class (do not silently force `"Classical"`).
+**Tag-derivable signal — verified against live code (confirmed).**
+- `releasetype` (from `release.release_group.primary_type`, `_tags.py:702`) and `releasetype_secondary` (semicolon-joined
+  `secondary_type_list`, `_tags.py:698`) are named `TrackTags` fields (`models.py:1254,1263`), are **NOT** in the
+  `to_file_dict()` exclusion set (`models.py:1505-1513`), and are non-empty-guarded strings → they survive to file as
+  `RELEASETYPE` / `RELEASETYPE_SECONDARY`.
+- On the maintenance read-back path, `_tags_from_file_dict` (`_pipeline_maint.py:71-119`) repopulates any uppercase key
+  matching a known field name; `releasetype`/`releasetype_secondary` are known fields and NOT in its `_excluded` set
+  (`{recording_date_work, cwp_composers_is_fallback}`), so they round-trip.  **The full ingest→persist→read-back→build
+  chain is sound; no new model field, no new tag, no `cast()` is required (R-1/R-2 satisfied).**
 
-**Defined-in:** S1 (`_tags.py`: `_top_level_class` + `build_dest_path` class-prefix insertion).
-**Consumed-by:** S2 (the classical subtree boundary); every `build_dest_path` caller (`run()`, `repath`,
-`regroup`, `unify`); downstream R6b/R6d full-library repath.  Over-specify the class vocabulary per
-Category-A.
+**Classical predicate — reuse the existing tested predicate (do not invent one).**  The CE-classical split reuses the
+predicate already in `_is_composer_split_release` (`_pipeline_maint.py:709-716`): a release is **classical** when
+`CWP_WORK_TOP` is non-empty (MB work structure present) AND `CWP_WORKTYPE_GENRES_TOP` contains `"Classical"`; otherwise
+non-classical.  Both fields survive `to_file_dict` (not excluded) and round-trip via `_tags_from_file_dict` (both are
+known fields), so the predicate is fully tag-derivable — consistent with the substrate core.  A non-classical
+secondary-type (`Audiobook`/`Spokenword`/`Soundtrack`) short-circuits to the matching non-classical class even when work
+structure is coincidentally present.
+
+**Routing table (Picard-aligned; MB release-group Type vocabulary verified against musicbrainz.org/doc/Release_Group/Type).**
+Evaluate in this order (first match wins); the `secondary_type_list` (semicolon-joined in `releasetype_secondary`) is
+checked before `primary_type` because Picard's community classical scripts branch on `%_secondaryreleasetype%` first:
+1. secondary contains `Audiobook` OR `Spokenword` OR `Audio drama` OR `Interview` → **`Spoken Word`** class.
+2. secondary contains `Soundtrack` → **`Soundtracks`** class.
+3. CE-classical predicate true (see above) → **`Classical`** class.
+4. secondary contains `Compilation` (and not classical) → **`Compilations`** class.
+5. `primary_type` in {`Album`, `Single`, `EP`, `Broadcast`, `Other`} (non-classical, no other signal) → **`Popular`** class.
+6. no usable signal (empty `releasetype` and `releasetype_secondary`, predicate false) → **`Unsorted`** class (the honest
+   fallback — do NOT silently force `Classical`).
+
+Over-specify per Category-A: arms 1, 2, 4 may be thinly populated by the current census but are frozen now (adding a
+class later is cheaper than a mid-library re-route).  Each arm — including unpopulated ones — carries a KAT; the
+`match`/`case _` needs `# pragma: no cover` per house style.
+
+**Path shape (class prefix insertion).**  `build_dest_path` prepends the class as the new first component.  The classical
+class nests **today's `<composer> - <performers>` top_dir unchanged** beneath it (S1 does not touch it; S2/C-INIT refines
+only the within-classical component).  Non-classical top_dir shapes are S1's and are kept **simple and honest** (R-3 —
+the population is thin):
+- `Spoken Word` / `Popular` / `Compilations`: `<ALBUMARTIST or ARTIST> - <ALBUM>` (author/narrator or artist, then title;
+  a spoken-word/pop release has no composer, so the classical composer-first shape is wrong here).
+- `Soundtracks`: `<ALBUM>` (the soundtrack title; composer/artist is unreliable across a VA score).
+- `Unsorted`: `<ALBUM or "Unknown Album">` (honest minimal shape).
+
+Resulting layouts: `dest_root/Classical/<composer> - <performers>/<work [YYYY]>/…` (classical, unchanged nesting) and
+`dest_root/<NonClassicalClass>/<class-appropriate top_dir>/<work_dir>/…`.
+
+**LOAD-BEARING RESOLUTION — the work-top-dir depth invariant (C-PROV boundary; part of the freeze).**  Adding a first
+component makes new-ingest paths **three-level** (`<class>/<top_dir>/<work_dir>/`), but the copy/sidecar/audit machinery
+derives the *work top directory* positionally from the **root down** as `parts[0]/parts[1]`, which would then resolve to
+`<class>/<top_dir>` — one level too shallow — silently mis-placing cover-art/freedb/whipper/provenance sidecars and
+mis-scoping the collision-suffix and fragmentation logic.  Affected sites (all assume a fixed two-level
+`<top_dir>/<work_dir>/`): `_pipeline.py:1341-1342` (new-ingest sidecar `work_top_dir` — **NOT deferred; in R4a's own
+scope**), `_pipeline.py:389,526-530` (collision grouping + `parts[1]` work_dir suffix rewrite), `_pipeline.py:1883`,
+`_audit.py:341,448-474,528,689,675-678` (fragmentation + sidecar resolution + `detect_fragmented_releases`),
+`_pipeline_io.py:1469,1836-1839` (journal rebuild + provenance sidecar).  The C-PROV *frozen primitive*
+(`_move_verify_journal`) and the copy/verify/journal **ordering** are genuinely untouched — this is the adjacent
+positional-depth assumption, not the primitive.
+
+**Freeze decision:** the work-top-dir and work_dir-scope derivations must become **class-depth-aware**, not
+`parts[0]/parts[1]`.  The frozen rule: **the work top directory is the two components immediately beneath the class**,
+i.e. `parts[1]/parts[2]` for a class-prefixed path.  Implement via a single shared helper (proposed
+`_work_top_dir(dest_file, dest_root) -> Path` and `_work_dir_component(rel_parts) -> str`) that skips the leading class
+component, and route ALL the sites above through it.  `build_dest_path` remains the sole authority on structure; the
+helper reads the same class-prefixed shape.  This keeps C-PROV's provenance chain intact (entries still written only
+after verify) while correcting the directory the sidecars land in.
+
+**⚠ DISCOVERY / RESHARD FLAG (surface at step-3 review and the S2 ◆).**  This depth reconciliation **expands S1's file
+list beyond the PLAN-stated `_tags.py` + tests**: `_pipeline.py`, `_audit.py`, and `_pipeline_io.py` must also change
+(the shared `_work_top_dir` helper + routing the ~14 positional sites through it, plus their tests
+`tests/unit/test_pipeline.py`, `tests/unit/test_audit.py`, `tests/integration/test_integration.py`).  This is a
+foreseen-class discovery (R-1/R-2: substrate mis-read surfaced, not silently widened) — it is **additive** (a
+depth-invariant helper, no contract broken) and rides through as `internal-continue` for the executor, but the driver
+should record the file-list expansion.  It is **not** a `_move_verify_journal` edit and **not** an ordering change, so it
+is not the frozen-primitive scope-drift HALT.  If the executor instead finds the class cannot be kept depth-invariant
+without editing `_move_verify_journal` or the copy/verify/journal ordering, THAT is scope drift → HALT.
+
+**Backward-compat / no retro-migration (R-4).**  The class prefix changes only **forward** paths; already-annotated
+two-level releases are NOT retro-migrated by R4a (R6b/R6d owns the whole-library re-derivation).  During R4a the library
+is a mix of two-level (old) and three-level (new) trees; the `_work_top_dir` helper MUST handle both — for a
+non-class-prefixed (legacy two-level) path it returns `parts[0]/parts[1]`, for a class-prefixed path it returns
+`parts[1]/parts[2]`.  Discriminate by testing whether `parts[0]` is a known class name (the closed C-CLASS vocabulary is
+the discriminator) — pin this dual-shape behaviour with a KAT.  State the forward-path-only posture in the
+`_top_level_class` docstring.
+
+**KATs (frozen).**  Unit: `test_top_level_class_classical`, `test_top_level_class_audiobook` (→ Spoken Word),
+`test_top_level_class_soundtrack`, `test_top_level_class_compilation_nonclassical` (→ Compilations),
+`test_top_level_class_popular`, `test_top_level_class_default_fallback` (→ Unsorted),
+`test_build_dest_path_nests_composer_under_class` (classical top_dir unchanged beneath `Classical`),
+`test_repath_reconstructs_class_from_tags` (empty-stub `build_dest_path` derives the class from
+`RELEASETYPE`/`RELEASETYPE_SECONDARY` tags, not the live release), and `test_work_top_dir_depth_invariant` (the
+`_work_top_dir` helper returns the correct work dir for BOTH a legacy two-level path and a class-prefixed three-level
+path).  Integration (no internal-helper patching): a classical release → `Classical/<composer-first top_dir>/…` with
+sidecars in the correct work dir; an audiobook release → `Spoken Word/…` with sidecars in the correct work dir.
+
+**Defined-in:** S1 (`_tags.py`: `_top_level_class` + `build_dest_path` class-prefix insertion; the shared
+`_work_top_dir`/`_work_dir_component` helper and its adoption across `_pipeline.py`/`_audit.py`/`_pipeline_io.py`).
+**Consumed-by:** S2 (the classical subtree boundary); every `build_dest_path` caller (`run()`, `repath`, `regroup`,
+`unify`); downstream R6b/R6d full-library repath.  Over-specify the class vocabulary per Category-A.
 
 ### C-INIT — within-classical initial directory component *(to be frozen at S2)*
 
@@ -265,12 +352,16 @@ performer-first recitals; compilation handling).  **Flavour: test-enforced** (KA
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Introduce the top-level library class scheme in build_dest_path; route on MB release-group type; nest classical composer-first under it | pending | | |
+| 1 | Introduce the top-level library class scheme in build_dest_path; route on MB release-group type; nest classical composer-first under it | done | 7666040 | C-CLASS |
 | 2 | Refine the within-classical initial directory component (recitals, compilations, performer-led) | pending | | |
 
 ## Action-frame digest
 
-*(none yet)*
+### S1 inflection — 2026-07-21
+Discovery/flex: C-CLASS interface frozen; `_top_level_class(tags: TrackTags) -> str` (no `release` param); 6-arm routing table; tag-derivable signal confirmed; depth-invariant `_work_top_dir` helper required at ~14 sites in `_pipeline.py`/`_audit.py`/`_pipeline_io.py` (additive, internal-continue).
+Affected: C-CLASS (frozen), S1 expected-file list expanded to include `_pipeline.py`, `_audit.py`, `_pipeline_io.py` and their tests.
+Deferred: no — depth reconciliation is in S1's scope, not deferred.
+Texture: The `_work_top_dir` helper must handle dual-shape (legacy two-level + new three-level) during R4a; discriminate by testing `parts[0]` against the closed C-CLASS vocabulary.
 
 ## Discoveries & risks
 
