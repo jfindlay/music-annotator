@@ -321,7 +321,7 @@ sidecars in the correct work dir; an audiobook release → `Spoken Word/…` wit
 **Consumed-by:** S2 (the classical subtree boundary); every `build_dest_path` caller (`run()`, `repath`, `regroup`,
 `unify`); downstream R6b/R6d full-library repath.  Over-specify the class vocabulary per Category-A.
 
-### C-INIT — within-classical initial directory component *(to be frozen at S2)*
+### C-INIT — within-classical initial directory component *(FROZEN at S2)*
 
 The rule choosing the initial component *inside* the classical class (composer-first default;
 performer-first recitals; compilation handling).  **Flavour: test-enforced** (KAT per branch) +
@@ -353,7 +353,7 @@ performer-first recitals; compilation handling).  **Flavour: test-enforced** (KA
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 | Introduce the top-level library class scheme in build_dest_path; route on MB release-group type; nest classical composer-first under it | done | 7666040 | C-CLASS |
-| 2 | Refine the within-classical initial directory component (recitals, compilations, performer-led) | pending | | |
+| 2 | Refine the within-classical initial directory component (recitals, compilations, performer-led) | done | 2cef03e | C-INIT |
 
 ## Action-frame digest
 
