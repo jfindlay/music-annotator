@@ -2995,6 +2995,48 @@ class TestCClassIntegration:
         prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
         assert prov_path.exists(), f"provenance sidecar must be written at {prov_path}"
 
+    def test_classical_single_composer_regression_guard(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Single-composer classical release → path under Classical/<composer-first top_dir>/… (C-INIT regression guard).
+
+        Verifies that the C-INIT change does not regress the dominant single-composer population.
+        The existing Respighi/Karajan release must still produce a composer-first top_dir.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        src = Path("/src/classical_single")
+        dest = Path("/dest/classical_single")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01 - track1.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02 - track2.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release()
+        _patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        flac_files = sorted(dest.rglob("*.flac"))
+        assert len(flac_files) == 2, f"expected 2 FLAC files, got {len(flac_files)}"
+
+        for f in flac_files:
+            rel = f.relative_to(dest)
+            assert rel.parts[0] == "Classical", (
+                f"Expected class 'Classical' for single-composer classical, got {rel.parts[0]!r}"
+            )
+            # C-INIT: single-composer → composer-first top_dir (Respighi is the composer).
+            assert "Respighi" in rel.parts[1], (
+                f"Expected composer 'Respighi' in top_dir (C-INIT single-composer), got {rel.parts[1]!r}"
+            )
+
     def test_audiobook_release_paths_under_spoken_word_class(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """Audiobook release → path under Spoken Word/… with sidecars in correct work dir.
 
@@ -3034,6 +3076,230 @@ class TestCClassIntegration:
             rel = f.relative_to(dest)
             assert rel.parts[0] == "Spoken Word", (
                 f"Expected class 'Spoken Word' for audiobook release, got {rel.parts[0]!r} for {f}"
+            )
+
+        # Provenance sidecar must be in the correct work_top_dir.
+        work_top = _work_top_dir(flac_files[0], dest)
+        prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
+        assert prov_path.exists(), f"provenance sidecar must be written at {prov_path}"
+
+
+# ---------------------------------------------------------------------------
+# C-INIT integration KATs: within-classical initial component (S2, frozen)
+# ---------------------------------------------------------------------------
+
+
+def _make_recital_release() -> MBRelease:
+    """Return a minimal recital release model (performer-led, no single composer).
+
+    The release artist is "Mitsuko Uchida" (pianist).  The work has type "Classical" so that
+    the C-CLASS predicate routes to the Classical class, but has NO composer relation so that
+    cwp_composer_lastnames is empty and _classical_top_dir returns the recital (performer-first)
+    shape.
+
+    :returns: An :class:`~music_annotator.models.MBRelease` instance.
+    """
+    return MBRelease.model_validate(
+        {
+            "id": "recital-rel-1",
+            "title": "Schubert: Piano Sonatas",
+            "date": "2006",
+            "status": "Official",
+            "barcode": "",
+            "artist-credit": [
+                {
+                    "name": "Mitsuko Uchida",
+                    "artist": {
+                        "id": "uchida-1",
+                        "name": "Mitsuko Uchida",
+                        "sort-name": "Uchida, Mitsuko",
+                        "type": "Person",
+                    },
+                }
+            ],
+            "release-group": {
+                "id": "recital-rg-1",
+                "primary-type": "Album",
+                "first-release-date": "2006",
+            },
+            "label-info-list": [],
+            "text-representation": {"script": "Latn", "language": "ger"},
+            "medium-list": [
+                {
+                    "position": 1,
+                    "format": "CD",
+                    "track-list": [
+                        {
+                            "id": "recital-trk1",
+                            "position": 1,
+                            "recording": {
+                                "id": "recital-rec1",
+                                "title": "Sonata in B minor, D 960: I. Molto moderato",
+                                "artist-credit": [
+                                    {
+                                        "name": "Mitsuko Uchida",
+                                        "artist": {
+                                            "id": "uchida-1",
+                                            "name": "Mitsuko Uchida",
+                                            "sort-name": "Uchida, Mitsuko",
+                                        },
+                                    }
+                                ],
+                            },
+                        },
+                        {
+                            "id": "recital-trk2",
+                            "position": 2,
+                            "recording": {
+                                "id": "recital-rec2",
+                                "title": "Sonata in B minor, D 960: II. Andante sostenuto",
+                                "artist-credit": [
+                                    {
+                                        "name": "Mitsuko Uchida",
+                                        "artist": {
+                                            "id": "uchida-1",
+                                            "name": "Mitsuko Uchida",
+                                            "sort-name": "Uchida, Mitsuko",
+                                        },
+                                    }
+                                ],
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+
+def _make_recital_work_detail() -> MBWork:
+    """Return a minimal work model for a recital track with NO composer relation.
+
+    Uses ``"type": "Classical"`` so that ``cwp_worktype_genres_top`` contains ``"Classical"``
+    and the C-CLASS predicate routes the release to the ``Classical`` library class.  The
+    ``artist-relation-list`` is empty (no composer linked) so that ``cwp_composer_lastnames``
+    is empty and ``_classical_top_dir`` returns the recital (performer-first) shape.
+
+    :returns: An :class:`~music_annotator.models.MBWork` instance.
+    """
+    return MBWork.model_validate(
+        {
+            "id": "recital-w1",
+            "title": "Sonata in B minor, D 960",
+            "type": "Classical",
+            "artist-relation-list": [],
+            "work-relation-list": [],
+            "tag-list": [],
+            "attribute-list": [],
+            "life-span": {"begin": "", "end": "", "ended": False},
+        }
+    )
+
+
+def _patch_mb_recital(mocker: MockerFixture, release: MBRelease) -> None:
+    """Patch all musicbrainzngs calls for a recital run().
+
+    :param mocker: pytest-mock fixture.
+    :param release: The MBRelease model to return from fetch_release.
+    """
+    mocker.patch("music_annotator._mb_api.mb.set_useragent")
+    mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+    mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+    def _rec_detail(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
+        titles = {
+            "recital-rec1": "Sonata in B minor, D 960: I. Molto moderato",
+            "recital-rec2": "Sonata in B minor, D 960: II. Andante sostenuto",
+        }
+        return MBRecording.model_validate(
+            {
+                "id": rec_id,
+                "title": titles.get(rec_id, "Unknown"),
+                "artist-credit": [
+                    {
+                        "name": "Mitsuko Uchida",
+                        "artist": {
+                            "id": "uchida-1",
+                            "name": "Mitsuko Uchida",
+                            "sort-name": "Uchida, Mitsuko",
+                        },
+                    }
+                ],
+                "artist-relation-list": [
+                    {
+                        "type": "instrument",
+                        "artist": {
+                            "id": "uchida-1",
+                            "name": "Mitsuko Uchida",
+                            "sort-name": "Uchida, Mitsuko",
+                        },
+                        "attribute-list": [{"type": "piano", "value": "piano"}],
+                    }
+                ],
+                "work-relation-list": [
+                    {
+                        "type": "performance",
+                        "work": {"id": "recital-w1", "title": "Sonata in B minor, D 960"},
+                    }
+                ],
+            }
+        )
+
+    mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_rec_detail)
+    mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_recital_work_detail())
+    mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+
+class TestCInitIntegration:
+    """C-INIT integration KATs: within-classical initial component (S2, frozen).
+
+    These tests exercise the full pipeline end-to-end (no internal helpers patched) and verify
+    that the C-INIT routing produces the correct within-classical path structure for recital
+    and single-composer releases.
+    """
+
+    def test_recital_release_paths_under_classical_performer_first(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Recital release → path under Classical/<performer-first top_dir>/… (C-INIT recital branch).
+
+        Exercises the full pipeline with a recital release (work type "Classical" but no composer
+        relation → cwp_composer_lastnames empty).  Verifies:
+        - All FLAC files land under ``Classical/``.
+        - The top_dir uses the performer-first shape (albumartist - album).
+        - The provenance sidecar is written to the correct work_top_dir.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        src = Path("/src/recital")
+        dest = Path("/dest/recital")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01 - track1.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02 - track2.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_recital_release()
+        _patch_mb_recital(mocker, release)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
+        music_annotator.run(
+            release_id="recital-rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        flac_files = sorted(dest.rglob("*.flac"))
+        assert len(flac_files) == 2, f"expected 2 FLAC files, got {len(flac_files)}"
+
+        # All files must be under the Classical class.
+        for f in flac_files:
+            rel = f.relative_to(dest)
+            assert rel.parts[0] == "Classical", f"Expected class 'Classical' for recital release, got {rel.parts[0]!r} for {f}"
+            # C-INIT recital branch: top_dir must be performer-first (albumartist - album).
+            assert "Mitsuko Uchida" in rel.parts[1], (
+                f"Expected albumartist 'Mitsuko Uchida' in recital top_dir (C-INIT), got {rel.parts[1]!r}"
             )
 
         # Provenance sidecar must be in the correct work_top_dir.

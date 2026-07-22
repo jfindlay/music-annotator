@@ -37,7 +37,7 @@ from music_annotator import (
 from music_annotator._audit import _audit_tier_pass, _make_audit_counts
 from music_annotator._mb_api import _extract_session_date
 from music_annotator._pipeline_io import _write_provenance_fields
-from music_annotator._tags import _NAME_MAX, _proposed_short, _top_level_class, _work_aliases
+from music_annotator._tags import _NAME_MAX, _classical_top_dir, _proposed_short, _top_level_class, _work_aliases
 from music_annotator._works import _date_range, _score_top_work, select_primary_performance_work
 from music_annotator.models import (
     JSON,
@@ -1500,14 +1500,20 @@ class TestBuildDestPathEdgeCases:
         )
         assert "Adagio" in result.name
 
-    def test_no_person_in_artist_credit_uses_unknown_composer(self, fs: FakeFilesystem) -> None:
-        """build_dest_path uses 'Unknown Composer' when artist-credit has no Person type.
+    def test_no_composer_in_tags_uses_recital_shape(self, fs: FakeFilesystem) -> None:
+        """build_dest_path uses recital shape (albumartist - album) when CWP/CEA composer tags are empty.
+
+        C-INIT: when cwp_composer_lastnames and cea_composer_lastnames are both empty, the
+        _classical_top_dir recital branch fires and uses albumartist - album as the top_dir.
+        The release.artist_credit is not consulted (the recital branch short-circuits it).
+
+        When albumartist is also empty, falls back to album title alone (or "Unknown Album").
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        # artist-credit has a string join phrase (not a dict) → no Person found
+        # No composer in tags, no albumartist → recital branch → "Unknown Album" top_dir.
         tags = self._make_tags_no_composer(title="Track")
         result = music_annotator.build_dest_path(
             dest_root,
@@ -1515,31 +1521,36 @@ class TestBuildDestPathEdgeCases:
             _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Track"}}),
             tags,
         )
-        assert "Unknown Composer" in str(result)
+        rel = result.relative_to(dest_root)
+        # C-INIT recital branch: top_dir is albumartist-based (or "Unknown Album" when empty).
+        assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
+        assert rel.parts[1] == "Unknown Album", (
+            f"Expected recital top_dir 'Unknown Album' (no albumartist), got {rel.parts[1]!r}"
+        )
 
-    def test_dict_artist_credit_without_person_type(self, fs: FakeFilesystem) -> None:
-        """build_dest_path uses 'Unknown Composer' when dict artist lacks 'Person' type.
+    def test_no_composer_in_tags_with_albumartist_uses_performer_first(self, fs: FakeFilesystem) -> None:
+        """build_dest_path uses albumartist - album when CWP/CEA composer tags are empty but albumartist is set.
+
+        C-INIT: the recital branch uses albumartist as the primary attribution.
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        # artist has type "Group" → not "Person" → composer remains ""
         tags = self._make_tags_no_composer(title="Track")
+        tags.albumartist = "Mitsuko Uchida"
+        tags.album = "Schubert Sonatas"
         result = music_annotator.build_dest_path(
             dest_root,
-            _rel(
-                {
-                    "id": "r1",
-                    "title": "Album",
-                    "artist-credit": [{"artist": {"type": "Group", "name": "Some Ensemble", "sort-name": "Ensemble, Some"}}],
-                    "medium-list": [],
-                }
-            ),
+            _rel({"id": "r1", "title": "Schubert Sonatas", "artist-credit": [], "medium-list": []}),
             _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Track"}}),
             tags,
         )
-        assert "Unknown Composer" in str(result)
+        rel = result.relative_to(dest_root)
+        assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
+        assert "Mitsuko Uchida" in rel.parts[1], (
+            f"Expected albumartist 'Mitsuko Uchida' in recital top_dir, got {rel.parts[1]!r}"
+        )
 
     def test_duplicate_composer_lastnames_deduplicated(self, fs: FakeFilesystem) -> None:
         """Duplicate entries in CWP_COMPOSER_LASTNAMES are deduplicated.
@@ -4629,3 +4640,192 @@ class TestBuildDestPathClassPrefix:
         rel = result.relative_to(dest_root)
         assert rel.parts[0] == "Popular", f"Expected class 'Popular', got {rel.parts[0]!r}"
         assert rel.parts[1] == "Unknown", f"Expected top_dir 'Unknown', got {rel.parts[1]!r}"
+
+
+# ---------------------------------------------------------------------------
+# C-INIT KATs: _classical_top_dir within-classical initial component (S2, frozen)
+# ---------------------------------------------------------------------------
+
+
+class TestClassicalTopDir:
+    """KATs for :func:`~music_annotator._tags._classical_top_dir` (C-INIT, frozen at S2).
+
+    Each test exercises one branch of the three-case C-INIT rule:
+    1. Multi-composer classical compilation → albumartist-based shape.
+    2. Recital (no single composer) → performer-first shape.
+    3. Single-composer (dominant population) → None (caller uses <composer> - <performers>).
+    """
+
+    def test_classical_top_dir_single_composer(self) -> None:
+        """Single-composer classical → None (caller uses <composer> - <performers> unchanged).
+
+        The dominant population: a work with a single composer linked in MB.  _classical_top_dir
+        returns None to signal the caller should use the default composer-first shape.
+
+        :returns: None.
+        """
+        tags = TrackTags(
+            cwp_work_top="Symphony No. 9",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="Beethoven",
+            cea_composer_lastnames="Beethoven",
+            albumartist="Herbert von Karajan",
+            albumartistsort="Karajan, Herbert von",
+            album="Beethoven: Symphony No. 9",
+        )
+        result = _classical_top_dir(tags)
+        assert result is None, f"Expected None for single-composer classical, got {result!r}"
+
+    def test_classical_top_dir_recital(self) -> None:
+        """Recital (performer-led, no single composer) → performer-first component.
+
+        Signal: CWP_COMPOSER_LASTNAMES and CEA_COMPOSER_LASTNAMES are both empty.
+        The album artist is the canonical identity for a recital.
+
+        :returns: None.
+        """
+        tags = TrackTags(
+            cwp_work_top="Sonata in B minor",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="",
+            cea_composer_lastnames="",
+            albumartist="Mitsuko Uchida",
+            albumartistsort="Uchida, Mitsuko",
+            album="Schubert: Piano Sonatas",
+        )
+        result = _classical_top_dir(tags)
+        assert result is not None, "Expected a non-None result for recital"
+        assert "Mitsuko Uchida" in result, f"Expected albumartist 'Mitsuko Uchida' in recital top_dir, got {result!r}"
+        assert "Schubert" in result or "Piano Sonatas" in result, f"Expected album title in recital top_dir, got {result!r}"
+
+    def test_classical_top_dir_compilation(self) -> None:
+        """Multi-composer classical compilation → albumartist-based shape.
+
+        Signal: releasetype_secondary contains 'Compilation'.
+        Uses albumartistsort → last_name derivation (aligned with _canonical_composer_component).
+
+        :returns: None.
+        """
+        tags = TrackTags(
+            cwp_work_top="Piano Concerto No. 1",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="Beethoven",
+            cea_composer_lastnames="Beethoven",
+            releasetype_secondary="Compilation",
+            albumartist="Various Artists",
+            albumartistsort="Various Artists",
+            album="Great Piano Concertos",
+        )
+        result = _classical_top_dir(tags)
+        assert result is not None, "Expected a non-None result for compilation"
+        assert "Various" in result, f"Expected 'Various' in compilation top_dir, got {result!r}"
+        assert "Great Piano Concertos" in result, f"Expected album title in compilation top_dir, got {result!r}"
+
+    def test_classical_top_dir_compilation_named_artist(self) -> None:
+        """Multi-composer compilation with a named albumartist → last_name of albumartistsort.
+
+        When albumartistsort is not 'Various Artists', uses last_name(albumartistsort) as the
+        artist component (aligned with _canonical_composer_component in _pipeline_maint.py).
+
+        :returns: None.
+        """
+        tags = TrackTags(
+            cwp_work_top="Violin Concerto",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="Brahms",
+            cea_composer_lastnames="Brahms",
+            releasetype_secondary="Compilation",
+            albumartist="Itzhak Perlman",
+            albumartistsort="Perlman, Itzhak",
+            album="Perlman Plays Concertos",
+        )
+        result = _classical_top_dir(tags)
+        assert result is not None, "Expected a non-None result for named-artist compilation"
+        assert "Perlman" in result, f"Expected 'Perlman' (last_name of albumartistsort) in top_dir, got {result!r}"
+        assert "Perlman Plays Concertos" in result, f"Expected album title in compilation top_dir, got {result!r}"
+
+    def test_classical_top_dir_recital_no_albumartist(self) -> None:
+        """Recital with no albumartist → album-only shape (no performer prefix).
+
+        Edge case: both ALBUMARTIST and ARTIST are empty.  Falls back to album title alone.
+
+        :returns: None.
+        """
+        tags = TrackTags(
+            cwp_work_top="Sonata",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="",
+            cea_composer_lastnames="",
+            albumartist="",
+            artist="",
+            album="Unknown Recital",
+        )
+        result = _classical_top_dir(tags)
+        assert result is not None, "Expected a non-None result for recital with no albumartist"
+        assert result == "Unknown Recital", f"Expected 'Unknown Recital', got {result!r}"
+
+    def test_build_dest_path_classical_recital_uses_performer_first(self, fs: FakeFilesystem) -> None:
+        """build_dest_path for a recital routes to Classical/<albumartist> - <album>/….
+
+        Verifies the C-INIT recital branch end-to-end through build_dest_path.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = TrackTags(
+            title="Sonata in B minor",
+            movementnumber="1",
+            movementtotal="1",
+            cwp_work_top="Sonata in B minor",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="",
+            cea_composer_lastnames="",
+            albumartist="Mitsuko Uchida",
+            albumartistsort="Uchida, Mitsuko",
+            album="Schubert: Piano Sonatas",
+        )
+        result = music_annotator.build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "Schubert: Piano Sonatas", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Sonata in B minor"}}),
+            tags,
+        )
+        rel = result.relative_to(dest_root)
+        assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
+        assert "Mitsuko Uchida" in rel.parts[1], (
+            f"Expected albumartist 'Mitsuko Uchida' in recital top_dir, got {rel.parts[1]!r}"
+        )
+
+    def test_build_dest_path_classical_compilation_uses_various(self, fs: FakeFilesystem) -> None:
+        """build_dest_path for a classical compilation routes to Classical/Various - <album>/….
+
+        Verifies the C-INIT compilation branch end-to-end through build_dest_path.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        tags = TrackTags(
+            title="Piano Concerto No. 1",
+            movementnumber="1",
+            movementtotal="1",
+            cwp_work_top="Piano Concerto No. 1",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="Beethoven",
+            cea_composer_lastnames="Beethoven",
+            releasetype_secondary="Compilation",
+            albumartist="Various Artists",
+            albumartistsort="Various Artists",
+            album="Great Piano Concertos",
+        )
+        result = music_annotator.build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "Great Piano Concertos", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Piano Concerto No. 1"}}),
+            tags,
+        )
+        rel = result.relative_to(dest_root)
+        assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
+        assert "Various" in rel.parts[1], f"Expected 'Various' in compilation top_dir, got {rel.parts[1]!r}"
+        assert "Great Piano Concertos" in rel.parts[1], f"Expected album title in compilation top_dir, got {rel.parts[1]!r}"

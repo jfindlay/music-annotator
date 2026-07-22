@@ -5909,3 +5909,47 @@ class TestCClassKATs:
         assert class_work_top == dest_root / "Beethoven - Karajan" / "Symphony No. 9 [rec 1962]", (
             f"Class-prefixed path: expected work_top_dir at depth 2 (below class), got {class_work_top.relative_to(dest_root)}"
         )
+
+    def test_repath_reconstructs_classical_top_dir_from_tags(self, fs: FakeFilesystem) -> None:
+        """Empty-stub build_dest_path derives the within-classical top_dir from tags (C-INIT KAT).
+
+        Verifies the C-INIT substrate correctness core: repath/regroup/unify call build_dest_path
+        with empty MBRelease()/MBTrack() stubs.  The within-classical top_dir must be derivable
+        from embedded tags alone, not from release.release_group or any live release data.
+
+        Tests the recital branch: a FLAC with CWP_COMPOSER_LASTNAMES="" and ALBUMARTIST set
+        must produce a performer-first top_dir under Classical/ when called with empty stubs.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Recital tags: cwp_work_top set (→ Classical class), but no composer linked.
+        # The within-classical top_dir must use albumartist (performer-first).
+        tags = TrackTags(
+            cwp_work_top="Sonata in B minor",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="",
+            cea_composer_lastnames="",
+            albumartist="Mitsuko Uchida",
+            albumartistsort="Uchida, Mitsuko",
+            album="Schubert: Piano Sonatas",
+            title="Sonata in B minor",
+            movementnumber="1",
+            movementtotal="1",
+        )
+
+        # Call build_dest_path with empty stubs (as repath/regroup/unify do).
+        stub_release = MBRelease()
+        stub_track = MBTrack()
+        result = build_dest_path(dest_root, stub_release, stub_track, tags)
+
+        rel = result.relative_to(dest_root)
+        assert rel.parts[0] == "Classical", (
+            f"Expected class 'Classical' from CWP_WORK_TOP + CWP_WORKTYPE_GENRES_TOP tags, got {rel.parts[0]!r}"
+        )
+        # C-INIT recital branch: top_dir must be performer-first (albumartist), not composer-first.
+        assert "Mitsuko Uchida" in rel.parts[1], (
+            f"Expected albumartist 'Mitsuko Uchida' in recital top_dir (C-INIT), got {rel.parts[1]!r}"
+        )

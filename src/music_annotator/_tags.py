@@ -275,6 +275,71 @@ def _top_level_class(tags: TrackTags) -> str:
             return "Unsorted"
 
 
+def _classical_top_dir(tags: TrackTags) -> str | None:
+    """Derive the within-classical initial path component (C-INIT, frozen at S2).
+
+    Encodes the C-INIT rule: what is the primary attribution for a classical release?  Three cases
+    evaluated in order (first match wins):
+
+    1. **Multi-composer classical compilation** — ``releasetype_secondary`` contains ``"Compilation"``:
+       use ``<albumartist_last_name or "Various"> - <album>`` (CE: primary attribution in path; the
+       album artist is the canonical identity for a compilation).  Aligns with
+       ``_is_composer_split_release`` / ``_canonical_composer_component`` in ``_pipeline_maint.py``
+       (same ``albumartistsort`` → ``last_name`` derivation).
+
+    2. **Recital** (performer-led, no single dominant composer) — ``CWP_COMPOSER_LASTNAMES`` and
+       ``CEA_COMPOSER_LASTNAMES`` are both empty: use ``<albumartist> - <album>`` (performer-first).
+       The album artist is the canonical identity for a recital (e.g. "Mitsuko Uchida" or
+       "Berliner Philharmoniker").  CE divergence note: CE uses the composer-first shape even for
+       recitals when a composer can be inferred; here we use the album artist when no composer is
+       linked in MB, which is the honest tag-derivable signal.
+
+    3. **Single-composer** (dominant population) — returns ``None`` to signal the caller should use
+       the default ``<composer> - <performers>`` shape (including any concerto-soloist injection).
+
+    **Tag-derivable source requirement (C-INIT substrate correctness):** reads only
+    ``tags.releasetype_secondary``, ``tags.albumartistsort``, ``tags.albumartist``, and the
+    ``CWP_COMPOSER_LASTNAMES`` / ``CEA_COMPOSER_LASTNAMES`` / ``ALBUM`` / ``ALBUMARTIST`` /
+    ``ARTIST`` keys from ``tags.to_file_dict()`` — all of which survive ``to_file_dict()`` and
+    round-trip via ``_tags_from_file_dict``.  Never reads ``release.release_group`` so that
+    ``repath``/``regroup``/``unify`` reconstruct the correct within-classical component from
+    embedded tags alone.
+
+    :param tags: The :class:`~music_annotator.models.TrackTags` instance for this track.
+    :returns: The within-classical ``top_dir`` component string for cases 1 and 2, or ``None`` for
+        case 3 (single-composer default — caller uses ``<composer> - <performers>``).
+    """
+    file_dict = tags.to_file_dict()
+    secondary_parts = {p.strip() for p in tags.releasetype_secondary.split(";")} if tags.releasetype_secondary else set()
+
+    # Case 1: Multi-composer classical compilation.
+    # releasetype_secondary contains "Compilation" → albumartist-based shape.
+    # Aligns with _canonical_composer_component in _pipeline_maint.py (same last_name derivation).
+    if "Compilation" in secondary_parts:
+        album_artist_sort = tags.albumartistsort.strip()
+        if not album_artist_sort or album_artist_sort == "Various Artists":
+            artist_component = "Various"
+        else:
+            artist_component = last_name(album_artist_sort)
+        album = file_dict.get("ALBUM", "") or "Unknown Album"
+        return safe_name(f"{artist_component} - {album}")
+
+    # Case 2: Recital (performer-led, no single dominant composer).
+    # Signal: CWP_COMPOSER_LASTNAMES and CEA_COMPOSER_LASTNAMES are both empty.
+    # This is the honest tag-derivable signal: if no composer is linked in the MB work hierarchy,
+    # the release is performer-led and the album artist is the primary attribution.
+    raw_composer = file_dict.get("CWP_COMPOSER_LASTNAMES") or file_dict.get("CEA_COMPOSER_LASTNAMES", "")
+    if not raw_composer:
+        albumartist = file_dict.get("ALBUMARTIST") or file_dict.get("ARTIST", "")
+        album = file_dict.get("ALBUM", "") or "Unknown Album"
+        if albumartist:
+            return safe_name(f"{albumartist} - {album}")
+        return safe_name(album)
+
+    # Case 3: Single-composer (dominant population) — caller uses <composer> - <performers>.
+    return None
+
+
 def _work_dir_component(rel_parts: Sequence[str]) -> str:
     """Return the work-dir component name from the relative path parts of a destination file.
 
@@ -948,14 +1013,17 @@ def build_track_tags(
     return tags
 
 
-def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: TrackTags, global_track_idx: int = 0) -> Path:
+def build_dest_path(  # pylint: disable=unused-argument  # release kept for API stability; C-INIT removed the last internal use
+    dest_root: Path, release: MBRelease, track: MBTrack, tags: TrackTags, global_track_idx: int = 0
+) -> Path:
     """Compute the destination path (without extension) for one annotated track.
 
     The first path component is the top-level library class derived by :func:`_top_level_class`
-    (C-CLASS, frozen at S1).  Classical releases nest the existing composer-first ``top_dir``
-    unchanged beneath it; non-classical releases use a class-appropriate ``top_dir`` shape.
+    (C-CLASS, frozen at S1).  Classical releases use the within-classical initial component derived
+    by :func:`_classical_top_dir` (C-INIT, frozen at S2); non-classical releases use a
+    class-appropriate ``top_dir`` shape.
 
-    Classical layout (2-level work hierarchy — e.g. symphony with movements)::
+    Classical layout — single-composer (dominant population, 2-level work hierarchy)::
 
         <dest_root>/
           Classical/
@@ -963,7 +1031,7 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
               <Work title> [YYYY]/
                 <nn> - <movement title>
 
-    Classical layout (3-level — e.g. opera with acts and numbers)::
+    Classical layout — single-composer (3-level — e.g. opera with acts and numbers)::
 
         <dest_root>/
           Classical/
@@ -971,6 +1039,22 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
               <Work title> [YYYY]/
                 <nn> - <Act title>/
                   <nn> - <number title>
+
+    Classical layout — recital (performer-led, no single composer)::
+
+        <dest_root>/
+          Classical/
+            <ALBUMARTIST> - <ALBUM>/
+              <Work title> [YYYY]/
+                <nn> - <movement title>
+
+    Classical layout — multi-composer compilation::
+
+        <dest_root>/
+          Classical/
+            <albumartist_last_name or "Various"> - <ALBUM>/
+              <Work title> [YYYY]/
+                <nn> - <movement title>
 
     Non-classical layouts::
 
@@ -1047,7 +1131,9 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     """
     file_dict = tags.to_file_dict()
 
-    # Composer directory component
+    # Composer directory component (tag-derivable; used only for the Classical single-composer case).
+    # When raw_composer is empty, _classical_top_dir returns the recital shape (not None), so
+    # composer="" is never used in the path — the recital/compilation branch fires first.
     raw_composer = file_dict.get("CWP_COMPOSER_LASTNAMES") or file_dict.get("CEA_COMPOSER_LASTNAMES", "")
     if raw_composer:
         seen: set[str] = set()
@@ -1060,12 +1146,6 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
         composer = "; ".join(unique)
     else:
         composer = ""
-        for credit in release.artist_credit:
-            if isinstance(credit, MBArtistCredit) and credit.artist.type == "Person":
-                composer = credit.artist.sort_name or credit.artist.name
-                break
-        if not composer:
-            composer = "Unknown Composer"
 
     # Performers directory component.
     #
@@ -1200,11 +1280,16 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     class_dir = safe_name(_top_level_class(tags))
 
     # top_dir: class-appropriate first component beneath the class prefix.
-    # Classical: unchanged composer-first shape (S2/C-INIT refines this further).
+    # Classical: C-INIT rule (frozen at S2) — compilation, recital, or single-composer default.
     # Non-classical: simple honest shapes per C-CLASS (R-3 — population is thin).
     match class_dir:
         case "Classical":
-            top_dir = safe_name(f"{composer} - {performers}")
+            # C-INIT: _classical_top_dir returns the top_dir for compilation/recital cases,
+            # or None for single-composer (dominant population) → use <composer> - <performers>.
+            # When _classical_top_dir returns None, raw_composer is non-empty (that is the
+            # single-composer gate), so composer is already set from raw_composer above.
+            _cinit = _classical_top_dir(tags)
+            top_dir = _cinit if _cinit is not None else safe_name(f"{composer} - {performers}")
         case "Soundtracks":
             # Soundtrack title is the primary identity; composer/artist is unreliable across a VA score.
             top_dir = safe_name(file_dict.get("ALBUM", "") or "Unknown Album")

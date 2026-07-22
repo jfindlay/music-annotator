@@ -370,11 +370,11 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
         tags = _tags_from_file_dict(file_dict)
 
         # Construct minimal stand-in objects for build_dest_path.
-        # build_dest_path reads release.artist_credit only when CWP_COMPOSER_LASTNAMES and
-        # CEA_COMPOSER_LASTNAMES are both absent — an edge case that defaults gracefully to
-        # "Unknown Composer".  track.position is used only as the deepest leaf-nn fallback
-        # (when CWP_MOVT_NUM is absent and global_track_idx=0); zero is acceptable here
-        # because CWP_MOVT_NUM must be present for the repath to produce a meaningful path.
+        # release is kept for API stability (C-INIT removed the last internal use of
+        # release.artist_credit in the classical path).  track.position is used only as the
+        # deepest leaf-nn fallback (when CWP_MOVT_NUM is absent and global_track_idx=0); zero
+        # is acceptable here because CWP_MOVT_NUM must be present for the repath to produce a
+        # meaningful path.
         stub_release = MBRelease()
         stub_track = MBTrack()
 
