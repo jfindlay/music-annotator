@@ -34,6 +34,7 @@ from music_annotator._pipeline_io import (
     read_journal,
     rebuild_journal,
 )
+from music_annotator._tags import _work_dir_component, _work_top_dir
 from music_annotator.models import AccurateRipSummary, AnnotationTier, TransactionEntry, TransactionLog
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
@@ -295,8 +296,9 @@ def _audit_tier_pass(
     by destination path (first occurrence wins).  This keeps the tier denominator consistent with
     ``counts["total"]`` so per-tier counts reconcile against the same base.
 
-    For each eligible destination, the work_top_dir is derived as
-    ``dest_root / rel.parts[0] / rel.parts[1]``.  The sidecar is resolved by
+    For each eligible destination, the work_top_dir is derived via
+    :func:`~music_annotator._tags._work_top_dir`, which handles both legacy two-level and
+    class-prefixed three-level paths (C-CLASS).  The sidecar is resolved by
     :func:`~music_annotator._pipeline_io._find_freedb_sidecar` (``freedb_disc_*.yaml``) with
     fallback to :data:`~music_annotator._pipeline_io.PROVENANCE_FILENAME`.  Destinations whose
     path cannot be made relative to ``dest_root`` or whose relative path has fewer than two parts
@@ -336,9 +338,9 @@ def _audit_tier_pass(
             rel = Path(dest).relative_to(dest_root)
         except ValueError:
             continue
-        if len(rel.parts) < 2:  # noqa: PLR2004 — structural constant (parts[0], parts[1])
+        if len(rel.parts) < 2:  # noqa: PLR2004 — structural constant (min 2 parts for work_top_dir)
             continue
-        dest_to_work_top[dest] = dest_root / rel.parts[0] / rel.parts[1]
+        dest_to_work_top[dest] = _work_top_dir(Path(dest), dest_root)
 
     # Cache sidecar reads per work_top_dir to avoid re-reading for multi-track work dirs.
     # Tuple: (annotation_tier, needs_spot_check, accuraterip_summary, origin_source) — the AR
@@ -444,9 +446,10 @@ def _journal_fragmentation_groups(
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """Derive work-dir → release-id and release-id → work-dir groupings from ``action == "tagged"`` journal entries.
 
-    Iterates only ``action == "tagged"`` entries.  For each entry, the ``work_dir`` component is extracted as
-    ``Path(e.destination).relative_to(dest_root).parts[1]`` (parts[0] is the top-level performers/composer directory;
-    parts[1] is the work directory in the ``<Composer> - <Performers>/<Work [YYYY]>/…`` layout).
+    Iterates only ``action == "tagged"`` entries.  For each entry, the ``work_dir`` component is extracted via
+    :func:`~music_annotator._tags._work_dir_component`, which handles both legacy two-level paths
+    (``parts[1]`` in ``<top_dir>/<work_dir>/…``) and class-prefixed three-level paths
+    (``parts[2]`` in ``<class>/<top_dir>/<work_dir>/…`` introduced by C-CLASS).
 
     Entries whose ``destination`` is not under ``dest_root`` or whose relative path has fewer than two parts are
     silently skipped: they represent malformed or foreign journal entries that cannot be safely attributed to a
@@ -469,9 +472,9 @@ def _journal_fragmentation_groups(
             rel = Path(entry.destination).relative_to(dest_root)
         except ValueError:
             continue
-        if len(rel.parts) < 2:  # noqa: PLR2004 — 2 is a structural constant (parts[0], parts[1])
+        if len(rel.parts) < 2:  # noqa: PLR2004 — min 2 parts required for work_dir extraction
             continue
-        work_dir = rel.parts[1]
+        work_dir = _work_dir_component(rel.parts)
         release_id = entry.release_id
         work_dir_to_release_ids.setdefault(work_dir, set()).add(release_id)
         release_id_to_work_dirs.setdefault(release_id, set()).add(work_dir)
@@ -523,9 +526,9 @@ def _confirm_fragmentation(
             rel = Path(entry.destination).relative_to(dest_root)
         except ValueError:
             continue
-        if len(rel.parts) < 2:  # noqa: PLR2004 — structural constant (parts[0], parts[1])
+        if len(rel.parts) < 2:  # noqa: PLR2004 — min 2 parts required for work_dir extraction
             continue
-        work_dir = rel.parts[1]
+        work_dir = _work_dir_component(rel.parts)
         release_id = entry.release_id
         wd_rid_to_dests.setdefault((work_dir, release_id), []).append(entry.destination)
         rid_wd_to_dests.setdefault((release_id, work_dir), []).append(entry.destination)

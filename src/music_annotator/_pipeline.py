@@ -62,7 +62,14 @@ from music_annotator._pipeline_io import (
     write_transaction_log,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
-from music_annotator._tags import _NAME_MAX, _proposed_short, build_dest_path, build_track_tags
+from music_annotator._tags import (
+    _CLASS_VOCAB,
+    _NAME_MAX,
+    _proposed_short,
+    _work_top_dir,
+    build_dest_path,
+    build_track_tags,
+)
 from music_annotator._works import build_work_hierarchy, select_primary_performance_work
 from music_annotator.models import (
     AccurateRipSummary,
@@ -386,7 +393,7 @@ def _prompt_collision_policy(results: list[AudioCompareResult], dest_root: Path)
     :returns: The :class:`CollisionPolicy` chosen by the user.
     """
     collisions = [r.dest for r in results]
-    work_dirs = sorted({p.relative_to(dest_root).parts[0] / Path(p.relative_to(dest_root).parts[1]) for p in collisions})
+    work_dirs = sorted({_work_top_dir(p, dest_root).relative_to(dest_root) for p in collisions})
     _console.print(
         f"\n[bold red]WARNING:[/] [red]{len(collisions)} destination file(s) already exist under "
         f"{_markup_escape(str(dest_root))}:[/]"
@@ -523,11 +530,13 @@ def _apply_collision_suffix(
     for i, entry in enumerate(plan):
         if entry.dest_file not in nonmatch_dests:
             continue
-        # Rewrite parts[1] (work_dir, at relative depth 1) to add the release suffix.
-        # Destination structure: dest_root / parts[0] / parts[1] / [intermediate/] leaf
+        # Rewrite the work_dir component to add the release suffix.
+        # Destination structure (class-prefixed): dest_root / class / top_dir / work_dir / … leaf
+        # Destination structure (legacy):         dest_root / top_dir / work_dir / … leaf
+        # Discriminate by testing whether parts[0] is a known class name (C-CLASS vocabulary).
         rel_parts = list(entry.dest_file.relative_to(dest_root).parts)
-        # rel_parts[0] = composer_dir, rel_parts[1] = work_dir, rel_parts[2:] = rest
-        rel_parts[1] = f"{rel_parts[1]} [{suffix}]"
+        work_dir_idx = 2 if rel_parts[0] in _CLASS_VOCAB else 1
+        rel_parts[work_dir_idx] = f"{rel_parts[work_dir_idx]} [{suffix}]"
         new_dest = dest_root.joinpath(*rel_parts)
         log.warning(
             "collision_nonmatch_suffix",
@@ -1336,10 +1345,11 @@ def _copy_tag_verify_journal_pass(
 
         _verify_copy(src_file, dest_file, final_tags, cover, src_stat.st_mtime)
 
-        # Derive the work top directory (dest_root / composer-dir / work-dir) and write
-        # sidecar cover art files exactly once per work directory across all tracks.
-        rel_parts = dest_file.relative_to(dest_root).parts
-        work_top_dir = dest_root / rel_parts[0] / rel_parts[1]
+        # Derive the work top directory and write sidecar cover art files exactly once per
+        # work directory across all tracks.  _work_top_dir handles both legacy two-level paths
+        # (dest_root/top_dir/work_dir/…) and class-prefixed three-level paths
+        # (dest_root/class/top_dir/work_dir/…) introduced by C-CLASS.
+        work_top_dir = _work_top_dir(dest_file, dest_root)
 
         _write_sidecars(cover, work_top_dir, sidecars_written, journal_entries, now, release_id)
         _write_freedb_yaml(src_dir, work_top_dir, medium_pos, freedb_written, journal_entries, now, release_id)
@@ -1878,12 +1888,7 @@ def run(
         # Count copied (not skipped/dry-run) entries and print a confirmation message so the user
         # knows it is safe to delete the source directory before they do so.
         copied = [e for e in journal_entries if e.action == "tagged"]
-        dest_dirs = sorted(
-            {
-                Path(e.destination).relative_to(dest_root).parts[0] / Path(Path(e.destination).relative_to(dest_root).parts[1])
-                for e in copied
-            }
-        )
+        dest_dirs = sorted({_work_top_dir(Path(e.destination), dest_root).relative_to(dest_root) for e in copied})
         if copied:
             _console.print(
                 f"\n[bold green]Verified OK:[/] [green]{len(copied)} file(s) written and confirmed under "

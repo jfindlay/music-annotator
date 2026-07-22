@@ -85,6 +85,7 @@ from music_annotator._pipeline_io import (
     rebuild_journal,
 )
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
+from music_annotator._tags import _work_top_dir
 from music_annotator.models import (
     JSON,
     AccurateRipResult,
@@ -1360,7 +1361,7 @@ class TestRunWritesFreedBYaml:
         # freedb_disc_1.yaml must exist in the work top directory.
         flac_files = list(dest.rglob("*.flac"))
         assert flac_files
-        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        work_top = _work_top_dir(Path(flac_files[0]), dest)
         freedb_path = work_top / "freedb_disc_1.yaml"
         assert freedb_path.exists()
         # The original disc_id data must be preserved (tier write merges, not replaces).
@@ -2498,7 +2499,7 @@ class TestRunFullPipeline:
             {
                 "id": top_work_id,
                 "title": "Concerto",
-                "type": "Concerto",
+                "type": "Classical",  # cwp_worktype_genres_top must contain "Classical" for C-CLASS predicate
                 "artist-relation-list": [],
                 "work-relation-list": [],
                 "attribute-list": [],
@@ -2553,8 +2554,11 @@ class TestRunFullPipeline:
         )
 
         assert len(captured_dests) == 2
-        # Both movements must share the same top-level directory (parts[0]).
-        tops = {p.relative_to(dest).parts[0] for p in captured_dests}
+        # Both movements must share the same top-level directory.
+        # With C-CLASS: parts[0] = class ("Classical"), parts[1] = top_dir (<composer> - <performers>).
+        classes = {p.relative_to(dest).parts[0] for p in captured_dests}
+        tops = {p.relative_to(dest).parts[1] for p in captured_dests}
+        assert len(classes) == 1, f"Movements landed in different classes: {sorted(classes)}"
         assert len(tops) == 1, f"Movements landed in different top dirs: {sorted(tops)}"
         # The shared top-level directory must be Mozart's, not Süßmayr's.
         assert "Mozart" in tops.pop()
@@ -2617,7 +2621,7 @@ class TestRunFullPipeline:
                     }
                 ],
                 "work-relation-list": [
-                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Work"}},
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Concerto"}},
                 ],
                 "attribute-list": [],
                 "tag-list": [],
@@ -2626,8 +2630,8 @@ class TestRunFullPipeline:
         work_root = _w(
             {
                 "id": top_work_id,
-                "title": "Work",
-                "type": "",
+                "title": "Concerto",
+                "type": "Classical",  # cwp_worktype_genres_top must contain "Classical" for C-CLASS predicate
                 "artist-relation-list": [],
                 "work-relation-list": [],
                 "attribute-list": [],
@@ -4738,7 +4742,7 @@ class TestRunWithWorkHierarchy:
         concerto_root = _w(
             {
                 "id": "w-conc",
-                "type": "Concerto",
+                "type": "Classical",  # cwp_worktype_genres_top must contain "Classical" for C-CLASS predicate
                 "title": "Violin Concerto in D major, Op. 61",
                 "work-relation-list": [],
                 "artist-relation-list": [
@@ -6922,7 +6926,7 @@ class TestRunCountMismatch:
         # Verify annotation_tier is mb-partial in the sidecar
         flac_files = sorted(dest.rglob("*.flac"))
         assert len(flac_files) == 2, f"expected 2 FLAC files (k=min(2,3)=2), got {len(flac_files)}"
-        work_top = dest / flac_files[0].relative_to(dest).parts[0] / flac_files[0].relative_to(dest).parts[1]
+        work_top = _work_top_dir(flac_files[0], dest)
         prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
         sidecar = _read_provenance_sidecar(prov_path)
         assert sidecar.annotation_tier == AnnotationTier.MB_PARTIAL
@@ -6961,7 +6965,7 @@ class TestRunCountMismatch:
         mock_ui.confirm_count_mismatch.assert_called_once()
         flac_files = sorted(dest.rglob("*.flac"))
         assert len(flac_files) == 3, f"expected 3 FLAC files (k=min(4,3)=3), got {len(flac_files)}"
-        work_top = dest / flac_files[0].relative_to(dest).parts[0] / flac_files[0].relative_to(dest).parts[1]
+        work_top = _work_top_dir(flac_files[0], dest)
         prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
         sidecar = _read_provenance_sidecar(prov_path)
         assert sidecar.annotation_tier == AnnotationTier.MB_PARTIAL
@@ -7094,7 +7098,7 @@ class TestRunCountMismatch:
         assert call_args.args[4] == 4  # n_medium (disc 1)
         flac_files = sorted(dest.rglob("*.flac"))
         assert len(flac_files) == 3, f"expected 3 FLAC files (k=min(3,4)=3), got {len(flac_files)}"
-        work_top = dest / flac_files[0].relative_to(dest).parts[0] / flac_files[0].relative_to(dest).parts[1]
+        work_top = _work_top_dir(flac_files[0], dest)
         prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
         sidecar = _read_provenance_sidecar(prov_path)
         assert sidecar.annotation_tier == AnnotationTier.MB_PARTIAL
@@ -10545,6 +10549,62 @@ class TestRebuildJournal:
         result = _read_albumid_from_tags(flac_path)
         assert result == ""
 
+    def test_class_prefixed_path_rebuilt_correctly(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal handles class-prefixed three-level paths (C-CLASS, S1).
+
+        A library with a class-prefixed path (``dest_root/Classical/Composer/Work/leaf.flac``)
+        must be walked correctly: the class directory is detected as a known C-CLASS name and
+        the walk iterates one level deeper to find the actual work directories.  Also exercises
+        the non-dir-in-artist-dir, non-dir-in-work-dir, skip-filename, and sidecar-file branches
+        of the class-prefixed walk.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        # Class-prefixed three-level path: dest_root / Classical / <top_dir> / <work_dir> / leaf
+        work_dir = dest_root / "Classical" / "Beethoven - Karajan" / "Symphony No. 9 [rec 1962]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Allegro.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Allegro", musicbrainz_albumid="rel-class-1"))
+
+        # A sidecar file in the work_dir (exercises the sidecar branch).
+        cover_path = work_dir / "cover.jpg"
+        fs.create_file(str(cover_path), contents=b"\xff\xd8\xff\xe0")
+
+        # A skip-filename file in the work_dir (exercises the skip-filename branch).
+        journal_in_work = work_dir / JOURNAL_FILENAME
+        journal_in_work.write_text("[]", encoding="utf-8")
+
+        # A non-dir file directly under the artist dir (exercises the non-dir-in-artist-dir branch).
+        artist_dir = dest_root / "Classical" / "Beethoven - Karajan"
+        stray_in_artist = artist_dir / "stray.txt"
+        fs.create_file(str(stray_in_artist), contents=b"stray")
+
+        # A non-dir file directly under the class dir (exercises the non-dir-in-class-dir branch).
+        stray_in_class = dest_root / "Classical" / "stray.txt"
+        fs.create_file(str(stray_in_class), contents=b"stray")
+
+        # A subdirectory inside the work_dir (exercises the non-file branch in rglob).
+        sub_dir = work_dir / "Act I"
+        fs.create_dir(str(sub_dir))
+
+        # A .cue file (unknown extension — neither audio nor sidecar) exercises the elif-False branch.
+        cue_path = work_dir / "disc.cue"
+        fs.create_file(str(cue_path), contents=b"FILE disc.wav WAVE\n")
+
+        result = rebuild_journal(dest_root, dry_run=True)
+
+        audio_entries = [e for e in result.entries if e.action == "tagged"]
+        assert len(audio_entries) == 1, f"Expected 1 audio entry, got {len(audio_entries)}"
+        assert audio_entries[0].destination == str(flac_path)
+        assert audio_entries[0].release_id == "rel-class-1"
+
+        sidecar_entries = [e for e in result.entries if e.action == "sidecar"]
+        sidecar_dests = {e.destination for e in sidecar_entries}
+        assert str(cover_path) in sidecar_dests, "cover.jpg must be included as a sidecar entry"
+        assert str(journal_in_work) not in sidecar_dests, "journal file must be skipped"
+
 
 # ---------------------------------------------------------------------------
 # Annotation-tier vocabulary round-trip tests (C-TIER, S1 KAT)
@@ -10846,7 +10906,7 @@ class TestAnnotationTierWritePath:
 
         flac_files = list(dest.rglob("*.flac"))
         assert flac_files
-        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        work_top = _work_top_dir(Path(flac_files[0]), dest)
         prov_path = work_top / PROVENANCE_FILENAME
         assert prov_path.exists(), "music_annotator_provenance.yaml must be written when no freedb sidecar exists"
         result = _read_provenance_sidecar(prov_path)
@@ -10885,7 +10945,7 @@ class TestAnnotationTierWritePath:
 
         flac_files = list(dest.rglob("*.flac"))
         assert flac_files
-        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        work_top = _work_top_dir(Path(flac_files[0]), dest)
         freedb_path = work_top / "freedb_disc_1.yaml"
         assert freedb_path.exists(), "freedb_disc_1.yaml must exist (written by _write_freedb_yaml)"
         result = _read_provenance_sidecar(freedb_path)
@@ -10981,7 +11041,7 @@ class TestAnnotationTierWritePath:
         # Verify the sidecar carries full-mb-verified
         flac_files = list(dest.rglob("*.flac"))
         assert flac_files
-        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        work_top = _work_top_dir(Path(flac_files[0]), dest)
         prov_path = work_top / PROVENANCE_FILENAME
         result = _read_provenance_sidecar(prov_path)
         assert result.annotation_tier == AnnotationTier.FULL_MB_VERIFIED
@@ -11120,7 +11180,7 @@ class TestSingleDiscTocPromotion:
         # The disc info YAML causes a freedb sidecar to be written; the tier lands there.
         flac_files = list(dest.rglob("*.flac"))
         assert flac_files
-        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        work_top = _work_top_dir(Path(flac_files[0]), dest)
         sidecar_path = _find_freedb_sidecar(work_top)
         assert sidecar_path is not None, "freedb sidecar must exist (disc info YAML was present)"
         result = _read_provenance_sidecar(sidecar_path)
@@ -11171,7 +11231,7 @@ class TestSingleDiscTocPromotion:
         # The disc info YAML causes a freedb sidecar to be written; the tier lands there.
         flac_files = list(dest.rglob("*.flac"))
         assert flac_files
-        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        work_top = _work_top_dir(Path(flac_files[0]), dest)
         sidecar_path = _find_freedb_sidecar(work_top)
         assert sidecar_path is not None, "freedb sidecar must exist (disc info YAML was present)"
         result = _read_provenance_sidecar(sidecar_path)
@@ -11297,7 +11357,7 @@ class TestIsrcMatchTierPromotion:
 
         flac_files = list(dest.rglob("*.flac"))
         assert flac_files
-        work_top = dest / Path(flac_files[0]).relative_to(dest).parts[0] / Path(flac_files[0]).relative_to(dest).parts[1]
+        work_top = _work_top_dir(Path(flac_files[0]), dest)
         prov_path = work_top / PROVENANCE_FILENAME
         result = _read_provenance_sidecar(prov_path)
         assert result.annotation_tier == AnnotationTier.FULL_MB_VERIFIED

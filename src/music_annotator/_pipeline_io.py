@@ -26,6 +26,7 @@ from mutagen.flac import FLAC
 from mutagen.id3 import ID3
 
 from music_annotator._tagger import _MP3_STD_KEYS, _MP3_TXXX_MAP
+from music_annotator._tags import _CLASS_VOCAB, _work_top_dir
 from music_annotator.models import (
     JSON,
     AccurateRipResult,
@@ -1440,7 +1441,8 @@ def _collect_work_dir_provenance(
 ) -> dict[Path, ProvenanceSidecar]:
     """Derive per-work-dir provenance from ``action == "tagged"`` journal entries.
 
-    Groups entries by work_top_dir (``dest_root / parts[0] / parts[1]``).  For each group, takes
+    Groups entries by work_top_dir (via :func:`~music_annotator._tags._work_top_dir`, which handles
+    both legacy two-level and class-prefixed three-level paths introduced by C-CLASS).  For each group, takes
     the entry with the lexicographically earliest ``timestamp`` as the canonical annotation time
     (ISO-8601 strings sort correctly without parsing), and takes the parent of that entry's
     ``source`` path as the origin provenance label.
@@ -1464,9 +1466,9 @@ def _collect_work_dir_provenance(
             rel = Path(entry.destination).relative_to(dest_root)
         except ValueError:
             continue
-        if len(rel.parts) < 2:  # noqa: PLR2004 — structural constant (parts[0], parts[1])
+        if len(rel.parts) < 2:  # noqa: PLR2004 — min 2 parts required for work_top_dir
             continue
-        work_top_dir = dest_root / rel.parts[0] / rel.parts[1]
+        work_top_dir = _work_top_dir(Path(entry.destination), dest_root)
         groups.setdefault(work_top_dir, []).append((entry.timestamp, entry.source))
 
     result: dict[Path, ProvenanceSidecar] = {}
@@ -1827,7 +1829,9 @@ def rebuild_journal(dest_root: Path, *, dry_run: bool = True) -> TransactionLog:
     """
     entries: list[TransactionEntry] = []
 
-    # Walk the two-level library structure: dest_root/<top_dir>/<work_dir>/...
+    # Walk the library structure, handling both legacy two-level paths
+    # (dest_root/<top_dir>/<work_dir>/…) and class-prefixed three-level paths
+    # (dest_root/<class>/<top_dir>/<work_dir>/…) introduced by C-CLASS.
     # Files directly under dest_root are skipped (they are not library files).
     if not dest_root.is_dir():
         log.warning("rebuild_dest_root_missing", dest_root=str(dest_root))
@@ -1836,23 +1840,45 @@ def rebuild_journal(dest_root: Path, *, dry_run: bool = True) -> TransactionLog:
     for top_dir in sorted(dest_root.iterdir()):
         if not top_dir.is_dir():
             continue
-        for work_dir in sorted(top_dir.iterdir()):
-            if not work_dir.is_dir():
-                continue
-            # Read origin_time once per work_dir (shared by all files in the directory tree)
-            origin_time = _read_origin_time_for_dir(work_dir)
-            # Walk the work_dir tree (may have sub-directories for intermediate divisions)
-            for file_path in sorted(work_dir.rglob("*")):
-                if not file_path.is_file():
+        if top_dir.name in _CLASS_VOCAB:
+            # Class-prefixed three-level path: top_dir is the class; iterate one level deeper
+            # to find the actual <top_dir>/<work_dir> pairs.
+            for artist_dir in sorted(top_dir.iterdir()):
+                if not artist_dir.is_dir():
                     continue
-                if file_path.name in _REBUILD_SKIP_FILENAMES:
+                for work_dir in sorted(artist_dir.iterdir()):
+                    if not work_dir.is_dir():
+                        continue
+                    origin_time = _read_origin_time_for_dir(work_dir)
+                    for file_path in sorted(work_dir.rglob("*")):
+                        if not file_path.is_file():
+                            continue
+                        if file_path.name in _REBUILD_SKIP_FILENAMES:
+                            continue
+                        ext = file_path.suffix.lower()
+                        if ext in _REBUILD_AUDIO_EXTENSIONS:
+                            entries.append(_rebuild_audio_entry(file_path, dest_root, origin_time))
+                        elif ext in _REBUILD_SIDECAR_EXTENSIONS:
+                            entries.append(_rebuild_sidecar_entry(file_path, dest_root, origin_time))
+        else:
+            # Legacy two-level path: top_dir is the <composer> - <performers> dir.
+            for work_dir in sorted(top_dir.iterdir()):
+                if not work_dir.is_dir():
                     continue
-                ext = file_path.suffix.lower()
-                if ext in _REBUILD_AUDIO_EXTENSIONS:
-                    entries.append(_rebuild_audio_entry(file_path, dest_root, origin_time))
-                elif ext in _REBUILD_SIDECAR_EXTENSIONS:
-                    entries.append(_rebuild_sidecar_entry(file_path, dest_root, origin_time))
-                # Files with other extensions (e.g. .cue, .log) are silently skipped.
+                # Read origin_time once per work_dir (shared by all files in the directory tree)
+                origin_time = _read_origin_time_for_dir(work_dir)
+                # Walk the work_dir tree (may have sub-directories for intermediate divisions)
+                for file_path in sorted(work_dir.rglob("*")):
+                    if not file_path.is_file():
+                        continue
+                    if file_path.name in _REBUILD_SKIP_FILENAMES:
+                        continue
+                    ext = file_path.suffix.lower()
+                    if ext in _REBUILD_AUDIO_EXTENSIONS:
+                        entries.append(_rebuild_audio_entry(file_path, dest_root, origin_time))
+                    elif ext in _REBUILD_SIDECAR_EXTENSIONS:
+                        entries.append(_rebuild_sidecar_entry(file_path, dest_root, origin_time))
+                    # Files with other extensions (e.g. .cue, .log) are silently skipped.
 
     log.info(
         "rebuild_journal_complete",

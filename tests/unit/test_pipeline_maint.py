@@ -44,6 +44,7 @@ from music_annotator._pipeline_maint import (
     _resolve_current_lib,
     _unify_classical_composer_groups,
 )
+from music_annotator._tags import _work_top_dir
 from music_annotator.models import (
     MBRelease,
     MBTrack,
@@ -1253,9 +1254,11 @@ class TestRepath:
         # Tags for a 3-level hierarchy: Opera > Act I > Aria.
         # CWP_PART_LEVELS=2 means 3 levels total (root + 1 intermediate + leaf).
         # CWP_INTER_INDEX_1=1 is the gap-free sibling index for the intermediate level.
+        # cwp_worktype_genres_top="Classical" routes to the Classical class (C-CLASS predicate).
         tags = TrackTags(
             cwp_composer_lastnames="Mozart",
             cwp_work_top="Don Giovanni",
+            cwp_worktype_genres_top="Classical",
             recording_date="1985",
             cwp_movt_num="1",
             movementtotal="3",
@@ -1271,9 +1274,10 @@ class TestRepath:
 
         # Compute the correct (3-level) destination path.
         correct_path = self._new_path(dest_root, tags)
-        # The correct path must include an intermediate directory (3 levels below dest_root).
-        assert len(correct_path.relative_to(dest_root).parts) == 4, (
-            f"Expected 4 path parts (top_dir/work_dir/inter_dir/leaf), got {correct_path.relative_to(dest_root).parts!r}"
+        # The correct path must include an intermediate directory.
+        # With C-CLASS: class/top_dir/work_dir/inter_dir/leaf = 5 parts below dest_root.
+        assert len(correct_path.relative_to(dest_root).parts) == 5, (
+            f"Expected 5 path parts (class/top_dir/work_dir/inter_dir/leaf), got {correct_path.relative_to(dest_root).parts!r}"
         )
 
         # Place the file at a stale 2-level path (missing the intermediate directory).
@@ -4572,7 +4576,8 @@ class TestUnify:
 
         The release has no CWP_WORK_TOP (non-classical) and a varying CEA_COMPOSER_LASTNAMES
         across tracks.  ALBUMARTISTSORT is set to ``album_artist_sort`` so the canonical
-        composer component can be derived from it.
+        composer component can be derived from it.  ``releasetype="Album"`` routes the release
+        to the ``Popular`` C-CLASS so the top_dir uses ``<ALBUMARTIST> - <ALBUM>`` shape.
 
         :param composer: The per-track CEA_COMPOSER_LASTNAMES value.
         :param album_artist_sort: The ALBUMARTISTSORT value (uniform across the release).
@@ -4581,6 +4586,9 @@ class TestUnify:
         return TrackTags(
             cea_composer_lastnames=composer,
             albumartistsort=album_artist_sort,
+            albumartist="Benny Goodman",
+            album="The Story",
+            releasetype="Album",
             cwp_work_top="",  # non-classical: no MB work link
             cwp_worktype_genres_top="",
             cwp_movt_num="1",
@@ -4622,12 +4630,16 @@ class TestUnify:
 
         # The file that was at the wrong path should have moved
         moved_dests = {e.destination for e in unified}
-        # All moved destinations should be under the canonical top_dir
+        # All moved destinations should be under the canonical top_dir.
+        # With C-CLASS, Popular releases use <ALBUMARTIST> - <ALBUM> as top_dir (parts[1]).
         for dest_str in moved_dests:
             dest_path = Path(dest_str)
-            top_dir = dest_path.relative_to(dest_root).parts[0]
-            # The canonical composer component is last_name("Goodman, Benny") = "Goodman"
-            assert top_dir.startswith("Goodman"), f"Expected top_dir to start with 'Goodman', got {top_dir!r}"
+            rel = dest_path.relative_to(dest_root)
+            # parts[0] = class ("Popular"), parts[1] = top_dir ("<albumartist> - <album>")
+            assert rel.parts[0] == "Popular", f"Expected 'Popular', got {rel.parts[0]!r}"
+            assert rel.parts[1].startswith("Benny Goodman"), (
+                f"Expected top_dir starting with 'Benny Goodman', got {rel.parts[1]!r}"
+            )
 
         # Original paths should no longer exist (they were moved)
         assert not path_a.exists() or not path_b.exists()
@@ -4657,11 +4669,14 @@ class TestUnify:
         unified = [e for e in journal.entries if e.action == "unified"]
         assert len(unified) >= 1
 
-        # All moved destinations must be under a top_dir starting with "Goodman"
-        # (last_name("Goodman, Benny") == "Goodman")
+        # All moved destinations must be under a top_dir starting with "Benny Goodman"
+        # (albumartist="Benny Goodman", album="The Story" → top_dir "Benny Goodman - The Story")
         for entry in unified:
-            top_dir = Path(entry.destination).relative_to(dest_root).parts[0]
-            assert top_dir.startswith("Goodman"), f"Expected canonical top_dir to start with 'Goodman', got {top_dir!r}"
+            rel = Path(entry.destination).relative_to(dest_root)
+            assert rel.parts[0] == "Popular", f"Expected 'Popular', got {rel.parts[0]!r}"
+            assert rel.parts[1].startswith("Benny Goodman"), (
+                f"Expected top_dir starting with 'Benny Goodman', got {rel.parts[1]!r}"
+            )
 
         # At least one file was moved
         assert not path_a.exists() or not path_b.exists()
@@ -4691,10 +4706,15 @@ class TestUnify:
         unified = [e for e in journal.entries if e.action == "unified"]
         assert len(unified) >= 1
 
-        # All moved destinations must be under a top_dir starting with "Various"
+        # All moved destinations must be under the same canonical top_dir.
+        # With C-CLASS, Popular releases use <ALBUMARTIST> - <ALBUM> as top_dir (parts[1]).
+        # albumartist="Benny Goodman" (set by _make_composer_split_tags), album="The Story".
         for entry in unified:
-            top_dir = Path(entry.destination).relative_to(dest_root).parts[0]
-            assert top_dir.startswith("Various"), f"Expected 'Various' top_dir, got {top_dir!r}"
+            rel = Path(entry.destination).relative_to(dest_root)
+            assert rel.parts[0] == "Popular", f"Expected 'Popular', got {rel.parts[0]!r}"
+            assert rel.parts[1].startswith("Benny Goodman"), (
+                f"Expected top_dir starting with 'Benny Goodman', got {rel.parts[1]!r}"
+            )
 
         assert not path_a.exists() or not path_b.exists()
 
@@ -4718,9 +4738,14 @@ class TestUnify:
         unified = [e for e in journal.entries if e.action == "unified"]
         assert len(unified) >= 1
 
+        # With C-CLASS, Popular releases use <ALBUMARTIST> - <ALBUM> as top_dir (parts[1]).
+        # albumartist="Benny Goodman" (set by _make_composer_split_tags), album="The Story".
         for entry in unified:
-            top_dir = Path(entry.destination).relative_to(dest_root).parts[0]
-            assert top_dir.startswith("Various"), f"Expected 'Various' top_dir, got {top_dir!r}"
+            rel = Path(entry.destination).relative_to(dest_root)
+            assert rel.parts[0] == "Popular", f"Expected 'Popular', got {rel.parts[0]!r}"
+            assert rel.parts[1].startswith("Benny Goodman"), (
+                f"Expected top_dir starting with 'Benny Goodman', got {rel.parts[1]!r}"
+            )
 
         assert not path_a.exists() or not path_b.exists()
 
@@ -4736,10 +4761,14 @@ class TestUnify:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        # Non-classical release with a work link but genre "Jazz" (not "Classical")
+        # Non-classical release with a work link but genre "Jazz" (not "Classical").
+        # releasetype="Album" routes to Popular class; albumartist/album set the top_dir shape.
         tags_a = TrackTags(
             cea_composer_lastnames="Goodman",
             albumartistsort="Goodman, Benny",
+            albumartist="Benny Goodman",
+            album="The Story",
+            releasetype="Album",
             cwp_work_top="The Benny Goodman Story",  # has MB work link
             cwp_worktype_genres_top="Jazz",  # NOT "Classical" → composer-split rule applies
             cwp_movt_num="1",
@@ -4752,6 +4781,9 @@ class TestUnify:
         tags_b = TrackTags(
             cea_composer_lastnames="Berlin",  # different composer → composer-split
             albumartistsort="Goodman, Benny",
+            albumartist="Benny Goodman",
+            album="The Story",
+            releasetype="Album",
             cwp_work_top="The Benny Goodman Story",
             cwp_worktype_genres_top="Jazz",
             cwp_movt_num="1",
@@ -4772,10 +4804,12 @@ class TestUnify:
         unified = [e for e in journal.entries if e.action == "unified"]
         assert len(unified) >= 1
 
+        # With C-CLASS, Popular releases use <ALBUMARTIST> - <ALBUM> as top_dir (parts[1]).
         for entry in unified:
-            top_dir = Path(entry.destination).relative_to(dest_root).parts[0]
-            assert top_dir.startswith("Goodman"), (
-                f"Expected composer-split rule to fire for Jazz genre; got top_dir={top_dir!r}"
+            rel = Path(entry.destination).relative_to(dest_root)
+            assert rel.parts[0] == "Popular", f"Expected class 'Popular', got {rel.parts[0]!r}"
+            assert rel.parts[1].startswith("Benny Goodman"), (
+                f"Expected composer-split rule to fire for Jazz genre; got top_dir={rel.parts[1]!r}"
             )
 
     def test_composer_split_classical_release_not_affected(self, fs: FakeFilesystem) -> None:
@@ -4823,13 +4857,15 @@ class TestUnify:
 
         music_annotator.unify(dest_root=dest_root, yes=True)
 
-        # The composer-split rule must NOT have fired: no "Goodman, Benny" top_dir should appear
+        # The composer-split rule must NOT have fired: no "Goodman, Benny" top_dir should appear.
+        # With C-CLASS, Classical releases use parts[0]="Classical", parts[1]=<composer>-<performers>.
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
         unified = [e for e in journal.entries if e.action == "unified"]
         for entry in unified:
-            top_dir = Path(entry.destination).relative_to(dest_root).parts[0]
-            assert "Goodman" not in top_dir, (
-                f"Composer-split rule must not fire for classical releases; got top_dir={top_dir!r}"
+            rel = Path(entry.destination).relative_to(dest_root)
+            assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
+            assert "Goodman" not in rel.parts[1], (
+                f"Composer-split rule must not fire for classical releases; got top_dir={rel.parts[1]!r}"
             )
 
     def test_composer_split_idempotent_second_run_noop(self, fs: FakeFilesystem) -> None:
@@ -4931,11 +4967,11 @@ class TestUnify:
         tags_mvt2 = self._make_classical_arranger_tags("Mozart; Süßmayr", movt_num="2", title="Kyrie")
 
         # Place files under different top_dirs (fragmentation: two distinct top_dirs for same albumid)
-        path_mvt1 = _make_library_flac(dest_root, "Mozart - Karajan/Requiem K. 626 [rec 1962]/01 - Introitus.flac", tags_mvt1)
+        _make_library_flac(dest_root, "Mozart - Karajan/Requiem K. 626 [rec 1962]/01 - Introitus.flac", tags_mvt1)
         path_mvt2 = _make_library_flac(
             dest_root, "Mozart; Süßmayr - Karajan/Requiem K. 626 [rec 1962]/02 - Kyrie.flac", tags_mvt2
         )
-        path_mvt3 = _make_library_flac(dest_root, "Mozart - Karajan/Requiem K. 626 [rec 1962]/03 - Lacrimosa.flac", tags_mvt3)
+        _make_library_flac(dest_root, "Mozart - Karajan/Requiem K. 626 [rec 1962]/03 - Lacrimosa.flac", tags_mvt3)
 
         music_annotator.unify(dest_root=dest_root, yes=True)
 
@@ -4944,21 +4980,27 @@ class TestUnify:
         unified = [e for e in journal.entries if e.action == "unified"]
         assert len(unified) >= 1
 
-        # The moved file (mvt2) should now be under the "Mozart" top_dir
+        # The moved file (mvt2) should now be under the "Mozart" top_dir.
+        # With C-CLASS, Classical releases use <composer> - <performers> as top_dir (parts[1]).
         moved_dests = {e.destination for e in unified}
         for dest_str in moved_dests:
             dest_path = Path(dest_str)
-            top_dir = dest_path.relative_to(dest_root).parts[0]
-            assert top_dir.startswith("Mozart"), (
-                f"W2c KAT failed: arranger-only movement landed in top_dir={top_dir!r}, expected top_dir starting with 'Mozart'"
+            rel = dest_path.relative_to(dest_root)
+            assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
+            assert rel.parts[1].startswith("Mozart"), (
+                f"W2c KAT: arranger-only movement in top_dir={rel.parts[1]!r}, expected 'Mozart'"
             )
 
         # The "Mozart; Süßmayr" top_dir should no longer contain the movement 2 file
         assert not path_mvt2.exists()
 
-        # Movements 1 and 3 (already at canonical path) should be untouched
-        assert path_mvt1.exists()
-        assert path_mvt3.exists()
+        # Movements 1 and 3 were at legacy two-level paths; unify() moved them to the new
+        # class-prefixed paths (Classical/Mozart - Karajan/...).  The original paths no longer exist.
+        # Verify the new paths exist.
+        new_mvt1 = dest_root / "Classical" / "Mozart - Karajan" / "Requiem K. 626 [rec 1962]" / "01 - Introitus.flac"
+        new_mvt3 = dest_root / "Classical" / "Mozart - Karajan" / "Requiem K. 626 [rec 1962]" / "03 - Lacrimosa.flac"
+        assert new_mvt1.exists(), f"Movement 1 not found at new canonical path {new_mvt1}"
+        assert new_mvt3.exists(), f"Movement 3 not found at new canonical path {new_mvt3}"
 
     def test_w2c_classical_uniform_composer_is_noop(self, fs: FakeFilesystem) -> None:
         """W2c: classical release where all movements agree on CEA_COMPOSER_LASTNAMES is a no-op.
@@ -5756,3 +5798,114 @@ class TestRepathConfirmation:
         journal = read_journal(dest_root / "music_annotator_journal.json")
         repathed = [e for e in journal.entries if e.action == "repathed"]
         assert len(repathed) == 0
+
+
+# ---------------------------------------------------------------------------
+# C-CLASS KATs: repath reconstructs class from tags; _work_top_dir depth invariant
+# ---------------------------------------------------------------------------
+
+
+class TestCClassKATs:
+    """C-CLASS KATs for the tag-derivable class routing and the work_top_dir depth invariant (S1, frozen).
+
+    These tests pin the substrate correctness core: the class must be derivable from embedded tags
+    alone (so repath/regroup/unify reconstruct the correct class without a live MBRelease), and
+    the _work_top_dir helper must handle both legacy two-level and class-prefixed three-level paths.
+    """
+
+    def test_repath_reconstructs_class_from_tags(self, fs: FakeFilesystem) -> None:
+        """Empty-stub build_dest_path derives the class from RELEASETYPE/RELEASETYPE_SECONDARY tags.
+
+        Verifies the substrate correctness core (R-2): repath/regroup/unify call build_dest_path
+        with empty MBRelease()/MBTrack() stubs.  The class must be derivable from embedded tags
+        alone, not from release.release_group.
+
+        Creates a FLAC file with RELEASETYPE="Album" embedded (Popular class) and verifies that
+        build_dest_path with an empty stub produces a path under "Popular/".
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Tags with releasetype="Album" → Popular class (no cwp_work_top, no classical predicate).
+        tags = TrackTags(
+            releasetype="Album",
+            albumartist="Test Artist",
+            album="Test Album",
+            title="Track 1",
+            movementnumber="1",
+            movementtotal="1",
+            cwp_work_top="",
+            cwp_worktype_genres_top="",
+        )
+
+        # Call build_dest_path with empty stubs (as repath/regroup/unify do).
+        stub_release = MBRelease()
+        stub_track = MBTrack()
+        result = build_dest_path(dest_root, stub_release, stub_track, tags)
+
+        rel = result.relative_to(dest_root)
+        # The class must be derived from the RELEASETYPE tag, not from release.release_group.
+        assert rel.parts[0] == "Popular", f"Expected class 'Popular' from RELEASETYPE='Album' tag, got {rel.parts[0]!r}"
+
+    def test_repath_reconstructs_classical_class_from_tags(self, fs: FakeFilesystem) -> None:
+        """Empty-stub build_dest_path derives the Classical class from CWP_WORK_TOP and CWP_WORKTYPE_GENRES_TOP tags.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            cwp_work_top="Symphony No. 9",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="Beethoven",
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+        )
+
+        stub_release = MBRelease()
+        stub_track = MBTrack()
+        result = build_dest_path(dest_root, stub_release, stub_track, tags)
+
+        rel = result.relative_to(dest_root)
+        assert rel.parts[0] == "Classical", (
+            f"Expected class 'Classical' from CWP_WORK_TOP + CWP_WORKTYPE_GENRES_TOP tags, got {rel.parts[0]!r}"
+        )
+
+    def test_work_top_dir_depth_invariant(self, fs: FakeFilesystem) -> None:
+        """_work_top_dir returns the correct work dir for BOTH legacy two-level AND class-prefixed three-level paths.
+
+        Pins the dual-shape behaviour required during R4a: the library is a mix of legacy
+        two-level (old annotated releases) and new three-level (class-prefixed) paths.  The
+        _work_top_dir helper must handle both shapes by testing whether parts[0] is a known
+        class name from the closed C-CLASS vocabulary.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Legacy two-level path: dest_root / <top_dir> / <work_dir> / leaf
+        legacy_file = dest_root / "Beethoven - Karajan" / "Symphony No. 9 [rec 1962]" / "01 - Allegro.flac"
+        legacy_file.parent.mkdir(parents=True, exist_ok=True)
+        legacy_file.touch()
+
+        # Class-prefixed three-level path: dest_root / <class> / <top_dir> / <work_dir> / leaf
+        class_file = dest_root / "Classical" / "Beethoven - Karajan" / "Symphony No. 9 [rec 1962]" / "01 - Allegro.flac"
+        class_file.parent.mkdir(parents=True, exist_ok=True)
+        class_file.touch()
+
+        # Legacy path: work_top_dir = dest_root / parts[0] / parts[1]
+        legacy_work_top = _work_top_dir(legacy_file, dest_root)
+        assert legacy_work_top == dest_root / "Beethoven - Karajan" / "Symphony No. 9 [rec 1962]", (
+            f"Legacy path: expected work_top_dir at depth 2, got {legacy_work_top.relative_to(dest_root)}"
+        )
+
+        # Class-prefixed path: work_top_dir = dest_root / parts[1] / parts[2]
+        class_work_top = _work_top_dir(class_file, dest_root)
+        assert class_work_top == dest_root / "Beethoven - Karajan" / "Symphony No. 9 [rec 1962]", (
+            f"Class-prefixed path: expected work_top_dir at depth 2 (below class), got {class_work_top.relative_to(dest_root)}"
+        )

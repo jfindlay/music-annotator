@@ -8,6 +8,7 @@ metadata sources into a :class:`~music_annotator.models.TrackTags` ready for wri
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 import structlog
@@ -215,6 +216,99 @@ def _rec_title(track: MBTrack) -> str:
     :returns: The title of the nested recording, or ``"Unknown"`` when absent.
     """
     return track.recording.title or "Unknown"
+
+
+#: Closed vocabulary of top-level library class names (C-CLASS).
+#: Used by :func:`_top_level_class` and :func:`_work_top_dir` to discriminate
+#: class-prefixed (three-level) paths from legacy two-level paths.
+_CLASS_VOCAB: frozenset[str] = frozenset({"Spoken Word", "Soundtracks", "Classical", "Compilations", "Popular", "Unsorted"})
+
+
+def _top_level_class(tags: TrackTags) -> str:
+    """Derive the top-level library class from embedded tags only (C-CLASS, frozen at S1).
+
+    Routing table (first match wins; evaluated in order):
+
+    1. ``releasetype_secondary`` contains ``Audiobook``, ``Spokenword``, ``Audio drama``, or
+       ``Interview`` → ``"Spoken Word"``.
+    2. ``releasetype_secondary`` contains ``Soundtrack`` → ``"Soundtracks"``.
+    3. CE-classical predicate: ``cwp_work_top`` non-empty AND ``cwp_worktype_genres_top`` contains
+       ``"Classical"`` → ``"Classical"``.
+    4. ``releasetype_secondary`` contains ``Compilation`` (and not classical) → ``"Compilations"``.
+    5. ``releasetype`` in {``Album``, ``Single``, ``EP``, ``Broadcast``, ``Other``} (non-classical,
+       no other signal) → ``"Popular"``.
+    6. No usable signal → ``"Unsorted"`` (honest fallback; never silently forces ``Classical``).
+
+    **Tag-derivable source requirement (substrate correctness core):** this function reads only
+    ``tags.releasetype``, ``tags.releasetype_secondary``, ``tags.cwp_work_top``, and
+    ``tags.cwp_worktype_genres_top`` — all of which survive ``to_file_dict()`` and round-trip via
+    ``_tags_from_file_dict``.  It never reads ``release.release_group`` so that
+    ``repath``/``regroup``/``unify`` (which call ``build_dest_path`` with empty ``MBRelease()``
+    stubs) reconstruct the correct class from embedded tags alone.
+
+    **Forward-path-only posture:** this function changes only newly-computed destination paths.
+    Already-annotated two-level releases are not retro-migrated by R4a; the whole-library
+    re-derivation is deferred to R6b/R6d.
+
+    :param tags: The :class:`~music_annotator.models.TrackTags` instance for this track.
+    :returns: A single path-component string from the closed C-CLASS vocabulary.
+    """
+    secondary = tags.releasetype_secondary
+    primary = tags.releasetype
+
+    # Arms 1–2: non-classical secondary types short-circuit before the classical predicate.
+    spoken_word_types = {"Audiobook", "Spokenword", "Audio drama", "Interview"}
+    secondary_parts = {p.strip() for p in secondary.split(";")} if secondary else set()
+
+    match True:
+        case _ if secondary_parts & spoken_word_types:
+            return "Spoken Word"
+        case _ if "Soundtrack" in secondary_parts:
+            return "Soundtracks"
+        case _ if tags.cwp_work_top and "Classical" in tags.cwp_worktype_genres_top:
+            return "Classical"
+        case _ if "Compilation" in secondary_parts:
+            return "Compilations"
+        case _ if primary in {"Album", "Single", "EP", "Broadcast", "Other"}:
+            return "Popular"
+        case _:
+            return "Unsorted"
+
+
+def _work_dir_component(rel_parts: Sequence[str]) -> str:
+    """Return the work-dir component name from the relative path parts of a destination file.
+
+    Handles both legacy two-level paths (``<top_dir>/<work_dir>/…``) and class-prefixed
+    three-level paths (``<class>/<top_dir>/<work_dir>/…``).  Discriminates by testing whether
+    ``parts[0]`` is a known class name from the closed C-CLASS vocabulary.
+
+    :param rel_parts: The ``parts`` of the destination path relative to ``dest_root``.
+    :returns: The work-dir component string (``parts[1]`` for legacy, ``parts[2]`` for class-prefixed).
+    """
+    if rel_parts[0] in _CLASS_VOCAB:
+        return rel_parts[2]
+    return rel_parts[1]
+
+
+def _work_top_dir(dest_file: Path, dest_root: Path) -> Path:
+    """Return the work top directory (two components immediately beneath ``dest_root``) for ``dest_file``.
+
+    Handles both legacy two-level paths (``dest_root/<top_dir>/<work_dir>/…``) and class-prefixed
+    three-level paths (``dest_root/<class>/<top_dir>/<work_dir>/…``).  Discriminates by testing
+    whether the first relative component is a known class name from the closed C-CLASS vocabulary.
+
+    For a class-prefixed path returns ``dest_root / parts[1] / parts[2]``.
+    For a legacy two-level path returns ``dest_root / parts[0] / parts[1]``.
+
+    :param dest_file: Absolute path to the destination audio file.
+    :param dest_root: Root of the annotated music library.
+    :returns: The absolute work top directory :class:`~pathlib.Path`.
+    """
+    rel = dest_file.relative_to(dest_root)
+    parts = rel.parts
+    if parts[0] in _CLASS_VOCAB:
+        return dest_root / parts[1] / parts[2]
+    return dest_root / parts[0] / parts[1]
 
 
 def build_cea_performers(recording_detail: MBRecording) -> CeaPerformers:
@@ -857,27 +951,47 @@ def build_track_tags(
 def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: TrackTags, global_track_idx: int = 0) -> Path:
     """Compute the destination path (without extension) for one annotated track.
 
-    Layout (2-level work hierarchy — e.g. symphony with movements)::
+    The first path component is the top-level library class derived by :func:`_top_level_class`
+    (C-CLASS, frozen at S1).  Classical releases nest the existing composer-first ``top_dir``
+    unchanged beneath it; non-classical releases use a class-appropriate ``top_dir`` shape.
+
+    Classical layout (2-level work hierarchy — e.g. symphony with movements)::
 
         <dest_root>/
-          <Composer last names> - <Conductor; Ensemble>/
-            <Work title> [YYYY]/
-              <nn> - <movement title>
+          Classical/
+            <Composer last names> - <Conductor; Ensemble>/
+              <Work title> [YYYY]/
+                <nn> - <movement title>
 
-    Layout (3-level — e.g. opera with acts and numbers)::
+    Classical layout (3-level — e.g. opera with acts and numbers)::
 
         <dest_root>/
-          <Composer last names> - <Conductor; Ensemble>/
-            <Work title> [YYYY]/
-              <nn> - <Act title>/
-                <nn> - <number title>
+          Classical/
+            <Composer last names> - <Conductor; Ensemble>/
+              <Work title> [YYYY]/
+                <nn> - <Act title>/
+                  <nn> - <number title>
 
-    The ``<Conductor; Ensemble>`` component uses the **album-level** performers — i.e. those
-    credited at the release level in ``release.artist_credit`` (``tags.cea_album_conductors_list``
-    and ``tags.cea_album_ensembles_list``).  This prevents the top-level directory from forking
-    when MB credits performers inconsistently across movements (e.g. conductor on some tracks only,
-    or parent ensemble on some tracks and a named subgroup on others).  Support performers (credited
-    per-track but not at release level) are captured in tags only, not in the directory path.
+    Non-classical layouts::
+
+        <dest_root>/
+          Spoken Word|Popular|Compilations/
+            <ALBUMARTIST or ARTIST> - <ALBUM>/
+              <work_dir>/…
+          Soundtracks/
+            <ALBUM>/
+              <work_dir>/…
+          Unsorted/
+            <ALBUM or "Unknown Album">/
+              <work_dir>/…
+
+    The ``<Conductor; Ensemble>`` component (classical only) uses the **album-level** performers —
+    i.e. those credited at the release level in ``release.artist_credit``
+    (``tags.cea_album_conductors_list`` and ``tags.cea_album_ensembles_list``).  This prevents the
+    top-level directory from forking when MB credits performers inconsistently across movements
+    (e.g. conductor on some tracks only, or parent ensemble on some tracks and a named subgroup on
+    others).  Support performers (credited per-track but not at release level) are captured in tags
+    only, not in the directory path.
 
     Fallback when album-level yields no conductors or ensembles (e.g. composer-only or
     Various-Artists release): uses the per-track union of all conductors + ensembles from
@@ -1080,7 +1194,33 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
         key = int(primary_str) if primary_str.isdigit() else 0
         return str(key if key > 0 else fallback).zfill(w)
 
-    top_dir = safe_name(f"{composer} - {performers}")
+    # Top-level library class (C-CLASS, frozen at S1).
+    # Derived from embedded tags only so that repath/regroup/unify (which call build_dest_path
+    # with empty MBRelease() stubs) reconstruct the correct class from tags alone.
+    class_dir = safe_name(_top_level_class(tags))
+
+    # top_dir: class-appropriate first component beneath the class prefix.
+    # Classical: unchanged composer-first shape (S2/C-INIT refines this further).
+    # Non-classical: simple honest shapes per C-CLASS (R-3 — population is thin).
+    match class_dir:
+        case "Classical":
+            top_dir = safe_name(f"{composer} - {performers}")
+        case "Soundtracks":
+            # Soundtrack title is the primary identity; composer/artist is unreliable across a VA score.
+            top_dir = safe_name(file_dict.get("ALBUM", "") or "Unknown Album")
+        case "Unsorted":
+            top_dir = safe_name(file_dict.get("ALBUM", "") or "Unknown Album")
+        case _:
+            # Spoken Word, Popular, Compilations: author/narrator or artist, then title.
+            artist_part = file_dict.get("ALBUMARTIST") or file_dict.get("ARTIST", "")
+            album_part = file_dict.get("ALBUM", "")
+            if artist_part and album_part:
+                top_dir = safe_name(f"{artist_part} - {album_part}")
+            elif album_part:
+                top_dir = safe_name(album_part)
+            else:
+                top_dir = safe_name(artist_part or "Unknown")
+
     track_title = safe_name(file_dict.get("TITLE") or _rec_title(track))
 
     if part_levels >= 2:
@@ -1110,7 +1250,7 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
         leaf_fallback = global_track_idx or track.position
         leaf_nn = _nn(leaf_movt_num, leaf_fallback, width)
 
-        path: Path = dest_root / top_dir / work_dir
+        path: Path = dest_root / class_dir / top_dir / work_dir
         for d in intermediate:
             path = path / d
         return path / f"{leaf_nn} - {track_title}"
@@ -1125,4 +1265,4 @@ def build_dest_path(dest_root: Path, release: MBRelease, track: MBTrack, tags: T
     leaf_movt_num = file_dict.get("CWP_MOVT_NUM", "")
     leaf_fallback = global_track_idx or track.position
     track_num = _nn(leaf_movt_num, leaf_fallback, width)
-    return dest_root / top_dir / work_dir / f"{track_num} - {track_title}"
+    return dest_root / class_dir / top_dir / work_dir / f"{track_num} - {track_title}"

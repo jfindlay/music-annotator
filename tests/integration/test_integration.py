@@ -31,7 +31,7 @@ from music_annotator._pipeline_io import (
     rebuild_journal,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
-from music_annotator._tags import build_dest_path
+from music_annotator._tags import _work_top_dir, build_dest_path
 from music_annotator.models import (
     AccurateRipSummary,
     AnnotationTier,
@@ -197,13 +197,16 @@ def _make_recording_detail(rec_id: str, track_title: str) -> MBRecording:
 def _make_work_detail() -> MBWork:
     """Return a minimal work model for Fontane di Roma.
 
+    Uses ``"type": "Classical"`` so that ``cwp_worktype_genres_top`` contains ``"Classical"``
+    and the C-CLASS predicate routes the release to the ``Classical`` library class.
+
     :returns: An :class:`~music_annotator.models.MBWork` instance.
     """
     return MBWork.model_validate(
         {
             "id": "w1",
             "title": "Fontane di Roma, P 106",
-            "type": "Symphonic poem",
+            "type": "Classical",
             "artist-relation-list": [
                 {
                     "type": "composer",
@@ -1988,11 +1991,7 @@ class TestIngestPersistsAnnotationTier:
         # Locate the work top directory and read the provenance sidecar
         flac_files_a = sorted(dest_embedded.rglob("*.flac"))
         assert len(flac_files_a) == 1
-        work_top_a = (
-            dest_embedded
-            / flac_files_a[0].relative_to(dest_embedded).parts[0]
-            / flac_files_a[0].relative_to(dest_embedded).parts[1]
-        )
+        work_top_a = _work_top_dir(flac_files_a[0], dest_embedded)
         prov_path_a = work_top_a / PROVENANCE_FILENAME
         assert prov_path_a.exists(), "provenance sidecar must be written for embedded-MBID fixture"
         sidecar_a = _read_provenance_sidecar(prov_path_a)
@@ -2025,9 +2024,7 @@ class TestIngestPersistsAnnotationTier:
 
         flac_files_b = sorted(dest_search.rglob("*.flac"))
         assert len(flac_files_b) == 2
-        work_top_b = (
-            dest_search / flac_files_b[0].relative_to(dest_search).parts[0] / flac_files_b[0].relative_to(dest_search).parts[1]
-        )
+        work_top_b = _work_top_dir(flac_files_b[0], dest_search)
         prov_path_b = work_top_b / PROVENANCE_FILENAME
         assert prov_path_b.exists(), "provenance sidecar must be written for search-hit fixture"
         sidecar_b = _read_provenance_sidecar(prov_path_b)
@@ -2272,7 +2269,7 @@ class TestWhipperIntegration:
         # --- (a) Tier is full-mb-verified ---
         flac_files = sorted(dest_root.rglob("*.flac"))
         assert len(flac_files) == 2, f"expected 2 FLAC files in dest, got {len(flac_files)}"
-        work_top = dest_root / flac_files[0].relative_to(dest_root).parts[0] / flac_files[0].relative_to(dest_root).parts[1]
+        work_top = _work_top_dir(flac_files[0], dest_root)
         # The sidecar may be freedb_disc_1.yaml (when 00 - disc info.yaml is present) or
         # music_annotator_provenance.yaml.  Use _find_freedb_sidecar with fallback.
         prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
@@ -2625,7 +2622,7 @@ class TestOtherDownloadIsrcIntegration:
         # Locate the output FLAC files and work top directory.
         flac_files = sorted(dest_root.rglob("*.flac"))
         assert len(flac_files) == 2, f"expected 2 FLAC files in dest, got {len(flac_files)}"
-        work_top = dest_root / flac_files[0].relative_to(dest_root).parts[0] / flac_files[0].relative_to(dest_root).parts[1]
+        work_top = _work_top_dir(flac_files[0], dest_root)
         prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
         assert prov_path.exists(), f"provenance sidecar must be written at {prov_path}"
         sidecar = _read_provenance_sidecar(prov_path)
@@ -2822,7 +2819,7 @@ class TestRunMismatchOverrideIntegration:
         assert len(flac_files) == 2, f"expected 2 FLAC files (k=2), got {len(flac_files)}"
 
         # --- (b) Provenance sidecar annotation_tier == mb-partial ---
-        work_top = dest_root / flac_files[0].relative_to(dest_root).parts[0] / flac_files[0].relative_to(dest_root).parts[1]
+        work_top = _work_top_dir(flac_files[0], dest_root)
         prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
         assert prov_path.exists(), f"provenance sidecar must exist at {prov_path}"
         sidecar = _read_provenance_sidecar(prov_path)
@@ -2844,3 +2841,202 @@ class TestRunMismatchOverrideIntegration:
         assert counts["tier_partial"] == 2, (
             f"audit must count 2 mb-partial entries (one per tagged file), got tier_partial={counts['tier_partial']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# C-CLASS integration KATs: classical and audiobook class routing (S1, frozen)
+# ---------------------------------------------------------------------------
+
+
+def _make_audiobook_release() -> MBRelease:
+    """Return a minimal audiobook release model (secondary-type 'Audiobook').
+
+    :returns: An :class:`~music_annotator.models.MBRelease` instance.
+    """
+    return MBRelease.model_validate(
+        {
+            "id": "ab-rel-1",
+            "title": "Aesop's Fables",
+            "date": "2010",
+            "status": "Official",
+            "barcode": "",
+            "artist-credit": [
+                {
+                    "name": "Aesop",
+                    "artist": {
+                        "id": "aesop-1",
+                        "name": "Aesop",
+                        "sort-name": "Aesop",
+                        "type": "Person",
+                    },
+                }
+            ],
+            "release-group": {
+                "id": "ab-rg-1",
+                "primary-type": "Album",
+                "secondary-type-list": ["Audiobook"],
+                "first-release-date": "2010",
+            },
+            "label-info-list": [],
+            "text-representation": {"script": "Latn", "language": "eng"},
+            "medium-list": [
+                {
+                    "position": 1,
+                    "format": "CD",
+                    "track-list": [
+                        {
+                            "id": "ab-trk1",
+                            "position": 1,
+                            "recording": {
+                                "id": "ab-rec1",
+                                "title": "The Fox and the Grapes",
+                                "artist-credit": [],
+                            },
+                        },
+                        {
+                            "id": "ab-trk2",
+                            "position": 2,
+                            "recording": {
+                                "id": "ab-rec2",
+                                "title": "The Tortoise and the Hare",
+                                "artist-credit": [],
+                            },
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+
+def _patch_mb_audiobook(mocker: MockerFixture, release: MBRelease) -> None:
+    """Patch all musicbrainzngs calls for an audiobook run().
+
+    :param mocker: pytest-mock fixture.
+    :param release: The MBRelease model to return from fetch_release.
+    """
+    mocker.patch("music_annotator._mb_api.mb.set_useragent")
+    mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+    mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+    def _rec_detail(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
+        titles = {
+            "ab-rec1": "The Fox and the Grapes",
+            "ab-rec2": "The Tortoise and the Hare",
+        }
+        return MBRecording.model_validate(
+            {
+                "id": rec_id,
+                "title": titles.get(rec_id, "Unknown"),
+                "artist-credit": [],
+                "artist-relation-list": [],
+                "work-relation-list": [],
+            }
+        )
+
+    mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_rec_detail)
+    mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+    mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+
+class TestCClassIntegration:
+    """C-CLASS integration KATs: classical and audiobook class routing (S1, frozen).
+
+    These tests exercise the full pipeline end-to-end (no internal helpers patched) and verify
+    that the C-CLASS routing produces the correct path structure for classical and audiobook releases.
+    """
+
+    def test_classical_release_paths_under_classical_class(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Classical release → path under Classical/<composer-first top_dir>/… with sidecars in correct work dir.
+
+        Exercises the full pipeline with a classical release (work type "Classical" so
+        cwp_worktype_genres_top contains "Classical").  Verifies:
+        - All FLAC files land under ``Classical/``.
+        - The top_dir uses the composer-first shape (``<composer> - <performers>``).
+        - The provenance sidecar is written to the correct work_top_dir.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        src = Path("/src/classical")
+        dest = Path("/dest/classical")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01 - track1.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02 - track2.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release()
+        _patch_mb(mocker, release)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        flac_files = sorted(dest.rglob("*.flac"))
+        assert len(flac_files) == 2, f"expected 2 FLAC files, got {len(flac_files)}"
+
+        # All files must be under the Classical class.
+        for f in flac_files:
+            rel = f.relative_to(dest)
+            assert rel.parts[0] == "Classical", (
+                f"Expected class 'Classical' for classical release, got {rel.parts[0]!r} for {f}"
+            )
+            # top_dir (parts[1]) must use the composer-first shape.
+            assert "Respighi" in rel.parts[1], f"Expected composer 'Respighi' in top_dir, got {rel.parts[1]!r}"
+
+        # Provenance sidecar must be in the correct work_top_dir.
+        work_top = _work_top_dir(flac_files[0], dest)
+        prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
+        assert prov_path.exists(), f"provenance sidecar must be written at {prov_path}"
+
+    def test_audiobook_release_paths_under_spoken_word_class(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Audiobook release → path under Spoken Word/… with sidecars in correct work dir.
+
+        Exercises the full pipeline with an audiobook release (secondary-type 'Audiobook').
+        Verifies:
+        - All FLAC files land under ``Spoken Word/``.
+        - The provenance sidecar is written to the correct work_top_dir.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        src = Path("/src/audiobook")
+        dest = Path("/dest/audiobook")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01 - track1.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02 - track2.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_audiobook_release()
+        _patch_mb_audiobook(mocker, release)
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
+        music_annotator.run(
+            release_id="ab-rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        flac_files = sorted(dest.rglob("*.flac"))
+        assert len(flac_files) == 2, f"expected 2 FLAC files, got {len(flac_files)}"
+
+        # All files must be under the Spoken Word class.
+        for f in flac_files:
+            rel = f.relative_to(dest)
+            assert rel.parts[0] == "Spoken Word", (
+                f"Expected class 'Spoken Word' for audiobook release, got {rel.parts[0]!r} for {f}"
+            )
+
+        # Provenance sidecar must be in the correct work_top_dir.
+        work_top = _work_top_dir(flac_files[0], dest)
+        prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
+        assert prov_path.exists(), f"provenance sidecar must be written at {prov_path}"
