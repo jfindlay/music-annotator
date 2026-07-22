@@ -39,11 +39,17 @@ R0 census ──► J1 (adjudicate adapter order + rung ladder)
 R1 _net ✓ ──────┼──► R2 tier substrate ✓ ─► R3 adapters (J1-ordered) ──► R5 drain ──► J3 ──► R6 re-derivation
                 │                                                                     ▲
 R4 Act II convergence ──────────────► J2 (naming-policy freeze) ──────────────────────┘
+                                        ▲
+E styleguide arc [ROADMAP-styleguide.md] ┘   (peer arc; V1b/v1 gates J2; feeds R6e)
 ```
 
 Critical path: **R0 → J1 → R2 → R3 (binding adapter) → R5 → J3 → R6**.  R1 is near-critical (gates
-R3).  R4 is parallel but J2 gates R6.  R5 is operator-paced, not agent-session-paced — the arc's
-schedule is dominated by the user's drain rate, not AI throughput.
+R3).  R4 is parallel but J2 gates R6.  **The editorial-styleguide arc (a peer roadmap,
+`docs/ROADMAP-styleguide.md`) now gates J2** — its V1b/v1 completion is J2's editorial input; J2
+cannot freeze the naming policy ahead of the styleguide v1.  R4b (the remaining in-arc R4 node) runs
+parallel to that arc (inventory-first, remedy-routing — largely independent of attribution policy).
+R5 is operator-paced, not agent-session-paced — the arc's schedule is dominated by the user's drain
+rate, not AI throughput.
 
 ### R0 — Census of `Original/`  (Category B; 2 sessions; DONE 2026-07-20)
 
@@ -199,13 +205,41 @@ step-3 watch item that could reshard R3 order.
 ### R4 — Act II naming-policy convergence  (design-heavy; ~3-6 sessions; parallel; soft-depends R0)
 
 - **R4a** Library-wide taxonomy + initial directory component (A-b): top-level class scheme admitting
-  the full corpus; within-classical component edge cases.  Design can start now; finalises against the
-  R0 census inventory.  **IN PROGRESS 2026-07-21** (sharded as PLAN R4a).  Sharded first among R4
-  after the R3 code arc closed (R5 is operator-paced/no sessions; R4a sits on the existing R0 census
-  substrate, unlike R4b which is inventory-first).
+  the full corpus; within-classical component edge cases.  **DONE 2026-07-22** (commits `7666040`,
+  `2cef03e`; PLAN R4a 2/2 rows).  Froze **C-CLASS** (top-level class scheme: `_top_level_class(tags)
+  -> str`, 6-arm Picard-aligned routing table, tag-derivable signal, class-depth-aware `_work_top_dir`
+  helper) and **C-INIT** (`_classical_top_dir(tags) -> str | None`: compilation → albumartist-last-name-first,
+  recital → performer-first, single-composer → unchanged).  Sharded first among R4 after the R3 code
+  arc closed.  ◆ closed; hands off to E + R4b.
 - **R4b** Cross-medium fragmentation inventory (A-c): enumerate before designing; remedies may route
-  to class B or III-b.
-- **R4c** Concerto-like soloist editorial allowlist (small additive; substrate already in place).
+  to class B or III-b.  Runs parallel to E (inventory-first; largely independent of attribution policy).
+- **R4c DISSOLVED into E (2026-07-22).**  R4c was scoped as a "small additive allowlist" widening the
+  mechanical `top_work.type == "Concerto"` path-injection gate (`_tags.py:1189`) to a few more
+  canonical-soloist dirs.  Operator refutation (2026-07-22): an allowlist is the tell of a *missing
+  principle*, not a missing list entry — the real problem is a general performer-attribution editorial
+  policy (soloists→conductors→ensembles; the Albinoni/concerto-grosso/choir+chorusmaster/modern-works
+  hard cases prove it is editorial, not mechanical — the same work is attributed differently across
+  releases).  R4c-as-written is therefore dissolved; its actual need (canonical-soloist promotion
+  beyond mechanical Concerto) becomes one *application* of node **E** and lands wherever E directs
+  (likely folded into R6d re-derivation or a thin post-E follow-on).  The `_tags.py:1189` gate stays
+  as-is until E says otherwise.
+
+### E — Editorial styleguide (the CE-replacement basis)  (gates J2; feeds R6e; **own ROADMAP**)
+
+**Promoted above the R4 tail 2026-07-22; graduated to its own arc roadmap 2026-07-23 (operator
+decision): `docs/ROADMAP-styleguide.md`.**  A generative editorial styleguide that is the
+philosophical basis of the CE replacement — authored from principle; universal (realised by
+music-annotator within and without Picard; CEv3 platforms its MB-derivable partition).  Charter and
+session-1 adjudications in `docs/NOTES.md`; the document itself is `docs/STYLEGUIDE.md` (seeded
+2026-07-22: three founding principles, five-layer × two-partition architecture, epistemic register
+authored, 14-case register).  **Arc structure (see the styleguide ROADMAP): V1a source mining (3
+Sonnet-autonomous sessions over CE docs / the implementation / the library data) → J-E1 → V1b
+authoring (3 interactive sessions: ontology-via-sharp-cases freezing C-ONT, remaining adjudications +
+layers 2–3, rendering + integration) → v1, which satisfies this arc's J2 gate.**  ~6 sessions
+remaining to v1.  Post-v1 application shards (sidecar case-IDs, SEL-11 replacing the concerto gate,
+composite-tag grammars) coordinate with R6d so the library re-derives once.  Register: generative
+authoring on the Fable model (resolved 2026-07-22; no @dialectic handoff).  → `docs/ROADMAP-styleguide.md`;
+`docs/NOTES.md` charter; BACKLOG A-c (superseded).
 
 Ends at **J2 — the naming-policy freeze** (uniform-ceiling/ragged-floor already converged; A-b/A-c
 close here).  → BACKLOG Act II sections.
@@ -235,7 +269,7 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
 | Juncture | When | Adjudicates |
 |----------|------|-------------|
 | **J1** *(FIRED 2026-07-20)* | end of R0 | Census distribution → R3 order/pruning; rung-ladder shape for R2; not-in-MB default posture.  Verdict `still-on-intent` + `additive-reshard`; no destructive-HALT.  Outputs folded into R2/R3/pre-R3 nodes above and recorded in the appendix.  R2 shard proceeds against C-TIER. |
-| **J2** | end of R4 | Naming-policy freeze: taxonomy, depth policy, editorial signals.  Gates R6. |
+| **J2** | end of R4 + **styleguide v1** | Naming-policy freeze: taxonomy, depth policy, editorial signals.  **Gated on the styleguide arc's v1** (`docs/ROADMAP-styleguide.md`, V1b-S6 completion) — J2's editorial input is the styleguide v1, not an in-arc node (E graduated to a peer arc 2026-07-23).  Gates R6. |
 | **J3** | before R6d | Go/no-go on the destructive-scale full-library repath: `Reference/` retention decision, journal capacity, dry-run evidence. |
 
 Post-R3, the **structural-audit trigger** fires (BACKLOG "Codebase maintenance cadence"): review the
@@ -261,8 +295,10 @@ derivation re-reads them.
 
 ## Scope estimate (static frame; R3 tightened by J1 2026-07-20)
 
-R0 2 ✓ · R1 3-5 ✓ · pre-R3 fix 1 ✓ · R2 3 ✓ · R3 9-10 · R4 3-6 · R6 5-8 → **~24-35 agent sessions**, plus
-the operator-paced R5 drain.  J1 tightened the R3 range from the provisional 8-16 to 9-10 on the
+R0 2 ✓ · R1 3-5 ✓ · pre-R3 fix 1 ✓ · R2 3 ✓ · R3 9-10 · R4 (R4a 2 ✓ · R4b unsized; R4c dissolved) · R6 5-8
+→ **~19-28 agent sessions** for this arc, plus the peer **styleguide arc ~6 remaining to v1**
+(`docs/ROADMAP-styleguide.md`: V1a 3 · V1b 3; its post-v1 A-shards fold into R6d) and the operator-paced
+R5 drain.  J1 tightened the R3 range from the provisional 8-16 to 9-10 on the
 census distribution; the R3b survey (2026-07-20) then re-sized R3b 3→5, and R3d collapsed 3→1 at its
 shard boundary (operator-override, no auto-reconciliation), giving **9-10**: pre-R3 fix 1 ✓ ·
 R2 3 ✓ · R3b 5 ✓ · R3a 3 ✓ · R3e 1 ✓ · R3d 1 · R3c 0 (pruned).  The
@@ -415,3 +451,15 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   inclusion is the north star), but it is **designed against a thin live non-classical population**,
   not a large one — the LoC-style "class for everything" is a durable design frame, not a large
   immediate migration.  For the R4a substrate session to weigh.
+
+- **R4a shard boundary (2026-07-22) — R4c under-scoped; the editorial basis is a J2-gating node
+  (promoted to E).**  Sharding R4c surfaced that "small additive concerto-soloist allowlist" is a
+  symptom of a *missing editorial principle*, not a missing list entry.  Operator reframe: performer
+  attribution is a general policy (three categories soloists→conductors→ensembles, the audible-credits
+  analogy; hard cases — Albinoni Adagio organ-vs-violin, concerto grosso, orchestra+independent-choir
+  chorusmaster, modern works attributed to the ensemble, ensemble+guest-soloists — that have no
+  mechanical answer, proven editorial by cross-release attribution variance).  Two principles (coherence
+  across surfaces; a generative well-designed styleguide) become the CE-replacement basis.  Static-frame
+  consequence: **R4c dissolved, node E added and promoted to the R4-tail critical path (gates J2), R4b
+  parallel.**  Register is @dialectic (generative authoring), not sharding — no PLAN.md.  Full charter
+  captured to NOTES.  (CAPTURE-CANDIDATE surfaced and folded here at the boundary.)

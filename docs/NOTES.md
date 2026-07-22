@@ -474,3 +474,159 @@ diagnostic path keeps a "never raises" contract: under the universal rule, a *ca
 failure on that path raises too — and is caught at the same per-release boundary. The rule is frozen
 as contract **C-NET-TERM** in the R1 `_net` PLAN and is the reason the `_net` classifier is
 three-outcome (`RETRY` / `NO_DATA` / `FATAL`), not a two-way retryable/permanent split.
+
+## Editorial attribution styleguide (node E — the CE-replacement basis)
+
+Charter seed for node E (ROADMAP), promoted above the R4 tail 2026-07-22 (operator).  The
+concerto-soloist "allowlist" (dissolved R4c) was the surface of a general problem: **performer
+attribution has no mechanical answer** — the same work is attributed differently across releases,
+exactly as different publishing houses' style guides differ.  music-annotator needs a *generative
+editorial basis*, authored from principle, that supersedes the dormant Classical Extras plugin while
+keeping CE as anchor.
+
+**Two founding principles (operator, 2026-07-22):**
+
+1. **Cross-surface coherence.**  Directory (compact), tags, and playlists (full) are one attribution
+   model rendered as three coherent projections — never three independent rules that happen to agree.
+   The compact projection (path) is UX-ceiling-bounded and lists only the audible principals; the full
+   projections (tags, playlists) carry complete credits.  Mahler 8 is the worst case: the compact form
+   must stay readable (it should *not* list every soloist/conductor/ensemble), the full form should
+   carry them all.  The current concerto path-injection (`_tags.py:1189`, gated on `top_work.type ==
+   "Concerto"`) is a coherence *violation* in miniature — the path gains a soloist the tag worldview
+   does not share (NOTES "Concerto-soloist path promotion": "the per-track tag worldview need not yet
+   carry the union").  E fixes attribution at the model root, not per-surface.
+2. **A generative, well-designed styleguide.**  Coherence must *arise from* an articulated editorial
+   styleguide that consults well for the cases we know and for cases not yet discovered or decided.
+   Where releases legitimately disagree, the styleguide takes as neutral a defensible position as it
+   can.  This styleguide is the philosophical basis of the CE replacement (BACKLOG "Public conventions
+   spec"; CE the *convention* stays anchor, E is the live basis that R6e externalizes).
+
+**The three-category attribution spine (first domain).**  Recordings are traditionally attributed to
+three performer categories, typically in this order — **soloists → conductors → ensembles** — mirroring
+how visible/audible credits are arranged (the film-credits analogy: attribute the principals the
+audience perceives, not every contributor).  All three are normally attributed; ambiguity lives in the
+edge cases.
+
+**Hard-case taxonomy (proves the rule is editorial, not mechanical).**  Each has been observed to be
+attributed differently across releases — the styleguide must pick a neutral, principled default and
+document divergence:
+
+- **Ambiguous soloist role** — Albinoni's Adagio in G minor: attribute the organ soloist? the violin
+  soloist? both? neither?
+- **Concerto grosso** — multiple concertino soloists, no single "the soloist" (far more common in the
+  Baroque; the modern single-soloist concerto is the special case, historically).
+- **Orchestra + independent choral ensemble** — is the guest choir's chorusmaster attributed alongside
+  the conductor?
+- **Modern works written for soloists / where each performer plays a unique part** — attribution often
+  still goes to the ensemble the players belong to, not the individuals.
+- **Ensemble joined by guest soloists covering some (not all) solo parts** — mixed individual-plus-
+  ensemble attribution.
+
+**Neutral-position constraint.**  Because publishers/editors legitimately differ, music-annotator holds
+as close to a neutral stance as it can rather than committing to one house style — and where it must
+choose, the choice is documented (the NOTES "divergences need a documented rationale" rule, made
+generative).
+
+**Scope (operator, 2026-07-22):** the styleguide is *forked above* R4c and authored as a basis, so it
+informs R4c's actual need (canonical-soloist promotion beyond mechanical Concerto), the R4a frozen
+editorial choices (validate, do not re-open C-CLASS/C-INIT), R4b fragmentation remedies, R6e's spec,
+and future editorial judgments from one cohesive basis.  **Register: @dialectic (generative authoring).**
+Node E is explored/authored before any of its applications are sharded.
+
+**Open question the operator explicitly posed (for the exploration to answer):** *are there more
+editorial decisions to be discovered and made here beyond the enumerated hard cases?*  E should treat
+the taxonomy above as seed, not closure.
+
+### Scope expansion (operator + session synthesis, 2026-07-22 — E session 1)
+
+**Third founding principle — the epistemic register (annotation-as-claim).**  Sourced from the operator's annotation-editing
+notes (BACKLOG `[jfindlay edit]` blocks, 2026-07-18): *an annotation is a claim, not a fact — the library records claim +
+basis.*  The system already instantiates this mechanically (annotation-tier ladder = completeness error bar;
+identity-confidence rungs = identity error bar; `needs_spot_check`; persisted failure-vs-no-data); the styleguide canonizes
+the principle those mechanisms realize.  Its boundary is the operator's own line: **tags carry curation-grade epistemics
+(tier, rung, provenance — biblioteconomy); scholarship-grade argument routes upstream** (MB annotations, the editorial
+track) — the layer-routing rule extended to epistemic content.  Two corollaries: (a) **identity-honesty** — claims flow only
+along verified identity edges; a knowing approximation (the FR-for-JP pressing case, BACKLOG "Submit disc IDs") is a
+persisted fact downstream and a submission bar upstream (never submit to MB without physical attestation); (b) the
+neutrality constraint is the editorial-time error bar — where sources legitimately disagree, the styleguide picks a neutral
+default *and records that the case is contested*.
+
+**Composite tags are projections.**  `ARTIST` (an awful name whose *semantics*, not name, we fix — the tag name is the
+player-compatibility contract) is today the MB recording credit verbatim (`_pipeline.py:1742`), release-dependent and
+role-blind: CE's founding complaint.  Under principle 1 every composite tag becomes a defined **grammar over the one
+attribution model** — ordered role classes (soloists → conductors → ensembles), separators, inclusion policy — structurally
+identical to the path's performer component, differing only in ceiling and completeness.  One model; path, composite tags,
+and playlists are all renderings.
+
+**Normalization is a distinct axis.**  Directory fragmentation from credit variance ("Wiener Philharmoniker" vs "Vienna
+Philharmonic"; per-release credit strings for identical forces) is a *name-form* question, orthogonal to selection (who is
+credited) and rendering (how it is written).  MB distinguishes canonical artist name from `target_credit` (as-credited);
+the model already carries both (`cea_performers_credited`).  The coherence-consistent rule: **paths render canonical
+(MBID-stable) identities — else one performer fragments into many dirs; tags render canonical *plus* as-credited
+variants.**  The native-language/script item (editorial track) is this axis at a different depth.
+
+**Universality and the platform partition.**  The styleguide on how to tag classical music is **universal** —
+implementation-independent (operator, 2026-07-22).  music-annotator will eventually serve both roles: tagging within and
+without Picard; CEv3 (the CE successor on Picard v3) realizes the styleguide inside Picard's plugin model.  Each rule E
+authors therefore lands in a platform-capability partition: (1) **MB-derivable** — attribution selection, normalization,
+composite-tag grammars, work-title policy; computable deterministically from MB data + configuration; this partition *is*
+the CEv3-implementable spec.  (2) **Library-level** — path construction, journal provenance, tier/rung persistence,
+sidecars, playlists, attestation workflow; requires filesystem/operator machinery a Picard plugin does not have.
+Cross-surface coherence governs both from the one model; the partition determines only where each rule can execute.  R6e's
+public spec must keep this boundary honest (the CEv3 half must never quietly depend on library-level machinery).
+
+**CE-continuity posture (confirmed).**  Use and improve CE — do not reconstruct its contract from scratch: CE stays the
+semantic anchor, extensions are additive new tag names (never redefinitions), divergences carry documented rationale
+(BACKLOG "Public conventions spec" posture, unchanged; E is the generative basis that makes it consultable for undecided
+cases).
+
+**Hard-case taxonomy — second installment (discovered E session 1):** play-direct soloist-conductors (Perahia directing
+from the keyboard — one category or both?); opera principals (is a named-role singer a "soloist"? Così has six — the
+compact ceiling meets selection head-on); completion/orchestration composers (Süssmayr, Cooke on Mahler 10, Ravel on
+*Pictures* — composer credit, arranger credit, or both; does the completer enter the path?); transcription chains
+(Bach–Busoni); historical ensemble renames (same MBID, era-dependent names — normalization meets time);
+anonymous/traditional works (selection with no composer to select); the composer-in-`ARTIST` question (several house
+styles lead classical `ARTIST` with the composer; releases genuinely disagree — the neutrality constraint applies).
+
+**Styleguide skeleton (five layers, each consuming the one above; all cut by the platform partition):**
+
+1. **Ontology** — role taxonomy: the soloist/conductor/ensemble spine; composer-side roles (arranger, orchestrator,
+   completer, cadenza author, transcriber); auxiliaries (chorusmaster, continuo, leader/director); what "canonical identity
+   of a work" means.
+2. **Selection** — who is attributed, per scope (work / recording / release): the hard-case taxonomy, principals-vs-support,
+   canonical-soloist promotion (dissolved R4c lands here).
+3. **Normalization** — which name-form: canonical vs as-credited vs native-script; the anti-fragmentation rule.
+4. **Rendering** — per-surface grammars: path components, each composite tag (`ARTIST`, `ALBUMARTIST`, CEA_/CWP_ families),
+   playlists; ceilings, ordering, separators; the frozen uniform-ceiling/ragged-floor depth rules live here.
+5. **Epistemic register** — claim+basis, the two ladders, contested-case marking, identity-honesty/attestation, lossless
+   degradation.
+
+**Register (resolved, operator 2026-07-22):** E is authored in architect-mode-on-Fable — the reasoning register the
+ROADMAP's `@dialectic` assignment asked for is supplied by the model; no separate handoff.  The styleguide document itself
+is central to music-annotator (a repo deliverable, not rolling context).
+
+**E session 1 adjudications (operator, 2026-07-22).**  (1) `docs/STYLEGUIDE.md` created — flat single file, the generative
+basis; R6e's public spec is a later *derivation*, not the same document.  As a human design doc it is self-contained and
+never references agent docs (NOTES/BACKLOG/ROADMAP), which enforces the universality the operator asked for.  (2)
+**Rendered, not buried** canonized as epistemic rule 5.3 (the `[rec]`/`[rel]` precedent generalized: a fallback basis is
+carried in the rendered form where the surface affords it).  (3) **Contested-case marking = sidecar + case-IDs** (rule
+5.5): adjudicated styleguide cases carry stable IDs (`SEL-*`, `NORM-*`, `REND-*`, …); `ProvenanceSidecar` will gain an
+editorial-notes list of applied case-IDs (implementation is a later application shard, not now); tag-only platforms apply
+the same defaults without persisting the mark.  (4) Case register seeded with 14 open cases (SEL-1..11, NORM-1..2,
+REND-1), including the dissolved R4c need as SEL-11 (canonical-soloist promotion).  **Next authoring focus (operator,
+session-1 close): resolve layer 1 — the role taxonomy and the canonical-identity concept** (what belongs to what a work
+*is* vs to a performance of it — the definition SEL-11 and the compact projections hang on), then the first SEL
+adjudications against it.  Recommended shape: let the ontology emerge from adjudicating the sharpest cases (SEL-1, SEL-2,
+SEL-6, SEL-11) rather than authoring it in the abstract.
+
+**E session 2 (2026-07-23) — the arc graduated to `docs/ROADMAP-styleguide.md`.**  Operator decisions: (1) the styleguide
+gets its own arc roadmap (peer of the library-completion arc; v1 feeds J2); (2) **v1 is built by mining three sources** —
+CE docs (the *intended* stance: every CE option is a documented editorial fork; a pre-compiled hard-case census),
+the music-annotator implementation (the *enacted* stance: de-facto adjudications to ratify or overturn), and the library
+data (the *empirical* stance: case frequencies, concrete instances, cross-release variance) — the triangulation corrects
+each source's solo failure mode (options-without-frequencies / accidents-mistaken-for-intentions / biased sample); (3) v1
+posture: initial and improvable by design — architecture + adjudication method freeze, individual rulings stay revisable;
+(4) 6 sessions to v1 (V1a mining ×3, Sonnet-autonomous with the five-layer rubric; V1b authoring ×3, interactive);
+(5) mining-chain juncture tier opted down to sonnet (V1b consumption is the inner loop that catches census errors).  New
+contracts: C-CASE (append-only case-ID stability, frozen at V1a start), C-ONT (layer-1 taxonomy, frozen at V1b-S4).
+Layer-1 resolution (the pinned focus above) lands at V1b-S4, after the evidence is in.
