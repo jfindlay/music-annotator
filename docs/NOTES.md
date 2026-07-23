@@ -630,3 +630,28 @@ posture: initial and improvable by design — architecture + adjudication method
 (5) mining-chain juncture tier opted down to sonnet (V1b consumption is the inner loop that catches census errors).  New
 contracts: C-CASE (append-only case-ID stability, frozen at V1a start), C-ONT (layer-1 taxonomy, frozen at V1b-S4).
 Layer-1 resolution (the pinned focus above) lands at V1b-S4, after the evidence is in.
+
+**V1b-S4 (2026-07-23) — layer 1 authored; the sharp selection cases adjudicated (operator rulings).**  The session's
+central correction: the agent's draft rule for SEL-1/SEL-2 ("follow MB data — attribute every individually-credited
+non-ensemble performer as a soloist") was **rejected** by the operator as mechanically expansive.  The operator's rule,
+now STYLEGUIDE 1.2: *a performer is a soloist iff reasonable confidence establishes the part as a named or attributive
+solo*.  Constituents of the ruling, all operator-supplied: (1) two covariant but independent confidence streams —
+descriptive (MB/label/publisher editorial history) and normative (the styleguide's defensible optimum) — which may not
+align; the styleguide governs where they diverge; (2) work-format evidence (concerto, organ symphony, lieder, sonata)
+confers the position constitutively — but *not* concerto grosso or earlier-Baroque forms (era sensitivity: the
+solo–ensemble spectrum was less focused and less ossified then; virtuosity mattered more than named attribution);
+(3) negative rules — prominence is not solohood (DG Complete Brahms chamber recordings: independent musicians
+collaborating are still chamber players; a modern "for 3 soloists" title may be satire of the term); orchestral
+principals are never soloists (Scheherazade's concertmaster "holds forth extensively" yet is traditionally unnamed —
+the part belongs to the chair; percussion is the reductio); ensemble-name precedence (collectively-named groups
+attribute as the ensemble); (4) exceptional engagement can re-establish the position (four famous violinists in
+Vivaldi's four-violin concerto).  **SEL-1 ruled**: Albinoni organ + violin obbligato → no soloist attribution by
+default.  **SEL-2 ruled**: concertino members not soloists by default.  **SEL-6 ratified** as drafted: dual occupancy
+(soloist + conductor), compact projections contract to the soloist position — operator confirmed the contraction
+direction is itself traditional.  **SEL-11 confirmed overturned** (standing 2026-07-23 pre-adjudication) with an
+operator-supplied scope carve-out that became **ONT-11 (minted)**: canonical-identity-as-compositional holds for the
+written tradition (provenance = the written record + scholarship); improvisational-primacy forms (jazz) invert it —
+the audio capture is the authority and performers are constitutive of the recorded work's identity.  ONT-1..10
+absorbed into the register (ONT-2 documented-open with direction: compositional containers canonical, editorial
+collections not — a potential CE divergence; ONT-8 consolidated into ONT-7 by cross-reference per C-CASE).  Layer-2
+stub updated: the promotion question is closed at layer 1.  **C-ONT is frozen** by this session.

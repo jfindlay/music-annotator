@@ -221,8 +221,10 @@ step-3 watch item that could reshard R3 order.
   hard cases prove it is editorial, not mechanical — the same work is attributed differently across
   releases).  R4c-as-written is therefore dissolved; its actual need (canonical-soloist promotion
   beyond mechanical Concerto) becomes one *application* of node **E** and lands wherever E directs
-  (likely folded into R6d re-derivation or a thin post-E follow-on).  The `_tags.py:1189` gate stays
-  as-is until E says otherwise.
+  (likely folded into R6d re-derivation or a thin post-E follow-on).  **E said otherwise (operator
+  2026-07-23): SEL-11 overturned** — no canonical-soloist path promotion at all (the soloist is always
+  in the tags); the `_tags.py:1189` gate is removed by a trivial post-v1 deletion shard, coordinated
+  with R6d.  R4c's need is resolved by rejection, not generalisation.
 
 ### E — Editorial styleguide (the CE-replacement basis)  (gates J2; feeds R6e; **own ROADMAP**)
 
@@ -235,8 +237,9 @@ session-1 adjudications in `docs/NOTES.md`; the document itself is `docs/STYLEGU
 authored, 14-case register).  **Arc structure (see the styleguide ROADMAP): V1a source mining (3
 Sonnet-autonomous sessions over CE docs / the implementation / the library data) → J-E1 → V1b
 authoring (3 interactive sessions: ontology-via-sharp-cases freezing C-ONT, remaining adjudications +
-layers 2–3, rendering + integration) → v1, which satisfies this arc's J2 gate.**  ~6 sessions
-remaining to v1.  Post-v1 application shards (sidecar case-IDs, SEL-11 replacing the concerto gate,
+layers 2–3, rendering + integration) → v1, which satisfies this arc's J2 gate.**  ~3 sessions
+remaining to v1 (V1a done 2026-07-23; V1b sharded to `docs/PLAN.md`).  Post-v1 application shards
+(sidecar case-IDs, removing the concerto gate (SEL-11 overturned, operator 2026-07-23),
 composite-tag grammars) coordinate with R6d so the library re-derives once.  Register: generative
 authoring on the Fable model (resolved 2026-07-22; no @dialectic handoff).  → `docs/ROADMAP-styleguide.md`;
 `docs/NOTES.md` charter; BACKLOG A-c (superseded).
@@ -296,7 +299,7 @@ derivation re-reads them.
 ## Scope estimate (static frame; R3 tightened by J1 2026-07-20)
 
 R0 2 ✓ · R1 3-5 ✓ · pre-R3 fix 1 ✓ · R2 3 ✓ · R3 9-10 · R4 (R4a 2 ✓ · R4b unsized; R4c dissolved) · R6 5-8
-→ **~19-28 agent sessions** for this arc, plus the peer **styleguide arc ~6 remaining to v1**
+→ **~19-28 agent sessions** for this arc, plus the peer **styleguide arc ~3 remaining to v1**
 (`docs/ROADMAP-styleguide.md`: V1a 3 · V1b 3; its post-v1 A-shards fold into R6d) and the operator-paced
 R5 drain.  J1 tightened the R3 range from the provisional 8-16 to 9-10 on the
 census distribution; the R3b survey (2026-07-20) then re-sized R3b 3→5, and R3d collapsed 3→1 at its

@@ -67,7 +67,7 @@ layer 5 (epistemic register) fully authored, case register seeded with 14 open c
 Charter + adjudication record in `docs/NOTES.md`.  Rendered-not-buried canonized (rule 5.3); contested-case marking =
 sidecar + case-IDs (rule 5.5); flat single document, public spec derived later.
 
-### V1a — Source mining  (Category B; 3 sessions; Sonnet-autonomous with rubric)  (IN PROGRESS 2026-07-23 — sharded to docs/PLAN.md)
+### V1a — Source mining  (Category B; 3 sessions; Sonnet-autonomous with rubric)  (DONE 2026-07-23 — commits dcf55f2 / 45681bd / 58f7f9b; J-E1 verdict: still-on-intent)
 
 The extraction rubric for all three: classify every finding onto the five-layer schema; map onto existing case-IDs where
 they fit; mint new cases (append-only, per C-CASE) where they do not; record evidence with enough provenance that V1b can
@@ -98,12 +98,19 @@ signal the seed taxonomy mis-shaped the space — surface, do not silently absor
 the evidence; any discovered conflict with frozen contracts (C-CLASS/C-INIT) → flag to the library-completion ROADMAP,
 never re-open in-arc.
 
-### V1b — Authoring  (3 sessions; interactive — the operator is the editorial authority; architect-on-Fable register)
+**Fired 2026-07-22 at the S3 ◆ (boundary-transform fork): still-on-intent.**  62 cases minted across V1a (35 S1 · 24 S2
+· 3 S3) against the 14-case E0 seed — adjudicated a volume signal (evidence density), not a taxonomy mis-shaping; the
+five-layer schema held with no schema-fit failure.  V1b's 3-session split confirmed still fitting the evidence.  Two
+operator recommendations carried to V1b (see Discoveries appendix D-A1/D-A2).
+
+### V1b — Authoring  (3 sessions; interactive — the operator is the editorial authority; architect-on-Fable register)  (IN PROGRESS 2026-07-23 — sharded to docs/PLAN.md)
 
 4. **V1b-S4 — Ontology through the sharp cases** (Category A substrate).  Adjudicate SEL-1 (ambiguous soloist), SEL-2
-   (concerto grosso), SEL-6 (play-direct), SEL-11 (canonical-soloist promotion) against the three censuses; author layer 1
-   (role taxonomy + the canonical-identity definition) *from* the adjudications.  Freezes **C-ONT**.  The operator's
-   pinned focus (NOTES session-1 close) lands here.
+   (concerto grosso), SEL-6 (play-direct) against the three censuses; record SEL-11 (canonical-soloist promotion) as
+   **overturned** — pre-adjudicated by the operator (2026-07-23): no path promotion, the concerto path-injection is
+   dropped (REND-16 moot with it — see Discoveries D-A3).  Author layer 1 (role taxonomy + the canonical-identity
+   definition) *from* the adjudications.  Freezes **C-ONT**.  The operator's pinned focus (NOTES session-1 close) lands
+   here.
 5. **V1b-S5 — Remaining adjudications + layers 2–3**.  Rule on the rest of the register (including V1a-minted cases);
    genuinely undecidable cases get a documented neutral default or a documented-open status (both are rulings).
    Generalise the selection (layer 2) and normalisation (layer 3) rules from the accumulated rulings.
@@ -115,10 +122,11 @@ never re-open in-arc.
 ### Post-v1 nodes (trigger/operator-paced; unordered)
 
 - **A — Applications (code shards).**  Each is a normal PLAN-sharded code sub-track once v1 rules exist: the
-  `ProvenanceSidecar` editorial-notes field (case-ID persistence, rule 5.5); replacing the mechanical concerto
-  path-injection with the SEL-11 ruling; composite-tag grammar changes (`ARTIST` et al.); normalisation changes (canonical
-  name-forms in paths).  Application shards that change persisted tags or paths coordinate with the library-completion
-  arc's R6 re-derivation — prefer landing them so R6d re-paths once, not piecemeal.
+  `ProvenanceSidecar` editorial-notes field (case-ID persistence, rule 5.5); removing the concerto path-injection
+  (SEL-11 overturned, operator 2026-07-23 — a trivial deletion shard, coordinated with R6d); composite-tag grammar
+  changes (`ARTIST` et al.); normalisation changes (canonical name-forms in paths).  Application shards that change
+  persisted tags or paths coordinate with the library-completion arc's R6 re-derivation — prefer landing them so R6d
+  re-paths once, not piecemeal.
 - **P — Public conventions spec.**  The externalised projection of the styleguide (= R6e in the library-completion
   ROADMAP; finalises alongside the Act II freeze).  Derivation, not duplication.
 - **C — CEv3.**  The CE successor on Picard v3, platforming the styleguide's MB-derivable partition.  Graduates to its
@@ -153,7 +161,7 @@ rules 5.1–5.5 (E0); C-CLASS / C-INIT (library-completion arc); the CE-continui
 
 ## Scope estimate (static frame)
 
-E0 1 ✓ · V1a 3 · V1b 3 → **~7 sessions to v1** (6 remaining).  Post-v1: A ~2-4 shards of 1-3 sessions each
+E0 1 ✓ · V1a 3 ✓ · V1b 3 → **~7 sessions to v1** (3 remaining).  Post-v1: A ~2-4 shards of 1-3 sessions each
 (sharded per normal PLAN convention when elected); P = R6e's existing estimate; C unscoped until graduated.
 
 ## Out of scope (v1)
@@ -166,3 +174,17 @@ E0 1 ✓ · V1a 3 · V1b 3 → **~7 sessions to v1** (6 remaining).  Post-v1: A 
 ## Discoveries appendix
 
 (Mid-session discoveries append here; evaluated at the next sub-track boundary.)
+
+- **D-A1 (2026-07-22, V1a ◆ / J-E1).**  62-case mint across V1a; J-E1 verdict still-on-intent — the volume is evidence
+  density, not schema failure.  Operator recommendation carried to V1b-S6: **REND merge-assessment** — 26 REND cases;
+  REND-14/15/16 (ordering family) and REND-17/18 (separator family) are consolidation candidates.  Merges are
+  cross-referencing adjudications, never renumbers (C-CASE).
+- **D-A2 (2026-07-22 S3; resolved 2026-07-23).**  `census-library.md` was produced from documentary evidence
+  (census-r0, NOTES, BACKLOG) because the canonical library root was not mounted in the dev environment.  The operator
+  reviewed the census and **cleared V1b to proceed on this basis (2026-07-23)** — the hades scanner re-run is waived as
+  a V1b precondition and remains available to the post-v1 L loop.  V1b rules with existence-weight, not
+  frequency-weight, on library evidence.
+- **D-A3 (2026-07-23, operator).**  **The concerto:soloist hack is dropped.**  SEL-11 (canonical-soloist promotion) is
+  pre-adjudicated **overturned** — a concerto release always carries the soloist in its tags; nothing is promoted into
+  the path grammar.  REND-16 is moot with it; the `_tags.py:1189` gate removal is a trivial post-v1 A-shard
+  (coordinated with R6d).  R4c's dissolved need is thereby resolved by *rejection*, not generalisation.
