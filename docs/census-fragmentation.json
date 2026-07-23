@@ -1,0 +1,91 @@
+{
+  "scan_status": "scan-not-run",
+  "scan_note": "hades not mounted; documentary census on D-A2 posture. Scanner scripts/scan_fragmentation.py was not run against the live library. Census reconstructed from census-r0.md, census-library.md, and NOTES.md.",
+  "files_read": 0,
+  "findings": [
+    {
+      "shape": "rg-multi-release",
+      "release_group_id": "unknown-documentary",
+      "album_ids": [
+        "unknown-documentary"
+      ],
+      "top_dirs": [
+        "Arturo Toscanini :: Beethoven (NBC Symphony Orchestra) (Disc 6).0x310f2704",
+        "Arturo Toscanini :: Ludwig van Beethoven Symphonies Nos. 1,2,3&4 Vol 1.0x670e3a09",
+        "Arturo Toscanini :: NBC Symphony Orchestra Vol II: Ludwig van Beethoven CD2.0x7f0da908",
+        "Beethoven :: Beethoven (NBC Symphony Orchestra) (Disc 5).0x3d117c05",
+        "Beethoven  :: Symphonies Nos. 3&4 - Toscanini, NBCSO.0x73121308"
+      ],
+      "files": [],
+      "remedy_route": "iii-b",
+      "documentary_evidence": "census-r0.md whipper/in-mb-clean: five separate top-level dirs for discs/volumes of the same Toscanini NBC Beethoven recordings. Dir names include disc numbers and volume labels confirming these are parts of one release group. When ingested, they will share a release-group MBID but carry distinct album MBIDs, spanning 5 top_dirs. MB data correctly models these as separate releases within one release group; the library structure needs a regroup pass."
+    },
+    {
+      "shape": "rg-multi-release",
+      "release_group_id": "unknown-documentary",
+      "album_ids": [
+        "unknown-documentary"
+      ],
+      "top_dirs": [
+        "Wagner, Richard: :: Wagner: Ring Des Nibelungen; Karajan::BPO.0x6b0a9b08",
+        "Wagner, Richard: :: Wagner: Ring Des Nibelungen; Karajan::BPO.0xaf11030d"
+      ],
+      "files": [],
+      "remedy_route": "iii-b",
+      "documentary_evidence": "census-r0.md whipper/in-mb-clean: two separate top-level dirs for the same Wagner Ring cycle (Karajan/BPO), distinguished only by FreeDB disc-ID hex suffix. These are either two different pressings (same release group, different album MBIDs) or two rips of the same release. Either way, they span 2 top_dirs under the same release group. The library structure needs a regroup pass; if these are duplicate rips, one may be a deletion candidate."
+    },
+    {
+      "shape": "rg-multi-release",
+      "release_group_id": "unknown-documentary",
+      "album_ids": [
+        "unknown-documentary"
+      ],
+      "top_dirs": [
+        "Wilhelm Furtwängler :: [Disc 2] Johannes Brahms.0x1a0b2104",
+        "Wilhelm Furtwängler :: [Disc 3] Anton Bruckner.0x2f0fe904",
+        "Wilhelm Furtwängler :: [Disk 5] Sibelius, Strauss, Ravel.0x180c3b03"
+      ],
+      "files": [],
+      "remedy_route": "iii-b",
+      "documentary_evidence": "census-r0.md whipper/in-mb-clean: three separate top-level dirs for discs 2, 3, and 5 of a Furtwängler multi-disc box set. The disc numbers in the dir names confirm these are parts of one release group. When ingested, they will share a release-group MBID but carry distinct album MBIDs, spanning 3 top_dirs. The library structure needs a regroup pass. Note: discs 1 and 4 are absent from Original/, suggesting they may already be in Done/ — a partial-ingest fragmentation scenario."
+    },
+    {
+      "shape": "rg-multi-release",
+      "release_group_id": "unknown-documentary",
+      "album_ids": [
+        "unknown-documentary"
+      ],
+      "top_dirs": [
+        "Gioacchino Rossini :: Panorama - Gioacchino Rossini - Disc 1.0x9b10f20b",
+        "Gioacchino Rossini :: Panorama.0xe6120d0f"
+      ],
+      "files": [],
+      "remedy_route": "iii-b",
+      "documentary_evidence": "census-r0.md whipper/in-mb-clean: two separate top-level dirs for the Rossini Panorama compilation — one for Disc 1 specifically, one for the main set. These are parts of the same release group. When ingested, they will share a release-group MBID but carry distinct album MBIDs, spanning 2 top_dirs. The library structure needs a regroup pass."
+    },
+    {
+      "shape": "rg-multi-release",
+      "release_group_id": "unknown-documentary",
+      "album_ids": [
+        "unknown-documentary"
+      ],
+      "top_dirs": [
+        "Various :: Jazz Classic, 10th ED, CD03.0xb912740c",
+        "Various :: Jazz Classics, 10th ED, CD01.0xd712ac1f",
+        "Various :: Jazz Classics, 10th ED, CD02.0xa912340c"
+      ],
+      "files": [],
+      "remedy_route": "iii-b",
+      "documentary_evidence": "census-r0.md whipper/in-mb-clean: three separate top-level dirs for CDs 1, 2, and 3 of the Jazz Classics 10th Edition compilation. The CD numbers in the dir names confirm these are parts of one release group. When ingested, they will share a release-group MBID but carry distinct album MBIDs, spanning 3 top_dirs. The library structure needs a regroup pass."
+    }
+  ],
+  "summary": {
+    "rg_multi_release": 5,
+    "per_medium_credit_variance": 0,
+    "rg_vs_release_split": 0,
+    "shapes_with_zero_instances": [
+      "per-medium-credit-variance",
+      "rg-vs-release-split"
+    ]
+  }
+}
