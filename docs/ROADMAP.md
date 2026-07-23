@@ -213,6 +213,9 @@ step-3 watch item that could reshard R3 order.
   arc closed.  ◆ closed; hands off to E + R4b.
 - **R4b** Cross-medium fragmentation inventory (A-c): enumerate before designing; remedies may route
   to class B or III-b.  Runs parallel to E (inventory-first; largely independent of attribution policy).
+  **IN PROGRESS 2026-07-23 — sharded to `docs/PLAN-fragmentation.md`** (2 sessions: S1 read-only fragmentation
+  scanner + shape taxonomy freezing C-FRAG-TAX; S2 ◆ census artifact + remedy-routing).  `juncture-tier: opus`
+  (arc default retained: the read-only inventory is low-criticality, but the S2 ◆ remedy-routing feeds J2/R6).
 - **R4c DISSOLVED into E (2026-07-22).**  R4c was scoped as a "small additive allowlist" widening the
   mechanical `top_work.type == "Concerto"` path-injection gate (`_tags.py:1189`) to a few more
   canonical-soloist dirs.  Operator refutation (2026-07-22): an allowlist is the tell of a *missing
