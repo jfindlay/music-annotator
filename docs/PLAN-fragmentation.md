@@ -177,7 +177,7 @@ live instances; `remedy_route` field frozen ahead of its values).
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | R4b Add read-only cross-medium fragmentation scanner + shape taxonomy | pending | — | C-FRAG-TAX |
+| 1 | R4b Add read-only cross-medium fragmentation scanner + shape taxonomy | done | fac01f3 | C-FRAG-TAX ✓ frozen |
 | 2 | R4b Census library fragmentation shapes and route remedies | pending | — | census-fragmentation |
 
 ## Action-frame digest
