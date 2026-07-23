@@ -178,11 +178,15 @@ live instances; `remedy_route` field frozen ahead of its values).
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 | R4b Add read-only cross-medium fragmentation scanner + shape taxonomy | done | fac01f3 | C-FRAG-TAX ✓ frozen |
-| 2 | R4b Census library fragmentation shapes and route remedies | pending | — | census-fragmentation |
+| 2 | R4b Census library fragmentation shapes and route remedies | done | b5f7d76 | census-fragmentation ✓ frozen |
 
 ## Action-frame digest
 
-*(none yet)*
+### S2 — 2026-07-23
+Discovery/flex: C-S0 limitation surfaced as arc-boundary finding: C-S0 aggregates within a release (album MBID), not across releases in a release group, so box sets modeled as multiple releases will fragment despite C-S0.
+Affected: C-S0 (upstream frozen contract — forwarded to arc boundary per D-4, not re-opened in-arc)
+Deferred: yes — the C-S0 limitation finding should be examined at the library-completion arc boundary (ROADMAP Discoveries) before the III-b regroup shard is planned; the Furtwängler partial-ingest scenario (discs 1/4 may already be in Done/) means the live scan prerequisite is load-bearing for that cluster.
+Texture: D-A2 posture confirmed (hades not mounted); census is documentary (5 rg-multi-release pre-ingest candidates, 0 per-medium-credit-variance, 0 rg-vs-release-split); all 5 routed iii-b.
 
 ## Discoveries & risks
 
