@@ -247,7 +247,11 @@ mints live in census artifacts until V1b.*
 
 ## Action-frame digest
 
-*(none yet)*
+### S3 ◆ — 2026-07-22 (J-E1 boundary-transform)
+Discovery/flex: 62 new cases minted across V1a (vs E0's 14); boundary-transform fork returned still-on-intent.
+Affected: C-CASE (consumed; mint volume is a D-1 J-E1 signal, not a taxonomy mis-shaping — no D-4 triggered).
+Deferred: yes — two operator recommendations for V1b: (1) REND- merge-assessment (26 cases, REND-14/15/16 and REND-17/18 are consolidation candidates); (2) run scanner on hades for authoritative frequencies before V1b adjudication.
+Texture: library census produced from available evidence (library not accessible in dev); honest labeling sufficient for V1b adjudication per fork verdict.
 
 ## Discoveries & risks
 
