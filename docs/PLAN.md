@@ -166,7 +166,7 @@ with REND-x"), never renumbers — sidecars will persist these IDs (rule 5.5).  
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 4 | Adjudicate the sharp selection cases and author layer 1 (ontology) | done (pending commit) | — | C-ONT |
+| 4 | Adjudicate the sharp selection cases and author layer 1 (ontology) | done | 3a1d58f | C-ONT |
 | 5 | Adjudicate the remaining register and author layers 2–3 | pending | — | — |
 | 6 | Author layer 4 rendering grammars and the CE-divergence register; integrate → v1 | pending | — | v1 |
 
