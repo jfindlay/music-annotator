@@ -243,7 +243,7 @@ mints live in census artifacts until V1b.*
 |---|---------|--------|--------|-------|
 | 1 | Mine CE documentation into the editorial-fork inventory | done | dcf55f2 | C-CASE (consumed; 35 cases minted into census, not register) |
 | 2 | Mine the implementation into the de-facto rulings inventory | done | 45681bd | C-CASE (consumed; 24 cases minted into census, not register) |
-| 3 | Mine the library into the empirical census (+ read-only scanner) | pending | | |
+| 3 | Mine the library into the empirical census (+ read-only scanner) | done | 58f7f9b | C-CASE (consumed; 3 cases minted into census, not register) |
 
 ## Action-frame digest
 
