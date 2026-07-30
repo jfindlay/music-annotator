@@ -187,6 +187,18 @@ statement only, no rules.
 Texture: SEL-11's overturn now *derives* from the 1.7 canonical-identity definition rather than standing as a bare operator
 fiat — the register entry cites 1.7, and the jazz carve-out shows where the premise legitimately inverts.
 
+### S5 — 2026-07-30
+Discovery/flex: none structural — all 36 rulings landed within the S4 ontology, and the S4 carry-over (SEL-4/5/7/22 against
+the narrowed soloist rule) resolved by citation rather than extension, validating C-ONT's strength.  SEL-8 ruled as the
+mirror of SEL-11 (authors of the performed edition are canonical and enter compact projections; performers never are).
+SEL-17 carries the binding buckets-are-credit-routing-not-solohood gloss (STYLEGUIDE 2.5) that the post-v1 composite-tag
+A-shards consume.  Two true CE divergences recorded: SEL-13 (lyricist suppression overturned), NORM-6 (extended-title
+splicing rejected).  D-S1-7 (EPIST schema-fit) closed by ruling: EPIST-1/4/5 adjudicated out-of-editorial-scope.
+Affected: none frozen this session (C-ONT consumed, unmodified); layers 2–3 prose replaces the stubs.
+Deferred: no split needed (D-5 risk did not materialise — the session fit).  Consolidations: SEL-21→SEL-2, NORM-10→NORM-2.
+Texture: S6's queue grew two items — the chorusmaster-in-`CONDUCTOR` shared-tag narrowing (CE-continuity question for the
+tag grammars) and the SEL-12→REND-1 handoff (the artist-slot fork is now wholly a layer-4 grammar question).
+
 ## Discoveries & risks
 
 - **D-1 (REND merge-assessment — S6 opening move).**  26 REND cases; REND-14/15/16 and REND-17/18 are consolidation

@@ -655,3 +655,23 @@ the audio capture is the authority and performers are constitutive of the record
 absorbed into the register (ONT-2 documented-open with direction: compositional containers canonical, editorial
 collections not — a potential CE divergence; ONT-8 consolidated into ONT-7 by cross-reference per C-CASE).  Layer-2
 stub updated: the promotion question is closed at layer 1.  **C-ONT is frozen** by this session.
+
+**V1b-S5 (2026-07-30) — layers 2–3 authored; all remaining SEL/NORM/EPIST cases ruled (operator adjudications).**
+All 36 outstanding cases statused: 18 SEL, 10 NORM, 8 EPIST — zero unstatused, per the S5 coverage assertion.  The S4
+carry-over discharged: SEL-4/5/7/22 re-examined against the narrowed 1.2 soloist rule, and all four resolved by *citing*
+1.2 rather than extending it (the only new mechanisms minted were guest-as-metadata (SEL-5), the principal–comprimario
+confidence line (SEL-7), and chorusmaster-alongside-not-as-conductor (SEL-3)) — confirming C-ONT was specified at the
+right strength.  Structural rulings: **SEL-8 is the mirror image of SEL-11** (the two faces of 1.7: performers are never
+canonical, authors always are — completers/orchestrators enter compact projections role-annotated); **SEL-17's binding
+gloss** formally propagates the S4 narrowing into the enacted tag model (CE buckets are credit routing, not solohood;
+position-projecting surfaces must consume 1.2 position selection — the post-v1 composite-tag A-shards cite this);
+**SEL-13 is the register's first true divergence status** (CE's lyricist suppression overturned: work-scope authorship
+survives instrumental performance).  Layer 3's substrate: NORM-2 defines the canonical form (native-Latin as-is;
+established Latin reception forms for non-Latin scripts); NORM-1 rules identity-stability over era-fidelity in compact
+projections; NORM-5 inverts for instruments (render credited, classify standard — no fragmentation hazard).
+Consolidations per C-CASE (cross-reference, never renumber): SEL-21→SEL-2, NORM-10→NORM-2.  The D-S1-7 EPIST schema-fit
+question is *closed by ruling*: EPIST-1/4/5 statused adjudicated-out-of-editorial-scope (IDs preserved), EPIST-2/3
+cross-referenced to the alternate-source rung, EPIST-6/7/8 ratified as realisations of 5.1/5.2/5.5.  **Queued for S6:**
+the chorusmaster-in-`CONDUCTOR` shared-tag question (CE renders "Name (choirmaster)" inside `conductor`; omitting it is
+a semantic narrowing of a shared tag — divergence to document or convention to adopt), and the SEL-12→REND-1
+cross-reference (the artist-slot question is now wholly layer 4's).
