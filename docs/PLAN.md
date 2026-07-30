@@ -168,7 +168,7 @@ with REND-x"), never renumbers — sidecars will persist these IDs (rule 5.5).  
 |---|---------|--------|--------|-------|
 | 4 | Adjudicate the sharp selection cases and author layer 1 (ontology) | done | 3a1d58f | C-ONT |
 | 5 | Adjudicate the remaining register and author layers 2–3 | done | 38b1559 | — |
-| 6 | Author layer 4 rendering grammars and the CE-divergence register; integrate → v1 | pending ledger flip | — | v1 |
+| 6 ◆ | Author layer 4 rendering grammars and the CE-divergence register; integrate → v1 | done | 386d092 | v1 |
 
 ## Action-frame digest
 
