@@ -103,7 +103,7 @@ never re-open in-arc.
 five-layer schema held with no schema-fit failure.  V1b's 3-session split confirmed still fitting the evidence.  Two
 operator recommendations carried to V1b (see Discoveries appendix D-A1/D-A2).
 
-### V1b — Authoring  (3 sessions; interactive — the operator is the editorial authority; architect-on-Fable register)  (IN PROGRESS 2026-07-23 — sharded to docs/PLAN.md)
+### V1b — Authoring  (3 sessions; interactive — the operator is the editorial authority; architect-on-Fable register)  (DONE 2026-07-30 — v1 ✓, reported to J2; S4 3a1d58f · S5 38b1559 · S6 see PLAN ledger)
 
 4. **V1b-S4 — Ontology through the sharp cases** (Category A substrate).  Adjudicate SEL-1 (ambiguous soloist), SEL-2
    (concerto grosso), SEL-6 (play-direct) against the three censuses; record SEL-11 (canonical-soloist promotion) as
@@ -123,10 +123,11 @@ operator recommendations carried to V1b (see Discoveries appendix D-A1/D-A2).
 
 - **A — Applications (code shards).**  Each is a normal PLAN-sharded code sub-track once v1 rules exist: the
   `ProvenanceSidecar` editorial-notes field (case-ID persistence, rule 5.5); removing the concerto path-injection
-  (SEL-11 overturned, operator 2026-07-23 — a trivial deletion shard, coordinated with R6d); composite-tag grammar
-  changes (`ARTIST` et al.); normalisation changes (canonical name-forms in paths).  Application shards that change
-  persisted tags or paths coordinate with the library-completion arc's R6 re-derivation — prefer landing them so R6d
-  re-paths once, not piecemeal.
+  (SEL-11 overturned, operator 2026-07-23 — a trivial deletion shard, coordinated with R6d); the S6 tag-shaping set
+  (REND-14 billing-order reorder + composite-tag naming realignment, chorusmaster-into-`CONDUCTOR` addition,
+  `IS_CLASSICAL` conditionalisation); composite-tag grammar changes (`ARTIST` et al.); normalisation changes (canonical
+  name-forms in paths).  Application shards that change persisted tags or paths coordinate with the library-completion
+  arc's R6 re-derivation — prefer landing them so R6d re-paths once, not piecemeal.
 - **P — Public conventions spec.**  The externalised projection of the styleguide (= R6e in the library-completion
   ROADMAP; finalises alongside the Act II freeze).  Derivation, not duplication.
 - **C — CEv3.**  The CE successor on Picard v3, platforming the styleguide's MB-derivable partition.  Graduates to its
@@ -161,7 +162,7 @@ rules 5.1–5.5 (E0); C-CLASS / C-INIT (library-completion arc); the CE-continui
 
 ## Scope estimate (static frame)
 
-E0 1 ✓ · V1a 3 ✓ · V1b 3 → **~7 sessions to v1** (3 remaining).  Post-v1: A ~2-4 shards of 1-3 sessions each
+E0 1 ✓ · V1a 3 ✓ · V1b 3 ✓ → **v1 reached in 7 sessions (2026-07-30)**.  Post-v1: A ~2-4 shards of 1-3 sessions each
 (sharded per normal PLAN convention when elected); P = R6e's existing estimate; C unscoped until graduated.
 
 ## Out of scope (v1)
@@ -188,3 +189,10 @@ E0 1 ✓ · V1a 3 ✓ · V1b 3 → **~7 sessions to v1** (3 remaining).  Post-v1
   pre-adjudicated **overturned** — a concerto release always carries the soloist in its tags; nothing is promoted into
   the path grammar.  REND-16 is moot with it; the `_tags.py:1189` gate removal is a trivial post-v1 A-shard
   (coordinated with R6d).  R4c's dissolved need is thereby resolved by *rejection*, not generalisation.
+- **D-A4 (2026-07-30, S6 ◆).**  **v1 ✓.**  All 26 REND IDs statused (merges: REND-16→SEL-11, REND-18→REND-6,
+  REND-8/9/11→REND-5); the D-S2-1 tag-vs-path "inversion" dissolved (the path already renders billing order; REND-14's
+  tag assembly was the deviant surface, overturned in part by the operator's normalise-to-billing-order ruling).  New
+  divergences: REND-1 (no composer fallback into `ARTIST`), REND-2 (no composer prefix on `ALBUM`), REND-14 (billing
+  order over CE assembly order); CE convention adopted for the chorusmaster in `CONDUCTOR`.  A standing-rule-2
+  naming-drift hazard (composite semantics under CE's verbatim-credit tag name) is queued for realignment with the
+  REND-14 shard.  The A-node gains the S6 tag-shaping set; all coordinate with R6d.

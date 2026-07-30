@@ -145,9 +145,9 @@ position later is costlier than carrying one.
 composer** (the usual database realisation of a completer — Süssmayr's Requiem); **arranger**, **orchestrator**,
 **reconstructor**, **revisor**; **transcriber** (the Bach–Busoni chain, SEL-9); **cadenza author**; **writer** — a distinct
 authorial position at the work scope, though recording-scope practice has merged it into composer (the asymmetry is
-adjudicated deliberate at SEL-18); **lyricist**, **librettist**, **translator**.  The positions are fixed here; the selection rules —
-when a completer is attributed alongside the composer, whether the completer enters compact projections (SEL-8) — are
-layer-2 rulings.
+adjudicated deliberate at SEL-18); **lyricist**, **librettist**, **translator**.  The positions are fixed here; the
+selection rules — when a completer is attributed alongside the composer, whether the completer enters compact
+projections (SEL-8) — are layer-2 rulings.
 
 **1.7 Canonical identity of a work.**  A work's canonical identity is its **compositional identity**: the properties fixed
 by the act and record of composition — title, key, catalogue and opus designation, work type, compositional structure
@@ -251,18 +251,66 @@ of their own.  One sort key per entity is the anti-fragmentation rule applied to
 ratified period taxonomy (ONT-6) with its documented first-match convention over overlapping ranges (NORM-8); period is
 reception metadata, revisable, never identity.
 
-## Layer 4 — Rendering (to be authored)
+## Layer 4 — Rendering
 
-Per-surface grammars over the model: path components, each composite tag (`ARTIST`, `ALBUMARTIST`, and the extended
-classical tag families), playlists.  Each grammar declares its ordering (the spine order unless a case rules otherwise),
-its separators, its inclusion policy, and its ceiling.  Two rendering rules are already converged and are inputs to this
-layer rather than open questions:
+Per-surface grammars over the model: path components, each composite tag (`ARTIST`, `ALBUMARTIST`, and the CE tag
+families), playlists.  The `REND-*` rulings in the case register are the case law of these rules; the rules generalise
+the rulings, not the reverse.
 
-- **Path is a handle, not a manifest.**  The destination directory and filename are short, stable identifiers a user
-  locates a recording by — not manifests of every credited contributor.  Full credits belong in full projections.
-- **Uniform ceiling, ragged floor.**  When projecting a work's part-hierarchy onto directory depth, over-resolved branches
-  clamp down to the group's modal depth (removing structure the path does not need — faithful), but shallow branches are
-  never padded up (which would invent structure that is not there — unfaithful).
+**4.1 Every surface is a declared grammar.**  A rendering surface declares its content source (which positions and
+credits it draws from the model), its ordering, its separators, and its inclusion policy with its ceiling.  Two grammar
+registers exist, and the distinction is load-bearing: an *assembled* surface projects the model editorially — its
+content is this styleguide's claim; a *preserved* surface carries a source credit verbatim — its content is the
+release's claim, kept as evidence (P3).  Both registers are projections of the one model (P1): a preserved credit is in
+the model by total selection (2.1), so preservation can never disagree with it.
+
+**4.2 Billing order.**  Assembled surfaces render performer principals in the spine's billing order (1.1): soloists,
+then conductors, then ensembles.  Where a surface carries the author chain alongside performers, the authors lead, in
+chain order (1.7, SEL-9): the work identifies before the performance.  Preserved surfaces render as credited.  A grammar
+may deviate from billing order only by an adjudicated case with documented rationale; none currently does (REND-14,
+REND-15).
+
+**4.3 `ARTIST` and `ALBUMARTIST` are preserved claims.**  `ARTIST` renders the MB recording artist-credit verbatim;
+`ALBUMARTIST` renders the release artist-credit verbatim (REND-1, REND-19).  The author chain is never spliced into
+`ARTIST`: authorship has its own surfaces (SEL-19), and rendering a work-scope author in a performance-scope slot when
+performer data is absent would be a silent scope substitution (5.2) — the mirror of SEL-10: as anonymity is never filled
+by promoting an arranger, performer-lessness is never filled by promoting the composer.  The editorial performer
+composite is a separate assembled tag — claim and adjudication remain distinct surfaces.
+
+**4.4 CE-family tag grammars.**  CE-named tags keep their established CE semantics and grammar (standing rule 1).  Role
+annotations render in parentheses within host tags using the CE annotation vocabulary — "(orch.)", "(choirmaster)",
+"(arr.)", and kin (REND-3) — the visible-basis form of 5.3 applied to role merging: the merged credit carries its role
+in the claim itself.  `CONDUCTOR` carries the conductor position plus the annotated chorusmaster credit (the grammar
+half of SEL-3: credit routing per 2.5; the position ruling is untouched).  Multi-value lists within one tag join with
+`"; "` (REND-17); the work-hierarchy family joins levels with `" :: "` (REND-6).  Which tag names receive work,
+movement, genre, instrument, key, date, and period data is platform-configurable with CE defaults (REND-5).  Format
+realisation — standard ID3 frames plus own-namespace TXXX descriptors — is platform machinery under the same semantics
+(REND-13).
+
+**4.5 The path grammar (library partition).**  The destination path is the compact assembled projection: class
+directory; within-classical top directory (compilation, recital, and the dominant single-composer
+`<composer> - <performers>` form — authors lead per 4.2, with `" - "` separating the author chain from performers); work
+directory `<work title> [rec YYYY]`, the date basis visible in the rendered form and `[rel YYYY]` as the labelled
+fallback (REND-24, 5.3); gap-free ordinal prefixes on intermediate levels and leaves (REND-25, REND-26).  The class and
+top-directory routings realise the C-CLASS and C-INIT contracts, which this styleguide describes and does not define
+(REND-22, REND-23).  The performers component carries the performance's stable identity signals — conductors, then
+ensembles, billing order over its occupied positions.  Soloists never enter it, however principal (1.7, SEL-11): this is
+the inclusion-policy answer to the ceiling question a six-principal opera cast poses (SEL-7) — the handle stays stable
+because it never carries the credits that vary.  Two converged rules govern the whole surface: **path is
+a handle, not a manifest** — a short, stable identifier a user locates a recording by, never a manifest of contributors;
+and **uniform ceiling, ragged floor** — over-resolved branches clamp down to the work-group's modal depth (removing
+structure the path does not need — faithful), shallow branches are never padded up (inventing structure that is not
+there — unfaithful).
+
+**4.6 Playlists.**  Playlists are full projections: complete credits in billing order.  Their detailed grammar is
+deferred to the adjudication loop until playlist machinery exists — an honest gap, not an open contest.
+
+**4.7 Title and classification surfaces.**  `ALBUM` renders the release title verbatim — a preserved claim; composer
+prefixes are never spliced in (REND-2 — NORM-6's title-integrity logic at layer 4).  Work-scope surfaces render
+canonical work names (3.4), carrying key signatures contingently — only where the canonical title lacks them (REND-10)
+— and coverage labels ("(part)", "Arrangement:", "Medley") as visible marks (REND-7, 5.3).  Genre and classical
+classification render from compositional identity (REND-20; SEL-14, SEL-15), with the CE flag vocabulary preserved
+(REND-21).
 
 ## Layer 5 — The epistemic register
 
@@ -361,9 +409,9 @@ derives from.  The register is seed, not closure: new cases append.
 - **SEL-3 (adjudicated) — Independent choral ensemble.**  The chorusmaster occupies a distinct auxiliary position (1.5),
   attributed alongside the conductor in full projections — never as a conductor, never in compact projections.  The role is
   preparatory: the audience perceives the choir's preparation through the choir (1.1); the credit is real and always carried
-  in full.  CE merges the chorusmaster into the `conductor` host tag annotated "(choirmaster)" — whether shared tag surfaces
-  reproduce that convention is a layer-4 grammar question (flagged for the rendering layer: a semantic narrowing of a shared
-  tag is a divergence to document).  Derives from 1.1, 1.5; P1.
+  in full.  The shared-tag grammar is ruled at layer 4: `CONDUCTOR` carries the conductor position plus the annotated
+  chorusmaster credit "(choirmaster)" — CE's convention adopted as credit routing (2.5, 4.4); the position ruling here is
+  untouched.  Derives from 1.1, 1.5; P1.
 - **SEL-4 (adjudicated) — Ensemble works with unique parts.**  Where a collective identity exists, ensemble-name precedence
   governs: the ensemble is attributed, members are credits.  Where none exists (named individuals recording the Messiaen
   Quatuor), the performers are chamber players — individually credited in full projections, soloist position empty:
@@ -401,7 +449,7 @@ derives from.  The register is seed, not closure: new cases append.
   a work's canonical identity (1.7).  A concerto release always carries its soloist in the full projections; nothing is
   promoted into compact projections — the question "when is promotion justified?" has the answer *never*, by rejection
   rather than generalisation.  Any enacted concerto-only path promotion is rejected by this ruling, and the concerto
-  path-ordering question is moot with it (REND-16, absorbed with layer 4).  For improvisational-primacy repertoire the
+  path-ordering question is moot with it (REND-16, consolidated into this ruling).  For improvisational-primacy repertoire the
   premise inverts — see ONT-11.  Derives from 1.7; P1.
 - **SEL-12 (adjudicated) — Recording artist vs. track artist.**  Dissolved into the model: the fork exists only for
   platforms with a single `artist` slot to fight over.  The attribution model always selects both work-scope authors and
@@ -483,8 +531,82 @@ derives from.  The register is seed, not closure: new cases append.
 
 ### Rendering
 
-- **REND-1 (open) — Composer in `ARTIST`.**  For classical recordings, does the `ARTIST` grammar lead with the composer
-  (as several established house styles do) or carry performers only?  Releases genuinely disagree; P2 applies.
+- **REND-1 (divergence) — Composer in `ARTIST`.**  `ARTIST` renders the recording's performance principals as the MB
+  recording artist-credit verbatim — a preserved claim (4.3).  The author chain never enters: rendering a work-scope
+  author in a performance-scope slot when performer data is absent is a silent scope substitution (5.2), and an empty
+  performer credit is legitimate no-data, never a vacancy filled by promotion (the SEL-10 mirror).  Narrow documented
+  divergence from CE, whose default cascade appends the composer as a conditional fallback; the composer-led house
+  style is rejected as conflating scopes.  Derives from 4.3, 5.2, 1.7; P2, P3; cross-references SEL-12.
+- **REND-2 (divergence) — Composer-last-name prefix on album title.**  Overturns the CE default: `ALBUM` renders the
+  release's own title verbatim; composer text is never spliced in.  The release title is the release's claim (P3), and
+  manufacturing a title the release does not bear is NORM-6's rejected splicing at layer 4.  Composer-first browsing is
+  served by the path handle and the authorship surfaces.  Derives from 4.7, 3.4; P3.
+- **REND-3 (adjudicated) — Role-annotation text within host tags.**  The CE annotation vocabulary ("(orch.)",
+  "(choirmaster)", "(arr.)", "(reconstructed)", "(revised)", "(trans.)", and kin) is ratified: annotations render the
+  role of a merged credit visibly in the claim itself — 5.3 applied to role merging.  Derives from 4.4, 5.3.
+- **REND-4 (adjudicated) — Lyrics/notes splitting.**  Splitting a lyrics tag into album-common and track-unique notes
+  is ratified as CE convention; platform capability, no further editorial content.
+- **REND-5 (adjudicated) — Tag-name assignment.**  Which tag names receive work, movement, genre, instrument, key,
+  date, and period data is a platform-configurable projection choice; the CE default names are ratified as the neutral
+  defaults.  Consolidates REND-8, REND-9, and REND-11 (genre/flag, instrument/key, and date/period tag names — the same
+  fork per data family); the classical-flag value semantics are REND-21.  Derives from 4.4; P2.
+- **REND-6 (adjudicated) — Work-hierarchy and movement-number separators.**  `" :: "` joins work levels in the
+  work-hierarchy tag family (the CE `groupheading` convention); `"."` follows movement numbers; both ratified.
+  Consolidates REND-18 (the enacted `" :: "` evidence — same subject).  Derives from 4.4.
+- **REND-7 (adjudicated) — Coverage and lineage labels.**  The visible labels for partial recordings ("(part)"),
+  arrangements ("Arrangement:"), and medleys ("Medley") are ratified: each renders a work-identity fact in the claim
+  itself, realising ONT-3, ONT-4, and ONT-5 under 5.3.  Derives from 4.7, 5.3.
+- **REND-8 (adjudicated) — Genre and classical-flag tag names.**  Consolidated with REND-5 (tag-name assignment); flag
+  value semantics at REND-21.  Cross-referencing adjudication; IDs stable.
+- **REND-9 (adjudicated) — Instrument and key tag names.**  Consolidated with REND-5.  Cross-referencing adjudication;
+  IDs stable.
+- **REND-10 (adjudicated) — Key signature inclusion in work name.**  Contingent inclusion ratified (the CE default):
+  the key renders in the work name only where the canonical title lacks it — the key is compositional identity (1.7)
+  and duplication adds no claim.  Derives from 4.7, 1.7.
+- **REND-11 (adjudicated) — Work date and period tag names.**  Consolidated with REND-5.  Date-basis visibility is
+  REND-24; period taxonomy is ONT-6/NORM-8.  Cross-referencing adjudication; IDs stable.
+- **REND-12 (adjudicated — out of editorial scope) — Tag blanking and sort-tag population.**  Pre-mapping blanking and
+  overwrite policy are platform pipeline machinery with no styleguide semantics; sort forms are governed by 3.5.
+- **REND-13 (adjudicated) — Performer sub-tag grammar and format realisation.**  The CE secondary performer surfaces
+  (`soloists`, `band`, `involved people`, and kin) are ratified with their CE semantics; ID3 realisation uses standard
+  frames plus own-namespace TXXX descriptors.  Derives from 4.4.
+- **REND-14 (divergence) — Assembled performer-composite order.**  Overturned in part: the editorial performer
+  composite renders in billing order — soloists, then conductors, then ensembles (4.2) — replacing the CE assembly
+  order (soloists, ensembles, conductors).  The verbatim-credit fallback when the model has no performers is ratified.
+  Documented divergence from the CE ordering convention; the enacted assembly is realigned by a post-v1 change.
+  Derives from 4.2, 1.1.
+- **REND-15 (adjudicated) — Path performers ordering.**  Conductors before ensembles in the path component is ratified:
+  it is billing order over the positions the path carries, soloists never entering by SEL-11.  What the mining census
+  read as a path-vs-tag inversion dissolves — the deviant surface was the tag assembly (REND-14).  Derives from 4.2,
+  4.5.
+- **REND-16 (adjudicated) — Concerto path soloist-first ordering.**  Consolidated into SEL-11: with canonical-soloist
+  promotion overturned, no soloist enters the path and no concerto-specific ordering exists to rule.  Cross-referencing
+  adjudication; IDs stable.
+- **REND-17 (adjudicated) — Intra-list separator `"; "`.**  Ratified as the CE convention for multi-value lists within
+  a single tag field and within path components.  Derives from 4.4.
+- **REND-18 (adjudicated) — Work-hierarchy separator `" :: "`.**  Consolidated with REND-6.  Cross-referencing
+  adjudication; IDs stable.
+- **REND-19 (adjudicated) — `ALBUMARTIST` source.**  The MB release artist-credit verbatim — a preserved claim (4.3).
+  Derives from 4.3; P3.
+- **REND-20 (adjudicated) — `GENRE` source.**  Work-type-derived genre with a "Classical" default is ratified — the
+  rendering realisation of SEL-14's work-type-primary selection.  Derives from 4.7; SEL-14.
+- **REND-21 (adjudicated) — Classical flag.**  The CE flag vocabulary (`is_classical`, value `"1"`) is ratified for
+  classical material.  The enacted flag is unconditional where the classification is already classical — harmless
+  today; the flag must derive from the classification, never from the code path, if the surface is ever generalised
+  (noted for the application shards).  Derives from 4.7; SEL-15.
+- **REND-22 (adjudicated) — Top-level class routing.**  The path grammar describes the frozen C-CLASS contract
+  (library-completion arc); this styleguide defines neither its vocabulary nor its routing.  An apparent conflict is a
+  finding for that arc's boundary.  Derives from 4.5.
+- **REND-23 (adjudicated) — Within-classical top directory.**  As REND-22, for the frozen C-INIT contract.  Its recital
+  case is a documented CE divergence: where MB links no composer, the directory renders the album artist rather than an
+  inferred composer — an inferred composer is a manufactured basis (5.2).  Derives from 4.5, 5.2.
+- **REND-24 (adjudicated) — Work-directory year suffix.**  `[rec YYYY]` preferred, `[rel YYYY]` as the labelled
+  fallback — the exemplar of 5.3: the basis of the date claim is visible in the rendered form, changing form when the
+  basis changes.  Derives from 4.5, 5.3; SEL-16.
+- **REND-25 (adjudicated) — Leaf ordinal chain.**  Movement number, then copy-subset index, then track position —
+  ratified as deliberate ordinal machinery for a stable handle.  Derives from 4.5.
+- **REND-26 (adjudicated) — Intermediate ordinal chain.**  Gap-free sibling rank from ordering keys, mirroring the leaf
+  pattern — ratified.  Derives from 4.5.
 
 ### Epistemic register
 
@@ -506,3 +628,33 @@ derives from.  The register is seed, not closure: new cases append.
 - **EPIST-8 (adjudicated) — Provenance sidecar.**  The sidecar mechanism, monotonically upgradeable only, is ratified as
   the library-partition realisation of 5.1 and 5.5; monotonicity is 5.2 enforced structurally — degradation cannot be
   recorded as progress.
+
+## CE-divergence register
+
+Standing rule 3: divergences from CE are permitted only with a documented rationale.  This register is the enforcement
+artifact — every departure from a CE default or convention, with the ruling that carries its rationale.  Additive
+extensions and platform capability differences are not divergences (standing rule 2) and are footnoted separately.
+
+- **SEL-13.**  CE suppresses the lyricist tag when no vocal performers are present; this styleguide carries the credit
+  unconditionally — work-scope authorship survives instrumental performance.
+- **NORM-6.**  CE's "extended" style splices per-release title text into work names; rejected for canonical surfaces —
+  titles are evidence and terminal fallback (3.4).
+- **ONT-2 (pending).**  CE includes editorial collections in the work hierarchy; the direction here is compositional
+  containers only (1.7).  Ruling documented-open — a pending divergence, not yet enforced.
+- **REND-1.**  CE's `artist` cascade falls back to composers when performer sources are empty; here no composer ever
+  enters `ARTIST` — the fallback is a scope substitution, and performer-lessness is legitimate no-data (5.2).
+- **REND-2.**  CE prepends composer last names to the album title; `ALBUM` renders the release title verbatim — title
+  integrity, NORM-6's logic at layer 4.
+- **REND-14.**  CE orders assembled performer composites soloists, ensembles, conductors; billing order governs here —
+  one ordering authority, the spine (1.1, 4.2).
+- **REND-23.**  CE infers a composer-first form for recital directories; here the album artist renders when MB links no
+  composer — an inferred composer is a manufactured basis (5.2).  Frozen in C-INIT.
+
+**Capability differences (not divergences):** option/toolchain provenance persists in sidecars, not in tags (EPIST-6 —
+the library-partition realisation of the same principle CE serves in-tag); tag-only platforms apply contested-case
+defaults without persisting the mark (5.5 carve-out).
+
+**Naming-drift remediation (queued):** the enacted composite recording-artist tag carries assembled semantics under a
+name whose CE meaning is the verbatim recording credit — a same-name-different-semantics hazard under standing rule 2.
+Realignment (rename the composite, or restore verbatim semantics alongside it) is queued with the REND-14 ordering
+change in the post-v1 application shards.

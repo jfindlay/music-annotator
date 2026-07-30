@@ -167,8 +167,8 @@ with REND-x"), never renumbers — sidecars will persist these IDs (rule 5.5).  
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 4 | Adjudicate the sharp selection cases and author layer 1 (ontology) | done | 3a1d58f | C-ONT |
-| 5 | Adjudicate the remaining register and author layers 2–3 | pending | — | — |
-| 6 | Author layer 4 rendering grammars and the CE-divergence register; integrate → v1 | pending | — | v1 |
+| 5 | Adjudicate the remaining register and author layers 2–3 | done | 38b1559 | — |
+| 6 | Author layer 4 rendering grammars and the CE-divergence register; integrate → v1 | pending ledger flip | — | v1 |
 
 ## Action-frame digest
 
@@ -198,6 +198,19 @@ Affected: none frozen this session (C-ONT consumed, unmodified); layers 2–3 pr
 Deferred: no split needed (D-5 risk did not materialise — the session fit).  Consolidations: SEL-21→SEL-2, NORM-10→NORM-2.
 Texture: S6's queue grew two items — the chorusmaster-in-`CONDUCTOR` shared-tag narrowing (CE-continuity question for the
 tag grammars) and the SEL-12→REND-1 handoff (the artist-slot fork is now wholly a layer-4 grammar question).
+
+### S6 — 2026-07-30
+Discovery/flex: the D-S2-1 "inversion" dissolved under adjudication — the path already renders billing order over its
+occupied positions; the deviant surface was the tag assembly (REND-14), which the operator overturned in part by ruling
+normalise-everything-to-billing-order.  A same-name-different-semantics hazard surfaced during that ruling: the enacted
+composite recording-artist tag vs CE's verbatim-credit variable of the same name (remediation queued with the REND-14
+shard).  Merges: REND-16→SEL-11, REND-18→REND-6, REND-8/9/11→REND-5; J-E1's REND-17+18 pairing rejected.
+Affected: v1 produced (the J2 gate input).  No frozen contract touched; C-CLASS/C-INIT described, not defined.
+Deferred: playlists' detailed grammar (4.6, to the L loop — honest gap); ONT-2/ONT-11 remain documented-open by design.
+Texture: the 4.1 assembled-vs-preserved distinction did the session's structural work — it is why ARTIST/ALBUMARTIST
+(preserved claims) and the editorial composites (assembled, billing order) resolve differently without incoherence.
+Post-v1 A-shard queue out of S6: REND-14 reorder + naming realignment, chorusmaster-into-CONDUCTOR, IS_CLASSICAL
+conditionalisation — all tag-shaping; land with R6d.
 
 ## Discoveries & risks
 

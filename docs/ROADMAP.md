@@ -275,7 +275,7 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
 | Juncture | When | Adjudicates |
 |----------|------|-------------|
 | **J1** *(FIRED 2026-07-20)* | end of R0 | Census distribution → R3 order/pruning; rung-ladder shape for R2; not-in-MB default posture.  Verdict `still-on-intent` + `additive-reshard`; no destructive-HALT.  Outputs folded into R2/R3/pre-R3 nodes above and recorded in the appendix.  R2 shard proceeds against C-TIER. |
-| **J2** | end of R4 + **styleguide v1** | Naming-policy freeze: taxonomy, depth policy, editorial signals.  **Gated on the styleguide arc's v1** (`docs/ROADMAP-styleguide.md`, V1b-S6 completion) — J2's editorial input is the styleguide v1, not an in-arc node (E graduated to a peer arc 2026-07-23).  Gates R6. |
+| **J2** | end of R4 + **styleguide v1** | Naming-policy freeze: taxonomy, depth policy, editorial signals.  **Gated on the styleguide arc's v1** (`docs/ROADMAP-styleguide.md`, V1b-S6 completion) — J2's editorial input is the styleguide v1, not an in-arc node (E graduated to a peer arc 2026-07-23).  Gates R6.  **Both inputs are now in: R4a+R4b closed (structural half) and v1 delivered 2026-07-30 (editorial half) — J2 is fireable.** |
 | **J3** | before R6d | Go/no-go on the destructive-scale full-library repath: `Reference/` retention decision, journal capacity, dry-run evidence. |
 
 Post-R3, the **structural-audit trigger** fires (BACKLOG "Codebase maintenance cadence"): review the

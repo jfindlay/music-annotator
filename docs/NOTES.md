@@ -675,3 +675,26 @@ cross-referenced to the alternate-source rung, EPIST-6/7/8 ratified as realisati
 the chorusmaster-in-`CONDUCTOR` shared-tag question (CE renders "Name (choirmaster)" inside `conductor`; omitting it is
 a semantic narrowing of a shared tag — divergence to document or convention to adopt), and the SEL-12→REND-1
 cross-reference (the artist-slot question is now wholly layer 4's).
+
+**V1b-S6 (2026-07-30) — layer 4 authored; all REND cases ruled; CE-divergence register written; v1 ✓ (operator
+adjudications).**  Merge-assessment (D-1) ruled: REND-16→SEL-11 (moot by the overturn), REND-18→REND-6,
+REND-8/9/11→REND-5; REND-14/15 kept separate; J-E1's suggested REND-17+18 pairing rejected (different structural roles —
+intra-list vs work-hierarchy separators).  **REND-1 ruled ratify-enacted as a narrow divergence**: `ARTIST` is a
+preserved claim (MB recording credit verbatim); CE's conditional composer fallback dropped as a scope substitution
+(5.2; the SEL-10 mirror — performer-lessness is never filled by promoting the composer).  **Ordering: the operator ruled
+normalise-everything-to-billing-order (1.1)** — and the agent's three-orders framing was corrected in the process: the
+path already conforms (conductors→ensembles *is* billing order over the path's occupied positions), so the census
+"inversion" (D-S2-1) dissolves; the only deviant surface was the tag assembly (REND-14, overturned in part; the reorder
+is a post-v1 A-shard coordinated with R6d).  **Chorusmaster: CE convention adopted** — `CONDUCTOR` carries the annotated
+"(choirmaster)" credit (SEL-17 credit-routing gloss + REND-3 annotation vocabulary); SEL-3's position ruling untouched;
+the enacted omission becomes an A-shard.  **REND-2 overturned (divergence)**: `ALBUM` renders the release title verbatim
+— NORM-6's title-integrity logic at layer 4.  Bulk slate of 17 ratifications approved as tabled.  Layer-4 structure as
+authored: assembled-vs-preserved grammar registers (4.1) — the load-bearing distinction that let REND-1/19 (verbatim
+claims) and REND-14 (editorial assembly) resolve differently; billing order for assembled surfaces (4.2); the path
+inclusion policy answers SEL-7's ceiling question (4.5: soloists never enter the handle, so cast size never meets a
+ceiling).  CE-divergence register written: SEL-13, NORM-6, ONT-2 (pending), REND-1, REND-2, REND-14, REND-23, plus
+capability-difference footnotes and a **naming-drift remediation note**: the enacted composite recording-artist tag
+carries assembled semantics under a name whose CE meaning is the verbatim credit — a standing-rule-2 hazard, queued
+with the REND-14 shard.  **"Done means V1b" checklist passes; STYLEGUIDE v1 declared; reported to J2.**  Post-v1
+tag-shaping A-shard queue out of S6: REND-14 reorder + naming realignment, chorusmaster-into-`CONDUCTOR` addition,
+`IS_CLASSICAL` conditionalisation — all coordinate with R6d's one-pass re-derivation.
