@@ -998,6 +998,11 @@ def build_track_tags(
         cwp_worktype_genres_top=cwp.worktype_genres_top,
     )
 
+    # IS_CLASSICAL reflects the actual top-level class (STYLEGUIDE 4.7/REND-21).
+    # Set after construction so _top_level_class can read the fully-populated tags fields
+    # (releasetype, releasetype_secondary, cwp_work_top, cwp_worktype_genres_top).
+    tags.is_classical = "1" if _top_level_class(tags) == "Classical" else "0"
+
     # Mark when cwp_composers was populated from the additional_composers fallback rather than
     # from a plain primary-composer relation.  The cross-track composer unification pass in
     # _pipeline.py uses this flag to identify movements that should inherit the primary composer

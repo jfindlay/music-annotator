@@ -4291,6 +4291,83 @@ class TestBuildTrackTagsArrangerDedup:
 
 
 # ---------------------------------------------------------------------------
+# build_track_tags — IS_CLASSICAL conditionalisation (REND-21)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildTrackTagsIsClassical:
+    """KAT for REND-21: IS_CLASSICAL reflects the actual _top_level_class result.
+
+    Both branches (classical → "1"; non-classical → "0") are covered even though the non-classical
+    branch is presently unreachable in the live pipeline (build_track_tags is only called for
+    classical releases).  The unit tests construct each case directly.
+    """
+
+    def test_is_classical_one_for_classical_release(self) -> None:
+        """KAT REND-21a: IS_CLASSICAL is "1" when _top_level_class returns "Classical".
+
+        A work hierarchy whose top work has type "Classical" satisfies the CE-classical predicate
+        (cwp_work_top non-empty AND cwp_worktype_genres_top contains "Classical"), so
+        _top_level_class returns "Classical" and IS_CLASSICAL must be "1".
+        """
+        work = _w(
+            {
+                "id": "w-sym",
+                "title": "Symphony No. 5",
+                "type": "Classical",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-beethoven", "name": "Beethoven", "sort-name": "Beethoven, Ludwig van"},
+                        "attribute-list": [],
+                    }
+                ],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        rec = _rec(
+            {
+                "id": "rec-1",
+                "title": "Symphony No. 5",
+                "artist-credit": [],
+                "artist-relation-list": [],
+                "work-relation-list": [{"type": "performance", "work": {"id": "w-sym", "title": "Symphony No. 5"}}],
+            }
+        )
+        track = _trk({"id": "t1", "position": 1, "recording": {"id": "rec-1", "title": "Symphony No. 5", "artist-credit": []}})
+        tags = build_track_tags(_make_release(), track, 1, rec, [work])
+        assert tags.is_classical == "1", f"Expected IS_CLASSICAL='1' for classical release, got '{tags.is_classical}'"
+
+    def test_is_classical_zero_for_non_classical_release(self) -> None:
+        """KAT REND-21b: IS_CLASSICAL is "0" when _top_level_class does not return "Classical".
+
+        A release with no work link (cwp_work_top empty) and primary_type "Album" causes
+        _top_level_class to return "Popular", so IS_CLASSICAL must be "0".  This is the branch
+        REND-21 flagged as the latent bug — previously the hardcoded "1" would have been wrong here.
+        """
+        rec = _rec(
+            {
+                "id": "rec-pop",
+                "title": "Pop Track",
+                "artist-credit": [],
+                "artist-relation-list": [],
+                "work-relation-list": [],  # no work link → cwp_work_top empty → not classical
+            }
+        )
+        track = _trk({"id": "t1", "position": 1, "recording": {"id": "rec-pop", "title": "Pop Track", "artist-credit": []}})
+        tags = build_track_tags(
+            _make_release(),  # primary_type="Album", no secondary types → "Popular"
+            track,
+            1,
+            rec,
+            [],  # empty work hierarchy
+        )
+        assert tags.is_classical == "0", f"Expected IS_CLASSICAL='0' for non-classical release, got '{tags.is_classical}'"
+
+
+# ---------------------------------------------------------------------------
 # run() — fetch_rels=True with actual work-relation-list (covers lines 1590-1596)
 # ---------------------------------------------------------------------------
 

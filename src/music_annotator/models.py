@@ -1355,6 +1355,9 @@ class TrackTags(BaseModel):
     genre: str = "Classical"
     period: str = ""
     key: str = ""
+    # Default "1" follows CE convention for classical-only fields; build_track_tags overrides this
+    # explicitly from _top_level_class (STYLEGUIDE 4.7/REND-21) so the persisted value reflects the
+    # actual library class rather than the model default.
     is_classical: str = "1"
 
     # Work dates
