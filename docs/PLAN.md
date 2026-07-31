@@ -193,16 +193,52 @@ any residual reader of the deleted field).  **Defined-in:** S1.  **Consumed-by:*
 path-absent so REND-15 needs no change), R6d re-derivation.  Over-specified per Category-A: carries the C-S0-unchanged
 assertion even though no session immediately re-checks it.
 
-### C-RA-GRAMMAR — recording-artist composite: order + name/semantics *(to be frozen at S2)*
+### C-RA-GRAMMAR — recording-artist composite: order + name/semantics *(frozen at S2)*
 
-The assembled recording-artist composite renders in billing order soloists → conductors → ensembles (STYLEGUIDE 4.2),
-with the verbatim MB-credit fallback retained.  The **name/register** of the assembled composite vs. any verbatim-
-semantics tag is resolved to eliminate the standing-rule-2 same-name-different-semantics hazard — *the specific target
-name is written into this subsection by the S2 juncture at execution time* (mark: to be frozen at S2).  **Flavour:
-test-enforced** (S2 KAT: exact `soloist; conductor; ensemble` render; paired verbatim assertion if a verbatim tag is
-introduced) **+ prose-enforced** (the naming-drift ruling and its rationale, cited to standing rule 2).  **Defined-in:**
-S2.  **Consumed-by:** S3 (chorusmaster routes into `CONDUCTOR`, a *different* tag — must not disturb the realigned
-recording-artist tag), R6d (persisted-tag migration applies the final name library-wide).
+**Order (REND-14).**  The assembled recording-artist composite renders performer principals in billing order
+**soloists → conductors → ensembles** (STYLEGUIDE 4.2), replacing the enacted soloists → ensembles → conductors.  This
+governs `cea_recording_artist` and `cea_recording_artists` (identical content) and their sort sibling
+`cea_recording_artists_sort` (same three role classes in the same order, sort names).  The `rec_artist_phrase` /
+`rec_artist_sort` verbatim MB-credit **fallback is retained** for the empty-composite case (ratified, REND-14).
+
+**Name/register ruling (standing-rule-2 juncture judgment — Option "keep, no rename, no new tag").**  The assembled
+composite stays under its CE name **`CEA_RECORDING_ARTIST`** (with `CEA_RECORDING_ARTISTS` / `CEA_RECORDING_ARTISTS_SORT`);
+**no rename, no newly-introduced verbatim tag.**  Rationale, cited to the standing rules:
+- The premise of the queued naming-drift note (STYLEGUIDE:657–660 — "assembled semantics under a name whose CE meaning
+  is the verbatim recording credit") is imprecise against the CE variable register.  census-ce.md:655 defines
+  `_cea_recording_artist` = "*Artist credited with the recording*" and census-ce.md:436–438 shows CE **itself assembles**
+  it (a performer composite, not a verbatim credit).  CE's *verbatim* recording-credit variable is a **different** name,
+  `_cea_MB_artists` = "Original track artists before any replacement/merge" (census-ce.md:657).
+- Both CE meanings are already correctly realised in the enacted code: the verbatim credit lives under **`CEA_MB_ARTISTS`**
+  (`_tags.py:759–760` `cea_mb_artists = rec_artist_phrase`; census-impl.md:298–299 states the two are distinct — composite
+  vs. raw credit), and `ARTIST` also renders the MB credit verbatim (REND-1, STYLEGUIDE 4.3).  No verbatim tag needs to be
+  introduced; `CEA_MB_ARTISTS` and `ARTIST` already carry it.
+- Therefore keeping the assembled composite under `CEA_RECORDING_ARTIST` **conforms to standing rule 1** (the CE name keeps
+  its established assembled meaning) and produces **no fragmentation** under standing rule 2.  The only genuine divergence
+  from CE is the assembly *order* (REND-14) — an already-registered CE divergence (STYLEGUIDE:648–649) — which S2's reorder
+  step discharges.  The queued "naming-drift remediation" is thereby **resolved as: no name change required**; verbatim
+  semantics already live under `CEA_MB_ARTISTS`/`ARTIST`.
+
+**Enacted deltas for S2 (interface, not implementation).**
+- `_tags.py:749–757`: reorder the assembly to `all_soloists + cea.conductors + cea.ensembles` for both
+  `cea_recording_artist`/`cea_recording_artists` and `cea_recording_artists_sort`; keep the `or rec_artist_phrase` /
+  `or rec_artist_sort` fallback.  Add a one-line comment recording that `CEA_RECORDING_ARTIST` is CE's *assembled*
+  composite and the verbatim credit is `CEA_MB_ARTISTS`/`ARTIST` (discharges the standing-rule-2 comment obligation).
+- `_tagger.py` (`_MP3_TXXX_MAP`/`_MP3_STD_KEYS`) and `models.py` (field + `to_file_dict` mapping): **unchanged** — no
+  tag-name change means no descriptor-map or field move.  (The PLAN's "move together with it" clause is satisfied vacuously
+  because the ruling introduces no name change.)
+
+**KAT (freeze witness).**  A `build_track_tags` case carrying one soloist, one conductor, and one ensemble asserts
+`CEA_RECORDING_ARTIST` renders exactly `<soloist>; <conductor>; <ensemble>` (billing order) — and a **paired assertion**
+that `CEA_MB_ARTISTS` renders the raw MB credit phrase (`rec_artist_phrase`), witnessing that the verbatim credit is
+carried by the distinct existing tag.  A fallback KAT: with all three role classes empty, `CEA_RECORDING_ARTIST` renders
+the `rec_artist_phrase` fallback.  Tests land in `tests/unit/test_pipeline.py` (no existing test asserts on these tags —
+this is a genuinely new witness, authored, not rewired).
+
+**Flavour:** test-enforced (the three KAT assertions above) **+ prose-enforced** (this name/register ruling, cited to
+standing rules 1/2 and the CE variable register).  **Defined-in:** S2.  **Consumed-by:** S3 (chorusmaster routes into
+`CONDUCTOR`, a *different* tag — must not disturb `CEA_RECORDING_ARTIST`), R6d (persisted-tag re-derivation — because the
+name is unchanged, R6d re-derives the composite content only; **no library-wide tag rename migration is incurred**).
 
 ### Consumed (frozen upstream — invalidation is out of scope for this sub-track)
 
@@ -223,13 +259,17 @@ recording-artist tag), R6d (persisted-tag migration applies the final name libra
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 | Delete the concerto-soloist path injection and its dead plumbing (SEL-11) | done | 6eaedaa | C-NOSOLO ✓ (extra: tests/unit/test_pipeline.py — retired test for deleted union pass) |
-| 2 | Reorder CEA recording-artist to billing order and realign composite naming (REND-14) | pending | — | — |
+| 2 | Reorder CEA recording-artist to billing order and realign composite naming (REND-14) | done | 4d90566 | C-RA-GRAMMAR ✓ (extra: docs/STYLEGUIDE.md — CE-divergence register note updated to resolved) |
 | 3 | Route the chorusmaster credit into CONDUCTOR (REND-3/SEL-3) | pending | — | — |
 | 4 ◆ | Conditionalise IS_CLASSICAL on top-level class (REND-21) | pending | — | — |
 
 ## Action-frame digest
 
-*(none yet)*
+### S2 inflection — 2026-07-31
+Discovery/flex: C-RA-GRAMMAR naming-realignment juncture resolved: keep assembled composite under CEA_RECORDING_ARTIST (no rename, no new verbatim tag); the standing-rule-2 premise was imprecise — CE's verbatim credit is already CEA_MB_ARTISTS.
+Affected: C-RA-GRAMMAR (now fully specified; "to be frozen at S2" placeholder replaced)
+Deferred: no — D-A2 resolved; STYLEGUIDE CE-divergence register note updated to "resolved: no rename" by S2 implementer (done).
+Texture: No library-wide tag rename migration incurred at R6d — the survivor avoids the persisted-tag rename cost entirely.
 
 ## Discoveries & risks
 
@@ -238,12 +278,12 @@ recording-artist tag), R6d (persisted-tag migration applies the final name libra
   first and let mypy strict enumerate every reader (compiler-enforced completeness).  If a *live* (non-injection) reader
   of `cea_album_soloists_unified` surfaces in `_pipeline_maint`, that is an **additive-reshard** signal (the field was
   more load-bearing than the survey showed) — surface it, do not silently retain the field.
-- **D-A2 (S2 naming-realignment is a genuine design decision, not a mechanical rename).**  The standing-rule-2 hazard
-  (assembled semantics under CE's verbatim-credit variable name) has two legitimate resolutions — rename the assembled
-  composite, or document the divergence — and the choice is a persisted-tag migration R6d applies library-wide.  This is
-  the **Opus juncture judgment** in the sub-track; C-RA-GRAMMAR is deliberately left "to be frozen at S2".  If the
-  juncture finds the two resolutions have materially different downstream costs it could not weigh, that is a
-  **HALT-to-operator** signal, not an internal-continue.
+- **D-A2 (S2 naming-realignment — resolved: keep, no rename).**  The standing-rule-2 hazard (assembled semantics under
+  CE's verbatim-credit variable name) resolved at the S2 inflection juncture (2026-07-31): the premise was imprecise —
+  CE's `_cea_recording_artist` means the *assembled* composite (census-ce.md:655), not the verbatim credit; the verbatim
+  credit is `_cea_MB_artists` → `CEA_MB_ARTISTS`, already correctly realised.  **Ruling: keep assembled composite under
+  `CEA_RECORDING_ARTIST`, no rename, no new verbatim tag.**  No library-wide tag rename migration at R6d.  C-RA-GRAMMAR
+  frozen.  STYLEGUIDE CE-divergence register note (lines 657–660) to be updated to "resolved: no rename" by S2 implementer.
 - **D-A3 (sequencing vs. R6d — internal-continue).**  These four land ahead of R6d (J3/R5-gated) so the library
   re-derives once against corrected code (ROADMAP R6d fold-in, 2026-07-30).  They are logically independent of R6d's
   destructive repath — R6d re-derives with whatever the code then does.  No dependency inversion; safe to land now.
