@@ -222,7 +222,7 @@ recording-artist tag), R6d (persisted-tag migration applies the final name libra
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Delete the concerto-soloist path injection and its dead plumbing (SEL-11) | pending | — | — |
+| 1 | Delete the concerto-soloist path injection and its dead plumbing (SEL-11) | done | 6eaedaa | C-NOSOLO ✓ (extra: tests/unit/test_pipeline.py — retired test for deleted union pass) |
 | 2 | Reorder CEA recording-artist to billing order and realign composite naming (REND-14) | pending | — | — |
 | 3 | Route the chorusmaster credit into CONDUCTOR (REND-3/SEL-3) | pending | — | — |
 | 4 ◆ | Conditionalise IS_CLASSICAL on top-level class (REND-21) | pending | — | — |
