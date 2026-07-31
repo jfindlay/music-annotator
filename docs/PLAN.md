@@ -260,7 +260,7 @@ name is unchanged, R6d re-derives the composite content only; **no library-wide 
 |---|---------|--------|--------|-------|
 | 1 | Delete the concerto-soloist path injection and its dead plumbing (SEL-11) | done | 6eaedaa | C-NOSOLO ✓ (extra: tests/unit/test_pipeline.py — retired test for deleted union pass) |
 | 2 | Reorder CEA recording-artist to billing order and realign composite naming (REND-14) | done | 4d90566 | C-RA-GRAMMAR ✓ (extra: docs/STYLEGUIDE.md — CE-divergence register note updated to resolved) |
-| 3 | Route the chorusmaster credit into CONDUCTOR (REND-3/SEL-3) | pending | — | — |
+| 3 | Route the chorusmaster credit into CONDUCTOR (REND-3/SEL-3) | done | b553f65 | — |
 | 4 ◆ | Conditionalise IS_CLASSICAL on top-level class (REND-21) | pending | — | — |
 
 ## Action-frame digest
