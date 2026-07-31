@@ -261,7 +261,7 @@ name is unchanged, R6d re-derives the composite content only; **no library-wide 
 | 1 | Delete the concerto-soloist path injection and its dead plumbing (SEL-11) | done | 6eaedaa | C-NOSOLO ✓ (extra: tests/unit/test_pipeline.py — retired test for deleted union pass) |
 | 2 | Reorder CEA recording-artist to billing order and realign composite naming (REND-14) | done | 4d90566 | C-RA-GRAMMAR ✓ (extra: docs/STYLEGUIDE.md — CE-divergence register note updated to resolved) |
 | 3 | Route the chorusmaster credit into CONDUCTOR (REND-3/SEL-3) | done | b553f65 | — |
-| 4 ◆ | Conditionalise IS_CLASSICAL on top-level class (REND-21) | pending | — | — |
+| 4 ◆ | Conditionalise IS_CLASSICAL on top-level class (REND-21) | done | e0b9f54 | — |
 
 ## Action-frame digest
 
@@ -270,6 +270,12 @@ Discovery/flex: C-RA-GRAMMAR naming-realignment juncture resolved: keep assemble
 Affected: C-RA-GRAMMAR (now fully specified; "to be frozen at S2" placeholder replaced)
 Deferred: no — D-A2 resolved; STYLEGUIDE CE-divergence register note updated to "resolved: no rename" by S2 implementer (done).
 Texture: No library-wide tag rename migration incurred at R6d — the survivor avoids the persisted-tag rename cost entirely.
+
+### S4 ◆ boundary — 2026-07-31
+Discovery/flex: Boundary juncture returned still-on-intent; all four STYLEGUIDE v1 rulings enacted and KAT-witnessed; sub-track closed on intent.
+Affected: none — no contract drift.
+Deferred: yes — census-impl.md and NOTES.md still reference the deleted cea_album_soloists_unified field (stale descriptive docs, out of sub-track write scope). Refresh before R6d consumes the census so R6d planning does not read a superseded concerto path rule.
+Texture: Sub-track output to R6d: tag/path grammar now matches STYLEGUIDE v1; R6d re-derives against already-corrected code.
 
 ## Discoveries & risks
 
