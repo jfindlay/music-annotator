@@ -1,247 +1,272 @@
-<!-- juncture-tier: n/a — interactive arc: no automated junctures fire (ROADMAP-styleguide lines 15–16); every boundary
-     judgment is made live with the operator.  This PLAN is an operator-run agenda + contract tracker, NOT a /plan-run
-     target. -->
-<!-- sub-track: V1b (authoring) — styleguide arc (docs/ROADMAP-styleguide.md); consumes the three V1a censuses;
-     interactive, operator-adjudicated, architect-on-Fable register; produces STYLEGUIDE v1, which satisfies the
-     library-completion arc's J2 gate. -->
+<!-- juncture-tier: opus -->
+<!-- sub-track: A-shards (post-v1 styleguide application) — the four tag/path-grammar code changes that STYLEGUIDE v1
+     (layer 4) mandates against the enacted code.  Lives under ROADMAP R6d (library-completion arc) as an R6-planning
+     input; lands AHEAD of R6d so the one-pass re-derivation runs already-corrected code.  This IS a /plan-run target
+     (unlike the interactive V1b PLAN it replaces): the four shards are mechanical code+test changes verifiable by the
+     src/tests gate with zero library access. -->
 
-# PLAN — V1b: authoring (three-source adjudication → STYLEGUIDE v1)
+# PLAN — A-shards: post-v1 styleguide application (four tag/path-grammar changes)
 
 ## Purpose (design intent)
 
-*(Re-read at every session start — anti-defocus anchor.)*
+*(Re-read at every ◆ boundary — anti-defocus anchor.)*
 
-Author STYLEGUIDE v1 by adjudicating the case register against the three V1a censuses (`census-ce.md` — intended;
-`census-impl.md` — enacted; `census-library.md` — empirical).  The v1 posture (ROADMAP-styleguide "V1 posture"): what v1
-freezes is the *architecture* (already frozen at E0) and the *adjudication method* (rulings grounded in three-source
-evidence, citing principles); individual rulings carry status and remain revisable through the post-v1 L loop.  v1 need
-not be complete or excellent — it is designed knowing it will be improved.  **The operator is the editorial authority**:
-sessions are interactive; the agent drafts, structures, and argues; the operator rules.
+STYLEGUIDE v1 froze the editorial rendering rules (layer 4) that the enacted code predates.  Four rulings diverge from
+what the code does; each is a persisted-tag or path-grammar change that R6d's one-pass re-derivation will bake into the
+whole library, so they must land *before* R6d re-derives.  This sub-track makes the code match the frozen styleguide —
+no new editorial decisions are taken here; every change cites a v1 ruling as its authority.  The unifying principle is
+**one attribution model, many projections** (STYLEGUIDE P1): every composite tag and the path component must be a
+declared grammar over the one model, in the model's billing order, under a name that means what CE means by it.
 
-The register boundary inverts from V1a: mining is over, authoring begins.  Census artifacts are consumed and **never
-cited by STYLEGUIDE.md** (universality guarantee — the styleguide is a self-contained human document; rulings cite
-principles, not working documents).  Absorption of the 62 V1a-minted cases into the register happens here, per-layer, as
-each session rules on them (C-CASE: append-only; merges are cross-referencing adjudications, never renumbers).
+The four changes, in landing order:
 
-**Standing operator adjudication (2026-07-23), binding on all three sessions:** the concerto:soloist hack is dropped.
-SEL-11 (canonical-soloist promotion) is **overturned** — a concerto release always carries the soloist in its tags;
-nothing is promoted into the path grammar.  REND-16 (concerto path soloist-first ordering) is moot with it.  S4 records
-the ruling; S6's path grammar omits the injection; the `_tags.py:1189` code removal is a post-v1 A-shard (trivial
-deletion, coordinated with R6d).
+1. **S1 — Concerto-gate deletion (SEL-11 overturned).**  The soloist is never in the path, however principal
+   (STYLEGUIDE 4.5, SEL-11).  Delete the concerto-soloist path injection *and its now-dead plumbing* (the `run()`
+   soloist-union pass, the `cea_album_soloists_unified` field, the `_pipeline_maint` reader).  Contract-sharp: freezes
+   **C-NOSOLO** ("no soloist ever enters the path component").
+2. **S2 — REND-14 reorder + naming realignment.**  Reorder the recording-artist composite to billing order
+   (soloists → conductors → ensembles; STYLEGUIDE 4.2), and resolve the standing-rule-2 naming-drift hazard: the enacted
+   composite carries *assembled* semantics under `CEA_RECORDING_ARTIST`, a CE variable whose CE meaning is the
+   *verbatim* recording credit.  Freezes **C-RA-GRAMMAR**.
+3. **S3 — chorusmaster-into-CONDUCTOR.**  `CONDUCTOR` also carries the annotated chorusmaster credit
+   ("Name (choirmaster)"; STYLEGUIDE 4.4, SEL-3 credit-routing half, REND-3 vocabulary).  The separate `CHORUSMASTER`
+   tag is retained; this is additive routing, not a move.
+4. **S4 ◆ — IS_CLASSICAL conditionalisation (REND-21).**  Make `IS_CLASSICAL` reflect the actual `_top_level_class`
+   result instead of the hardcoded `"1"`.  Currently latent (only classical releases reach `build_track_tags`); make it
+   correct now so R6d can never surface it.
 
 ## Verify gate
 
-**V1b touches no code at all** — all three sessions write `docs/STYLEGUIDE.md` (+ NOTES adjudication log, + this
-ledger).  The `src/`+`tests/` gate has no V1b session to fail it; stated for documentation only:
+Discovered from `pyproject.toml` (tox envs); do not assume `make`.  Both are **binding** — this is a code sub-track.
 
-- **VERIFY_TEST**: `~/.local/bin/tox -e test` (not binding — docs-only commits).
-- **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` (not binding).
-- The real per-session gate is each session's **coverage assertion** (Session detail) plus operator sign-off, and at
-  the S6 ◆ the roadmap's "Done means V1b" checklist.
+- **VERIFY_TEST**: `~/.local/bin/tox -e test` (`pytest tests/`; **100% branch coverage enforced**, `fail_under = 100`).
+- **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` (`mypy src/ tests/`, strict).
+- Full gate before declaring any row done: `~/.local/bin/tox -m analyze` (build + test + check_type + check_format +
+  check_lint 10.00/10 + check_upgrade).  The `AGENTS.md` "never skip `tox -m analyze`" rule applies to every row.
 
 ## Session list
 
 | # | Session | Cat | Tier | Consumes | Expected files |
 |---|---------|-----|------|----------|----------------|
-| 4 | Adjudicate the sharp selection cases and author layer 1 (ontology) | A | @architect (Fable, live) | C-CASE, censuses ×3, SEL-11 pre-adjudication | `docs/STYLEGUIDE.md`, `docs/NOTES.md` |
-| 5 | Adjudicate the remaining register and author layers 2–3 | B | @architect (Fable, live) | **C-ONT**, C-CASE, censuses ×3 | `docs/STYLEGUIDE.md`, `docs/NOTES.md` |
-| 6 ◆ | Author layer 4 rendering grammars and the CE-divergence register; integrate → v1 | I | @architect (Fable, live) | **C-ONT**, all prior rulings, S2 ratify/overturn queue | `docs/STYLEGUIDE.md`, `docs/NOTES.md` |
+| 1 | Delete the concerto-soloist path injection and its dead plumbing (SEL-11) | A | Opus | STYLEGUIDE 4.5/SEL-11, C-S0 | `src/music_annotator/_tags.py`, `src/music_annotator/_pipeline.py`, `src/music_annotator/models.py`, `src/music_annotator/_pipeline_maint.py`, `tests/unit/test_annotator.py`, `tests/integration/test_integration.py` |
+| 2 | Reorder CEA recording-artist to billing order and realign composite naming (REND-14) | B | Opus | **C-NOSOLO**, STYLEGUIDE 4.2/4.4, standing rule 2 | `src/music_annotator/_tags.py`, `src/music_annotator/_tagger.py`, `src/music_annotator/models.py`, `tests/unit/test_pipeline.py` |
+| 3 | Route the chorusmaster credit into CONDUCTOR (REND-3/SEL-3) | B | Sonnet | **C-RA-GRAMMAR**, STYLEGUIDE 4.4/SEL-3 | `src/music_annotator/_tags.py`, `tests/unit/test_pipeline.py` |
+| 4 ◆ | Conditionalise IS_CLASSICAL on top-level class (REND-21) | A | Sonnet | STYLEGUIDE 4.7/REND-21, C-CLASS | `src/music_annotator/_tags.py`, `src/music_annotator/models.py`, `tests/unit/test_pipeline.py`, `tests/unit/test_models.py` |
 
-`Cat`: S4 is **A (substrate)** — C-ONT (the layer-1 role taxonomy + canonical-identity definition) is the interface
-every layer-2/3/4 rule and every post-v1 A-shard consumes; strongly serial, worth over-specifying.  S5 is **B** — bulk
-adjudication against the frozen ontology.  S6 is **I (integrative)** — per the planning manual, consistently
-under-scheduled; full session minimum, do not compress.
-`Tier`: all three **operator-live @architect on Fable** (roadmap-frozen register).  No autonomous rows; no juncture
-forks.  The ◆ on S6 closes the sub-track and reports **v1 to J2** (library-completion ROADMAP junctures table).
+`Cat`: **S1 is A (substrate)** — it *removes* a path-grammar surface and freezes C-NOSOLO, the invariant every later
+path change and R6d assume; treat as substrate, over-specify the "no soloist anywhere" property.  **S2 is B** — it
+reshapes an existing composite (order + name).  **S3 is B** — additive credit routing into an existing tag.  **S4 is A**
+— it conditionalises a persisted flag on the C-CLASS substrate (a class-scheme consumer), the sub-track's clean closer.
+`Tier`: **S1 and S2 are Opus** — S1's deletion has real blast radius across four source files plus the C-S0 aggregation
+pass, and getting "dead" wrong leaves orphan machinery under the 100%-coverage gate; S2 carries the standing-rule-2
+naming decision, a same-name-different-semantics judgment a test cannot fully catch.  **S3 and S4 are Sonnet** —
+mechanical, single-surface, one clear ruling each; the strong inner loop (lever 5) covers them.  The ◆ on S4 closes the
+sub-track and reports the corrected grammar as an R6-planning input to R6d (ROADMAP).
 
-**Sizing (levers named).**  Three sessions, matching the roadmap estimate; J-E1 confirmed the split still fits the
-evidence.  Sessions are sized by **operator-attention span**, not LOC (the deliverable is a document; the operator is
-the inner loop — lever 5 is n/a in its test-suite form).  **Lever 2 (the floor)** shapes all three boundaries: S4's
-ontology-emerges-from-the-sharp-cases is one irreducible unit (adjudicating SEL-1/2/6 and authoring the taxonomy are the
-same act — NOTES session-1 close prescribed exactly this shape); S5's rulings+generalisation cohere because layers 2–3
-are *generalised from* the accumulated rulings; S6's grammars+divergence-register+coherence-pass is the standard
-integrative close.  **Known risk:** S5 carries ~35 rulings (all SEL except the four sharp ones, NORM-1..10, EPIST-1..8)
-— if it overruns the operator's session, the pre-authorized split point is the layer-2/layer-3 boundary (contract-sharp:
-selection rules freeze before normalisation rules generalise).  One-line-commit-title check: all three rows pass.
+**Sizing (levers named).**  Default band ~150–400 LOC / 2–4 files.
+- **S1 ≈ 150–250 LOC, up to 6 files** (mostly deletions + test adjustments).  **Lever 2 (the floor) forbids splitting**:
+  deleting the `_tags.py` injection strands the `run()` soloist-union pass and the `cea_album_soloists_unified` field
+  with no consumer — the 100%-branch-coverage gate (lever 5) then *fails* on the now-unreachable union pass, so the
+  deletion is one irreducible unit.  It exceeds the file-count band by design (the plumbing spans four source files);
+  splitting at any interior point leaves the tree red.  One-line-commit-title check: passes.
+- **S2 ≈ 60–100 LOC, 3–4 files.**  Reorder + naming realignment are bundled because NOTES/STYLEGUIDE treat them as one
+  queue item ("REND-14 reorder + naming realignment") and they are one conceptual unit — you cannot realign the tag's
+  name without settling the order it now renders in.  **Lever 2** keeps them whole; **lever 3 (cost of a design error)**
+  is why it is Opus, not why it splits.
+- **S3 ≈ 30–50 LOC, 2 files;  S4 ≈ 30–50 LOC, 2–4 files.**  Each is well under the band but is kept a **separate
+  session by the one-line-commit-title corollary**: chorusmaster routing and IS_CLASSICAL conditionalisation are
+  unrelated tag semantics with no shared contract; merging them yields an "and"-joined title (the tell of two sessions).
+  Not fractured below the floor — each is already one irreducible unit.
 
 ## Session detail
 
-### S4 — Adjudicate the sharp selection cases and author layer 1 (ontology) — freezes C-ONT
+### S1 — Delete the concerto-soloist path injection and its dead plumbing — freezes C-NOSOLO
 
-**Deliverable.**  Layer 1 authored in STYLEGUIDE.md: the role taxonomy (soloists / ensembles / conductors spine + the
-boundary roles the censuses surfaced) and the **canonical-identity definition** (what belongs to what a work *is* vs. to
-a performance of it) — authored *from* the live adjudication of SEL-1 (ambiguous soloist), SEL-2 (concerto grosso),
-SEL-6 (play-direct), not in the abstract.  SEL-11 recorded as **overturned** (operator pre-adjudication — the standing
-decision above).  ONT-1..10 absorbed into the register with rulings or documented-open statuses.  Freezes **C-ONT**.
+**Deliverable.**  The concerto-soloist path injection and every piece of machinery that exists only to feed it are
+removed; the path performers component is always `conductors → ensembles` (billing order over its occupied positions,
+STYLEGUIDE 4.5) with no soloist branch.  Concretely:
+- `_tags.py`: delete the injection block (`_tags.py:1174–1190`) and scrub the two docstring references to it
+  (`build_dest_path` docstring ~1085–1091; the `_classical_top_dir` docstring tail at ~298 "including any
+  concerto-soloist injection").
+- `_pipeline.py`: delete the `run()` soloist-union pass (`~1069–1101`) that computes `cea_album_soloists_unified` — its
+  sole consumer was the injection.
+- `models.py`: remove the `cea_album_soloists_unified` field (`~1404`) and its `to_file_dict` exclusion entry (`~1512`).
+- `_pipeline_maint.py`: update the `regroup` docstring (`~839–840`) that describes the unified-soloist path component;
+  confirm no live read of the field remains (it is path-only, so removing the field forces the compiler/mypy to surface
+  any residual reader — that is the intended safety net).
+- Tests: retire `TestBuildDestPathConcertoSoloist` (`test_annotator.py:1838+`) and adjust the concerto integration
+  assertions (`test_integration.py:1823/1854`) so the path no longer expects a soloist segment.
 
-**Coverage assertion (the session's KAT-analog).**  Every ONT-* case absorbed and statused; SEL-1/2/6 adjudicated with
-three-source evidence; SEL-11 statused overturned; layer 1 prose replaces its "(to be authored)" stub; the
-canonical-identity definition is explicit enough that SEL-11's overturn and the compact projections both derive from it.
-
-**Subtleties.**
-- Over-specify the taxonomy (Category-A discipline): boundary roles the censuses prove real — chorusmaster (SEL-3),
-  guest soloists (SEL-5), opera principals (SEL-7), completers/arrangers (SEL-8), vocal soloists in choral works
-  (SEL-22) — should get taxonomy *positions* now even where their selection rules wait for S5; adding a position later
-  is costlier than carrying one.
-- The `"writer"`-merge divergence (recording-level merges into composers vs. work-level own bucket — SEL-17/18) is
-  ontology-adjacent — position it in the taxonomy here, rule it in S5.
-
-**Deferrals.**  No layer-2/3/4 prose.  No REND rulings.  No code.
-
-### S5 — Adjudicate the remaining register and author layers 2–3
-
-**Deliverable.**  Every remaining SEL-*, NORM-*, EPIST-* case ruled or documented-open (both are rulings; an unstatused
-case is the defect).  Layers 2 (selection) and 3 (normalisation) core rules generalised *from* the accumulated rulings.
-The census-impl ratify/overturn queue drained for its SEL/NORM/EPIST entries.
-
-**Coverage assertion.**  Zero SEL/NORM/EPIST register cases without status; layers 2–3 stubs replaced; every
-census-minted SEL/NORM/EPIST case absorbed.
+**KAT (the freeze witness for C-NOSOLO).**  A build_dest_path case over a Concerto work whose recording carries a
+named soloist (e.g. Mutter) asserts the soloist name is **absent** from every path component — the inverse of the
+retired KAT.  A second KAT over a multi-disc concerto with different soloists per disc asserts all movements still land
+under the *same* top directory (the union pass's original purpose) purely from the conductor/ensemble component, proving
+the deletion did not regress cross-medium grouping.
 
 **Subtleties.**
-- Genuinely undecidable cases get a documented neutral default or documented-open status — generative neutrality is a
-  founding principle, not a failure.
-- Library frequencies are one-collection estimates from documentary evidence (D-2) — a frequency of 1 proves existence,
-  not weight.
+- **C-S0 interaction (over-specify here — Category-A discipline):** the deleted union pass ran over `group_idxs`
+  spanning all media (the C-S0 aggregation contract).  Removing it must not touch the *composer* cross-medium pass or
+  `recording_date_work` pass that share that loop — only the soloist accumulation.  Freeze in C-NOSOLO that C-S0
+  aggregation is unchanged.
+- The field is excluded from `to_file_dict`, so no on-disk tag changes — but the *path* changes for every concerto
+  already ingested; that is exactly what R6d will re-derive.
+- mypy strict is the deletion's ally: remove the field and let the type checker enumerate every residual reference.
 
-**Deferrals.**  REND rulings and all grammars (S6).  No code.
+**Deferrals.**  No reorder (S2), no chorusmaster (S3), no IS_CLASSICAL (S4).  The `_works.py` `"Concerto"` worktype
+mapping stays — it is still used for genre/worktype rendering; only the *soloist path injection* keyed on it goes.
 
-### S6 ◆ — Author layer 4 rendering grammars and the CE-divergence register; integrate → v1
+### S2 — Reorder CEA recording-artist to billing order and realign composite naming (REND-14)
 
-**Deliverable.**  Layer 4 authored: per-surface grammars — `ARTIST` (REND-1 ruled) / `ALBUMARTIST`, the path-component
-grammar (describing frozen C-CLASS/C-INIT, **without the concerto injection**), separators, orderings.  The **REND
-merge-assessment** first: REND-14/15/16 (ordering family — note REND-16 moot) and REND-17/18 (separator family) are
-consolidation candidates; merges are cross-referencing adjudications under C-CASE.  The **CE-divergence register**
-written from the drained ratify/overturn queue.  End-to-end coherence pass; roadmap "Done means V1b" checklist;
-**v1 ✓ — report to J2**.
+**Deliverable.**  Two coupled changes to the recording-artist composite:
+1. **Reorder** (`_tags.py:749–757`): assemble `cea_recording_artist` (and `cea_recording_artists_sort`) in billing
+   order **soloists → conductors → ensembles** (STYLEGUIDE 4.2), replacing the enacted soloists → ensembles →
+   conductors.  The `rec_artist_phrase` verbatim fallback is retained (ratified).
+2. **Naming realignment** (standing rule 2): the enacted composite carries *assembled* semantics under the CEA variable
+   name whose CE meaning is the *verbatim* recording credit.  Resolve per the frozen ruling — **the realignment
+   decision itself is the S2 juncture judgment** (see below): either rename the assembled composite to a
+   non-colliding own-namespace name (and keep a verbatim-semantics tag under the CE-meaning name), or document the
+   divergence explicitly in code + register.  Whichever the juncture rules, `_tagger.py`'s `_MP3_TXXX_MAP` /
+   `_MP3_STD_KEYS` and `models.py`'s field + `to_file_dict` mapping move together with it.
 
-**Coverage assertion.**  Zero REND cases without status; zero census-minted cases anywhere left unabsorbed;
-CE-divergence register exists with rationale per divergence; layer-4 stub replaced; the tag-order (REND-14:
-soloists-first) vs. path-order (REND-15: conductors-first) inversion is either ruled coherent (documented) or resolved.
+**KAT (freeze witness for C-RA-GRAMMAR).**  A build_track_tags case with a soloist, a conductor, and an ensemble
+asserts `CEA_RECORDING_ARTIST` (or its realigned name) renders exactly `soloist; conductor; ensemble` — and, if a
+verbatim-semantics tag is introduced, a paired assertion that it renders the raw MB credit phrase.
 
 **Subtleties.**
-- Integrative sessions are consistently under-scheduled — full session minimum.
-- The path grammar *describes* C-CLASS/C-INIT (frozen, other arc) — an apparent conflict is a library-arc boundary
-  finding, never an in-arc change.
-- Cross-surface coherence is founding principle 1: one attribution model, many projections — the grammars must derive
-  from the S4 ontology, not restate the enacted code.
+- **This is the standing-rule-2 hazard the juncture exists for.**  The realignment is a same-name-different-semantics
+  judgment a test cannot fully adjudicate; the Opus juncture (or operator) must rule the target name/register before
+  the row is implementable.  *This subsection over-specifies the interface only after that ruling; until then C-RA-
+  GRAMMAR is "to be frozen at S2".*
+- REND-15 (path order conductors-first) is **not** touched — the path already conforms to billing order over its
+  occupied positions (conductors → ensembles; soloists excluded by C-NOSOLO).  S2 changes only the *tag* composite.
+- Any tag-name change is a persisted-tag migration R6d will apply library-wide — that is why it lands pre-R6d.
 
-**Deferrals.**  All code (post-v1 A-shards: sidecar case-IDs, concerto-gate deletion, composite-tag and normalisation
-changes — coordinate with R6d).  The public spec (P = R6e).
+**Deferrals.**  No chorusmaster (S3); no IS_CLASSICAL (S4).
+
+### S3 — Route the chorusmaster credit into CONDUCTOR (REND-3/SEL-3)
+
+**Deliverable.**  `CONDUCTOR` additionally carries the annotated chorusmaster credit in CE annotation form
+"Name (choirmaster)" (STYLEGUIDE 4.4; REND-3 vocabulary; SEL-3 credit-routing half).  `_tags.py:891`/`714`/`895`: when
+`cea.chorusmasters` is non-empty, append each as `"<name> (choirmaster)"` to `conductor_name` (after the conductors,
+`"; "`-joined).  The standalone `CHORUSMASTER` tag (`_tags.py:895`) is **retained** — this is additive routing, not a
+move (SEL-3's *position* ruling is untouched; only credit routing changes).
+
+**KAT.**  A build_track_tags case with a conductor and a chorusmaster asserts `CONDUCTOR` renders
+`Conductor Name; Chorusmaster Name (choirmaster)` and `CHORUSMASTER` still renders the bare chorusmaster name.
+
+**Subtleties.**  Match the exact annotation string the CE census records (`"choirmaster"`, `census-ce.md:138`), not
+`"chorusmaster"`.  The empty-chorusmasters branch must leave `CONDUCTOR` exactly as before (coverage: both arms tested).
+
+**Deferrals.**  No IS_CLASSICAL (S4).
+
+### S4 ◆ — Conditionalise IS_CLASSICAL on top-level class (REND-21)
+
+**Deliverable.**  `IS_CLASSICAL` reflects the actual class instead of the hardcoded `"1"`.  `_tags.py:906`: set
+`is_classical` from the `_top_level_class` result (`"1"` when the class is `Classical`, else `"0"`) rather than the
+literal.  `models.py:1358`: keep the `"1"` default (CE convention for the classical-only fields default) but document
+that `build_track_tags` now sets it explicitly.  STYLEGUIDE 4.7 / REND-21 authority.
+
+**KAT.**  A build_track_tags case for a classical release asserts `IS_CLASSICAL == "1"`; a case that forces a
+non-classical `_top_level_class` asserts `IS_CLASSICAL == "0"` (the branch REND-21 flagged as the latent bug).
+
+**Subtleties.**
+- Currently latent: `build_track_tags` is only reached for classical releases (non-classical uses the minimal-tags
+  path).  The fix makes the flag *correct if that ever changes* and lets R6d re-derive without carrying a known-wrong
+  flag.  Both branches must be covered even though one is presently unreached in the live pipeline — construct the
+  non-classical case directly in the unit test.
+- Confirm `_top_level_class` is importable/available at the `build_track_tags` call site without a layer-routing
+  violation (tier/class routing is provenance-adjacent; keep the class *derivation* where C-CLASS put it).
+
+**◆ boundary.**  Re-read Purpose.  Confirm all four rulings are enacted, `tox -m analyze` green, ledger complete.
+Report to R6d planning (ROADMAP): the tag/path grammar now matches STYLEGUIDE v1; R6d re-derives already-corrected code.
 
 ## Cross-session contracts
 
-### C-ONT — layer-1 role taxonomy + canonical-identity definition *(to be frozen at S4)*
+### C-NOSOLO — no soloist enters the path component *(to be frozen at S1)*
 
-The substrate interface of the entire post-v1 space: every layer-2/3/4 rule, every A-shard, and CEv3 consume it.
-**Flavour: prose-enforced.**  **Defined-in:** S4 (STYLEGUIDE layer 1).  **Consumed-by:** S5, S6, all post-v1 A/P/C
-nodes.  Over-specified by design (Category-A discipline).
+The soloist is never a path component, however principal (STYLEGUIDE 4.5, SEL-11 overturned).  Also freezes the
+negative: **no machinery computes a cross-medium soloist union for the path** (`cea_album_soloists_unified` and the
+`run()` union pass are deleted), and **C-S0 aggregation is otherwise unchanged** (the composer and recording-date
+cross-medium passes over `group_idxs` survive intact).  **Flavour: test-enforced** (the S1 KATs: soloist absent from
+every path component; multi-disc concerto still groups under one top dir) **+ compiler-enforced** (mypy strict surfaces
+any residual reader of the deleted field).  **Defined-in:** S1.  **Consumed-by:** S2 (relies on soloists being
+path-absent so REND-15 needs no change), R6d re-derivation.  Over-specified per Category-A: carries the C-S0-unchanged
+assertion even though no session immediately re-checks it.
 
-### SEL-11 pre-adjudication *(operator, 2026-07-23 — standing)*
+### C-RA-GRAMMAR — recording-artist composite: order + name/semantics *(to be frozen at S2)*
 
-Canonical-soloist promotion **overturned**; REND-16 moot; concerto path-injection dropped (code removal = post-v1
-deletion shard).  **Flavour: prose-enforced.**  **Defined-in:** this PLAN + ROADMAP-styleguide Discoveries D-A3;
-recorded in the register at S4.  **Consumed-by:** S4 (records), S6 (path grammar omits the injection), the A-shard
-(deletes).
+The assembled recording-artist composite renders in billing order soloists → conductors → ensembles (STYLEGUIDE 4.2),
+with the verbatim MB-credit fallback retained.  The **name/register** of the assembled composite vs. any verbatim-
+semantics tag is resolved to eliminate the standing-rule-2 same-name-different-semantics hazard — *the specific target
+name is written into this subsection by the S2 juncture at execution time* (mark: to be frozen at S2).  **Flavour:
+test-enforced** (S2 KAT: exact `soloist; conductor; ensemble` render; paired verbatim assertion if a verbatim tag is
+introduced) **+ prose-enforced** (the naming-drift ruling and its rationale, cited to standing rule 2).  **Defined-in:**
+S2.  **Consumed-by:** S3 (chorusmaster routes into `CONDUCTOR`, a *different* tag — must not disturb the realigned
+recording-artist tag), R6d (persisted-tag migration applies the final name library-wide).
 
-### C-CASE — case-ID stability *(frozen at V1a start; consumed here)*
+### Consumed (frozen upstream — invalidation is out of scope for this sub-track)
 
-Append-only, never renumbered/reused.  V1b performs the absorption: census mints move into the register per-layer as
-ruled (S4: ONT; S5: SEL/NORM/EPIST; S6: REND).  Merges are cross-referencing adjudications ("adjudicated: consolidated
-with REND-x"), never renumbers — sidecars will persist these IDs (rule 5.5).  **Flavour: prose-enforced.**
-
-### Consumed (frozen upstream — invalidation is out-of-scope for V1b)
-
-- **STYLEGUIDE architecture + epistemic rules 5.1–5.5** (E0): the fixed frame v1 fills.
-- **C-CLASS / C-INIT** (library-completion arc): validate-only; S6 describes them in the path grammar; conflicts are
-  that arc's boundary findings.
-- **CE-continuity posture**: CE tag semantics are the compatibility floor; extensions additive; divergences documented
-  with rationale (the S6 divergence register is this posture's enforcement artifact).
-- **The three censuses** (V1a): evidence reservoirs; consumed, never cited by STYLEGUIDE.
+- **STYLEGUIDE v1 layer 4** (REND-1/2/3/14/15/21/24, 4.1–4.7) and **layer 1 SEL-11** — the rulings this sub-track
+  enacts; frozen at V1b-S6.  Every row cites one; none re-opens one.
+- **C-CLASS / C-INIT** (R4a; J2-ratified final) — S4 consumes `_top_level_class`; S1 consumes `_classical_top_dir`
+  (scrubbing only its concerto-injection docstring tail).  Validate-only; no redefinition.
+- **C-S0** (aggregation spans media) — S1 must preserve it while deleting the soloist union (see C-NOSOLO).
+- **The confirmation-provenance and defensive-download invariants** (repo `AGENTS.md`) — untouched; none of these
+  shards enters the copy/tag/verify loop's provenance chain.
 
 ### Produced
 
-- **C-ONT** at S4 (above).  **v1** at S6 — the J2 gate input and the A/P/C substrate.
+- **C-NOSOLO** at S1; **C-RA-GRAMMAR** at S2.  The corrected tag/path grammar is the sub-track's output to R6d planning.
 
 ## Progress ledger
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 4 | Adjudicate the sharp selection cases and author layer 1 (ontology) | done | 3a1d58f | C-ONT |
-| 5 | Adjudicate the remaining register and author layers 2–3 | done | 38b1559 | — |
-| 6 ◆ | Author layer 4 rendering grammars and the CE-divergence register; integrate → v1 | done | 386d092 | v1 |
+| 1 | Delete the concerto-soloist path injection and its dead plumbing (SEL-11) | pending | — | — |
+| 2 | Reorder CEA recording-artist to billing order and realign composite naming (REND-14) | pending | — | — |
+| 3 | Route the chorusmaster credit into CONDUCTOR (REND-3/SEL-3) | pending | — | — |
+| 4 ◆ | Conditionalise IS_CLASSICAL on top-level class (REND-21) | pending | — | — |
 
 ## Action-frame digest
 
-### S4 — 2026-07-23
-Discovery/flex: The agent's draft soloist rule ("follow MB data") was rejected; the operator's replacement — soloist iff
-reasonable confidence establishes a named/attributive solo, with work-format evidence, era sensitivity (Baroque and earlier
-confer nothing by default), prominence-is-not-solohood, orchestral-principals-never, and ensemble-name precedence — is now
-STYLEGUIDE 1.2 and the heart of C-ONT.  This *narrows* the soloist category relative to both CE and the enacted
-implementation (both attribute every non-ensemble performer): S5 must re-examine SEL-4/5/7/22 and the ratify queue for
-`build_cea_performers` against the narrowed category (the mechanical buckets remain valid as *credit* routing; they no
-longer define solohood).
-Affected: C-ONT (frozen this session, stronger than the pre-session sketch).
-Deferred: yes — ONT-2 documented-open with direction (compositional containers canonical, editorial collections not; a
-potential CE divergence for the S6 register).  ONT-11 minted (improvisational-primacy inversion — jazz boundary); scope
-statement only, no rules.
-Texture: SEL-11's overturn now *derives* from the 1.7 canonical-identity definition rather than standing as a bare operator
-fiat — the register entry cites 1.7, and the jazz carve-out shows where the premise legitimately inverts.
-
-### S5 — 2026-07-30
-Discovery/flex: none structural — all 36 rulings landed within the S4 ontology, and the S4 carry-over (SEL-4/5/7/22 against
-the narrowed soloist rule) resolved by citation rather than extension, validating C-ONT's strength.  SEL-8 ruled as the
-mirror of SEL-11 (authors of the performed edition are canonical and enter compact projections; performers never are).
-SEL-17 carries the binding buckets-are-credit-routing-not-solohood gloss (STYLEGUIDE 2.5) that the post-v1 composite-tag
-A-shards consume.  Two true CE divergences recorded: SEL-13 (lyricist suppression overturned), NORM-6 (extended-title
-splicing rejected).  D-S1-7 (EPIST schema-fit) closed by ruling: EPIST-1/4/5 adjudicated out-of-editorial-scope.
-Affected: none frozen this session (C-ONT consumed, unmodified); layers 2–3 prose replaces the stubs.
-Deferred: no split needed (D-5 risk did not materialise — the session fit).  Consolidations: SEL-21→SEL-2, NORM-10→NORM-2.
-Texture: S6's queue grew two items — the chorusmaster-in-`CONDUCTOR` shared-tag narrowing (CE-continuity question for the
-tag grammars) and the SEL-12→REND-1 handoff (the artist-slot fork is now wholly a layer-4 grammar question).
-
-### S6 — 2026-07-30
-Discovery/flex: the D-S2-1 "inversion" dissolved under adjudication — the path already renders billing order over its
-occupied positions; the deviant surface was the tag assembly (REND-14), which the operator overturned in part by ruling
-normalise-everything-to-billing-order.  A same-name-different-semantics hazard surfaced during that ruling: the enacted
-composite recording-artist tag vs CE's verbatim-credit variable of the same name (remediation queued with the REND-14
-shard).  Merges: REND-16→SEL-11, REND-18→REND-6, REND-8/9/11→REND-5; J-E1's REND-17+18 pairing rejected.
-Affected: v1 produced (the J2 gate input).  No frozen contract touched; C-CLASS/C-INIT described, not defined.
-Deferred: playlists' detailed grammar (4.6, to the L loop — honest gap); ONT-2/ONT-11 remain documented-open by design.
-Texture: the 4.1 assembled-vs-preserved distinction did the session's structural work — it is why ARTIST/ALBUMARTIST
-(preserved claims) and the editorial composites (assembled, billing order) resolve differently without incoherence.
-Post-v1 A-shard queue out of S6: REND-14 reorder + naming realignment, chorusmaster-into-CONDUCTOR, IS_CLASSICAL
-conditionalisation — all tag-shaping; land with R6d.
+*(none yet)*
 
 ## Discoveries & risks
 
-- **D-1 (REND merge-assessment — S6 opening move).**  26 REND cases; REND-14/15/16 and REND-17/18 are consolidation
-  candidates (J-E1 operator recommendation).  Consolidation is adjudication with cross-references — renumbering is a
-  C-CASE violation (**HALT-grade if attempted**; interactive, so the operator decides live).
-- **D-2 (library evidence is documentary and waived-sufficient).**  census-library was produced without live library
-  access; the operator reviewed and cleared V1b on it (2026-07-23).  Rule with existence-weight, not frequency-weight;
-  the hades re-run feeds the L loop, not v1.  **Internal-continue.**
-- **D-3 (C-CLASS/C-INIT are the other arc's frozen contracts).**  S6 describes, never redefines.  An apparent conflict
-  is a finding for the library-completion arc's boundary.
-- **D-4 (undecided ≠ unstatused).**  A neutral default or documented-open status is a ruling; a case with no status at
-  v1 is the defect the S5/S6 coverage assertions exist to catch.
-- **D-5 (S5 volume).**  ~35 rulings in one interactive session; pre-authorized split at the layer-2/layer-3 boundary if
-  the operator's session overruns.  **Additive-reshard**, decided live.
-- **D-6 (register-boundary inversion).**  V1b authors and rules; it does not re-mine.  A gap in the censuses is handled
-  by ruling documented-open on present evidence (the L loop revises), not by re-opening mining — unless the operator
-  elects a targeted spot-check.
+- **D-A1 (S1 blast radius — dead-code completeness).**  The concerto feature spans four source files; the risk is
+  leaving orphan machinery that the 100%-branch-coverage gate then rejects.  Mitigation: delete the `models.py` field
+  first and let mypy strict enumerate every reader (compiler-enforced completeness).  If a *live* (non-injection) reader
+  of `cea_album_soloists_unified` surfaces in `_pipeline_maint`, that is an **additive-reshard** signal (the field was
+  more load-bearing than the survey showed) — surface it, do not silently retain the field.
+- **D-A2 (S2 naming-realignment is a genuine design decision, not a mechanical rename).**  The standing-rule-2 hazard
+  (assembled semantics under CE's verbatim-credit variable name) has two legitimate resolutions — rename the assembled
+  composite, or document the divergence — and the choice is a persisted-tag migration R6d applies library-wide.  This is
+  the **Opus juncture judgment** in the sub-track; C-RA-GRAMMAR is deliberately left "to be frozen at S2".  If the
+  juncture finds the two resolutions have materially different downstream costs it could not weigh, that is a
+  **HALT-to-operator** signal, not an internal-continue.
+- **D-A3 (sequencing vs. R6d — internal-continue).**  These four land ahead of R6d (J3/R5-gated) so the library
+  re-derives once against corrected code (ROADMAP R6d fold-in, 2026-07-30).  They are logically independent of R6d's
+  destructive repath — R6d re-derives with whatever the code then does.  No dependency inversion; safe to land now.
+- **D-A4 (path changes without tag changes — S1).**  Deleting the injection changes concerto *paths* but no on-disk
+  *tags* (the field was path-only, `to_file_dict`-excluded).  Already-ingested concertos will re-path under R6d; this is
+  expected, not a regression.
 
 ## Notes for executors
 
-- **This PLAN is not a /plan-run target.**  Suggested invocation: the operator opens one `@architect` (Fable) session
-  per row, with this file as the agenda; the agent drafts and argues, the operator rules; commit per session (docs-only)
-  and update the ledger row.  No juncture forks fire; the S6 ◆ review is performed live with the operator against the
-  roadmap's "Done means V1b" checklist, then reported to J2.
-- **Register: authoring, not mining.**  STYLEGUIDE.md is a self-contained human document — it never references
-  NOTES/BACKLOG/ROADMAP/censuses.  Adjudication *records* (who ruled what, on which evidence) append to NOTES.md; the
-  styleguide carries the rulings and their principled rationale.
-- **Invariants to preserve:** C-CASE append-only (merges cross-reference); rendered-not-buried (rule 5.3); sidecar +
-  case-IDs for contested marks (rule 5.5); CE-continuity (extensions additive, divergences documented); C-CLASS/C-INIT
-  validate-only; the SEL-11 overturn (no concerto path-injection anywhere in v1's grammars); censuses never cited.
-- **Sequencing.**  S4 → S5 → S6 strictly serial (C-ONT gates both successors).  On the S6 ◆: v1 ✓ → J2 (library-
-  completion arc unblocks R6 planning); post-v1 A-shards become shardable, including the trivial concerto-gate deletion;
-  the PLAN slot frees for the library arc's next sub-track (R4b or R5 drain).
+- **Tier routing.**  S1, S2 are **Opus** (blast radius; the standing-rule-2 judgment).  S3, S4 are **Sonnet**
+  (mechanical single-surface changes; the strong inner loop covers them).  `juncture-tier: opus` — kept at the arc
+  default because two of four shards touch persisted-tag semantics R6d bakes library-wide (cost-of-wrong high despite
+  the strong inner loop), and S2's naming decision is a judgment tests cannot fully catch.
+- **Register: application, not authoring.**  No new editorial decisions.  Every change cites a frozen STYLEGUIDE v1
+  ruling as its authority; if a row seems to *need* a new ruling, that is a discovery (surface it), not a licence to
+  decide.
+- **Invariants to preserve:** C-S0 aggregation (S1 deletes only the soloist union, not the composer/date passes);
+  C-CASE append-only (register edits are cross-referencing adjudications); the confirmation-provenance and defensive-
+  download invariants (untouched — none of these shards is in the copy/tag/verify loop); STYLEGUIDE self-containment
+  (rulings cite principles, never working docs).
+- **Every row runs `~/.local/bin/tox -m analyze` before ledger-done** (build + test at 100% branch coverage + strict
+  mypy + ruff + pylint 10.00/10 + pyupgrade).  Import order via `~/.local/bin/tox -m edit`, never hand-edited.
+- **Suggested first `/plan-run` invocation:** `halt-at-boundaries` — this is the first A-shard (code) sub-track derived
+  from the styleguide arc; the shard pattern for "enact a frozen ruling" is unproven here, so stop at the S1 boundary
+  (◆ is only S4, but halt-at-boundaries also stops after the first row of an unproven pattern) for an operator check
+  before continuing S2–S4.  Once S1 confirms the pattern, `run-to-boundary` through the S4 ◆.

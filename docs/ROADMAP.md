@@ -247,8 +247,9 @@ composite-tag grammars) coordinate with R6d so the library re-derives once.  Reg
 authoring on the Fable model (resolved 2026-07-22; no @dialectic handoff).  → `docs/ROADMAP-styleguide.md`;
 `docs/NOTES.md` charter; BACKLOG A-c (superseded).
 
-Ends at **J2 — the naming-policy freeze** (uniform-ceiling/ragged-floor already converged; A-b/A-c
-close here).  → BACKLOG Act II sections.
+Ends at **J2 — the naming-policy freeze (FIRED 2026-07-30; verdict in the junctures table and
+appendix)** (uniform-ceiling/ragged-floor already converged; A-b/A-c closed here).  → BACKLOG Act II
+sections.
 
 ### R5 — Operational drain of `Original/`  (operator loop on hades; no agent sessions)
 
@@ -264,7 +265,13 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
 - **R6c** AcoustID tag naming + semantics — Picard alignment (persisted-tag migration; decide the two
   sub-questions at PLAN time).
 - **R6d** Full-library repath under the frozen heuristics — the "more like itself" pass.  Gated by
-  **J3**.
+  **J3**.  J2 folded in (2026-07-30): the III-b rg-multi-release regroup (live hades scan
+  prerequisite — R4b census) and the styleguide A-shards that reshape persisted tags/paths
+  (concerto-gate deletion, REND-14 reorder + naming realignment, chorusmaster-into-`CONDUCTOR`,
+  `IS_CLASSICAL` conditionalisation) land before or with this pass so the library re-derives once.
+  **The four A-shards are sharded to `docs/PLAN.md` (2026-07-30, sub-track IN PROGRESS) and land
+  ahead of R6d as pure code+test grammar fixes** — logically independent of the destructive repath;
+  R6d then re-derives against already-corrected code.
 - **R6e** Conventions-spec finalisation (integrative writeup; consistently under-scheduled — allocate
   a full session minimum).
 
@@ -275,7 +282,7 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
 | Juncture | When | Adjudicates |
 |----------|------|-------------|
 | **J1** *(FIRED 2026-07-20)* | end of R0 | Census distribution → R3 order/pruning; rung-ladder shape for R2; not-in-MB default posture.  Verdict `still-on-intent` + `additive-reshard`; no destructive-HALT.  Outputs folded into R2/R3/pre-R3 nodes above and recorded in the appendix.  R2 shard proceeds against C-TIER. |
-| **J2** | end of R4 + **styleguide v1** | Naming-policy freeze: taxonomy, depth policy, editorial signals.  **Gated on the styleguide arc's v1** (`docs/ROADMAP-styleguide.md`, V1b-S6 completion) — J2's editorial input is the styleguide v1, not an in-arc node (E graduated to a peer arc 2026-07-23).  Gates R6.  **Both inputs are now in: R4a+R4b closed (structural half) and v1 delivered 2026-07-30 (editorial half) — J2 is fireable.** |
+| **J2** *(FIRED 2026-07-30)* | end of R4 + **styleguide v1** | Naming-policy freeze: taxonomy, depth policy, editorial signals.  Verdict `still-on-intent` + **freeze granted**: C-CLASS/C-INIT ratified final; **C-W3b graduated from provisional**; editorial half defined by styleguide v1 (layer 4) by reference.  C-S0 finding ruled (operator): release-scoped aggregation retained; rg-multi-release consolidates via the III-b regroup folded into R6d planning (live hades scan prerequisite).  A-b/A-c close; **Act II is done**.  R6 unblocks for PLAN derivation (R6d still gated on J3 + R5 exit).  Full adjudication in the Discoveries appendix. |
 | **J3** | before R6d | Go/no-go on the destructive-scale full-library repath: `Reference/` retention decision, journal capacity, dry-run evidence. |
 
 Post-R3, the **structural-audit trigger** fires (BACKLOG "Codebase maintenance cadence"): review the
@@ -290,10 +297,11 @@ the critical path, so R4/J2 was sharded first).
 provenance), C-L0 / C-L1 (leaf/intermediate numbering), C-S0 (aggregation spans media; mutation does
 not), the defensive-download and confirmation-provenance invariants (repo `AGENTS.md`).
 
-**Produced:** R1 freezes the `_net` core interface; R2 freezes the rung-marking contract; R4/J2
-freezes the naming policy (C-W3b graduates from provisional); R6 freezes the final path policy and
-externalises it as the conventions spec.  Each sub-track PLAN names its own C-* contracts per existing
-convention.
+**Produced:** R1 freezes the `_net` core interface; R2 freezes the rung-marking contract; **the
+naming policy froze at J2 (2026-07-30)** — C-CLASS/C-INIT ratified final, C-W3b graduated from
+provisional (rule + sub-shape routing; interface mechanics resolve at R6a PLAN derivation), editorial
+half = styleguide v1 by reference; R6 freezes the final path policy and externalises it as the
+conventions spec.  Each sub-track PLAN names its own C-* contracts per existing convention.
 
 **Prose contracts:** the lossless principle (failure ≠ no-data), "path is a handle, not a manifest",
 the layer-routing rule, "journal detects, tag adjudicates" — all in `docs/NOTES.md`; every PLAN
@@ -469,3 +477,28 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   consequence: **R4c dissolved, node E added and promoted to the R4-tail critical path (gates J2), R4b
   parallel.**  Register is @dialectic (generative authoring), not sharding — no PLAN.md.  Full charter
   captured to NOTES.  (CAPTURE-CANDIDATE surfaced and folded here at the boundary.)
+
+- **J2 adjudication (2026-07-30) — verdict `still-on-intent`; naming-policy freeze granted.**  Both
+  halves cross-validated with no conflict (R4b census: no C-CLASS/C-INIT conflicts; styleguide S6:
+  layer 4 describes, never redefines).  (1) **Taxonomy**: C-CLASS + C-INIT ratified as final
+  naming-policy components.  (2) **Depth policy**: C-W3b graduates from provisional — the
+  uniform-ceiling/ragged-floor rule is doubly grounded (NOTES "two durable rules" + STYLEGUIDE 4.5,
+  independently converged), so the rule, the two-sub-shape routing (data-gap stays shallow and
+  visible; faithful over-resolution clamps), and the corner pins (modal ties → shallower; PL=0
+  orphans excluded) freeze; the `build_dest_path` interface mechanics (`depth_clamp` posture) and
+  tag-data-sufficiency resolve at R6a PLAN derivation, and R6a's fresh `scan_nonuniform_depth.py`
+  run stays gating (the 36-group census is stale by construction; a new shape the rule mishandles is
+  a reopen trigger).  (3) **Editorial signals**: defined by STYLEGUIDE v1 by reference — billing
+  order (4.2), the SEL-11 overturn (soloists never in the path; the concerto injection is
+  policy-dead as of this freeze, code-alive until its deletion shard), date-basis visibility
+  (REND-24), path-is-a-handle, case-ID sidecar marking (5.5).  Consequence: the post-v1 A-shards
+  that reshape persisted tags/paths (concerto-gate deletion, REND-14 reorder + naming realignment,
+  chorusmaster-into-`CONDUCTOR`, `IS_CLASSICAL` conditionalisation) are R6-planning inputs,
+  sequenced before or with R6d so the library re-derives once.  (4) **C-S0 ruling (operator, option
+  A)**: C-S0 stays release-scoped; the rg-multi-release shape consolidates via the III-b regroup
+  folded into R6d planning, with the live hades scan as the authoritative prerequisite — the
+  RG-aggregation semantics are unspecifiable on documentary evidence (an RG also groups pressings:
+  the Wagner Ring instance is a dedup question, not aggregation).  Extending C-S0 remains available
+  as an R6-planning decision if the live scan shows the shape pervasive in `Done/`.  No frozen
+  contract invalidated; no destructive-HALT.  A-b/A-c close; Act II is done; R6 unblocks for PLAN
+  derivation (R6d gated on J3 + R5 exit, unchanged).
