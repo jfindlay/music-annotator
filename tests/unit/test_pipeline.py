@@ -485,6 +485,65 @@ class TestBuildTrackTags:
         tags = build_track_tags(_make_release(), self._track(), 1, _make_rec_detail(), [])
         assert tags.conductor == "Karajan"
 
+    def test_conductor_includes_chorusmaster_annotation(self) -> None:
+        """CONDUCTOR carries chorusmaster annotated as "Name (choirmaster)" after conductors (REND-3/SEL-3 KAT).
+
+        A recording with one conductor and one chorusmaster must produce CONDUCTOR rendered as
+        ``"Conductor Name; Chorusmaster Name (choirmaster)"``.  CHORUSMASTER must still carry the bare
+        chorusmaster name (additive routing — not a move).  The empty-chorusmasters branch is covered by
+        ``test_conductor_populated_from_recording`` (no chorusmaster → CONDUCTOR unchanged).
+        """
+        recording = _rec(
+            {
+                "id": "rec-1",
+                "title": "Track 1",
+                "artist-credit": [],
+                "artist-relation-list": [
+                    {
+                        "type": "conductor",
+                        "artist": {"id": "c1", "name": "Herbert von Karajan", "sort-name": "Karajan, Herbert von"},
+                        "attribute-list": [],
+                    },
+                    {
+                        "type": "chorus master",
+                        "artist": {"id": "cm1", "name": "Simon Halsey", "sort-name": "Halsey, Simon"},
+                        "attribute-list": [],
+                    },
+                ],
+                "work-relation-list": [],
+            }
+        )
+        tags = build_track_tags(_make_release(), self._track(), 1, recording, [])
+        # KAT 1: CONDUCTOR renders conductor then chorusmaster annotated as "(choirmaster)"
+        assert tags.conductor == "Herbert von Karajan; Simon Halsey (choirmaster)"
+        # KAT 2: CHORUSMASTER retains the bare chorusmaster name (additive routing, not a move)
+        assert tags.chorusmaster == "Simon Halsey"
+
+    def test_conductor_without_chorusmaster_unchanged(self) -> None:
+        """CONDUCTOR is exactly the conductor name when no chorusmasters are present (empty-branch coverage).
+
+        This witnesses the empty-chorusmasters branch: the ``if cea.chorusmasters`` guard must leave
+        ``conductor_name`` untouched when the list is empty.
+        """
+        recording = _rec(
+            {
+                "id": "rec-1",
+                "title": "Track 1",
+                "artist-credit": [],
+                "artist-relation-list": [
+                    {
+                        "type": "conductor",
+                        "artist": {"id": "c1", "name": "Herbert von Karajan", "sort-name": "Karajan, Herbert von"},
+                        "attribute-list": [],
+                    },
+                ],
+                "work-relation-list": [],
+            }
+        )
+        tags = build_track_tags(_make_release(), self._track(), 1, recording, [])
+        # KAT 3: no chorusmasters → CONDUCTOR is exactly the conductor name, no annotation appended
+        assert tags.conductor == "Herbert von Karajan"
+
     def test_composer_from_work_hierarchy(self) -> None:
         """composer field is set from work-level composer relation."""
         tags = build_track_tags(

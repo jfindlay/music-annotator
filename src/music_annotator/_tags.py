@@ -712,6 +712,11 @@ def build_track_tags(
     conductor_name = "; ".join(e.name for e in cea.conductors)
     conductor_id = "/".join(e.mbid for e in cea.conductors)
     chorusmaster = "; ".join(e.name for e in cea.chorusmasters)
+    # CONDUCTOR additionally carries chorusmasters annotated as "Name (choirmaster)" (STYLEGUIDE 4.4/REND-3/SEL-3).
+    # CHORUSMASTER retains the bare name; this is additive routing, not a move.
+    if cea.chorusmasters:
+        chorusmaster_annotations = "; ".join(f"{e.name} (choirmaster)" for e in cea.chorusmasters)
+        conductor_name = "; ".join(filter(None, [conductor_name, chorusmaster_annotations]))
     leader = "; ".join(e.name for e in cea.leaders)
 
     # Arranger string (annotated with role in parens per CE convention)
