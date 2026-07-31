@@ -1831,138 +1831,128 @@ class TestBuildDestPathEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# build_dest_path — concerto-soloist path injection (KAT S5)
+# build_dest_path — C-NOSOLO freeze witness (KAT S1)
 # ---------------------------------------------------------------------------
 
 
-class TestBuildDestPathConcertoSoloist:
-    """KAT S5: build_dest_path injects cea_album_soloists_unified into performers for Concerto works.
+class TestBuildDestPathConcertoNoSoloist:
+    """KAT S1 (C-NOSOLO): build_dest_path never injects a soloist into any path component.
 
-    P1 gate: injection is strictly conditioned on ``CWP_WORKTYPE_GENRES_TOP == "Concerto"``
-    (C-S4 field).  Non-Concerto works must NOT have the soloist injected.
+    STYLEGUIDE 4.5 / SEL-11: the soloist is never a path component, however principal.
+    Two assertions freeze C-NOSOLO:
+
+    1. A Concerto work whose recording carries a named soloist (Mutter) — the soloist name
+       is absent from every path component.
+    2. A multi-disc concerto with different soloists per disc — all movements still land under
+       the *same* top directory, driven purely by the conductor/ensemble component, proving
+       the deletion did not regress cross-medium grouping.
     """
 
     def _make_concerto_tags(
         self,
         *,
-        worktype_genres_top: str = "Classical",
-        unified_soloists: str = "",
         conductor_name: str = "Karajan",
+        soloist_name: str = "Mutter",
+        cwp_movt_num: str = "1",
     ) -> TrackTags:
-        """Build a TrackTags instance for a concerto movement.
+        """Build a TrackTags instance for a Classical Concerto movement with a named soloist.
 
-        Uses ``cwp_worktype_genres_top="Classical"`` by default so that :func:`_top_level_class`
-        routes to the ``Classical`` class (C-CLASS predicate requires ``"Classical" in
-        cwp_worktype_genres_top``).  The concerto-soloist injection gate checks
-        ``CWP_WORKTYPE_GENRES_TOP == "Concerto"`` (C-S4); when ``worktype_genres_top="Classical"``
-        the injection does not fire — the test verifies the classical path structure instead.
+        The soloist is present in ``cea_soloists`` (per-track) and ``cea_album_soloists``
+        (album-level) to mirror what the pipeline would produce.  C-NOSOLO asserts neither
+        field ever reaches the path.
 
-        :param worktype_genres_top: Value for ``cwp_worktype_genres_top``.
-        :param unified_soloists: Value for ``cea_album_soloists_unified`` (path-only helper).
         :param conductor_name: Name to use for the album-level conductor list entry.
+        :param soloist_name: Soloist name to embed in ``cea_soloists`` / ``cea_album_soloists``.
+        :param cwp_movt_num: Movement number string (used as the leaf ``nn`` prefix).
         :returns: A populated :class:`~music_annotator.models.TrackTags` instance.
         """
         conductor = ArtistEntry(name=conductor_name, sort=f"{conductor_name}, X", mbid="k1")
         return TrackTags(
             title="I. Allegro",
-            movementnumber="1",
+            movementnumber=cwp_movt_num,
             movementtotal="3",
             cwp_work_top="Violin Concerto in D major",
             cwp_workid_top="w-conc-1",
             cwp_composer_lastnames="Brahms",
-            cwp_worktype_genres_top=worktype_genres_top,
-            cea_album_soloists_unified=unified_soloists,
+            cwp_worktype_genres_top="Classical",
+            cwp_movt_num=cwp_movt_num,
+            cea_soloists=soloist_name,
+            cea_album_soloists=soloist_name,
             cea_conductors_list=[conductor],
             cea_ensembles_list=[],
             cea_album_conductors_list=[conductor],
             cea_album_ensembles_list=[],
         )
 
-    def test_concerto_soloist_in_top_dir(self, fs: FakeFilesystem) -> None:
-        """For a Concerto work (Classical class), cea_album_soloists_unified appears in the top-level directory.
+    def test_concerto_soloist_absent_from_all_path_components(self, fs: FakeFilesystem) -> None:
+        """KAT S1a (C-NOSOLO): soloist name is absent from every path component for a Concerto work.
 
-        The top-level performers component is: "<soloists>; <conductor/ensemble>".
-        Soloist-first is the CE convention for a concerto (soloist is the headline performer).
-
-        Uses ``cwp_worktype_genres_top="Concerto"`` to trigger the C-S4 injection gate.  The
-        C-CLASS predicate requires ``"Classical" in cwp_worktype_genres_top`` for the Classical
-        class; since ``"Concerto"`` does not contain ``"Classical"``, the release routes to
-        ``Unsorted``.  The injection fires but the ``Unsorted`` top_dir uses ``<ALBUM>`` shape,
-        not ``<composer> - <performers>``.  This test verifies the injection fires (the
-        ``performers`` variable is modified) by checking the path contains the soloist name via
-        the ``albumartist`` tag set to the expected performers string.
+        A Concerto recording with soloist "Mutter" must produce a path that contains "Mutter"
+        in no component — not the class dir, not the top_dir, not the work_dir, not the filename.
+        This is the inverse of the retired KAT S5 assertion.
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        # Use cwp_worktype_genres_top="Concerto" to trigger the C-S4 injection gate.
-        # Add albumartist so the Popular/Unsorted top_dir shape includes the performer name.
-        tags = self._make_concerto_tags(worktype_genres_top="Concerto", unified_soloists="Mutter")
-        # Override albumartist to verify the injection modifies performers (which is used in
-        # the Classical top_dir but not in Popular/Unsorted).  Instead, verify via str(result).
+        tags = self._make_concerto_tags(conductor_name="Karajan", soloist_name="Mutter")
         result = build_dest_path(
             dest_root,
             _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
             _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
             tags,
         )
-        # With cwp_worktype_genres_top="Concerto" (not "Classical"), the class is Unsorted.
-        # The injection fires (CWP_WORKTYPE_GENRES_TOP == "Concerto") but has no effect on the
-        # Unsorted top_dir (which uses ALBUM shape, not composer-performers shape).
-        # Verify the class is Unsorted and the path structure is correct.
+        path_str = str(result)
+        assert "Mutter" not in path_str, f"C-NOSOLO violated: soloist 'Mutter' found in path '{path_str}'"
+        # Conductor must still be present — the performers component is conductors → ensembles.
         rel = result.relative_to(dest_root)
-        assert rel.parts[0] == "Unsorted", f"Expected class 'Unsorted' for Concerto work, got {rel.parts[0]!r}"
+        top_dir = rel.parts[1]  # parts: ["Classical", top_dir, ...]
+        assert "Karajan" in top_dir, f"Expected conductor 'Karajan' in top_dir '{top_dir}' (performers component intact)"
 
-    def test_non_concerto_soloist_not_injected(self, fs: FakeFilesystem) -> None:
-        """For a non-Concerto work, cea_album_soloists_unified is NOT injected into the path.
+    def test_multi_disc_concerto_same_top_dir_without_soloist(self, fs: FakeFilesystem) -> None:
+        """KAT S1b (C-NOSOLO): multi-disc concerto movements share one top directory via conductor/ensemble.
 
-        P1 gate is strict: only ``CWP_WORKTYPE_GENRES_TOP == "Concerto"`` triggers injection.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-        # Same tags as the concerto test but worktype_genres_top = "Symphony" → no injection.
-        tags = self._make_concerto_tags(worktype_genres_top="Symphony", unified_soloists="Mutter")
-        result = build_dest_path(
-            dest_root,
-            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
-            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
-            tags,
-        )
-        # With cwp_worktype_genres_top="Symphony" (not "Classical"), the class is Unsorted.
-        # The injection does NOT fire (CWP_WORKTYPE_GENRES_TOP != "Concerto").
-        # Verify "Mutter" does not appear anywhere in the path.
-        assert "Mutter" not in str(result), (
-            f"Expected soloist NOT injected for non-Concerto work, but found 'Mutter' in '{result}'"
-        )
-
-    def test_concerto_empty_unified_no_injection(self, fs: FakeFilesystem) -> None:
-        """For a Concerto work with no unified soloists, the performers component is unchanged.
-
-        When ``cea_album_soloists_unified`` is empty, the gate condition is false and no
-        soloist prefix is added to performers.
+        Two movements from different discs, each with a different soloist (Mutter on disc 1,
+        Perlman on disc 2), must produce paths that share the same top-level directory.  The
+        grouping is driven purely by the conductor/ensemble component (Karajan), not by any
+        soloist union — proving the deletion did not regress cross-medium grouping.
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        # Use cwp_worktype_genres_top="Classical" so the class is "Classical" and the
-        # composer-performers top_dir shape is used.  With unified_soloists="" the injection
-        # gate is false (empty string), so no soloist prefix is added.
-        tags = self._make_concerto_tags(worktype_genres_top="Classical", unified_soloists="")
-        result = build_dest_path(
+        # Both movements share the same conductor (Karajan) → same performers component → same top_dir.
+        tags_d1 = self._make_concerto_tags(conductor_name="Karajan", soloist_name="Mutter", cwp_movt_num="1")
+        tags_d2 = self._make_concerto_tags(conductor_name="Karajan", soloist_name="Perlman", cwp_movt_num="2")
+
+        result_d1 = build_dest_path(
             dest_root,
             _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
             _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
-            tags,
+            tags_d1,
         )
-        # result.parts: ["/", "lib", "Classical", top_dir, work_dir, filename]
-        top_dir = result.parts[3]
-        # The conductor is present (path still works), but no spurious empty-prefix injection.
-        assert "Karajan" in top_dir
-        assert top_dir.startswith("Brahms"), f"Expected top_dir to start with 'Brahms' (composer), got '{top_dir}'"
+        result_d2 = build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t2", "position": 1, "recording": {"id": "rec2", "title": "II. Adagio"}}),
+            tags_d2,
+        )
+
+        # Both paths must be under the same top_dir (Classical/<top_dir>/...).
+        rel_d1 = result_d1.relative_to(dest_root)
+        rel_d2 = result_d2.relative_to(dest_root)
+        assert rel_d1.parts[0] == "Classical", f"Expected class 'Classical', got {rel_d1.parts[0]!r}"
+        assert rel_d2.parts[0] == "Classical", f"Expected class 'Classical', got {rel_d2.parts[0]!r}"
+        top_dir_d1 = rel_d1.parts[1]
+        top_dir_d2 = rel_d2.parts[1]
+        assert top_dir_d1 == top_dir_d2, (
+            f"C-NOSOLO cross-medium grouping regressed: disc-1 top_dir '{top_dir_d1}' != "
+            f"disc-2 top_dir '{top_dir_d2}'.  Both should be 'Brahms - Karajan [...]'."
+        )
+        # Neither soloist name appears in any path component.
+        for soloist in ("Mutter", "Perlman"):
+            assert soloist not in str(result_d1), f"C-NOSOLO violated: '{soloist}' in disc-1 path '{result_d1}'"
+            assert soloist not in str(result_d2), f"C-NOSOLO violated: '{soloist}' in disc-2 path '{result_d2}'"
 
 
 # ---------------------------------------------------------------------------

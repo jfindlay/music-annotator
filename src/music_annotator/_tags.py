@@ -295,7 +295,7 @@ def _classical_top_dir(tags: TrackTags) -> str | None:
        linked in MB, which is the honest tag-derivable signal.
 
     3. **Single-composer** (dominant population) — returns ``None`` to signal the caller should use
-       the default ``<composer> - <performers>`` shape (including any concerto-soloist injection).
+        the default ``<composer> - <performers>`` shape.
 
     **Tag-derivable source requirement (C-INIT substrate correctness):** reads only
     ``tags.releasetype_secondary``, ``tags.albumartistsort``, ``tags.albumartist``, and the
@@ -1082,14 +1082,6 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
     ``tags.cea_conductors_list`` + ``tags.cea_ensembles_list``, mirroring the original behaviour.
     If that is also empty, falls back to ``CEA_ENSEMBLE_NAMES``, then ``ARTIST``.
 
-    For Concerto works (detected via ``CWP_WORKTYPE_GENRES_TOP == "Concerto"`` — C-S4), the
-    cross-medium soloist union ``tags.cea_album_soloists_unified`` (computed by
-    :func:`~music_annotator._pipeline.run`'s soloist-union pass) is prepended to the performers
-    component as ``"<soloists>; <conductor/ensemble>"``.  This is the CE-sanctioned exception to
-    "path is a handle, not a manifest" (P1): for a concerto the soloist is part of the work's
-    canonical identity.  The gate is strictly ``top_work.type == "Concerto"``; other
-    canonical-soloist work types are deferred (see plan appendix).
-
     One intermediate directory is introduced for each compositional subdivision level between the
     root work and the leaf (i.e. when ``CWP_PART_LEVELS`` ≥ 2).  Intermediate ``nn`` prefixes are
     directory-scoped zero-padded integers derived from the MB ``ordering-key`` (stored as
@@ -1170,24 +1162,6 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
             performers = "; ".join(all_conductors + all_ensembles)
         else:
             performers = file_dict.get("CEA_ENSEMBLE_NAMES") or file_dict.get("ARTIST", "Unknown Performers")
-
-    # Concerto-soloist path injection (P1 CE-sanctioned exception).
-    #
-    # For Concerto works the soloist is part of the work's canonical identity — inject
-    # tags.cea_album_soloists_unified (the cross-medium union computed by run()'s
-    # soloist-union pass) as the FIRST component of performers so that all movements land
-    # under the same top-level directory regardless of which disc they appear on.
-    #
-    # Join order: "<soloists>; <conductor/ensemble>" — soloist-first is the natural CE
-    # ordering for a concerto recording (the soloist is the headline performer).
-    #
-    # Gate: strictly top_work.type == "Concerto" (via CWP_WORKTYPE_GENRES_TOP — C-S4).
-    # This is the ONLY mechanical case in scope (P1); symphony-with-soloist and other
-    # canonical-identity works are deferred (see plan appendix "Concerto-like soloist
-    # override").  cea_album_soloists_unified is read directly from the tags object
-    # (not from file_dict) because it is excluded from to_file_dict().
-    if file_dict.get("CWP_WORKTYPE_GENRES_TOP") == "Concerto" and tags.cea_album_soloists_unified:
-        performers = f"{tags.cea_album_soloists_unified}; {performers}"
 
     # Work directory component — title + [rec YYYY] or [rel YYYY] year suffix.
     #

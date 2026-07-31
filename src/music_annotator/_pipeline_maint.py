@@ -836,8 +836,8 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
     **Canonical path algorithm (C-W2):** :func:`~music_annotator._tags.build_dest_path` already
     computes the correct unified path when given all tracks of the release as a group, because the
     cross-medium composer pass and ``recording_date_work`` pass run over the full release group.
-    The unified performer credit comes from the ``cea_album_soloists_unified`` field, which
-    accumulates the cross-medium union of ``CEA_SOLOISTS`` (C-S4 concerto-soloist rule).
+    The performers component uses album-level conductors and ensembles (C-NOSOLO: soloists are
+    never a path component).
 
     **Composer-split pre-processing (W2b):** when ``CEA_COMPOSER_LASTNAMES`` varies across tracks
     of a non-classical release, :func:`_is_composer_split_release` detects the shape and
@@ -950,8 +950,8 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
             _unify_classical_composer_groups(group_tags)
 
         # Compute canonical destinations for every file in the group.
-        # build_dest_path uses the unified path fields (cea_album_soloists_unified, etc.) that
-        # are already embedded in the tags from the original annotation pipeline run.
+        # build_dest_path uses the path fields (recording_date_work, etc.) already embedded
+        # in the tags from the original annotation pipeline run.
         # global_track_idx=0 is acceptable here because CWP_MOVT_NUM is present in the tags
         # for properly annotated files (same as repath/regroup).
         stub_release = MBRelease()
