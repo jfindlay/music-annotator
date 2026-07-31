@@ -654,7 +654,8 @@ extensions and platform capability differences are not divergences (standing rul
 the library-partition realisation of the same principle CE serves in-tag); tag-only platforms apply contested-case
 defaults without persisting the mark (5.5 carve-out).
 
-**Naming-drift remediation (queued):** the enacted composite recording-artist tag carries assembled semantics under a
-name whose CE meaning is the verbatim recording credit — a same-name-different-semantics hazard under standing rule 2.
-Realignment (rename the composite, or restore verbatim semantics alongside it) is queued with the REND-14 ordering
-change in the post-v1 application shards.
+**Naming-drift remediation (resolved: no rename; verbatim semantics already live under CEA_MB_ARTISTS/ARTIST):** the
+standing-rule-2 premise was imprecise — CE's `_cea_recording_artist` means the *assembled* performer composite
+(census-ce.md:655), not the verbatim recording credit; the verbatim credit is `_cea_MB_artists` → `CEA_MB_ARTISTS`,
+already correctly realised alongside `ARTIST`.  The assembled composite stays under `CEA_RECORDING_ARTIST`; no rename,
+no new verbatim tag.  Resolved at the S2 juncture (C-RA-GRAMMAR, 2026-07-31).

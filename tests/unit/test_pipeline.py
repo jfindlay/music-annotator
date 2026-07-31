@@ -811,6 +811,107 @@ class TestBuildTrackTags:
         )
         assert "Lib Z" in tags.lyricist
 
+    def test_cea_recording_artist_billing_order_soloist_conductor_ensemble(self) -> None:
+        """CEA_RECORDING_ARTIST renders in billing order: soloists → conductors → ensembles (C-RA-GRAMMAR KAT).
+
+        A recording carrying one soloist, one conductor, and one ensemble must produce exactly
+        ``<soloist>; <conductor>; <ensemble>`` — the STYLEGUIDE 4.2 billing order.  A paired assertion
+        confirms CEA_MB_ARTISTS carries the raw MB credit phrase, witnessing verbatim-credit separation.
+
+        Note: ``rec_artist_phrase`` derives from the track's recording stub (``track.recording.artist_credit``),
+        not from ``recording_detail``.  The artist-credit is therefore set on the track stub here.
+        """
+        # Track stub carries the verbatim MB credit phrase via its recording.artist-credit.
+        track = _trk(
+            {
+                "id": "trk-1",
+                "position": 1,
+                "recording": {
+                    "id": "rec-1",
+                    "title": "Violin Concerto",
+                    "artist-credit": [
+                        {
+                            "name": "MB Credit Phrase",
+                            "artist": {"id": "mb1", "name": "MB Credit Phrase", "sort-name": "MB Credit Phrase"},
+                        }
+                    ],
+                },
+            }
+        )
+        recording = _rec(
+            {
+                "id": "rec-1",
+                "title": "Violin Concerto",
+                "artist-credit": [],
+                "artist-relation-list": [
+                    {
+                        "type": "performer",
+                        "artist": {"id": "s1", "name": "Anne-Sophie Mutter", "sort-name": "Mutter, Anne-Sophie"},
+                        "attribute-list": [{"type": "", "value": "violin"}],
+                    },
+                    {
+                        "type": "conductor",
+                        "artist": {"id": "c1", "name": "Herbert von Karajan", "sort-name": "Karajan, Herbert von"},
+                        "attribute-list": [],
+                    },
+                    {
+                        "type": "performing orchestra",
+                        "artist": {
+                            "id": "e1",
+                            "name": "Berliner Philharmoniker",
+                            "sort-name": "Berliner Philharmoniker",
+                        },
+                        "attribute-list": [],
+                    },
+                ],
+                "work-relation-list": [],
+            }
+        )
+        tags = build_track_tags(_make_release(), track, 1, recording, [])
+        # KAT 1: billing order soloists → conductors → ensembles
+        assert tags.cea_recording_artist == "Anne-Sophie Mutter; Herbert von Karajan; Berliner Philharmoniker"
+        # KAT 2: verbatim MB credit phrase is carried by CEA_MB_ARTISTS, not the assembled composite
+        assert tags.cea_mb_artists == "MB Credit Phrase"
+
+    def test_cea_recording_artist_fallback_to_rec_artist_phrase(self) -> None:
+        """CEA_RECORDING_ARTIST falls back to rec_artist_phrase when all role classes are empty (C-RA-GRAMMAR KAT).
+
+        With no soloists, conductors, or ensembles on the recording, the assembled composite is empty
+        and must fall back to the raw MB recording credit phrase.
+
+        Note: ``rec_artist_phrase`` derives from the track's recording stub (``track.recording.artist_credit``),
+        not from ``recording_detail``.  The artist-credit is therefore set on the track stub here.
+        """
+        # Track stub carries the verbatim MB credit phrase via its recording.artist-credit.
+        track = _trk(
+            {
+                "id": "trk-1",
+                "position": 1,
+                "recording": {
+                    "id": "rec-1",
+                    "title": "Track 1",
+                    "artist-credit": [
+                        {
+                            "name": "Fallback Artist",
+                            "artist": {"id": "fa1", "name": "Fallback Artist", "sort-name": "Artist, Fallback"},
+                        }
+                    ],
+                },
+            }
+        )
+        recording = _rec(
+            {
+                "id": "rec-1",
+                "title": "Track 1",
+                "artist-credit": [],
+                "artist-relation-list": [],
+                "work-relation-list": [],
+            }
+        )
+        tags = build_track_tags(_make_release(), track, 1, recording, [])
+        # KAT 3: empty composite falls back to rec_artist_phrase
+        assert tags.cea_recording_artist == "Fallback Artist"
+
 
 # ---------------------------------------------------------------------------
 # find_source_files

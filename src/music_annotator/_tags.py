@@ -746,15 +746,15 @@ def build_track_tags(
     instrumentalist_str = "; ".join(f"{e.name} ({e.instrument})" if e.instrument else e.name for e in cea.instrumentalists)
     instruments_str = "; ".join(e.instrument for e in all_soloists if e.instrument)
 
-    recording_artist_names = [e.name for e in all_soloists + cea.ensembles]
-    if cea.conductors:
-        recording_artist_names += [e.name for e in cea.conductors]
+    # CEA_RECORDING_ARTIST is CE's *assembled* performer composite (billing order: soloists → conductors →
+    # ensembles; STYLEGUIDE 4.2/REND-14).  The verbatim MB recording credit is CEA_MB_ARTISTS/ARTIST.
+    recording_artist_names = [e.name for e in all_soloists + cea.conductors + cea.ensembles]
     cea_recording_artist = "; ".join(recording_artist_names) or rec_artist_phrase
 
     # CEA_RECORDING_ARTISTS (multi-value equivalent) and sort names — same data as cea_recording_artist but
     # stored so downstream tag-mapping scripts can access the raw list.
     cea_recording_artists = cea_recording_artist
-    cea_recording_artists_sort = "; ".join(e.sort for e in all_soloists + cea.ensembles + cea.conductors) or rec_artist_sort
+    cea_recording_artists_sort = "; ".join(e.sort for e in all_soloists + cea.conductors + cea.ensembles) or rec_artist_sort
 
     # CEA_MB_ARTISTS: raw MB recording artist-credit phrase, preserved before any replacement.
     cea_mb_artists = rec_artist_phrase
