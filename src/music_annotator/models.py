@@ -1846,3 +1846,13 @@ class ProvenanceSidecar(BaseModel):
     accuraterip_summary: AccurateRipSummary = Field(default_factory=AccurateRipSummary)
     """Per-release AccurateRip summary (C-AR).  Monotonic-upgrade: an incoming empty summary must not overwrite a
     populated one."""
+    applied_case_ids: list[str] = Field(default_factory=list)
+    """Applied contested-default case-IDs; set-union append-only; order-normalised for stable YAML.
+
+    Records the register case-IDs (``<LAYER>-<n>`` form, e.g. ``"SEL-11"``, ``"REND-14"``) of the
+    contested-case neutral defaults that were applied for this release.  Merge semantics: set-union,
+    append-only — ``_write_provenance_fields`` unions the incoming set with the recorded set and writes
+    the sorted union; an incoming empty list never shrinks or erases the recorded set.  Serialization
+    is order-normalised (sorted) for byte-stable re-writes.  Free-text is never written to tags: the
+    case-IDs live only in the provenance sidecar.
+    """

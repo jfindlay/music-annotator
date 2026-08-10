@@ -1467,6 +1467,14 @@ class TestAccurateRipSummary:
         """is_populated() returns True when summary_text is set."""
         assert AccurateRipSummary(summary_text="All tracks accurately ripped").is_populated() is True
 
+    def test_applied_case_ids_default_empty(self) -> None:
+        """applied_case_ids defaults to an empty list on a default-constructed ProvenanceSidecar.
+
+        Pins the C-CASE-PROV field contract: the field is present with a safe default so callers
+        never need to guard against AttributeError or KeyError.
+        """
+        assert ProvenanceSidecar().applied_case_ids == []
+
     def test_accuraterip_summary_monotonic(self) -> None:
         """A present accuraterip_summary on ProvenanceSidecar survives a later empty-summary merge.
 

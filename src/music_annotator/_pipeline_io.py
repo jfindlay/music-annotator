@@ -1520,6 +1520,9 @@ def _write_provenance_fields(sidecar_path: Path, provenance: ProvenanceSidecar) 
     - ``accuraterip_summary`` follows the **monotonic-upgrade rule** (C-AR): an incoming populated
       summary (``log_sha256`` non-empty) is written; an incoming empty summary never overwrites a
       populated one.
+    - ``applied_case_ids`` follows the **set-union append-only rule**: the incoming set is unioned
+      with the recorded set and the sorted union is written when it differs from the existing set.
+      An incoming empty list never shrinks or erases the recorded set.
 
     :param sidecar_path: Absolute path to the YAML sidecar file to update or create.
     :param provenance: The :class:`~music_annotator.models.ProvenanceSidecar` whose fields are
@@ -1570,6 +1573,16 @@ def _write_provenance_fields(sidecar_path: Path, provenance: ProvenanceSidecar) 
             existing_ar_sha256 = str(existing_ar_raw.get("log_sha256", ""))
         if not existing_ar_sha256:
             existing["accuraterip_summary"] = incoming_ar.model_dump()
+
+    # applied_case_ids: set-union append-only rule — union incoming with recorded set and write the
+    # sorted union when it differs; an incoming empty list never shrinks or erases the recorded set.
+    incoming_ids = provenance.applied_case_ids
+    if incoming_ids:
+        existing_ids_raw = existing.get("applied_case_ids", [])
+        existing_ids: list[str] = [str(v) for v in existing_ids_raw] if isinstance(existing_ids_raw, list) else []
+        union_ids = sorted(set(existing_ids) | set(incoming_ids))
+        if union_ids != existing_ids:
+            existing["applied_case_ids"] = union_ids
 
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     with sidecar_path.open("w", encoding="utf-8") as fh:

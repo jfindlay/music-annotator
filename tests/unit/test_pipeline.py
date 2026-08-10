@@ -10801,7 +10801,140 @@ class TestAnnotationTierVocabularyRoundtrips:
 
 
 # ---------------------------------------------------------------------------
-# Annotation-tier write path (S3 — _copy_tag_verify_journal_pass + run())
+# applied_case_ids set-union merge (C-CASE-PROV KAT)
+# ---------------------------------------------------------------------------
+
+
+class TestAppliedCaseIdsMerge:
+    """KAT: set-union append-only merge for applied_case_ids in _write_provenance_fields.
+
+    Covers the C-CASE-PROV merge contract:
+    (a) writing a non-empty set to an empty sidecar records the sorted set;
+    (b) a second write with a disjoint set yields the sorted union (append-only proof);
+    (c) a write with an empty list leaves the recorded set unchanged (empty-never-erases proof);
+    (d) a ProvenanceSidecar round-trips through _read_provenance_sidecar carrying the case-IDs.
+    """
+
+    def test_initial_write_records_sorted_set(self, fs: FakeFilesystem) -> None:
+        """Writing applied_case_ids to an empty sidecar records the sorted set.
+
+        Covers the superset-incoming (write) branch of the merge arm.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+
+        provenance = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/Beethoven",
+            applied_case_ids=["SEL-11", "REND-14"],
+        )
+        _write_provenance_fields(sidecar, provenance)
+
+        result = _read_provenance_sidecar(sidecar)
+        # Sorted order: REND-14 < SEL-11
+        assert result.applied_case_ids == ["REND-14", "SEL-11"]
+
+    def test_second_write_yields_union(self, fs: FakeFilesystem) -> None:
+        """A second write with a disjoint set yields the sorted union (append-only proof).
+
+        Covers the superset-incoming (write) branch a second time, confirming that previously
+        recorded case-IDs are never retracted.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+
+        # First write: two case-IDs
+        _write_provenance_fields(
+            sidecar,
+            ProvenanceSidecar(
+                origin_time="2024-06-01T00:00:00+00:00",
+                origin_source="/rip/Beethoven",
+                applied_case_ids=["SEL-11", "REND-14"],
+            ),
+        )
+
+        # Second write: one new case-ID, no overlap with the first set
+        _write_provenance_fields(
+            sidecar,
+            ProvenanceSidecar(
+                origin_time="2024-06-01T00:00:00+00:00",
+                origin_source="/rip/Beethoven",
+                applied_case_ids=["NORM-2"],
+            ),
+        )
+
+        result = _read_provenance_sidecar(sidecar)
+        # Union of {"SEL-11","REND-14"} and {"NORM-2"}, sorted
+        assert result.applied_case_ids == ["NORM-2", "REND-14", "SEL-11"]
+
+    def test_empty_incoming_never_erases_recorded_set(self, fs: FakeFilesystem) -> None:
+        """A write with an empty applied_case_ids list leaves the recorded set unchanged.
+
+        Covers the empty-incoming branch: an incoming empty list must never shrink or erase
+        the recorded set.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+
+        # Establish a recorded set
+        _write_provenance_fields(
+            sidecar,
+            ProvenanceSidecar(
+                origin_time="2024-06-01T00:00:00+00:00",
+                origin_source="/rip/Beethoven",
+                applied_case_ids=["NORM-2", "REND-14", "SEL-11"],
+            ),
+        )
+
+        # Write with empty list — must not erase the recorded set
+        _write_provenance_fields(
+            sidecar,
+            ProvenanceSidecar(
+                origin_time="2024-06-01T00:00:00+00:00",
+                origin_source="/rip/Beethoven",
+                applied_case_ids=[],
+            ),
+        )
+
+        result = _read_provenance_sidecar(sidecar)
+        assert result.applied_case_ids == ["NORM-2", "REND-14", "SEL-11"]
+
+    def test_round_trip_preserves_case_ids(self, fs: FakeFilesystem) -> None:
+        """A ProvenanceSidecar round-trips through _read_provenance_sidecar carrying the case-IDs.
+
+        Covers the subset-incoming (no-change) branch: writing the same set a second time must
+        leave the file content unchanged (idempotency), and the read-back value must equal the
+        original.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/Composer/Work/music_annotator_provenance.yaml")
+        fs.create_dir(str(sidecar.parent))
+
+        provenance = ProvenanceSidecar(
+            origin_time="2024-06-01T00:00:00+00:00",
+            origin_source="/rip/Beethoven",
+            annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
+            applied_case_ids=["NORM-2", "REND-14", "SEL-11"],
+        )
+        _write_provenance_fields(sidecar, provenance)
+
+        # Second write with the same set — no-change branch; file content must be stable
+        _write_provenance_fields(sidecar, provenance)
+
+        result = _read_provenance_sidecar(sidecar)
+        assert result.applied_case_ids == ["NORM-2", "REND-14", "SEL-11"]
+        assert result.annotation_tier == AnnotationTier.FULL_MB_VERIFIED
+
+
+# ---------------------------------------------------------------------------
+# Annotation-tier write path (_copy_tag_verify_journal_pass + run())
 # ---------------------------------------------------------------------------
 
 
