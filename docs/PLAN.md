@@ -195,7 +195,7 @@ form — the anneal is the same act):
 
 ## Cross-session contracts
 
-### C-CASE-PROV — applied contested-default case-IDs in the provenance sidecar *(field frozen at S1; source set to be frozen at S2)*
+### C-CASE-PROV — applied contested-default case-IDs in the provenance sidecar *(field + merge FROZEN; source set to be frozen at S2)*
 
 **Field + persistence (frozen at S1).**  `ProvenanceSidecar.applied_case_ids: list[str]` (default `[]`) records
 the register case-IDs (`<LAYER>-<n>`, per C-CASE) of the contested-case (P2) neutral defaults that were applied
@@ -241,7 +241,7 @@ S1's tests immediately exercise them.
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Add applied_case_ids field and set-union merge to ProvenanceSidecar | pending | — | — |
+| 1 | Add applied_case_ids field and set-union merge to ProvenanceSidecar | done | 856dfec | C-CASE-PROV (field + merge) |
 | 2 | Source and thread applied contested-default case-IDs into the sidecar | pending | — | — |
 | 3 ◆ | Surface applied case-IDs in the audit tier pass | pending | — | — |
 
