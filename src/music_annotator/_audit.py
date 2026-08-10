@@ -381,7 +381,7 @@ def _audit_tier_pass(
             log.warning(
                 "audit_tier_unset",
                 path=dest,
-                message="annotation_tier is unset in sidecar — S3 write path must always set it",
+                message="annotation_tier is unset in sidecar — the write path must always set it",
             )
             continue
 
