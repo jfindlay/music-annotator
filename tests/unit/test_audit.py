@@ -30,6 +30,7 @@ from music_annotator._audit import (
     _audit_audio_anchor,
     _audit_journal_scan,
     _audit_tag_adjudication,
+    _audit_tier_pass,
     _make_audit_counts,
     detect_fragmented_releases,
     diff_journal,
@@ -2136,3 +2137,120 @@ class TestDetectFragmentedReleases:
         result = detect_fragmented_releases(dest_root)
 
         assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# TestAuditTierCaseIds — KAT: applied contested-default case-IDs in audit pass
+# ---------------------------------------------------------------------------
+
+
+class TestAuditTierCaseIds:
+    """KAT tests for the applied contested-default case-ID surface in the tier-enumeration pass.
+
+    Covers the ``audit_tier_case_ids`` log event and ``applied_case_ids_total`` counter added to
+    :func:`music_annotator._audit._audit_tier_pass`.  The applied case-IDs are read from the
+    work-dir provenance sidecar's ``applied_case_ids`` field (C-CASE-PROV) and reported per
+    destination file.
+
+    Two branches are exercised:
+    - Non-empty ``applied_case_ids``: the event is logged and the counter incremented.
+    - Empty ``applied_case_ids``: no event is logged and the counter stays at zero.
+    """
+
+    def test_case_ids_logged_and_counted_when_present(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_audit_tier_pass logs audit_tier_case_ids and increments applied_case_ids_total when
+        the sidecar carries applied_case_ids=["SEL-11", "REND-14"].
+
+        Asserts:
+        - ``audit_tier_case_ids`` is logged at INFO with the correct ``applied_case_ids`` value.
+        - ``counts["applied_case_ids_total"]`` equals 1.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_top_dir = dest_root / "Composer - Performer" / "Work-A [2020]"
+        work_top_dir.mkdir(parents=True, exist_ok=True)
+        _write_provenance_fields(
+            work_top_dir / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
+                needs_spot_check=False,
+                applied_case_ids=["SEL-11", "REND-14"],
+            ),
+        )
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-1",
+                source="/src/01.flac",
+                destination=str(work_top_dir / "01 - Track.flac"),
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            )
+        ]
+
+        counts = _make_audit_counts()
+        mock_log = mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        info_events = [c.args[0] for c in mock_log.info.call_args_list]
+        assert "audit_tier_case_ids" in info_events
+
+        case_id_calls = [c for c in mock_log.info.call_args_list if c.args[0] == "audit_tier_case_ids"]
+        assert len(case_id_calls) == 1
+        assert case_id_calls[0].kwargs["applied_case_ids"] == ["REND-14", "SEL-11"]
+
+        assert counts["applied_case_ids_total"] == 1
+
+    def test_no_case_id_event_when_applied_case_ids_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_audit_tier_pass does not log audit_tier_case_ids when applied_case_ids is empty.
+
+        Asserts:
+        - ``audit_tier_case_ids`` is NOT logged.
+        - ``counts["applied_case_ids_total"]`` remains 0.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_top_dir = dest_root / "Composer - Performer" / "Work-B [2020]"
+        work_top_dir.mkdir(parents=True, exist_ok=True)
+        _write_provenance_fields(
+            work_top_dir / PROVENANCE_FILENAME,
+            ProvenanceSidecar(
+                origin_time="2024-01-01T00:00:00+00:00",
+                origin_source="/rip/source",
+                annotation_tier=AnnotationTier.FULL_MB_VERIFIED,
+                needs_spot_check=False,
+                applied_case_ids=[],
+            ),
+        )
+
+        journal_entries = [
+            TransactionEntry(
+                timestamp="2024-01-01T00:00:00Z",
+                release_id="rel-2",
+                source="/src/01.flac",
+                destination=str(work_top_dir / "01 - Track.flac"),
+                action="tagged",
+                audio_hash="",
+                acoustid_id="",
+            )
+        ]
+
+        counts = _make_audit_counts()
+        mock_log = mocker.patch("music_annotator._audit.log")
+        _audit_tier_pass(dest_root, journal_entries, counts)
+
+        info_events = [c.args[0] for c in mock_log.info.call_args_list]
+        assert "audit_tier_case_ids" not in info_events
+        assert counts["applied_case_ids_total"] == 0

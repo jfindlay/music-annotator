@@ -67,6 +67,9 @@ _AUDIT_COUNT_KEYS: tuple[str, ...] = (
     "tier_source_only",
     "provisional_total",
     "needs_spot_check",
+    # Applied contested-default case-IDs (C-CASE-PROV): destination files whose work_dir
+    # sidecar carries at least one applied case-ID.
+    "applied_case_ids_total",
 )
 
 
@@ -113,6 +116,8 @@ def _make_audit_counts() -> dict[str, int]:
     * ``tier_source_only`` — destination files whose work_dir sidecar carries ``source-tags-only``.
     * ``provisional_total`` — destination files below ``full-mb-verified`` (all non-full tiers).
     * ``needs_spot_check`` — destination files whose work_dir sidecar has ``needs_spot_check=True``.
+    * ``applied_case_ids_total`` — destination files whose work_dir sidecar carries at least one
+      applied contested-default case-ID (``applied_case_ids`` non-empty).
 
     :returns: A ``dict[str, int]`` with all keys initialised to ``0``.
     """
@@ -286,11 +291,12 @@ def _audit_tier_pass(
     entries: list[TransactionEntry],
     counts: dict[str, int],
 ) -> None:
-    """Pass 4 — tier enumeration: count per-tier, provisional, and spot-check populations.
+    """Pass 4 — tier enumeration: count per-tier, provisional, spot-check, and case-ID populations.
 
-    Reads ``annotation_tier`` and ``needs_spot_check`` from each eligible work directory's
-    provenance sidecar and aggregates counts per destination file.  A work directory's tier
-    applies to all its tracks (sidecar-per-work-dir vs entry-per-file aggregation).
+    Reads ``annotation_tier``, ``needs_spot_check``, and ``applied_case_ids`` from each eligible
+    work directory's provenance sidecar and aggregates counts per destination file.  A work
+    directory's tier and case-IDs apply to all its tracks (sidecar-per-work-dir vs
+    entry-per-file aggregation).
 
     The eligible set is the same as passes 1–3: ``action in {"tagged", "enriched"}``, deduplicated
     by destination path (first occurrence wins).  This keeps the tier denominator consistent with
@@ -307,7 +313,7 @@ def _audit_tier_pass(
     Logs one event per finding:
 
     * ``audit_tier_unset`` — sidecar exists but ``annotation_tier`` is empty (defect state per
-      the lossless principle; S3 write path must always set it).
+      the lossless principle; the write path must always set it).
     * ``audit_tier_full`` — ``full-mb-verified`` (logged at DEBUG; expected clean state).
       Includes ``origin_source`` from the sidecar so an operator can see the identity basis:
       ``"download"`` for ISRC-promoted entries, ``"whipper"`` for TOC-promoted entries, ``""``
@@ -318,6 +324,9 @@ def _audit_tier_pass(
       ``accurately_ripped``, and ``in_ar_database`` counts from the sidecar's
       ``accuraterip_summary``.  This allows a rip that is AccurateRip-verified but only
       search-resolved to be visibly distinguished from one with no AR data.
+    * ``audit_tier_case_ids`` — ``applied_case_ids`` non-empty (logged at INFO), reporting the
+      applied contested-default case-IDs for the work dir.  Increments
+      ``counts["applied_case_ids_total"]``.  Not logged when ``applied_case_ids`` is empty.
 
     :param dest_root: Root of the annotated music library.
     :param entries: All :class:`~music_annotator.models.TransactionEntry` objects from the journal.
@@ -343,12 +352,14 @@ def _audit_tier_pass(
         dest_to_work_top[dest] = _work_top_dir(Path(dest), dest_root)
 
     # Cache sidecar reads per work_top_dir to avoid re-reading for multi-track work dirs.
-    # Tuple: (annotation_tier, needs_spot_check, accuraterip_summary, origin_source) — the AR
-    # summary is attached to the spot-check log event so AR-verified search-resolved entries are
-    # visibly distinguished from those with no AR data (J1 spot-check gate, S5).  origin_source
-    # is included in the audit_tier_full event so an operator can see the identity basis (e.g.
-    # "download" for ISRC-promoted entries, "whipper" for TOC-promoted entries).
-    sidecar_cache: dict[Path, tuple[AnnotationTier | str, bool, AccurateRipSummary, str]] = {}
+    # Tuple: (annotation_tier, needs_spot_check, accuraterip_summary, origin_source,
+    #         applied_case_ids) — the AR summary is attached to the spot-check log event so
+    # AR-verified search-resolved entries are visibly distinguished from those with no AR data.
+    # origin_source is included in the audit_tier_full event so an operator can see the identity
+    # basis (e.g. "download" for ISRC-promoted entries, "whipper" for TOC-promoted entries).
+    # applied_case_ids carries the applied contested-default case-IDs (C-CASE-PROV) for the
+    # audit_tier_case_ids event.
+    sidecar_cache: dict[Path, tuple[AnnotationTier | str, bool, AccurateRipSummary, str, list[str]]] = {}
 
     for dest, work_top_dir in dest_to_work_top.items():
         if work_top_dir not in sidecar_cache:
@@ -361,9 +372,10 @@ def _audit_tier_pass(
                 sidecar.needs_spot_check,
                 sidecar.accuraterip_summary,
                 sidecar.origin_source,
+                sidecar.applied_case_ids,
             )
 
-        tier_raw, spot_check, ar_summary, origin_source = sidecar_cache[work_top_dir]
+        tier_raw, spot_check, ar_summary, origin_source, applied_case_ids = sidecar_cache[work_top_dir]
 
         if not tier_raw:
             log.warning(
@@ -437,6 +449,15 @@ def _audit_tier_pass(
                 accurately_ripped=ar_summary.accurately_ripped,
                 in_ar_database=ar_summary.in_ar_database,
                 message="mb-search-resolved entry awaiting human spot-check",
+            )
+
+        if applied_case_ids:
+            counts["applied_case_ids_total"] += 1
+            log.info(
+                "audit_tier_case_ids",
+                path=dest,
+                applied_case_ids=applied_case_ids,
+                message="work dir has applied contested-default case-IDs recorded in provenance sidecar",
             )
 
 
@@ -650,6 +671,7 @@ def audit(dest_root: Path) -> None:
         tier_source_only=counts["tier_source_only"],
         provisional_total=counts["provisional_total"],
         needs_spot_check=counts["needs_spot_check"],
+        applied_case_ids_total=counts["applied_case_ids_total"],
     )
 
 
