@@ -195,7 +195,7 @@ form — the anneal is the same act):
 
 ## Cross-session contracts
 
-### C-CASE-PROV — applied contested-default case-IDs in the provenance sidecar *(field + merge FROZEN; source set to be frozen at S2)*
+### C-CASE-PROV — applied contested-default case-IDs in the provenance sidecar *(field + merge FROZEN at S1; source set FROZEN at S2)*
 
 **Field + persistence (frozen at S1).**  `ProvenanceSidecar.applied_case_ids: list[str]` (default `[]`) records
 the register case-IDs (`<LAYER>-<n>`, per C-CASE) of the contested-case (P2) neutral defaults that were applied
@@ -207,11 +207,13 @@ incoming empty list never shrinks or erases the recorded set.  This is deliberat
 rule of `annotation_tier` (a set grows; it has no rank).  Serialization is order-normalised (sorted) for
 byte-stable re-writes.  Free-text is never written to tags (5.5): the case-IDs live only in the sidecar.
 
-**Source set (to be frozen at S2).**  Which register cases are "applied" and whether each is run-derived (a
-decision site fired for this release) or structural (always applied for a classical release) is the S2 juncture
-judgment.  Candidate contested-default population: SEL-11, NORM-1, NORM-2, REND-1, REND-2, REND-14 (the P2 /
-"contested by nature" register cases with identifiable application sites).  *This subsection over-specifies the
-source set only after the S2 ruling; until then it is "to be frozen at S2".*
+**Source set (FROZEN at S2).**  Emitted case-IDs and their detection conditions (from `collect_applied_case_ids`
+in `_tags.py`):
+- **SEL-11** (run-derived): `tags.cea_soloist_names` non-empty — soloists identified but not promoted to path.
+- **REND-1** (structural): `tags.composer` non-empty AND `tags.is_classical == "1"` — composer never appended to `ARTIST`.
+- **REND-2** (structural): same condition as REND-1 — composer never prefixed to `ALBUM`.
+- **REND-14** (structural): `tags.cea_soloist_names or tags.conductor or tags.cea_ensembles` non-empty — billing-order composite assembled.
+- **NORM-1, NORM-2**: no clean application site found; not emitted (see D-1).
 
 **Flavour:** compiler-enforced (the Pydantic field type; mypy strict on the merge arm) **+ test-enforced** (the
 S1 set-union KATs: union grows, empty-never-erases, round-trip; the S2 behavioural KATs: right case-IDs per
@@ -242,21 +244,22 @@ S1's tests immediately exercise them.
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 | Add applied_case_ids field and set-union merge to ProvenanceSidecar | done | 856dfec | C-CASE-PROV (field + merge) |
-| 2 | Source and thread applied contested-default case-IDs into the sidecar | pending | — | — |
+| 2 | Source and thread applied contested-default case-IDs into the sidecar | done | 55dd0c6 | C-CASE-PROV (source set: SEL-11 run-derived; REND-1/REND-2/REND-14 structural; NORM-1/NORM-2 no clean site) |
 | 3 ◆ | Surface applied case-IDs in the audit tier pass | pending | — | — |
 
 ## Action-frame digest
 
-*(none yet)*
+### S2 — 2026-08-09
+Discovery/flex: Source set narrowed — NORM-1 and NORM-2 have no clean application site in the pipeline; emitted set is {SEL-11, REND-1, REND-2, REND-14}.
+Affected: C-CASE-PROV source set (was "to be frozen at S2"; now frozen with narrower set)
+Deferred: no — S3 reads whatever is in applied_case_ids; narrower set does not affect the audit surface contract.
+Texture: Plan's D-1 anticipated this exact scenario; internal-continue verdict. No downstream contract broken.
 
 ## Discoveries & risks
 
-- **D-1 (S2 source-set judgment — the run-derived vs structural line).**  The contested-default population and
-  the per-case run-derived/structural classification is the S2 juncture judgment; a wrong set is a
-  *prose*-contract error, not a compiler one.  If S2 finds a candidate case (SEL-11/NORM-1/NORM-2/REND-1/2/14)
-  has **no clean application site** — e.g. the default is applied implicitly with no branch to instrument —
-  that is an **additive-reshard** signal (the source set is narrower than the survey implied); surface it, do
-  not manufacture a synthetic site.
+- **D-1 (S2 source-set judgment — RESOLVED).**  NORM-1 and NORM-2 have no clean application site in the
+  pipeline (no ensemble-specific credited-vs-canonical branch; no name-form selection logic). Source set frozen
+  as {SEL-11 run-derived; REND-1/REND-2/REND-14 structural}. Internal-continue — S3 unaffected.
 - **D-2 (composite-tag-grammar shard provisionally discharged).**  The substrate survey found ARTIST/ALBUMARTIST
   already render verbatim MB credits with no author-splicing (REND-1/4.3 satisfied) and CEA composites already
   correctly separated (C-RA-GRAMMAR) — no un-enacted grammar work without an operator-named target.  Folded to
