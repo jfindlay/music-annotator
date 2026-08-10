@@ -245,7 +245,7 @@ S1's tests immediately exercise them.
 |---|---------|--------|--------|-------|
 | 1 | Add applied_case_ids field and set-union merge to ProvenanceSidecar | done | 856dfec | C-CASE-PROV (field + merge) |
 | 2 | Source and thread applied contested-default case-IDs into the sidecar | done | 55dd0c6 | C-CASE-PROV (source set: SEL-11 run-derived; REND-1/REND-2/REND-14 structural; NORM-1/NORM-2 no clean site) |
-| 3 ◆ | Surface applied case-IDs in the audit tier pass | pending | — | — |
+| 3 ◆ | Surface applied case-IDs in the audit tier pass | done | a3a9e0c+441bddb | C-CASE-PROV audit surface; ◆ still-on-intent |
 
 ## Action-frame digest
 
@@ -254,6 +254,12 @@ Discovery/flex: Source set narrowed — NORM-1 and NORM-2 have no clean applicat
 Affected: C-CASE-PROV source set (was "to be frozen at S2"; now frozen with narrower set)
 Deferred: no — S3 reads whatever is in applied_case_ids; narrower set does not affect the audit surface contract.
 Texture: Plan's D-1 anticipated this exact scenario; internal-continue verdict. No downstream contract broken.
+
+### S3 ◆ — 2026-08-10
+Discovery/flex: Anneal gate found one residual plan coordinate in _audit.py:384 runtime message ("S3 write path"); fixed before ledger-done.
+Affected: none (cosmetic anneal fix; no contract change)
+Deferred: no — fixed in commit 441bddb.
+Texture: Boundary fork returned still-on-intent; all three sessions enacted, C-CASE-PROV fully frozen, sub-track complete.
 
 ## Discoveries & risks
 
