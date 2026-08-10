@@ -1023,6 +1023,68 @@ def build_track_tags(
     return tags
 
 
+def collect_applied_case_ids(tags: TrackTags) -> list[str]:
+    """Return the contested-default case-IDs that were applied for this track.
+
+    Inspects the fully-populated :class:`~music_annotator.models.TrackTags` to determine which
+    contested-case (P2) neutral defaults were applied during tag assembly.  Each case-ID is
+    emitted only when there is a clean, identifiable decision site — a condition that is True
+    when the default was applied and False when it was not.
+
+    Applied case-IDs and their detection conditions:
+
+    - **SEL-11** (soloist not promoted to path): fires when soloists were identified
+      (``cea_soloist_names`` non-empty) but are not included in the destination path.  The path
+      uses only conductors and ensembles; soloists are captured in tags only.  Run-derived: fires
+      per release with named soloists (e.g. concerto releases).
+
+    - **REND-1** (composer not appended to ``ARTIST``): fires when a composer is linked
+      (``composer`` non-empty) on a classical release (``is_classical == "1"``).  The ``ARTIST``
+      tag carries the verbatim MB recording credit; the composer is kept in ``COMPOSER`` only.
+      Structural: always applied for classical releases with a composer.
+
+    - **REND-2** (composer not prefixed to ``ALBUM``): fires under the same condition as REND-1.
+      The ``ALBUM`` tag carries the verbatim MB release title; the composer is not prepended.
+      Structural: always applied for classical releases with a composer.
+
+    - **REND-14** (billing-order composite): fires when the ``CEA_RECORDING_ARTIST`` composite
+      was assembled from classified performers (soloists → conductors → ensembles) rather than
+      falling back to the raw MB recording credit.  Structural: always applied when at least one
+      performer is classified.
+
+    Candidates with no clean application site (discoveries — not emitted):
+
+    - **NORM-1** (historical ensemble rename): no ensemble-specific credited-vs-canonical branch
+      exists; the general ``cea_performers_credited`` field captures all credited-as differences
+      without discriminating ensembles.
+    - **NORM-2** (native/Latin reception form): no name-form selection logic exists; MB canonical
+      names are used verbatim throughout.
+
+    :param tags: The fully-populated :class:`~music_annotator.models.TrackTags` for this track.
+    :returns: A list of register case-ID strings for the defaults that were applied.
+    """
+    case_ids: list[str] = []
+
+    # SEL-11: soloists identified but not promoted to destination path.
+    # The path uses only conductors and ensembles; soloists are captured in tags only.
+    if tags.cea_soloist_names:
+        case_ids.append("SEL-11")
+
+    # REND-1 and REND-2: composer not appended to ARTIST / not prefixed to ALBUM.
+    # Both fire together: the same decision (keep ARTIST and ALBUM verbatim) applies both defaults.
+    if tags.composer and tags.is_classical == "1":
+        case_ids.append("REND-1")
+        case_ids.append("REND-2")
+
+    # REND-14: billing-order composite (soloists → conductors → ensembles) was assembled.
+    # Fires when at least one performer was classified; the composite is then the authoritative
+    # CEA_RECORDING_ARTIST rather than the raw MB recording credit.
+    if tags.cea_soloist_names or tags.conductor or tags.cea_ensembles:
+        case_ids.append("REND-14")
+
+    return case_ids
+
+
 def build_dest_path(  # pylint: disable=unused-argument  # release kept for API stability; C-INIT removed the last internal use
     dest_root: Path, release: MBRelease, track: MBTrack, tags: TrackTags, global_track_idx: int = 0
 ) -> Path:

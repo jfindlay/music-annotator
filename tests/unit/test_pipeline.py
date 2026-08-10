@@ -85,7 +85,7 @@ from music_annotator._pipeline_io import (
     rebuild_journal,
 )
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
-from music_annotator._tags import _work_top_dir
+from music_annotator._tags import _work_top_dir, collect_applied_case_ids
 from music_annotator.models import (
     JSON,
     AccurateRipResult,
@@ -12245,3 +12245,406 @@ Conclusive status report:
         assert "not_a_number" not in str(tracks)
         assert 1 in tracks
         assert tracks[1].v1.result is AccurateRipResult.EXACT_MATCH
+
+
+# ---------------------------------------------------------------------------
+# collect_applied_case_ids — unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestCollectAppliedCaseIds:
+    """Unit tests for :func:`music_annotator._tags.collect_applied_case_ids`.
+
+    Verifies that each contested-default case-ID is emitted exactly when its decision site fires
+    and not emitted when it does not.
+    """
+
+    def test_sel11_emitted_when_soloists_present(self) -> None:
+        """SEL-11 is emitted when cea_soloist_names is non-empty (soloists identified but not in path).
+
+        :returns: None.
+        """
+        tags = TrackTags(cea_soloist_names="Hilary Hahn")
+        result = collect_applied_case_ids(tags)
+        assert "SEL-11" in result
+
+    def test_sel11_absent_when_no_soloists(self) -> None:
+        """SEL-11 is absent when cea_soloist_names is empty (no soloists identified).
+
+        :returns: None.
+        """
+        tags = TrackTags(cea_soloist_names="")
+        result = collect_applied_case_ids(tags)
+        assert "SEL-11" not in result
+
+    def test_rend1_rend2_emitted_when_composer_and_classical(self) -> None:
+        """REND-1 and REND-2 are emitted when composer is non-empty and is_classical is '1'.
+
+        :returns: None.
+        """
+        tags = TrackTags(composer="Beethoven", is_classical="1")
+        result = collect_applied_case_ids(tags)
+        assert "REND-1" in result
+        assert "REND-2" in result
+
+    def test_rend1_rend2_absent_when_no_composer(self) -> None:
+        """REND-1 and REND-2 are absent when composer is empty.
+
+        :returns: None.
+        """
+        tags = TrackTags(composer="", is_classical="1")
+        result = collect_applied_case_ids(tags)
+        assert "REND-1" not in result
+        assert "REND-2" not in result
+
+    def test_rend1_rend2_absent_when_not_classical(self) -> None:
+        """REND-1 and REND-2 are absent when is_classical is '0' (non-classical release).
+
+        :returns: None.
+        """
+        tags = TrackTags(composer="Beethoven", is_classical="0")
+        result = collect_applied_case_ids(tags)
+        assert "REND-1" not in result
+        assert "REND-2" not in result
+
+    def test_rend14_emitted_when_conductor_present(self) -> None:
+        """REND-14 is emitted when conductor is non-empty (billing-order composite assembled).
+
+        :returns: None.
+        """
+        tags = TrackTags(conductor="Karajan")
+        result = collect_applied_case_ids(tags)
+        assert "REND-14" in result
+
+    def test_rend14_emitted_when_ensemble_present(self) -> None:
+        """REND-14 is emitted when cea_ensembles is non-empty (billing-order composite assembled).
+
+        :returns: None.
+        """
+        tags = TrackTags(cea_ensembles="Berliner Philharmoniker")
+        result = collect_applied_case_ids(tags)
+        assert "REND-14" in result
+
+    def test_rend14_emitted_when_soloist_present(self) -> None:
+        """REND-14 is emitted when cea_soloist_names is non-empty (billing-order composite assembled).
+
+        :returns: None.
+        """
+        tags = TrackTags(cea_soloist_names="Hilary Hahn")
+        result = collect_applied_case_ids(tags)
+        assert "REND-14" in result
+
+    def test_rend14_absent_when_no_performers(self) -> None:
+        """REND-14 is absent when no performers are classified (no soloists, conductor, or ensemble).
+
+        :returns: None.
+        """
+        tags = TrackTags(cea_soloist_names="", conductor="", cea_ensembles="")
+        result = collect_applied_case_ids(tags)
+        assert "REND-14" not in result
+
+    def test_empty_tags_returns_empty_list(self) -> None:
+        """An empty TrackTags (no performers, no composer) returns an empty case-ID list.
+
+        :returns: None.
+        """
+        tags = TrackTags()
+        result = collect_applied_case_ids(tags)
+        assert result == []
+
+    def test_all_structural_cases_for_classical_with_conductor(self) -> None:
+        """A classical release with composer and conductor emits REND-1, REND-2, and REND-14.
+
+        :returns: None.
+        """
+        tags = TrackTags(composer="Beethoven", is_classical="1", conductor="Karajan")
+        result = collect_applied_case_ids(tags)
+        assert "REND-1" in result
+        assert "REND-2" in result
+        assert "REND-14" in result
+        assert "SEL-11" not in result
+
+    def test_concerto_case_emits_sel11_and_structural(self) -> None:
+        """A concerto release with soloist, composer, and conductor emits SEL-11 plus structural cases.
+
+        :returns: None.
+        """
+        tags = TrackTags(
+            composer="Beethoven",
+            is_classical="1",
+            conductor="Karajan",
+            cea_soloist_names="Hilary Hahn",
+        )
+        result = collect_applied_case_ids(tags)
+        assert "SEL-11" in result
+        assert "REND-1" in result
+        assert "REND-2" in result
+        assert "REND-14" in result
+
+
+# ---------------------------------------------------------------------------
+# KAT: applied_case_ids threaded to provenance sidecar via run()
+# ---------------------------------------------------------------------------
+
+
+class TestAppliedCaseIdsInSidecar:
+    """KAT: applied contested-default case-IDs are written to the provenance sidecar by run().
+
+    Verifies the end-to-end threading from decision sites in build_track_tags / collect_applied_case_ids
+    through the pipeline accumulator to ProvenanceSidecar.applied_case_ids in the on-disk sidecar.
+
+    Three shapes are tested:
+    - Concerto release with a named soloist: SEL-11 present.
+    - Plain single-composer classical release (no soloists): SEL-11 absent; structural cases present.
+    - Multi-track work dir: case-IDs from all tracks are unioned into the sidecar.
+    """
+
+    def _patch_mb_base(self, mocker: MockerFixture, release: MBRelease) -> None:
+        """Patch MB API infrastructure (useragent, release, cover art, acoustid, fpcalc, verify).
+
+        :param mocker: pytest-mock fixture.
+        :param release: MBRelease model to return from fetch_release.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+    def _make_classical_work(self, work_id: str, title: str, composer_id: str, composer_name: str) -> MBWork:
+        """Build a minimal classical work with a composer relation.
+
+        :param work_id: MBID for the work.
+        :param title: Work title.
+        :param composer_id: MBID for the composer artist.
+        :param composer_name: Display name for the composer artist.
+        :returns: An :class:`~music_annotator.models.MBWork` instance.
+        """
+        return _w(
+            {
+                "id": work_id,
+                "title": title,
+                "type": "Classical",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": composer_id, "name": composer_name, "sort-name": f"{composer_name}, Ludwig"},
+                        "attribute-list": [],
+                    }
+                ],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+    def test_concerto_release_sidecar_contains_sel11(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """A concerto release with a named soloist writes SEL-11 to the provenance sidecar.
+
+        The soloist is identified in build_cea_performers (goes to instrumentalists) and
+        collect_applied_case_ids emits SEL-11 because cea_soloist_names is non-empty.
+        The pipeline accumulator threads this to ProvenanceSidecar.applied_case_ids.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb_base(mocker, release)
+
+        work = self._make_classical_work("w-concerto", "Violin Concerto", "a-beethoven", "Beethoven")
+
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "Allegro",
+                    "artist-credit": [],
+                    "artist-relation-list": [
+                        {
+                            "type": "performer",
+                            "direction": "backward",
+                            "artist": {"id": "a-hahn", "name": "Hilary Hahn", "sort-name": "Hahn, Hilary"},
+                            "attribute-list": [{"type": "instrument", "value": "violin"}],
+                        },
+                        {
+                            "type": "conductor",
+                            "direction": "backward",
+                            "artist": {"id": "a-karajan", "name": "Karajan", "sort-name": "Karajan, Herbert von"},
+                            "attribute-list": [],
+                        },
+                    ],
+                    "work-relation-list": [{"type": "performance", "work": {"id": "w-concerto", "title": "Violin Concerto"}}],
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=work)
+        mocker.patch("music_annotator._works.fetch_work_detail", return_value=work)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        flac_files = list(dest.rglob("*.flac"))
+        assert flac_files, "Expected at least one FLAC in dest"
+        work_top = _work_top_dir(Path(flac_files[0]), dest)
+        prov_path = work_top / PROVENANCE_FILENAME
+        result = _read_provenance_sidecar(prov_path)
+        assert "SEL-11" in result.applied_case_ids, (
+            f"Expected SEL-11 in applied_case_ids for concerto release; got {result.applied_case_ids}"
+        )
+
+    def test_plain_classical_release_no_sel11(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """A plain single-composer classical release (no soloists) has SEL-11 absent.
+
+        The structural cases REND-1 and REND-2 are present (composer identified, classical release).
+        REND-14 is present (conductor classified).  SEL-11 is absent (no soloists).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=1)
+        self._patch_mb_base(mocker, release)
+
+        work = self._make_classical_work("w-symphony", "Symphony No. 5", "a-beethoven", "Beethoven")
+
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "Allegro con brio",
+                    "artist-credit": [],
+                    "artist-relation-list": [
+                        {
+                            "type": "conductor",
+                            "direction": "backward",
+                            "artist": {"id": "a-karajan", "name": "Karajan", "sort-name": "Karajan, Herbert von"},
+                            "attribute-list": [],
+                        },
+                    ],
+                    "work-relation-list": [{"type": "performance", "work": {"id": "w-symphony", "title": "Symphony No. 5"}}],
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=work)
+        mocker.patch("music_annotator._works.fetch_work_detail", return_value=work)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        flac_files = list(dest.rglob("*.flac"))
+        assert flac_files, "Expected at least one FLAC in dest"
+        work_top = _work_top_dir(Path(flac_files[0]), dest)
+        prov_path = work_top / PROVENANCE_FILENAME
+        result = _read_provenance_sidecar(prov_path)
+        assert "SEL-11" not in result.applied_case_ids, (
+            f"SEL-11 must be absent for a plain classical release without soloists; got {result.applied_case_ids}"
+        )
+        assert "REND-1" in result.applied_case_ids, (
+            f"Expected REND-1 in applied_case_ids for classical release with composer; got {result.applied_case_ids}"
+        )
+        assert "REND-2" in result.applied_case_ids, (
+            f"Expected REND-2 in applied_case_ids for classical release with composer; got {result.applied_case_ids}"
+        )
+        assert "REND-14" in result.applied_case_ids, (
+            f"Expected REND-14 in applied_case_ids for classical release with conductor; got {result.applied_case_ids}"
+        )
+
+    def test_multi_track_work_dir_unions_case_ids_across_tracks(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Case-IDs from all tracks in a work dir are unioned into the sidecar.
+
+        Two tracks share the same work dir.  The first track has a soloist (SEL-11); the second
+        does not.  The sidecar must carry SEL-11 (from the first track) after both are processed,
+        demonstrating that the set-union merge captures contributions from all tracks.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        self._patch_mb_base(mocker, release)
+
+        work = self._make_classical_work("w-concerto", "Violin Concerto", "a-beethoven", "Beethoven")
+
+        call_count = [0]
+
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
+            call_count[0] += 1
+            # Track 1: has a soloist (SEL-11 fires); track 2: conductor only (SEL-11 does not fire).
+            conductor_rel: JSON = {
+                "type": "conductor",
+                "direction": "backward",
+                "artist": {"id": "a-karajan", "name": "Karajan", "sort-name": "Karajan, Herbert von"},
+                "attribute-list": [],
+            }
+            soloist_rel: JSON = {
+                "type": "performer",
+                "direction": "backward",
+                "artist": {"id": "a-hahn", "name": "Hilary Hahn", "sort-name": "Hahn, Hilary"},
+                "attribute-list": [{"type": "instrument", "value": "violin"}],
+            }
+            artist_rels: list[JSON] = [conductor_rel] if call_count[0] != 1 else [conductor_rel, soloist_rel]
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "Movement",
+                    "artist-credit": [],
+                    "artist-relation-list": artist_rels,
+                    "work-relation-list": [{"type": "performance", "work": {"id": "w-concerto", "title": "Violin Concerto"}}],
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=work)
+        mocker.patch("music_annotator._works.fetch_work_detail", return_value=work)
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        flac_files = list(dest.rglob("*.flac"))
+        assert flac_files, "Expected at least one FLAC in dest"
+        work_top = _work_top_dir(Path(flac_files[0]), dest)
+        prov_path = work_top / PROVENANCE_FILENAME
+        result = _read_provenance_sidecar(prov_path)
+        # SEL-11 was applied on track 1; the set-union merge must carry it to the sidecar.
+        assert "SEL-11" in result.applied_case_ids, (
+            f"Expected SEL-11 in applied_case_ids after multi-track union; got {result.applied_case_ids}"
+        )

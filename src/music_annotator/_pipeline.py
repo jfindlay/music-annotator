@@ -69,6 +69,7 @@ from music_annotator._tags import (
     _work_top_dir,
     build_dest_path,
     build_track_tags,
+    collect_applied_case_ids,
 )
 from music_annotator._works import build_work_hierarchy, select_primary_performance_work
 from music_annotator.models import (
@@ -1095,10 +1096,13 @@ def _copy_tag_verify_journal_pass(
     9. Restore source timestamps via ``os.utime``.
     10. Verify the copy via :func:`~music_annotator._pipeline_io._verify_copy` — raise
         :exc:`RuntimeError` on any mismatch.
-    11. Write the annotation tier and AccurateRip summary to the provenance sidecar (once per
-        work directory).
-    12. Write sidecar cover-art files, the FreeDB YAML, and whipper sidecars (once per work dir).
-    13. Append a ``"tagged"`` :class:`~music_annotator.models.TransactionEntry` to the result list.
+    11. Accumulate applied contested-default case-IDs for this track into the per-work-dir set.
+    12. Write the annotation tier, AccurateRip summary, and applied case-IDs to the provenance
+        sidecar.  The annotation tier and AccurateRip summary are written once per work directory;
+        applied case-IDs are written on every track using the set-union merge so all tracks'
+        contributions are captured.
+    13. Write sidecar cover-art files, the FreeDB YAML, and whipper sidecars (once per work dir).
+    14. Append a ``"tagged"`` :class:`~music_annotator.models.TransactionEntry` to the result list.
 
     Dry-run and skip-dest entries are handled before step 1 and produce ``"dry_run"`` or
     ``"skipped"`` journal entries respectively.
@@ -1138,6 +1142,10 @@ def _copy_tag_verify_journal_pass(
     freedb_written: set[Path] = set()
     whipper_sidecars_written: set[Path] = set()
     tier_written: set[Path] = set()
+    # Accumulates the union of applied contested-default case-IDs across all tracks in each work
+    # directory.  Keyed on work_top_dir, parallel to tier_written.  Written to the provenance
+    # sidecar at the same gated site as annotation_tier (after _verify_copy, before journal append).
+    case_ids_accumulated: dict[Path, set[str]] = {}
     now = datetime.datetime.now(datetime.UTC).isoformat()
     annotation_tier, needs_spot_check = classify_annotation_tier(census_signal)
     _ar_tracks: dict[int, AccurateRipTrack] = ar_tracks if ar_tracks is not None else {}
@@ -1318,25 +1326,38 @@ def _copy_tag_verify_journal_pass(
         _write_freedb_yaml(src_dir, work_top_dir, medium_pos, freedb_written, journal_entries, now, release_id)
         _write_whipper_sidecars(src_dir, work_top_dir, whipper_sidecars_written, journal_entries, now, release_id)
 
-        # Step 5.5 (C-PROV invariant): write annotation_tier and AccurateRip summary to the
-        # provenance sidecar after _verify_copy succeeds and before journal_entries.append.
+        # Accumulate applied contested-default case-IDs for this track into the per-work-dir set.
+        # Done after _verify_copy so the accumulation is gated on successful verification (C-PROV).
+        _track_case_ids = collect_applied_case_ids(final_tags)
+        case_ids_accumulated.setdefault(work_top_dir, set()).update(_track_case_ids)
+
+        # C-PROV invariant: write annotation_tier, AccurateRip summary, and applied case-IDs to
+        # the provenance sidecar after _verify_copy succeeds and before journal_entries.append.
         # Runs after _write_freedb_yaml so that the tier is merged into the freedb sidecar when
-        # one exists, consistent with the enrich_origin_time convention.  Once per work directory.
+        # one exists, consistent with the enrich_origin_time convention.
         # AccurateRip summary monotonic-upgrade rule: an incoming empty summary must not overwrite
         # a populated one (C-AR).
+        # Applied case-IDs set-union rule: the accumulated set for this work dir is passed on the
+        # first track; subsequent tracks in the same work dir call _write_provenance_fields again
+        # with only the new case-IDs so the set-union merge captures all tracks' contributions.
+        _sidecar_path = _find_freedb_sidecar(work_top_dir)
+        if _sidecar_path is None:
+            _sidecar_path = work_top_dir / PROVENANCE_FILENAME
         if work_top_dir not in tier_written:
             tier_written.add(work_top_dir)
-            _sidecar_path = _find_freedb_sidecar(work_top_dir)
-            if _sidecar_path is None:
-                _sidecar_path = work_top_dir / PROVENANCE_FILENAME
             # Apply monotonic-upgrade rule for accuraterip_summary: only write when the incoming
             # summary is populated (log_sha256 non-empty) or no existing summary is present.
-            _prov_to_write = ProvenanceSidecar(annotation_tier=annotation_tier, needs_spot_check=needs_spot_check)
+            _prov_to_write = ProvenanceSidecar(
+                annotation_tier=annotation_tier,
+                needs_spot_check=needs_spot_check,
+                applied_case_ids=sorted(case_ids_accumulated.get(work_top_dir, set())),
+            )
             if _ar_summary.log_sha256:
                 _prov_to_write = ProvenanceSidecar(
                     annotation_tier=annotation_tier,
                     needs_spot_check=needs_spot_check,
                     accuraterip_summary=_ar_summary,
+                    applied_case_ids=sorted(case_ids_accumulated.get(work_top_dir, set())),
                 )
             _write_provenance_fields(
                 _sidecar_path,
@@ -1347,6 +1368,13 @@ def _copy_tag_verify_journal_pass(
                 tier=str(annotation_tier),
                 needs_spot_check=needs_spot_check,
                 sidecar=str(_sidecar_path.relative_to(dest_root)),
+            )
+        elif _track_case_ids:
+            # Subsequent track in the same work dir: write only the new case-IDs so the
+            # set-union merge in _write_provenance_fields captures all tracks' contributions.
+            _write_provenance_fields(
+                _sidecar_path,
+                ProvenanceSidecar(applied_case_ids=_track_case_ids),
             )
 
         journal_entries.append(
