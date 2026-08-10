@@ -1,318 +1,313 @@
 <!-- juncture-tier: opus -->
-<!-- sub-track: A-shards (post-v1 styleguide application) — the four tag/path-grammar code changes that STYLEGUIDE v1
-     (layer 4) mandates against the enacted code.  Lives under ROADMAP R6d (library-completion arc) as an R6-planning
-     input; lands AHEAD of R6d so the one-pass re-derivation runs already-corrected code.  This IS a /plan-run target
-     (unlike the interactive V1b PLAN it replaces): the four shards are mechanical code+test changes verifiable by the
-     src/tests gate with zero library access. -->
+<!-- sub-track: sidecar-case-ids (post-v1 styleguide application) — rule 5.5 case-ID persistence on
+     ProvenanceSidecar.  Records which contested-case (P2) neutral defaults were applied per release, so the
+     applied editorial rulings survive in the provenance sidecar (claim-in-the-unit, prose-in-STYLEGUIDE).
+     SIDECAR-ONLY: no persisted-tag or path change, so NO R6d coupling and no library-wide repath (distinct
+     from the other two remaining node-A shards).  This IS a /plan-run target: mechanical model+pipeline+audit
+     changes verifiable by the src/tests gate with zero library access. -->
 
-# PLAN — A-shards: post-v1 styleguide application (four tag/path-grammar changes)
+# PLAN — sidecar-case-ids: rule-5.5 applied-case-ID persistence on ProvenanceSidecar
 
 ## Purpose (design intent)
 
 *(Re-read at every ◆ boundary — anti-defocus anchor.)*
 
-STYLEGUIDE v1 froze the editorial rendering rules (layer 4) that the enacted code predates.  Four rulings diverge from
-what the code does; each is a persisted-tag or path-grammar change that R6d's one-pass re-derivation will bake into the
-whole library, so they must land *before* R6d re-derives.  This sub-track makes the code match the frozen styleguide —
-no new editorial decisions are taken here; every change cites a v1 ruling as its authority.  The unifying principle is
-**one attribution model, many projections** (STYLEGUIDE P1): every composite tag and the path component must be a
-declared grammar over the one model, in the model's billing order, under a name that means what CE means by it.
+STYLEGUIDE rule 5.5 (contested-case marking): where releases or editors legitimately disagree and the
+styleguide has chosen a neutral default (P2), *applying that default is itself an annotation-on-the-annotation*
+— "implementations that maintain per-release provenance sidecars record the applied case-IDs there: claim in
+the unit, prose in this document, nothing free-text in tags."  The code already maintains a provenance sidecar
+(`ProvenanceSidecar`, C-TIER/C-AR) but records no case-IDs.  This sub-track closes that gap: it persists the
+run-derived set of contested-default case-IDs that were *actually applied* for each release into the sidecar,
+under the same C-PROV write-provenance discipline as `annotation_tier`.
 
-The four changes, in landing order:
+No new editorial decisions are taken — the case-IDs are the *already-frozen* v1 rulings; this records which of
+them bit for a given release.  The unifying principle is **the epistemic register** (STYLEGUIDE P3, layer 5):
+every applied neutral default is a claim whose basis survives with the annotated unit, at zero side-channel
+cost, without defacing any compact surface (5.3's ceiling carve-out → 5.5's sidecar mechanism).
 
-1. **S1 — Concerto-gate deletion (SEL-11 overturned).**  The soloist is never in the path, however principal
-   (STYLEGUIDE 4.5, SEL-11).  Delete the concerto-soloist path injection *and its now-dead plumbing* (the `run()`
-   soloist-union pass, the `cea_album_soloists_unified` field, the `_pipeline_maint` reader).  Contract-sharp: freezes
-   **C-NOSOLO** ("no soloist ever enters the path component").
-2. **S2 — REND-14 reorder + naming realignment.**  Reorder the recording-artist composite to billing order
-   (soloists → conductors → ensembles; STYLEGUIDE 4.2), and resolve the standing-rule-2 naming-drift hazard: the enacted
-   composite carries *assembled* semantics under `CEA_RECORDING_ARTIST`, a CE variable whose CE meaning is the
-   *verbatim* recording credit.  Freezes **C-RA-GRAMMAR**.
-3. **S3 — chorusmaster-into-CONDUCTOR.**  `CONDUCTOR` also carries the annotated chorusmaster credit
-   ("Name (choirmaster)"; STYLEGUIDE 4.4, SEL-3 credit-routing half, REND-3 vocabulary).  The separate `CHORUSMASTER`
-   tag is retained; this is additive routing, not a move.
-4. **S4 ◆ — IS_CLASSICAL conditionalisation (REND-21).**  Make `IS_CLASSICAL` reflect the actual `_top_level_class`
-   result instead of the hardcoded `"1"`.  Currently latent (only classical releases reach `build_track_tags`); make it
-   correct now so R6d can never surface it.
+The three sessions, in landing order:
+
+1. **S1 — Model + merge substrate.**  Add `applied_case_ids: list[str]` to `ProvenanceSidecar` and a
+   **set-union monotonic-append** merge arm in `_write_provenance_fields` (case-IDs accumulate across
+   re-annotations; an incoming empty list never erases the recorded set).  Freezes **C-CASE-PROV**.
+2. **S2 — Source + thread the applied set.**  Derive the run-scoped set of contested-default (P2) case-IDs
+   actually applied for a release, accumulate them per work directory, and thread them to the C-PROV write
+   site.  Consumes C-CASE-PROV.
+3. **S3 ◆ — Audit surface + register anneal.**  Enumerate `applied_case_ids` in the `audit` tier pass
+   (parallel to `annotation_tier`/`needs_spot_check`); close the sub-track; anneal the planning register.
 
 ## Verify gate
 
-Discovered from `pyproject.toml` (tox envs); do not assume `make`.  Both are **binding** — this is a code sub-track.
+Discovered from `pyproject.toml` (tox envs); do not assume `make`.  Both are **binding** — this is a code
+sub-track.  (Confirmed green at shard time: 1661 tests, 100.00% branch coverage.)
 
 - **VERIFY_TEST**: `~/.local/bin/tox -e test` (`pytest tests/`; **100% branch coverage enforced**, `fail_under = 100`).
 - **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` (`mypy src/ tests/`, strict).
-- Full gate before declaring any row done: `~/.local/bin/tox -m analyze` (build + test + check_type + check_format +
-  check_lint 10.00/10 + check_upgrade).  The `AGENTS.md` "never skip `tox -m analyze`" rule applies to every row.
+- Full gate before declaring any row done: `~/.local/bin/tox -m analyze` (build + test + check_type + check_format
+  + check_lint 10.00/10 + check_upgrade).  The `AGENTS.md` "never skip `tox -m analyze`" rule applies to every row.
 
 ## Session list
 
 | # | Session | Cat | Tier | Consumes | Expected files |
 |---|---------|-----|------|----------|----------------|
-| 1 | Delete the concerto-soloist path injection and its dead plumbing (SEL-11) | A | Opus | STYLEGUIDE 4.5/SEL-11, C-S0 | `src/music_annotator/_tags.py`, `src/music_annotator/_pipeline.py`, `src/music_annotator/models.py`, `src/music_annotator/_pipeline_maint.py`, `tests/unit/test_annotator.py`, `tests/integration/test_integration.py` |
-| 2 | Reorder CEA recording-artist to billing order and realign composite naming (REND-14) | B | Opus | **C-NOSOLO**, STYLEGUIDE 4.2/4.4, standing rule 2 | `src/music_annotator/_tags.py`, `src/music_annotator/_tagger.py`, `src/music_annotator/models.py`, `tests/unit/test_pipeline.py` |
-| 3 | Route the chorusmaster credit into CONDUCTOR (REND-3/SEL-3) | B | Sonnet | **C-RA-GRAMMAR**, STYLEGUIDE 4.4/SEL-3 | `src/music_annotator/_tags.py`, `tests/unit/test_pipeline.py` |
-| 4 ◆ | Conditionalise IS_CLASSICAL on top-level class (REND-21) | A | Sonnet | STYLEGUIDE 4.7/REND-21, C-CLASS | `src/music_annotator/_tags.py`, `src/music_annotator/models.py`, `tests/unit/test_pipeline.py`, `tests/unit/test_models.py` |
+| 1 | Add applied_case_ids field and set-union merge to ProvenanceSidecar | A | Opus | C-TIER, C-AR, C-PROV | `src/music_annotator/models.py`, `src/music_annotator/_pipeline_io.py`, `tests/unit/test_models.py`, `tests/unit/test_pipeline.py` |
+| 2 | Source and thread applied contested-default case-IDs into the sidecar | B | Opus | **C-CASE-PROV**, C-PROV, STYLEGUIDE 5.5/P2 | `src/music_annotator/_tags.py`, `src/music_annotator/_pipeline.py`, `src/music_annotator/models.py`, `tests/unit/test_pipeline.py` |
+| 3 ◆ | Surface applied case-IDs in the audit tier pass | I | Sonnet | **C-CASE-PROV**, C-TIER | `src/music_annotator/_audit.py`, `tests/unit/test_audit.py` |
 
-`Cat`: **S1 is A (substrate)** — it *removes* a path-grammar surface and freezes C-NOSOLO, the invariant every later
-path change and R6d assume; treat as substrate, over-specify the "no soloist anywhere" property.  **S2 is B** — it
-reshapes an existing composite (order + name).  **S3 is B** — additive credit routing into an existing tag.  **S4 is A**
-— it conditionalises a persisted flag on the C-CLASS substrate (a class-scheme consumer), the sub-track's clean closer.
-`Tier`: **S1 and S2 are Opus** — S1's deletion has real blast radius across four source files plus the C-S0 aggregation
-pass, and getting "dead" wrong leaves orphan machinery under the 100%-coverage gate; S2 carries the standing-rule-2
-naming decision, a same-name-different-semantics judgment a test cannot fully catch.  **S3 and S4 are Sonnet** —
-mechanical, single-surface, one clear ruling each; the strong inner loop (lever 5) covers them.  The ◆ on S4 closes the
-sub-track and reports the corrected grammar as an R6-planning input to R6d (ROADMAP).
+`Cat`: **S1 is A (substrate)** — it adds the persisted field + merge contract that S2/S3 and every future
+sidecar reader assume; over-specify the merge semantics (set-union, append-only, empty-never-erases).  **S2 is
+B** — it derives and threads a new per-release datum through the render/pipeline path.  **S3 is I
+(integrative)** — it gives the contract its public/operator-visible form (the audit surface is "where the
+contract becomes visible"), closes the ◆, and carries the register anneal.
+`Tier`: **S1 and S2 are Opus.** S1 freezes a durable contract that sidecars persist on disk — a mis-freeze
+(wrong field name, wrong merge semantics) is costly to revise after real sidecars carry it (lever 3, cost of a
+design error).  S2 carries the *sourcing-model judgment* — which cases count as "applied," where the decision
+sites are, and how to instrument them under the 100%-coverage gate without minting dead branches (lever 3 +
+lever 1, ambient match/case coverage complexity).  **S3 is Sonnet** — a mechanical mirror of the existing
+`_audit_tier_pass`; one clear surface, strong inner loop (lever 5) covers it.  `juncture-tier: opus` — kept
+despite the sidecar-only / no-R6d-coupling posture, because the C-CASE-PROV freeze is durable and S2's
+sourcing model is a judgment tests cannot fully catch.
 
 **Sizing (levers named).**  Default band ~150–400 LOC / 2–4 files.
-- **S1 ≈ 150–250 LOC, up to 6 files** (mostly deletions + test adjustments).  **Lever 2 (the floor) forbids splitting**:
-  deleting the `_tags.py` injection strands the `run()` soloist-union pass and the `cea_album_soloists_unified` field
-  with no consumer — the 100%-branch-coverage gate (lever 5) then *fails* on the now-unreachable union pass, so the
-  deletion is one irreducible unit.  It exceeds the file-count band by design (the plumbing spans four source files);
-  splitting at any interior point leaves the tree red.  One-line-commit-title check: passes.
-- **S2 ≈ 60–100 LOC, 3–4 files.**  Reorder + naming realignment are bundled because NOTES/STYLEGUIDE treat them as one
-  queue item ("REND-14 reorder + naming realignment") and they are one conceptual unit — you cannot realign the tag's
-  name without settling the order it now renders in.  **Lever 2** keeps them whole; **lever 3 (cost of a design error)**
-  is why it is Opus, not why it splits.
-- **S3 ≈ 30–50 LOC, 2 files;  S4 ≈ 30–50 LOC, 2–4 files.**  Each is well under the band but is kept a **separate
-  session by the one-line-commit-title corollary**: chorusmaster routing and IS_CLASSICAL conditionalisation are
-  unrelated tag semantics with no shared contract; merging them yields an "and"-joined title (the tell of two sessions).
-  Not fractured below the floor — each is already one irreducible unit.
+
+- **S1 ≈ 50–80 LOC, 4 files.**  Under the band by LOC but a genuine irreducible unit: the field and its merge
+  arm are one contract (**lever 2, the floor** — a field with no merge rule is undefined under re-annotation;
+  a merge rule with no field is nothing).  Kept whole; not split.  One-line-commit-title check: passes.
+- **S2 ≈ 80–140 LOC, 3–4 files** (sourcing helper + per-work-dir accumulator + thread to write site + tests).
+  The sourcing derivation and the threading are **one conceptual unit** (lever 2): you cannot thread a set you
+  have not defined, and the set's definition (which cases, sourced how) *is* the interface the KAT witnesses.
+  Splitting "define the set" from "thread the set" would strand a helper with no consumer under the coverage
+  gate (lever 5 fails on the unreachable helper) — the same dead-code failure mode the A-shards S1 avoided.
+  Kept whole.
+- **S3 ≈ 30–50 LOC, 2 files.**  Under the band; a **separate session by the one-line-commit-title corollary** —
+  "surface applied case-IDs in audit" is a distinct read-path surface with no shared implementation with S2's
+  write path; merging it into S2 yields an "and"-joined title (thread AND surface).  Not fractured below the
+  floor — it is already one irreducible unit (the audit pass + its coverage).
 
 ## Session detail
 
-### S1 — Delete the concerto-soloist path injection and its dead plumbing — freezes C-NOSOLO
+### S1 — Add applied_case_ids field and set-union merge to ProvenanceSidecar — freezes C-CASE-PROV
 
-**Deliverable.**  The concerto-soloist path injection and every piece of machinery that exists only to feed it are
-removed; the path performers component is always `conductors → ensembles` (billing order over its occupied positions,
-STYLEGUIDE 4.5) with no soloist branch.  Concretely:
-- `_tags.py`: delete the injection block (`_tags.py:1174–1190`) and scrub the two docstring references to it
-  (`build_dest_path` docstring ~1085–1091; the `_classical_top_dir` docstring tail at ~298 "including any
-  concerto-soloist injection").
-- `_pipeline.py`: delete the `run()` soloist-union pass (`~1069–1101`) that computes `cea_album_soloists_unified` — its
-  sole consumer was the injection.
-- `models.py`: remove the `cea_album_soloists_unified` field (`~1404`) and its `to_file_dict` exclusion entry (`~1512`).
-- `_pipeline_maint.py`: update the `regroup` docstring (`~839–840`) that describes the unified-soloist path component;
-  confirm no live read of the field remains (it is path-only, so removing the field forces the compiler/mypy to surface
-  any residual reader — that is the intended safety net).
-- Tests: retire `TestBuildDestPathConcertoSoloist` (`test_annotator.py:1838+`) and adjust the concerto integration
-  assertions (`test_integration.py:1823/1854`) so the path no longer expects a soloist segment.
+**Deliverable.**  `ProvenanceSidecar` gains `applied_case_ids: list[str]` (default `[]`), and
+`_write_provenance_fields` gains a **set-union monotonic-append** merge arm mirroring the existing
+`annotation_tier` / `accuraterip_summary` arms:
+- `models.py`: add the field on `ProvenanceSidecar` (after `accuraterip_summary`, ~1848) with an rST attribute
+  docstring stating the C-CASE-PROV semantics (applied contested-default case-IDs; append-only set-union;
+  order-normalised for stable YAML).
+- `_pipeline_io.py` `_write_provenance_fields` (~1562, after the AR arm): read `existing.get("applied_case_ids", [])`,
+  union with `provenance.applied_case_ids`, write the **sorted** union when it differs from the existing set; an
+  incoming empty list must never shrink or erase the recorded set (the empty-incoming guard).  Update the
+  method docstring's idempotency-rules block with the new arm.
+- `_read_provenance_sidecar` needs no change (Pydantic parses the list; absent key → default `[]`), but the
+  round-trip must be covered.
 
-**KAT (the freeze witness for C-NOSOLO).**  A build_dest_path case over a Concerto work whose recording carries a
-named soloist (e.g. Mutter) asserts the soloist name is **absent** from every path component — the inverse of the
-retired KAT.  A second KAT over a multi-disc concerto with different soloists per disc asserts all movements still land
-under the *same* top directory (the union pass's original purpose) purely from the conductor/ensemble component, proving
-the deletion did not regress cross-medium grouping.
-
-**Subtleties.**
-- **C-S0 interaction (over-specify here — Category-A discipline):** the deleted union pass ran over `group_idxs`
-  spanning all media (the C-S0 aggregation contract).  Removing it must not touch the *composer* cross-medium pass or
-  `recording_date_work` pass that share that loop — only the soloist accumulation.  Freeze in C-NOSOLO that C-S0
-  aggregation is unchanged.
-- The field is excluded from `to_file_dict`, so no on-disk tag changes — but the *path* changes for every concerto
-  already ingested; that is exactly what R6d will re-derive.
-- mypy strict is the deletion's ally: remove the field and let the type checker enumerate every residual reference.
-
-**Deferrals.**  No reorder (S2), no chorusmaster (S3), no IS_CLASSICAL (S4).  The `_works.py` `"Concerto"` worktype
-mapping stays — it is still used for genre/worktype rendering; only the *soloist path injection* keyed on it goes.
-
-### S2 — Reorder CEA recording-artist to billing order and realign composite naming (REND-14)
-
-**Deliverable.**  Two coupled changes to the recording-artist composite:
-1. **Reorder** (`_tags.py:749–757`): assemble `cea_recording_artist` (and `cea_recording_artists_sort`) in billing
-   order **soloists → conductors → ensembles** (STYLEGUIDE 4.2), replacing the enacted soloists → ensembles →
-   conductors.  The `rec_artist_phrase` verbatim fallback is retained (ratified).
-2. **Naming realignment** (standing rule 2): the enacted composite carries *assembled* semantics under the CEA variable
-   name whose CE meaning is the *verbatim* recording credit.  Resolve per the frozen ruling — **the realignment
-   decision itself is the S2 juncture judgment** (see below): either rename the assembled composite to a
-   non-colliding own-namespace name (and keep a verbatim-semantics tag under the CE-meaning name), or document the
-   divergence explicitly in code + register.  Whichever the juncture rules, `_tagger.py`'s `_MP3_TXXX_MAP` /
-   `_MP3_STD_KEYS` and `models.py`'s field + `to_file_dict` mapping move together with it.
-
-**KAT (freeze witness for C-RA-GRAMMAR).**  A build_track_tags case with a soloist, a conductor, and an ensemble
-asserts `CEA_RECORDING_ARTIST` (or its realigned name) renders exactly `soloist; conductor; ensemble` — and, if a
-verbatim-semantics tag is introduced, a paired assertion that it renders the raw MB credit phrase.
+**KAT (the freeze witness for C-CASE-PROV).**  In `test_pipeline.py`, over `_write_provenance_fields`:
+(a) writing `applied_case_ids=["SEL-11","REND-14"]` to an empty sidecar records the sorted set;
+(b) a second write with `applied_case_ids=["NORM-2"]` yields the **union** `["NORM-2","REND-14","SEL-11"]`
+(append-only proof); (c) a write with `applied_case_ids=[]` leaves the recorded set **unchanged**
+(empty-never-erases proof); (d) a `ProvenanceSidecar` round-trips through `_read_provenance_sidecar` after write
+carrying the case-IDs.  Plus a `test_models.py` field-default test (`ProvenanceSidecar().applied_case_ids == []`).
 
 **Subtleties.**
-- **This is the standing-rule-2 hazard the juncture exists for.**  The realignment is a same-name-different-semantics
-  judgment a test cannot fully adjudicate; the Opus juncture (or operator) must rule the target name/register before
-  the row is implementable.  *This subsection over-specifies the interface only after that ruling; until then C-RA-
-  GRAMMAR is "to be frozen at S2".*
-- REND-15 (path order conductors-first) is **not** touched — the path already conforms to billing order over its
-  occupied positions (conductors → ensembles; soloists excluded by C-NOSOLO).  S2 changes only the *tag* composite.
-- Any tag-name change is a persisted-tag migration R6d will apply library-wide — that is why it lands pre-R6d.
+- **Set-union, not monotonic-tier:** unlike `annotation_tier` (a single rank-ordered value), case-IDs are a
+  *growing set* — re-annotation may apply additional contested defaults; none are ever retracted at the sidecar
+  layer.  Freeze this asymmetry in C-CASE-PROV explicitly (over-specify per Category-A).
+- **Deterministic serialization:** always write the union **sorted**, so re-writes are byte-stable and the
+  idempotency "file unchanged when set unchanged" property holds (the `_write_provenance_fields` YAML dump must
+  not reorder nondeterministically).  Coverage: both the changed-set and unchanged-set branches tested.
+- **100%-branch-coverage gate:** the new merge arm has an empty-incoming branch, a subset-incoming
+  (no-change) branch, and a superset-incoming (write) branch — all three need explicit tests.
+- **No production writer yet** (S2 wires it): S1's field is exercised only by unit tests until S2.  That is the
+  standard substrate-first pattern — the field is populated *in the test*, so the coverage gate is satisfied
+  without a live path.  (Confirm no `# pragma: no cover` is needed; the merge arm is fully reachable from tests.)
 
-**Deferrals.**  No chorusmaster (S3); no IS_CLASSICAL (S4).
+**Deferrals.**  No sourcing, no threading (S2); no audit surface (S3).
 
-### S3 — Route the chorusmaster credit into CONDUCTOR (REND-3/SEL-3)
+### S2 — Source and thread applied contested-default case-IDs into the sidecar
 
-**Deliverable.**  `CONDUCTOR` additionally carries the annotated chorusmaster credit in CE annotation form
-"Name (choirmaster)" (STYLEGUIDE 4.4; REND-3 vocabulary; SEL-3 credit-routing half).  `_tags.py:891`/`714`/`895`: when
-`cea.chorusmasters` is non-empty, append each as `"<name> (choirmaster)"` to `conductor_name` (after the conductors,
-`"; "`-joined).  The standalone `CHORUSMASTER` tag (`_tags.py:895`) is **retained** — this is additive routing, not a
-move (SEL-3's *position* ruling is untouched; only credit routing changes).
+*(Lower-fidelity sketch — correct for a post-substrate row; crisply specified after C-CASE-PROV freezes at S1
+and after the S2 inflection ruling on the exact source set.)*
 
-**KAT.**  A build_track_tags case with a conductor and a chorusmaster asserts `CONDUCTOR` renders
-`Conductor Name; Chorusmaster Name (choirmaster)` and `CHORUSMASTER` still renders the bare chorusmaster name.
+**Deliverable.**  Derive the run-scoped set of contested-default (P2) case-IDs actually applied for a release
+and thread it to the C-PROV write site (`_pipeline.py` ~1334) so it lands in `ProvenanceSidecar.applied_case_ids`.
+- **Source set (the S2 juncture judgment — see Subtleties).**  The contested-default population is the
+  register's P2/"contested by nature" cases whose neutral default the pipeline applies: candidates with real
+  per-release decision sites include **SEL-11** (soloist not promoted to path — fires per concerto release),
+  **NORM-1** (historical ensemble rename applied — fires when a rendered ensemble's canonical ≠ credited),
+  **NORM-2** (native/Latin reception form chosen — fires per name-form selection), **REND-1** (composer not
+  appended to `ARTIST`), **REND-2** (composer not prefixed to `ALBUM`), **REND-14** (billing-order composite).
+  The juncture rules the exact set and, per case, whether it is *run-derived* (a decision site fired) or
+  *structural* (always applied for a classical release).
+- **Accumulation.**  Per work directory (matching the once-per-work-dir C-PROV write), accumulate the union of
+  case-IDs applied across the dir's tracks — a run-level accumulator keyed on `work_top_dir`, parallel to
+  `tier_written`.
+- **Threading.**  Pass the accumulated set into the `ProvenanceSidecar(...)` construction at `_pipeline.py`
+  ~1334/1336 alongside `annotation_tier` / `needs_spot_check`.
 
-**Subtleties.**  Match the exact annotation string the CE census records (`"choirmaster"`, `census-ce.md:138`), not
-`"chorusmaster"`.  The empty-chorusmasters branch must leave `CONDUCTOR` exactly as before (coverage: both arms tested).
-
-**Deferrals.**  No IS_CLASSICAL (S4).
-
-### S4 ◆ — Conditionalise IS_CLASSICAL on top-level class (REND-21)
-
-**Deliverable.**  `IS_CLASSICAL` reflects the actual class instead of the hardcoded `"1"`.  `_tags.py:906`: set
-`is_classical` from the `_top_level_class` result (`"1"` when the class is `Classical`, else `"0"`) rather than the
-literal.  `models.py:1358`: keep the `"1"` default (CE convention for the classical-only fields default) but document
-that `build_track_tags` now sets it explicitly.  STYLEGUIDE 4.7 / REND-21 authority.
-
-**KAT.**  A build_track_tags case for a classical release asserts `IS_CLASSICAL == "1"`; a case that forces a
-non-classical `_top_level_class` asserts `IS_CLASSICAL == "0"` (the branch REND-21 flagged as the latent bug).
+**KAT (behavioural witness).**  A `run()`-level test over a concerto release with a named soloist asserts the
+work-dir sidecar's `applied_case_ids` contains `"SEL-11"` (the soloist-not-in-path default was applied); a
+release whose ensemble has a canonical≠credited name asserts `"NORM-1"` present; a plain single-composer
+release asserts the structural set (e.g. `"REND-1"`) present and the concerto-only `"SEL-11"` **absent**.
 
 **Subtleties.**
-- Currently latent: `build_track_tags` is only reached for classical releases (non-classical uses the minimal-tags
-  path).  The fix makes the flag *correct if that ever changes* and lets R6d re-derive without carrying a known-wrong
-  flag.  Both branches must be covered even though one is presently unreached in the live pipeline — construct the
-  non-classical case directly in the unit test.
-- Confirm `_top_level_class` is importable/available at the `build_track_tags` call site without a layer-routing
-  violation (tier/class routing is provenance-adjacent; keep the class *derivation* where C-CLASS put it).
+- **This is the sourcing-model juncture** the Opus tier exists for.  The run-derived-vs-structural line per case
+  is a judgment a test cannot fully adjudicate — the juncture (or operator) rules the exact source set before
+  the row is implementable.  *C-CASE-PROV's "which cases" clause is "to be frozen at S2" until then.*
+- **Layer-routing:** case-application provenance is *provenance*, not tag-rendering — keep the emission out of
+  the on-disk `TrackTags`/`to_file_dict` (nothing free-text in tags, per 5.5) and route it through the pipeline
+  accumulator to the sidecar, exactly as `annotation_tier` is kept in `_pipeline.py` not `_tags.py` (the C-TIER
+  precedent).
+- **match/case coverage:** instrumenting `build_cea_performers` / concerto / name-form decision sites must not
+  mint unreachable arms; prefer emitting the case-ID at the point the default is *applied*, and cover both the
+  applied and not-applied branches (lever 1, ambient coverage complexity).
+- **C-CASE append-only interplay:** the emitted strings are register case-IDs — they must match the register
+  exactly (`"SEL-11"`, not `"SEL11"`); a consolidation (e.g. NORM-10→NORM-2) means emitting the *survivor* ID.
 
-**◆ boundary.**  Re-read Purpose.  Confirm all four rulings are enacted, `tox -m analyze` green, ledger complete.
-Report to R6d planning (ROADMAP): the tag/path grammar now matches STYLEGUIDE v1; R6d re-derives already-corrected code.
+**Deferrals.**  No audit surface (S3).
+
+### S3 ◆ — Surface applied case-IDs in the audit tier pass
+
+*(Lower-fidelity sketch — post-substrate integrative row.)*
+
+**Deliverable.**  Extend `_audit_tier_pass` (`_audit.py` ~284) to read `applied_case_ids` from each work-dir
+sidecar (the sidecar is already read + cached there) and surface it: add an `audit_tier_case_ids` log event (or
+extend the existing per-tier events) reporting the applied case-IDs per work dir, and a count in the audit
+summary parallel to `needs_spot_check`.  The `sidecar_cache` tuple (~351) extends to carry `applied_case_ids`.
+
+**KAT.**  A `test_audit.py` case with a sidecar carrying `applied_case_ids=["SEL-11","REND-14"]` asserts the
+audit pass logs/counts them; a sidecar with `applied_case_ids=[]` asserts no case-ID event (both branches covered).
+
+**Subtleties.**  Mirror the exact dedup/eligibility guard the tier pass already uses (`action in {"tagged",
+"enriched"}`, min-2-parts) so the case-ID denominator reconciles with `counts["total"]`.  Purely additive to the
+audit surface — no change to write-path or contract.
+
+**◆ boundary (register anneal).**  Re-read Purpose.  Confirm all three sessions enacted, `tox -m analyze` green,
+ledger complete.  **Planning-register anneal** (the integrative session is where the contract gets its public
+form — the anneal is the same act):
+- Durable files (`models.py`, `_pipeline_io.py`, `_pipeline.py`, `_tags.py`, `_audit.py` docstrings/comments)
+  carry **no plan coordinates** — no "S1/S2/S3", no "sidecar-case-ids sub-track", no `/plan-run` vocabulary.
+  State the property/reason/invariant (e.g. "applied contested-default case-IDs; set-union append-only per
+  C-CASE-PROV"), never the plan coordinate.
+- Grep the durable files against the **anneal denylist** (Notes for executors); translate any leaked coordinate
+  into standalone prose.
+- Report to the styleguide roadmap: rule-5.5 sidecar persistence is enacted; C-CASE-PROV frozen.  **No R6d
+  coordination needed** — sidecar-only, no persisted-tag/path change.
 
 ## Cross-session contracts
 
-### C-NOSOLO — no soloist enters the path component *(to be frozen at S1)*
+### C-CASE-PROV — applied contested-default case-IDs in the provenance sidecar *(field frozen at S1; source set to be frozen at S2)*
 
-The soloist is never a path component, however principal (STYLEGUIDE 4.5, SEL-11 overturned).  Also freezes the
-negative: **no machinery computes a cross-medium soloist union for the path** (`cea_album_soloists_unified` and the
-`run()` union pass are deleted), and **C-S0 aggregation is otherwise unchanged** (the composer and recording-date
-cross-medium passes over `group_idxs` survive intact).  **Flavour: test-enforced** (the S1 KATs: soloist absent from
-every path component; multi-disc concerto still groups under one top dir) **+ compiler-enforced** (mypy strict surfaces
-any residual reader of the deleted field).  **Defined-in:** S1.  **Consumed-by:** S2 (relies on soloists being
-path-absent so REND-15 needs no change), R6d re-derivation.  Over-specified per Category-A: carries the C-S0-unchanged
-assertion even though no session immediately re-checks it.
+**Field + persistence (frozen at S1).**  `ProvenanceSidecar.applied_case_ids: list[str]` (default `[]`) records
+the register case-IDs (`<LAYER>-<n>`, per C-CASE) of the contested-case (P2) neutral defaults that were applied
+for the release.  Persisted in the work-dir provenance sidecar (`freedb_disc_*.yaml` or
+`music_annotator_provenance.yaml`), under the same C-PROV write discipline as `annotation_tier` (written once
+per work dir, after `_verify_copy`, before the journal append).  **Merge semantics: set-union, append-only** —
+`_write_provenance_fields` unions the incoming set with the recorded set and writes the **sorted** union; an
+incoming empty list never shrinks or erases the recorded set.  This is deliberately *not* the monotonic-rank
+rule of `annotation_tier` (a set grows; it has no rank).  Serialization is order-normalised (sorted) for
+byte-stable re-writes.  Free-text is never written to tags (5.5): the case-IDs live only in the sidecar.
 
-### C-RA-GRAMMAR — recording-artist composite: order + name/semantics *(frozen at S2)*
+**Source set (to be frozen at S2).**  Which register cases are "applied" and whether each is run-derived (a
+decision site fired for this release) or structural (always applied for a classical release) is the S2 juncture
+judgment.  Candidate contested-default population: SEL-11, NORM-1, NORM-2, REND-1, REND-2, REND-14 (the P2 /
+"contested by nature" register cases with identifiable application sites).  *This subsection over-specifies the
+source set only after the S2 ruling; until then it is "to be frozen at S2".*
 
-**Order (REND-14).**  The assembled recording-artist composite renders performer principals in billing order
-**soloists → conductors → ensembles** (STYLEGUIDE 4.2), replacing the enacted soloists → ensembles → conductors.  This
-governs `cea_recording_artist` and `cea_recording_artists` (identical content) and their sort sibling
-`cea_recording_artists_sort` (same three role classes in the same order, sort names).  The `rec_artist_phrase` /
-`rec_artist_sort` verbatim MB-credit **fallback is retained** for the empty-composite case (ratified, REND-14).
-
-**Name/register ruling (standing-rule-2 juncture judgment — Option "keep, no rename, no new tag").**  The assembled
-composite stays under its CE name **`CEA_RECORDING_ARTIST`** (with `CEA_RECORDING_ARTISTS` / `CEA_RECORDING_ARTISTS_SORT`);
-**no rename, no newly-introduced verbatim tag.**  Rationale, cited to the standing rules:
-- The premise of the queued naming-drift note (STYLEGUIDE:657–660 — "assembled semantics under a name whose CE meaning
-  is the verbatim recording credit") is imprecise against the CE variable register.  census-ce.md:655 defines
-  `_cea_recording_artist` = "*Artist credited with the recording*" and census-ce.md:436–438 shows CE **itself assembles**
-  it (a performer composite, not a verbatim credit).  CE's *verbatim* recording-credit variable is a **different** name,
-  `_cea_MB_artists` = "Original track artists before any replacement/merge" (census-ce.md:657).
-- Both CE meanings are already correctly realised in the enacted code: the verbatim credit lives under **`CEA_MB_ARTISTS`**
-  (`_tags.py:759–760` `cea_mb_artists = rec_artist_phrase`; census-impl.md:298–299 states the two are distinct — composite
-  vs. raw credit), and `ARTIST` also renders the MB credit verbatim (REND-1, STYLEGUIDE 4.3).  No verbatim tag needs to be
-  introduced; `CEA_MB_ARTISTS` and `ARTIST` already carry it.
-- Therefore keeping the assembled composite under `CEA_RECORDING_ARTIST` **conforms to standing rule 1** (the CE name keeps
-  its established assembled meaning) and produces **no fragmentation** under standing rule 2.  The only genuine divergence
-  from CE is the assembly *order* (REND-14) — an already-registered CE divergence (STYLEGUIDE:648–649) — which S2's reorder
-  step discharges.  The queued "naming-drift remediation" is thereby **resolved as: no name change required**; verbatim
-  semantics already live under `CEA_MB_ARTISTS`/`ARTIST`.
-
-**Enacted deltas for S2 (interface, not implementation).**
-- `_tags.py:749–757`: reorder the assembly to `all_soloists + cea.conductors + cea.ensembles` for both
-  `cea_recording_artist`/`cea_recording_artists` and `cea_recording_artists_sort`; keep the `or rec_artist_phrase` /
-  `or rec_artist_sort` fallback.  Add a one-line comment recording that `CEA_RECORDING_ARTIST` is CE's *assembled*
-  composite and the verbatim credit is `CEA_MB_ARTISTS`/`ARTIST` (discharges the standing-rule-2 comment obligation).
-- `_tagger.py` (`_MP3_TXXX_MAP`/`_MP3_STD_KEYS`) and `models.py` (field + `to_file_dict` mapping): **unchanged** — no
-  tag-name change means no descriptor-map or field move.  (The PLAN's "move together with it" clause is satisfied vacuously
-  because the ruling introduces no name change.)
-
-**KAT (freeze witness).**  A `build_track_tags` case carrying one soloist, one conductor, and one ensemble asserts
-`CEA_RECORDING_ARTIST` renders exactly `<soloist>; <conductor>; <ensemble>` (billing order) — and a **paired assertion**
-that `CEA_MB_ARTISTS` renders the raw MB credit phrase (`rec_artist_phrase`), witnessing that the verbatim credit is
-carried by the distinct existing tag.  A fallback KAT: with all three role classes empty, `CEA_RECORDING_ARTIST` renders
-the `rec_artist_phrase` fallback.  Tests land in `tests/unit/test_pipeline.py` (no existing test asserts on these tags —
-this is a genuinely new witness, authored, not rewired).
-
-**Flavour:** test-enforced (the three KAT assertions above) **+ prose-enforced** (this name/register ruling, cited to
-standing rules 1/2 and the CE variable register).  **Defined-in:** S2.  **Consumed-by:** S3 (chorusmaster routes into
-`CONDUCTOR`, a *different* tag — must not disturb `CEA_RECORDING_ARTIST`), R6d (persisted-tag re-derivation — because the
-name is unchanged, R6d re-derives the composite content only; **no library-wide tag rename migration is incurred**).
+**Flavour:** compiler-enforced (the Pydantic field type; mypy strict on the merge arm) **+ test-enforced** (the
+S1 set-union KATs: union grows, empty-never-erases, round-trip; the S2 behavioural KATs: right case-IDs per
+release shape) **+ prose-enforced** (the source-set ruling, cited to 5.5/P2 and the register).  **Defined-in:**
+S1 (field + merge) / S2 (source set).  **Consumed-by:** S2 (writes the field), S3 (reads it in audit), any
+future sidecar reader / Act III-b re-derivation (the case-IDs are durable provenance).  Over-specified per
+Category-A: carries the set-union-vs-monotonic asymmetry and the empty-never-erases guarantee even though only
+S1's tests immediately exercise them.
 
 ### Consumed (frozen upstream — invalidation is out of scope for this sub-track)
 
-- **STYLEGUIDE v1 layer 4** (REND-1/2/3/14/15/21/24, 4.1–4.7) and **layer 1 SEL-11** — the rulings this sub-track
-  enacts; frozen at V1b-S6.  Every row cites one; none re-opens one.
-- **C-CLASS / C-INIT** (R4a; J2-ratified final) — S4 consumes `_top_level_class`; S1 consumes `_classical_top_dir`
-  (scrubbing only its concerto-injection docstring tail).  Validate-only; no redefinition.
-- **C-S0** (aggregation spans media) — S1 must preserve it while deleting the soloist union (see C-NOSOLO).
-- **The confirmation-provenance and defensive-download invariants** (repo `AGENTS.md`) — untouched; none of these
-  shards enters the copy/tag/verify loop's provenance chain.
+- **C-TIER / C-AR** (R2 / R3b) — the sibling `ProvenanceSidecar` fields and their monotonic-upgrade merge arms;
+  the new arm sits beside them without disturbing them.  Validate-only.
+- **C-PROV** (repo `AGENTS.md`, transaction-journal/confirmation-provenance invariant) — the once-per-work-dir,
+  post-`_verify_copy`, pre-journal-append write ordering.  `applied_case_ids` is written at the *same* gated
+  site as `annotation_tier`; S2 must not append it before `_verify_copy` succeeds.
+- **C-CASE** (styleguide arc) — register case-IDs are append-only, never renumbered; emitted strings are the
+  survivor IDs after any consolidation.
+- **STYLEGUIDE v1 rule 5.5 / P2 / layer 5** — the authority; no ruling is re-opened.
 
 ### Produced
 
-- **C-NOSOLO** at S1; **C-RA-GRAMMAR** at S2.  The corrected tag/path grammar is the sub-track's output to R6d planning.
+- **C-CASE-PROV** — field + merge at S1, source set at S2.  Sidecar-only; **no output to R6d planning** (no
+  persisted-tag or path change).
 
 ## Progress ledger
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Delete the concerto-soloist path injection and its dead plumbing (SEL-11) | done | 6eaedaa | C-NOSOLO ✓ (extra: tests/unit/test_pipeline.py — retired test for deleted union pass) |
-| 2 | Reorder CEA recording-artist to billing order and realign composite naming (REND-14) | done | 4d90566 | C-RA-GRAMMAR ✓ (extra: docs/STYLEGUIDE.md — CE-divergence register note updated to resolved) |
-| 3 | Route the chorusmaster credit into CONDUCTOR (REND-3/SEL-3) | done | b553f65 | — |
-| 4 ◆ | Conditionalise IS_CLASSICAL on top-level class (REND-21) | done | e0b9f54 | — |
+| 1 | Add applied_case_ids field and set-union merge to ProvenanceSidecar | pending | — | — |
+| 2 | Source and thread applied contested-default case-IDs into the sidecar | pending | — | — |
+| 3 ◆ | Surface applied case-IDs in the audit tier pass | pending | — | — |
 
 ## Action-frame digest
 
-### S2 inflection — 2026-07-31
-Discovery/flex: C-RA-GRAMMAR naming-realignment juncture resolved: keep assembled composite under CEA_RECORDING_ARTIST (no rename, no new verbatim tag); the standing-rule-2 premise was imprecise — CE's verbatim credit is already CEA_MB_ARTISTS.
-Affected: C-RA-GRAMMAR (now fully specified; "to be frozen at S2" placeholder replaced)
-Deferred: no — D-A2 resolved; STYLEGUIDE CE-divergence register note updated to "resolved: no rename" by S2 implementer (done).
-Texture: No library-wide tag rename migration incurred at R6d — the survivor avoids the persisted-tag rename cost entirely.
-
-### S4 ◆ boundary — 2026-07-31
-Discovery/flex: Boundary juncture returned still-on-intent; all four STYLEGUIDE v1 rulings enacted and KAT-witnessed; sub-track closed on intent.
-Affected: none — no contract drift.
-Deferred: yes — census-impl.md and NOTES.md still reference the deleted cea_album_soloists_unified field (stale descriptive docs, out of sub-track write scope). Refresh before R6d consumes the census so R6d planning does not read a superseded concerto path rule.
-Texture: Sub-track output to R6d: tag/path grammar now matches STYLEGUIDE v1; R6d re-derives against already-corrected code.
+*(none yet)*
 
 ## Discoveries & risks
 
-- **D-A1 (S1 blast radius — dead-code completeness).**  The concerto feature spans four source files; the risk is
-  leaving orphan machinery that the 100%-branch-coverage gate then rejects.  Mitigation: delete the `models.py` field
-  first and let mypy strict enumerate every reader (compiler-enforced completeness).  If a *live* (non-injection) reader
-  of `cea_album_soloists_unified` surfaces in `_pipeline_maint`, that is an **additive-reshard** signal (the field was
-  more load-bearing than the survey showed) — surface it, do not silently retain the field.
-- **D-A2 (S2 naming-realignment — resolved: keep, no rename).**  The standing-rule-2 hazard (assembled semantics under
-  CE's verbatim-credit variable name) resolved at the S2 inflection juncture (2026-07-31): the premise was imprecise —
-  CE's `_cea_recording_artist` means the *assembled* composite (census-ce.md:655), not the verbatim credit; the verbatim
-  credit is `_cea_MB_artists` → `CEA_MB_ARTISTS`, already correctly realised.  **Ruling: keep assembled composite under
-  `CEA_RECORDING_ARTIST`, no rename, no new verbatim tag.**  No library-wide tag rename migration at R6d.  C-RA-GRAMMAR
-  frozen.  STYLEGUIDE CE-divergence register note (lines 657–660) to be updated to "resolved: no rename" by S2 implementer.
-- **D-A3 (sequencing vs. R6d — internal-continue).**  These four land ahead of R6d (J3/R5-gated) so the library
-  re-derives once against corrected code (ROADMAP R6d fold-in, 2026-07-30).  They are logically independent of R6d's
-  destructive repath — R6d re-derives with whatever the code then does.  No dependency inversion; safe to land now.
-- **D-A4 (path changes without tag changes — S1).**  Deleting the injection changes concerto *paths* but no on-disk
-  *tags* (the field was path-only, `to_file_dict`-excluded).  Already-ingested concertos will re-path under R6d; this is
-  expected, not a regression.
+- **D-1 (S2 source-set judgment — the run-derived vs structural line).**  The contested-default population and
+  the per-case run-derived/structural classification is the S2 juncture judgment; a wrong set is a
+  *prose*-contract error, not a compiler one.  If S2 finds a candidate case (SEL-11/NORM-1/NORM-2/REND-1/2/14)
+  has **no clean application site** — e.g. the default is applied implicitly with no branch to instrument —
+  that is an **additive-reshard** signal (the source set is narrower than the survey implied); surface it, do
+  not manufacture a synthetic site.
+- **D-2 (composite-tag-grammar shard provisionally discharged).**  The substrate survey found ARTIST/ALBUMARTIST
+  already render verbatim MB credits with no author-splicing (REND-1/4.3 satisfied) and CEA composites already
+  correctly separated (C-RA-GRAMMAR) — no un-enacted grammar work without an operator-named target.  Folded to
+  ROADMAP-styleguide D-A6.  Not a risk to *this* sub-track; recorded so a future node-A shard does not re-derive
+  it.  **internal-continue** (does not affect the sidecar-case-ids sessions).
+- **D-3 (normalisation shard carries an unresolved conflict).**  STYLEGUIDE 3.1 (compact projections render
+  canonical) vs. REND-1/4.3 (`ARTIST` preserved/verbatim) conflict, plus a library-wide repath requiring R6d
+  coordination — needs adjudication before that shard is shardable.  Recorded for the next node-A boundary; **no
+  bearing on this sub-track** (sidecar-only).
+- **D-4 (no R6d coupling — sequencing freedom).**  Unlike the other node-A shards, this one changes no persisted
+  tag and no path, so it is **independent of R6d** and can land any time without the "re-derive once" pressure.
+  No dependency inversion; safe to land now.
+- **D-5 (stale census/NOTES `cea_album_soloists_unified` refs — pre-existing, out of scope).**  Carried down
+  from the A-shards ◆ deferral and both roadmaps' R6d caveat: `census-impl.md` / `NOTES.md` still describe the
+  deleted field.  A doc-freshness item for R6d, **not** this sub-track's work (census-artifact content refresh).
+  Noted so `/plan-run` does not treat it as an in-track discovery.
 
 ## Notes for executors
 
-- **Tier routing.**  S1, S2 are **Opus** (blast radius; the standing-rule-2 judgment).  S3, S4 are **Sonnet**
-  (mechanical single-surface changes; the strong inner loop covers them).  `juncture-tier: opus` — kept at the arc
-  default because two of four shards touch persisted-tag semantics R6d bakes library-wide (cost-of-wrong high despite
-  the strong inner loop), and S2's naming decision is a judgment tests cannot fully catch.
-- **Register: application, not authoring.**  No new editorial decisions.  Every change cites a frozen STYLEGUIDE v1
-  ruling as its authority; if a row seems to *need* a new ruling, that is a discovery (surface it), not a licence to
-  decide.
-- **Invariants to preserve:** C-S0 aggregation (S1 deletes only the soloist union, not the composer/date passes);
-  C-CASE append-only (register edits are cross-referencing adjudications); the confirmation-provenance and defensive-
-  download invariants (untouched — none of these shards is in the copy/tag/verify loop); STYLEGUIDE self-containment
-  (rulings cite principles, never working docs).
-- **Every row runs `~/.local/bin/tox -m analyze` before ledger-done** (build + test at 100% branch coverage + strict
-  mypy + ruff + pylint 10.00/10 + pyupgrade).  Import order via `~/.local/bin/tox -m edit`, never hand-edited.
-- **Suggested first `/plan-run` invocation:** `halt-at-boundaries` — this is the first A-shard (code) sub-track derived
-  from the styleguide arc; the shard pattern for "enact a frozen ruling" is unproven here, so stop at the S1 boundary
-  (◆ is only S4, but halt-at-boundaries also stops after the first row of an unproven pattern) for an operator check
-  before continuing S2–S4.  Once S1 confirms the pattern, `run-to-boundary` through the S4 ◆.
+- **Tier routing.**  S1, S2 are **Opus** (durable contract freeze; the sourcing-model judgment).  S3 is
+  **Sonnet** (mechanical audit-surface mirror of `_audit_tier_pass`).  `juncture-tier: opus` — kept because
+  C-CASE-PROV is durable sidecar-persisted state and S2's source set is a judgment tests cannot fully catch,
+  despite the sidecar-only / no-R6d posture.
+- **Register: application, not authoring.**  No new editorial decisions.  Every applied case-ID is an
+  *already-frozen* v1 ruling; S2 records which bit, it does not decide.  If a row seems to *need* a new
+  contested-case ruling, that is a discovery (surface it), not a licence to decide.
+- **REGISTER rule (durable-file discipline).**  In source/tests, state the *property/reason/invariant* — never
+  the plan coordinate.  "applied contested-default case-IDs; set-union append-only" is right; "the S2
+  case-ID threading" is not.  Plan vocabulary (S1/S2/S3, sub-track names, `/plan-run`) lives only in
+  `PLAN.md` / `ROADMAP*.md` / the ledger / commit messages.  See also the repo `AGENTS.md` REGISTER block.
+- **Anneal denylist (◆ gate greps durable files for these).**  Seeded from the `/plan-run` default, tuned for
+  this project's vocabulary:
+  - `\bS[1-9]\b` (plan session coordinates) — **but** allow the legitimate STYLEGUIDE-rule-section forms
+    (`\b[45]\.[0-9]\b` like "4.5", "5.5" are register/rule cites, not plan coordinates — do **not** flag).
+  - `sub-track`, `plan-run`, `plan-shard`, `halt-at-boundaries`, `run-to-boundary`
+  - `C-CASE-PROV` **only outside docstrings that legitimately name the contract** — contract names in
+    docstrings are the intended durable form (the C-TIER/C-AR precedent); flag bare "S2 freeze"-style prose,
+    not the contract name itself.
+  - `juncture`, `inflection`, `action-frame`, `◆`
+  - Do **not** add `case-ID` / `applied_case_ids` / register IDs (`SEL-`, `NORM-`, `REND-`) to the denylist —
+    these are legitimate domain vocabulary this sub-track deliberately persists.
+- **Invariants to preserve:** C-PROV write ordering (case-IDs written at the same gated site as
+  `annotation_tier`, after `_verify_copy`, before journal append); C-TIER/C-AR merge arms untouched; C-CASE
+  append-only (emit survivor IDs); nothing free-text in tags (5.5 — case-IDs live only in the sidecar); the
+  defensive-download and confirmation-provenance invariants (untouched — this sub-track is not in the
+  copy/verify network path).
+- **Every row runs `~/.local/bin/tox -m analyze` before ledger-done** (build + test at 100% branch coverage +
+  strict mypy + ruff + pylint 10.00/10 + pyupgrade).  Import order via `~/.local/bin/tox -m edit`, never
+  hand-edited.
+- **Suggested first `/plan-run` invocation:** `halt-at-boundaries` — this is the first sidecar-provenance
+  application shard from the styleguide arc; the "persist an applied-ruling set" pattern is unproven here, so
+  stop after S1 for an operator check that the C-CASE-PROV freeze (especially the set-union-vs-monotonic
+  merge semantics) is right before S2 consumes it.  Once S1 confirms the pattern, `run-to-boundary` through the
+  S3 ◆.

@@ -214,3 +214,15 @@ chain**.  Specifically:
 - **Dead branches in `build_cea_performers`**: the `instr` extraction uses a single ternary (`first_attr.value if
   isinstance(first_attr, MBAttribute) else first_attr`) — any multi-branch `if/elif/else` here will produce a partial coverage
   failure because the `else` arm is unreachable given the type.
+
+## Register rule (planning-coordinate discipline)
+
+Durable files — source, tests, docstrings, comments, human docs — state the **property, reason, or invariant**, never the plan
+coordinate.  Write "applied contested-default case-IDs; set-union append-only per C-CASE-PROV", not "the S2 case-ID threading".
+Contract *names* (C-TIER, C-CASE-PROV, …) are legitimate durable vocabulary; plan session coordinates (S1/S2/S3), sub-track
+names, juncture/inflection/action-frame terms, and `/plan-run` / `/plan-shard` command vocabulary are **not** — they live only
+in `docs/PLAN.md`, `docs/ROADMAP*.md`, the progress ledger, and commit messages.
+
+When a rolling PLAN is active, its `## Notes for executors` carries the **anneal denylist** — the exact patterns the ◆ boundary
+gate greps durable files for.  Consult it before finishing any session; translate any leaked plan coordinate into standalone
+prose.

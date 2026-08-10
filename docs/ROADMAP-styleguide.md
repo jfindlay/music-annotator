@@ -121,13 +121,23 @@ operator recommendations carried to V1b (see Discoveries appendix D-A1/D-A2).
 
 ### Post-v1 nodes (trigger/operator-paced; unordered)
 
-- **A — Applications (code shards).**  Each is a normal PLAN-sharded code sub-track once v1 rules exist: the
-  `ProvenanceSidecar` editorial-notes field (case-ID persistence, rule 5.5); removing the concerto path-injection
-  (SEL-11 overturned, operator 2026-07-23 — a trivial deletion shard, coordinated with R6d); the S6 tag-shaping set
-  (REND-14 billing-order reorder + composite-tag naming realignment, chorusmaster-into-`CONDUCTOR` addition,
-  `IS_CLASSICAL` conditionalisation); composite-tag grammar changes (`ARTIST` et al.); normalisation changes (canonical
-  name-forms in paths).  Application shards that change persisted tags or paths coordinate with the library-completion
-  arc's R6 re-derivation — prefer landing them so R6d re-paths once, not piecemeal.
+- **A — Applications (code shards).**  Each is a normal PLAN-sharded code sub-track once v1 rules exist.
+  **DONE (2026-07-31, sub-track "A-shards", `docs/PLAN.md` 4/4):** removing the concerto path-injection
+  (SEL-11 overturned) and the S6 tag-shaping set — REND-14 billing-order reorder + composite-tag naming
+  realignment, chorusmaster-into-`CONDUCTOR`, `IS_CLASSICAL` conditionalisation — all landed ahead of R6d
+  (froze C-NOSOLO + C-RA-GRAMMAR; ◆ still-on-intent).  **Remaining node-A shards (not yet sharded):** the
+  `ProvenanceSidecar` editorial-notes field (case-ID persistence, rule 5.5); composite-tag grammar changes
+  (`ARTIST` et al.); normalisation changes (canonical name-forms in paths).  Application shards that change
+  persisted tags or paths coordinate with the library-completion arc's R6 re-derivation — prefer landing
+  them so R6d re-paths once, not piecemeal.
+  **IN PROGRESS (2026-08-09, sub-track "sidecar-case-ids", `docs/PLAN.md` 0/3):** the rule-5.5
+  `ProvenanceSidecar` case-ID persistence shard — S1 adds the `applied_case_ids` field + set-union monotonic
+  merge (freezes C-CASE-PROV), S2 sources + threads the run-derived contested-default (P2) case-IDs, S3
+  surfaces them in `audit` + register anneal.  **Sidecar-only: no persisted-tag or path change, no R6d
+  coupling** (distinct from the other two remaining shards, which do repath and must coordinate with R6d).
+  Substrate survey finding folded: composite-tag grammar (`ARTIST` et al.) appears **largely already satisfied
+  by v1's enacted state** (ARTIST/ALBUMARTIST already verbatim; CEA composite correctly separated) — that
+  shard's premise is provisionally discharged pending an operator-named target (see Discoveries D-A6).
 - **P — Public conventions spec.**  The externalised projection of the styleguide (= R6e in the library-completion
   ROADMAP; finalises alongside the Act II freeze).  Derivation, not duplication.
 - **C — CEv3.**  The CE successor on Picard v3, platforming the styleguide's MB-derivable partition.  Graduates to its
@@ -196,3 +206,23 @@ E0 1 ✓ · V1a 3 ✓ · V1b 3 ✓ → **v1 reached in 7 sessions (2026-07-30)**
   order over CE assembly order); CE convention adopted for the chorusmaster in `CONDUCTOR`.  A standing-rule-2
   naming-drift hazard (composite semantics under CE's verbatim-credit tag name) is queued for realignment with the
   REND-14 shard.  The A-node gains the S6 tag-shaping set; all coordinate with R6d.
+
+- **D-A5 (2026-07-31, A-shards ◆).**  The S6 tag-shaping set is enacted (`docs/PLAN.md` 4/4).  The
+  **standing-rule-2 naming-drift hazard queued at D-A4 is resolved**: the S2 inflection juncture found the
+  queued premise ("composite semantics under CE's verbatim-credit tag name") imprecise — CE's
+  `_cea_recording_artist` denotes the *assembled* composite (census-ce.md), and the verbatim credit already
+  lives under `CEA_MB_ARTISTS`/`ARTIST`.  **Ruling: keep the composite under `CEA_RECORDING_ARTIST`, no
+  rename, no new verbatim tag**; the only CE divergence is the billing-order assembly (REND-14), an
+  already-registered divergence.  No library-wide tag rename at R6d.  C-NOSOLO + C-RA-GRAMMAR froze.
+
+- **D-A6 (2026-08-09, sidecar-case-ids shard).**  Substrate survey for the three remaining node-A shards
+  found the **composite-tag-grammar shard largely discharged by v1**: `ARTIST`/`ALBUMARTIST` already render
+  the verbatim MB credit with no author-splicing (REND-1/4.3 satisfied), and `CEA_RECORDING_ARTIST`
+  (assembled) / `CEA_MB_ARTISTS` (verbatim) are already correctly separated (C-RA-GRAMMAR, A-shards S2).  No
+  un-enacted grammar work was found without an operator-named target; the shard is provisionally discharged,
+  not sharded.  Separately, the **normalisation shard (canonical name-forms) carries an unresolved design
+  conflict**: STYLEGUIDE 3.1 (compact projections render canonical forms) vs. REND-1/4.3 (`ARTIST` is a
+  *preserved verbatim* claim) — making `ARTIST` canonical would contradict REND-1.  The conflict needs
+  adjudication (which surfaces render canonical vs. preserved forms) before the normalisation shard is
+  shardable; and it triggers a library-wide repath that must coordinate with R6d.  Neither is a blocker for
+  the sidecar-case-ids shard (sidecar-only, R6d-independent).

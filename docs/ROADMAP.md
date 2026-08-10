@@ -269,9 +269,16 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   prerequisite — R4b census) and the styleguide A-shards that reshape persisted tags/paths
   (concerto-gate deletion, REND-14 reorder + naming realignment, chorusmaster-into-`CONDUCTOR`,
   `IS_CLASSICAL` conditionalisation) land before or with this pass so the library re-derives once.
-  **The four A-shards are sharded to `docs/PLAN.md` (2026-07-30, sub-track IN PROGRESS) and land
-  ahead of R6d as pure code+test grammar fixes** — logically independent of the destructive repath;
-  R6d then re-derives against already-corrected code.
+  **The four A-shards are DONE (2026-07-31, `docs/PLAN.md` 4/4 rows; commits `6eaedaa`
+  concerto-gate deletion / `4d90566` REND-14 reorder + naming realignment / `b553f65`
+  chorusmaster-into-`CONDUCTOR` / `e0b9f54` `IS_CLASSICAL` conditionalisation).**  They landed ahead
+  of R6d as pure code+test grammar fixes — logically independent of the destructive repath; R6d now
+  re-derives against already-corrected code.  Froze **C-NOSOLO** (no soloist enters the path
+  component) and **C-RA-GRAMMAR** (recording-artist composite: billing order under
+  `CEA_RECORDING_ARTIST`, no rename).  ◆ boundary `still-on-intent`.  **R6d planning caveat:**
+  `census-impl.md` / `NOTES.md` still describe the now-deleted `cea_album_soloists_unified`
+  concerto-injection path rule — refresh before R6d consumes the census so R6d planning does not
+  read a superseded rule.
 - **R6e** Conventions-spec finalisation (integrative writeup; consistently under-scheduled — allocate
   a full session minimum).
 
@@ -502,3 +509,13 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   as an R6-planning decision if the live scan shows the shape pervasive in `Done/`.  No frozen
   contract invalidated; no destructive-HALT.  A-b/A-c close; Act II is done; R6 unblocks for PLAN
   derivation (R6d gated on J3 + R5 exit, unchanged).
+
+- **A-shards ◆ boundary (2026-07-31) — post-v1 styleguide application complete; grammar matches v1.**
+  The four tag/path-grammar shards enacting STYLEGUIDE v1 landed ahead of R6d (`docs/PLAN.md` 4/4;
+  see R6d node for commits).  Froze C-NOSOLO and C-RA-GRAMMAR.  Two static-frame facts for R6d
+  planning: (1) the **standing-rule-2 naming-drift hazard is resolved** — the S2 inflection juncture
+  found the queued premise imprecise (CE's `_cea_recording_artist` *is* the assembled composite; the
+  verbatim credit is `CEA_MB_ARTISTS`), so the composite stays under `CEA_RECORDING_ARTIST` with **no
+  library-wide tag rename** at R6d; (2) **stale census/NOTES docs** still reference the deleted
+  `cea_album_soloists_unified` field — a doc-freshness item to clear before R6d consumes the census.
+  No frozen contract invalidated; no destructive-HALT.  R6d re-derives against corrected code.
