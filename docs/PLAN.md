@@ -1,45 +1,58 @@
 <!-- juncture-tier: opus -->
-<!-- sub-track: sidecar-case-ids (post-v1 styleguide application) — rule 5.5 case-ID persistence on
-     ProvenanceSidecar.  Records which contested-case (P2) neutral defaults were applied per release, so the
-     applied editorial rulings survive in the provenance sidecar (claim-in-the-unit, prose-in-STYLEGUIDE).
-     SIDECAR-ONLY: no persisted-tag or path change, so NO R6d coupling and no library-wide repath (distinct
-     from the other two remaining node-A shards).  This IS a /plan-run target: mechanical model+pipeline+audit
-     changes verifiable by the src/tests gate with zero library access. -->
+<!-- sub-track: path-canonical-name-forms (post-v1 styleguide application, node A) — render STYLEGUIDE 3.1/NORM-2
+     canonical entity name-forms in the compact path projection (rule 4.5), sourced from MB's own primary-flagged
+     aliases (D-A7/D-A8 authority-deference posture).  CODE-ONLY: new ingests render canonical; the destructive
+     library-wide repath rides R6d's one pass (D-A5 precedent).  This IS a /plan-run target: model + fetch + tags
+     + maintenance-path changes verifiable by the src/tests gate with zero library access. -->
 
-# PLAN — sidecar-case-ids: rule-5.5 applied-case-ID persistence on ProvenanceSidecar
+# PLAN — path-canonical-name-forms: STYLEGUIDE 3.1/NORM-2 canonical name-forms in the destination path
 
 ## Purpose (design intent)
 
 *(Re-read at every ◆ boundary — anti-defocus anchor.)*
 
-STYLEGUIDE rule 5.5 (contested-case marking): where releases or editors legitimately disagree and the
-styleguide has chosen a neutral default (P2), *applying that default is itself an annotation-on-the-annotation*
-— "implementations that maintain per-release provenance sidecars record the applied case-IDs there: claim in
-the unit, prose in this document, nothing free-text in tags."  The code already maintains a provenance sidecar
-(`ProvenanceSidecar`, C-TIER/C-AR) but records no case-IDs.  This sub-track closes that gap: it persists the
-run-derived set of contested-default case-IDs that were *actually applied* for each release into the sidecar,
-under the same C-PROV write-provenance discipline as `annotation_tier`.
+STYLEGUIDE rule 3.1 (one canonical form per entity) and NORM-2 (native Latin-script name; established Latin
+reception form for non-Latin script) require that **compact projections render one canonical name-form per
+entity, selected once, not per release**.  Rule 4.5 makes the destination path "the compact assembled
+projection" — so the path's performers component (conductors, ensembles) and composer component are exactly
+where 3.1/NORM-2 apply.  A code audit (D-A7) found that **no canonical-form machinery exists anywhere in
+`src/`**: every path name-form renders verbatim from `MBArtist.name` (as-credited display name) or
+`last_name(MBArtist.sort_name)`, so the path can render "Vienna Philharmonic" where NORM-2 demands "Wiener
+Philharmoniker".  This sub-track closes that gap.
 
-No new editorial decisions are taken — the case-IDs are the *already-frozen* v1 rulings; this records which of
-them bit for a given release.  The unifying principle is **the epistemic register** (STYLEGUIDE P3, layer 5):
-every applied neutral default is a claim whose basis survives with the annotated unit, at zero side-channel
-cost, without defacing any compact surface (5.3's ceiling carve-out → 5.5's sidecar mechanism).
+The D-A6 "3.1-vs-REND-1 conflict" is **dissolved** (D-A7): 3.1/NORM-2 govern the *compact* projection (the
+path); REND-1/4.3 govern `ARTIST`/`ALBUMARTIST` (*preserved/full* surfaces, verbatim by design).  They apply
+to different surfaces; `ARTIST` stays verbatim, the path renders canonical.  No preserved surface changes.
+
+**MB-authority-deference posture (D-A8 — the register anchor).**  The canonical form is **MB's own
+primary-flagged alias** (native/reception form per NORM-2), falling back to `MBArtist.name`.  The *only*
+editorial act is **selecting among MB's own asserted forms** — never a local editorial name table, never a
+form MB does not hold, never a new annotation convention or scholarly romanisation.  Accept MB as the source
+of authority even where fallible; modify it only as defensibly and plainly as possible.  This posture is the
+sub-track's neutrality guarantee (it scales across users and time; a private name authority does not).
+
+**Sequencing (D-A7, D-A5 precedent).**  This shard is **code-only**: it changes how *new* ingests render the
+path, verified by the src/tests gate.  The destructive library-wide repath (renaming existing directories to
+canonical forms) is **deferred to R6d's one-pass re-derivation** under the J3 gate — this sub-track never runs
+a destructive library operation.  A temporary as-credited/canonical inconsistency in the on-disk library
+(old dirs as-credited, new dirs canonical) is accepted until R6d.
 
 The three sessions, in landing order:
 
-1. **S1 — Model + merge substrate.**  Add `applied_case_ids: list[str]` to `ProvenanceSidecar` and a
-   **set-union monotonic-append** merge arm in `_write_provenance_fields` (case-IDs accumulate across
-   re-annotations; an incoming empty list never erases the recorded set).  Freezes **C-CASE-PROV**.
-2. **S2 — Source + thread the applied set.**  Derive the run-scoped set of contested-default (P2) case-IDs
-   actually applied for a release, accumulate them per work directory, and thread them to the C-PROV write
-   site.  Consumes C-CASE-PROV.
-3. **S3 ◆ — Audit surface + register anneal.**  Enumerate `applied_case_ids` in the `audit` tier pass
-   (parallel to `annotation_tier`/`needs_spot_check`); close the sub-track; anneal the planning register.
+1. **N1 @architect — Alias substrate + canonical-form resolver.**  Add artist alias data (fetch include or a
+   dedicated alias fetch — the inflection ruling; see N1 detail) and `MBArtist.alias_list`, and a
+   `canonical_artist_form(artist) -> str` resolver (prefer primary-flagged native/reception alias per NORM-2,
+   else `MBArtist.name`).  Freezes **C-CANON**.
+2. **N2 — Render canonical name-forms in the destination path.**  Call the resolver at the path performers /
+   composer assembly sites so the compact path projection carries canonical forms.  Consumes C-CANON.
+3. **N3 ◆ — Align the maintenance repath + register anneal.**  Make the `_pipeline_maint.py` repath/regroup
+   path render canonical too (so R6d's future one-pass repath produces canonical dirs, not as-credited);
+   close the sub-track; anneal the planning register.
 
 ## Verify gate
 
 Discovered from `pyproject.toml` (tox envs); do not assume `make`.  Both are **binding** — this is a code
-sub-track.  (Confirmed green at shard time: 1661 tests, 100.00% branch coverage.)
+sub-track.  (Confirm green at shard time before N1.)
 
 - **VERIFY_TEST**: `~/.local/bin/tox -e test` (`pytest tests/`; **100% branch coverage enforced**, `fail_under = 100`).
 - **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` (`mypy src/ tests/`, strict).
@@ -50,273 +63,283 @@ sub-track.  (Confirmed green at shard time: 1661 tests, 100.00% branch coverage.
 
 | # | Session | Cat | Tier | Consumes | Expected files |
 |---|---------|-----|------|----------|----------------|
-| 1 | Add applied_case_ids field and set-union merge to ProvenanceSidecar | A | Opus | C-TIER, C-AR, C-PROV | `src/music_annotator/models.py`, `src/music_annotator/_pipeline_io.py`, `tests/unit/test_models.py`, `tests/unit/test_pipeline.py` |
-| 2 | Source and thread applied contested-default case-IDs into the sidecar | B | Opus | **C-CASE-PROV**, C-PROV, STYLEGUIDE 5.5/P2 | `src/music_annotator/_tags.py`, `src/music_annotator/_pipeline.py`, `src/music_annotator/models.py`, `tests/unit/test_pipeline.py` |
-| 3 ◆ | Surface applied case-IDs in the audit tier pass | I | Sonnet | **C-CASE-PROV**, C-TIER | `src/music_annotator/_audit.py`, `tests/unit/test_audit.py` |
+| 1 @architect | Add artist alias-list and canonical-form resolver | A | Opus | STYLEGUIDE 3.1/NORM-2/NORM-3, D-A8 posture | `src/music_annotator/models.py`, `src/music_annotator/_mb_api.py`, `src/music_annotator/_artists.py`, `tests/unit/test_models.py`, `tests/unit/test_mb_helpers.py`, `tests/unit/test_annotator.py` |
+| 2 | Render canonical name-forms in the destination path | B | Sonnet | **C-CANON**, STYLEGUIDE 4.5 | `src/music_annotator/_tags.py`, `tests/unit/test_pipeline.py`, `tests/unit/test_annotator.py` |
+| 3 ◆ | Align the maintenance repath to canonical forms + anneal | I | Sonnet | **C-CANON** | `src/music_annotator/_pipeline_maint.py`, `tests/unit/test_pipeline.py` |
 
-`Cat`: **S1 is A (substrate)** — it adds the persisted field + merge contract that S2/S3 and every future
-sidecar reader assume; over-specify the merge semantics (set-union, append-only, empty-never-erases).  **S2 is
-B** — it derives and threads a new per-release datum through the render/pipeline path.  **S3 is I
-(integrative)** — it gives the contract its public/operator-visible form (the audit surface is "where the
-contract becomes visible"), closes the ◆, and carries the register anneal.
-`Tier`: **S1 and S2 are Opus.** S1 freezes a durable contract that sidecars persist on disk — a mis-freeze
-(wrong field name, wrong merge semantics) is costly to revise after real sidecars carry it (lever 3, cost of a
-design error).  S2 carries the *sourcing-model judgment* — which cases count as "applied," where the decision
-sites are, and how to instrument them under the 100%-coverage gate without minting dead branches (lever 3 +
-lever 1, ambient match/case coverage complexity).  **S3 is Sonnet** — a mechanical mirror of the existing
-`_audit_tier_pass`; one clear surface, strong inner loop (lever 5) covers it.  `juncture-tier: opus` — kept
-despite the sidecar-only / no-R6d-coupling posture, because the C-CASE-PROV freeze is durable and S2's
-sourcing model is a judgment tests cannot fully catch.
+`Cat`: **N1 is A (substrate)** — it adds the alias data surface + the resolver contract that N2/N3 and every
+future canonical-rendering site consume; over-specify the resolver (carry the primary/locale selection even if
+N2 uses only the primary-alias branch first).  **N2 is B** — it threads the resolver through the compact-path
+render sites; internally self-contained once C-CANON exists.  **N3 is I (integrative)** — it gives the
+contract its operator-visible/durable form (the maintenance repath is the surface R6d will drive), closes the
+◆, and carries the register anneal.
+`Tier`: **N1 is Opus + `@architect` inflection.**  The alias-attachment mechanism is a genuine design-error-cost
+point (lever 3): musicbrainzngs is known to attach `aliases` inconsistently to nested artist entities on a
+release fetch (AGENTS.md "musicbrainzngs implementation" caveat — verify against the raw dict, not the REST
+JSON), so the substrate row may need a dedicated `fetch_artist_aliases` under the defensive-download pattern
+rather than an include flag.  That choice, plus the C-CANON resolver shape, is the inflection judgment.  **N2,
+N3 are Sonnet** — mechanical resolver-threading over a frozen substrate, strong inner loop (lever 5: 100%
+branch coverage + strict mypy).  `juncture-tier: opus` — kept: C-CANON is a durable resolver contract every
+future name-rendering site consumes, and the alias-source mechanism is a judgment tests alone cannot catch.
 
 **Sizing (levers named).**  Default band ~150–400 LOC / 2–4 files.
 
-- **S1 ≈ 50–80 LOC, 4 files.**  Under the band by LOC but a genuine irreducible unit: the field and its merge
-  arm are one contract (**lever 2, the floor** — a field with no merge rule is undefined under re-annotation;
-  a merge rule with no field is nothing).  Kept whole; not split.  One-line-commit-title check: passes.
-- **S2 ≈ 80–140 LOC, 3–4 files** (sourcing helper + per-work-dir accumulator + thread to write site + tests).
-  The sourcing derivation and the threading are **one conceptual unit** (lever 2): you cannot thread a set you
-  have not defined, and the set's definition (which cases, sourced how) *is* the interface the KAT witnesses.
-  Splitting "define the set" from "thread the set" would strand a helper with no consumer under the coverage
-  gate (lever 5 fails on the unreachable helper) — the same dead-code failure mode the A-shards S1 avoided.
-  Kept whole.
-- **S3 ≈ 30–50 LOC, 2 files.**  Under the band; a **separate session by the one-line-commit-title corollary** —
-  "surface applied case-IDs in audit" is a distinct read-path surface with no shared implementation with S2's
-  write path; merging it into S2 yields an "and"-joined title (thread AND surface).  Not fractured below the
-  floor — it is already one irreducible unit (the audit pass + its coverage).
+- **N1 ≈ 120–200 LOC, 3–4 files** (alias model reuse + fetch wiring + resolver + tests).  Within band.
+  **Irreducible unit (lever 2, floor):** the alias data source, the `MBArtist.alias_list` field, and the
+  resolver are one contract — a resolver with no alias data is a no-op; alias data with no resolver is unused.
+  Kept whole.  One-line-commit-title check: "Add artist alias-list and canonical-form resolver" — passes.
+- **N2 ≈ 60–120 LOC, 2–3 files** (call the resolver at the path performers + composer sites + tests).  Under
+  the band; a **separate session by the one-line-commit-title corollary** — "render canonical name-forms in
+  the path" is a distinct render-path surface with no shared implementation with N1's resolver definition.
+  Splitting N1's "define the resolver" from N2's "call the resolver" is legitimate at the contract-sharp
+  C-CANON boundary (N1 freezes the interface N2 consumes).  Not fractured below the floor.
+- **N3 ≈ 40–80 LOC, 2 files** (maintenance-path resolver call + tests + anneal).  Under the band; a **separate
+  session by the one-line-commit-title corollary** — the maintenance/repath surface (`_pipeline_maint.py`) is
+  a distinct code path from the primary ingest path N2 touches; merging into N2 yields an "and"-joined title
+  (render in ingest AND align the repath).  It is already one irreducible unit (the repath render site + its
+  coverage + the anneal).
 
 ## Session detail
 
-### S1 — Add applied_case_ids field and set-union merge to ProvenanceSidecar — freezes C-CASE-PROV
+### N1 @architect — Add artist alias-list and canonical-form resolver — freezes C-CANON
 
-**Deliverable.**  `ProvenanceSidecar` gains `applied_case_ids: list[str]` (default `[]`), and
-`_write_provenance_fields` gains a **set-union monotonic-append** merge arm mirroring the existing
-`annotation_tier` / `accuraterip_summary` arms:
-- `models.py`: add the field on `ProvenanceSidecar` (after `accuraterip_summary`, ~1848) with an rST attribute
-  docstring stating the C-CASE-PROV semantics (applied contested-default case-IDs; append-only set-union;
-  order-normalised for stable YAML).
-- `_pipeline_io.py` `_write_provenance_fields` (~1562, after the AR arm): read `existing.get("applied_case_ids", [])`,
-  union with `provenance.applied_case_ids`, write the **sorted** union when it differs from the existing set; an
-  incoming empty list must never shrink or erase the recorded set (the empty-incoming guard).  Update the
-  method docstring's idempotency-rules block with the new arm.
-- `_read_provenance_sidecar` needs no change (Pydantic parses the list; absent key → default `[]`), but the
-  round-trip must be covered.
+**Deliverable.**  `MBArtist` gains alias data and the pipeline gains a canonical-form resolver:
+- `models.py`: add `alias_list: list[MBAlias] = Field(default_factory=list, alias="alias-list")` to `MBArtist`
+  (`~265`), **reusing the existing `MBAlias` model** (`~689`, already carries `name`/`locale`/`type`/`primary`
+  and `populate_by_name`).  Update the `MBArtist` class docstring's attribute list.
+- `_mb_api.py`: obtain artist aliases.  **Inflection ruling (see Subtleties):** either add `"aliases"` to the
+  artist includes on the release/recording fetch *if verified to attach to nested artist entities*, or add a
+  dedicated `fetch_artist_aliases(mbid)` following the two-layer defensive-download pattern (`@_mb_retry` +
+  `_mb_call`, 4xx-permanent / 5xx-transient) with a `_WORK_CACHE`-style per-MBID cache.
+- `_artists.py`: add `canonical_artist_form(artist: MBArtist) -> str` — return the **primary-flagged alias**
+  whose form matches NORM-2 (native alias where the entity is Latin-script; established Latin-reception alias
+  where non-Latin), falling back to `artist.name` when no qualifying primary alias exists.  Plain, total,
+  MB-sourced (D-A8): no local table, no authored form.
 
-**KAT (the freeze witness for C-CASE-PROV).**  In `test_pipeline.py`, over `_write_provenance_fields`:
-(a) writing `applied_case_ids=["SEL-11","REND-14"]` to an empty sidecar records the sorted set;
-(b) a second write with `applied_case_ids=["NORM-2"]` yields the **union** `["NORM-2","REND-14","SEL-11"]`
-(append-only proof); (c) a write with `applied_case_ids=[]` leaves the recorded set **unchanged**
-(empty-never-erases proof); (d) a `ProvenanceSidecar` round-trips through `_read_provenance_sidecar` after write
-carrying the case-IDs.  Plus a `test_models.py` field-default test (`ProvenanceSidecar().applied_case_ids == []`).
-
-**Subtleties.**
-- **Set-union, not monotonic-tier:** unlike `annotation_tier` (a single rank-ordered value), case-IDs are a
-  *growing set* — re-annotation may apply additional contested defaults; none are ever retracted at the sidecar
-  layer.  Freeze this asymmetry in C-CASE-PROV explicitly (over-specify per Category-A).
-- **Deterministic serialization:** always write the union **sorted**, so re-writes are byte-stable and the
-  idempotency "file unchanged when set unchanged" property holds (the `_write_provenance_fields` YAML dump must
-  not reorder nondeterministically).  Coverage: both the changed-set and unchanged-set branches tested.
-- **100%-branch-coverage gate:** the new merge arm has an empty-incoming branch, a subset-incoming
-  (no-change) branch, and a superset-incoming (write) branch — all three need explicit tests.
-- **No production writer yet** (S2 wires it): S1's field is exercised only by unit tests until S2.  That is the
-  standard substrate-first pattern — the field is populated *in the test*, so the coverage gate is satisfied
-  without a live path.  (Confirm no `# pragma: no cover` is needed; the merge arm is fully reachable from tests.)
-
-**Deferrals.**  No sourcing, no threading (S2); no audit surface (S3).
-
-### S2 — Source and thread applied contested-default case-IDs into the sidecar
-
-*(Lower-fidelity sketch — correct for a post-substrate row; crisply specified after C-CASE-PROV freezes at S1
-and after the S2 inflection ruling on the exact source set.)*
-
-**Deliverable.**  Derive the run-scoped set of contested-default (P2) case-IDs actually applied for a release
-and thread it to the C-PROV write site (`_pipeline.py` ~1334) so it lands in `ProvenanceSidecar.applied_case_ids`.
-- **Source set (the S2 juncture judgment — see Subtleties).**  The contested-default population is the
-  register's P2/"contested by nature" cases whose neutral default the pipeline applies: candidates with real
-  per-release decision sites include **SEL-11** (soloist not promoted to path — fires per concerto release),
-  **NORM-1** (historical ensemble rename applied — fires when a rendered ensemble's canonical ≠ credited),
-  **NORM-2** (native/Latin reception form chosen — fires per name-form selection), **REND-1** (composer not
-  appended to `ARTIST`), **REND-2** (composer not prefixed to `ALBUM`), **REND-14** (billing-order composite).
-  The juncture rules the exact set and, per case, whether it is *run-derived* (a decision site fired) or
-  *structural* (always applied for a classical release).
-- **Accumulation.**  Per work directory (matching the once-per-work-dir C-PROV write), accumulate the union of
-  case-IDs applied across the dir's tracks — a run-level accumulator keyed on `work_top_dir`, parallel to
-  `tier_written`.
-- **Threading.**  Pass the accumulated set into the `ProvenanceSidecar(...)` construction at `_pipeline.py`
-  ~1334/1336 alongside `annotation_tier` / `needs_spot_check`.
-
-**KAT (behavioural witness).**  A `run()`-level test over a concerto release with a named soloist asserts the
-work-dir sidecar's `applied_case_ids` contains `"SEL-11"` (the soloist-not-in-path default was applied); a
-release whose ensemble has a canonical≠credited name asserts `"NORM-1"` present; a plain single-composer
-release asserts the structural set (e.g. `"REND-1"`) present and the concerto-only `"SEL-11"` **absent**.
+**KAT (the freeze witness for C-CANON).**  In `test_annotator.py`, over `canonical_artist_form`:
+(a) an artist with a primary-flagged native-Latin alias ("Wiener Philharmoniker") whose `name` is the
+anglicised form ("Vienna Philharmonic") resolves to the **alias**; (b) an artist with no alias resolves to
+`name` (fallback proof); (c) an artist with only a non-primary alias resolves to `name` (primary-only proof).
+Plus a `test_models.py` `MBArtist().alias_list == []` default test, and (in `test_mb_helpers.py`) a fetch test
+proving aliases populate `MBArtist.alias_list` from the raw MB dict (verify against the actual `mb.get_*`
+key names, per the AGENTS.md musicbrainzngs caveat — not the REST JSON alone).
 
 **Subtleties.**
-- **This is the sourcing-model juncture** the Opus tier exists for.  The run-derived-vs-structural line per case
-  is a judgment a test cannot fully adjudicate — the juncture (or operator) rules the exact source set before
-  the row is implementable.  *C-CASE-PROV's "which cases" clause is "to be frozen at S2" until then.*
-- **Layer-routing:** case-application provenance is *provenance*, not tag-rendering — keep the emission out of
-  the on-disk `TrackTags`/`to_file_dict` (nothing free-text in tags, per 5.5) and route it through the pipeline
-  accumulator to the sidecar, exactly as `annotation_tier` is kept in `_pipeline.py` not `_tags.py` (the C-TIER
-  precedent).
-- **match/case coverage:** instrumenting `build_cea_performers` / concerto / name-form decision sites must not
-  mint unreachable arms; prefer emitting the case-ID at the point the default is *applied*, and cover both the
-  applied and not-applied branches (lever 1, ambient coverage complexity).
-- **C-CASE append-only interplay:** the emitted strings are register case-IDs — they must match the register
-  exactly (`"SEL-11"`, not `"SEL11"`); a consolidation (e.g. NORM-10→NORM-2) means emitting the *survivor* ID.
+- **The alias-attachment inflection (the `@architect` judgment).**  musicbrainzngs may not attach `aliases` to
+  artists nested inside `artist-credits`/relations on a release fetch even with the include — a known
+  library-vs-REST-JSON gap (AGENTS.md).  **Verify by printing the raw `mb.get_release_by_id` dict** before
+  committing to the include path; if aliases do not attach, freeze the dedicated-fetch mechanism instead.
+  This is the design-error-cost point the Opus tier + inflection marker exist for; the wrong choice here is
+  costly to revise after C-CANON is consumed.
+- **NORM-2 selection is MB-sourced only (D-A8).**  "Native where Latin-script; established reception where
+  non-Latin" is realised by *reading MB's own primary-alias flags and locales*, not by authoring a form.
+  Where MB holds no primary alias, fall back to `name` plainly — do not synthesise.
+- **Over-specify per Category-A.**  Carry the locale/primary selection logic in the resolver even though N2's
+  first consumer may only need the primary-alias branch — a downstream full-projection consumer (playlists,
+  as-credited-variant surfaces) will want it, and adding it later is costlier (compiler-contract rigidity).
+- **100%-branch-coverage gate.**  The resolver's primary-alias branch, the no-primary branch, and the
+  no-alias fallback branch each need an explicit test; the fetch/parse path needs both populated and empty
+  alias-list cases.
 
-**Deferrals.**  No audit surface (S3).
+**Deferrals.**  No path rendering (N2); no maintenance-path change (N3).
 
-### S3 ◆ — Surface applied case-IDs in the audit tier pass
+### N2 — Render canonical name-forms in the destination path
+
+*(Lower-fidelity sketch — correct for a post-substrate row; crisply specified after C-CANON freezes at N1.)*
+
+**Deliverable.**  Thread `canonical_artist_form` into the compact-path render sites so the destination path
+carries canonical entity forms (STYLEGUIDE 4.5):
+- **Performers component** (`_tags.py:1224–1227`): replace `[e.name for e in tags.cea_album_conductors_list]`
+  / `cea_album_ensembles_list` with the canonical form.  The `ArtistEntry` construction sites (`_tags.py:433`,
+  `_works.py:254`) are the natural place to carry the canonical form alongside `name`/`sort` — freeze at N1
+  detail whether the resolver is called at `ArtistEntry` construction (once, carried) or at path assembly
+  (per-render); prefer construction so all downstream path/tag readers see one resolved form.
+- **Composer component** (`_tags.py:587`): the path composer is `last_name(sort_name)`.  Per D-A8, the
+  MB sort-name surname is already an MB-asserted, stable, recognisable form — **N2 leaves it as-is unless N1's
+  ruling extends the resolver to composer name-forms**; if the operator wants composer canonicalisation, it
+  routes through the same primary-alias resolver, not a new mechanism.  (Default: performers only; composer
+  unchanged — surface as an N2 discovery if the composer path is found to violate NORM-2.)
+
+**KAT (behavioural witness).**  A `build_dest_path`-level test over a release whose ensemble has a primary
+native-Latin alias asserts the path performers component carries the **alias** form, not the anglicised
+`name`; a release whose entities have no aliases asserts the path is **unchanged** from the pre-N2 as-credited
+form (no-regression proof).  Preserved surfaces (`ARTIST`/`ALBUMARTIST`) asserted **unchanged** (the D-A7
+surface split — the path canonicalises, the preserved tags do not).
+
+**Subtleties.**
+- **Preserved surfaces must not change (D-A7).**  `ARTIST`/`ALBUMARTIST` and the CE verbatim tags stay
+  as-credited — N2 touches only the compact-path assembly, never the preserved-tag render.  A test asserting
+  `ARTIST` unchanged guards the surface split.
+- **Layer-routing.**  Canonicalisation is a *rendering* concern (layer 4) over the one model — the resolved
+  form is a projection, not a mutation of the model's credit data (P1).  Keep the as-credited credit intact in
+  the model; render canonical only at the compact-path surface.
+- **match/case coverage.**  Instrumenting the render sites must not mint unreachable arms; cover both the
+  alias-present and alias-absent path outcomes.
+
+**Deferrals.**  No maintenance-path change (N3); no destructive repath (R6d).
+
+### N3 ◆ — Align the maintenance repath to canonical forms + register anneal
 
 *(Lower-fidelity sketch — post-substrate integrative row.)*
 
-**Deliverable.**  Extend `_audit_tier_pass` (`_audit.py` ~284) to read `applied_case_ids` from each work-dir
-sidecar (the sidecar is already read + cached there) and surface it: add an `audit_tier_case_ids` log event (or
-extend the existing per-tier events) reporting the applied case-IDs per work dir, and a count in the audit
-summary parallel to `needs_spot_check`.  The `sidecar_cache` tuple (~351) extends to carry `applied_case_ids`.
+**Deliverable.**  Make the `_pipeline_maint.py` repath/regroup path render canonical forms too, so R6d's future
+one-pass repath produces canonical directories (not as-credited):
+- `_canonical_composer_component` (`_pipeline_maint.py:721–743`) and any performer-component derivation in the
+  repath path route through the same C-CANON resolver / carried canonical form as the primary ingest path
+  (N2), so ingest and repath render **identically**.  (This is consistency, not a new destructive op — the
+  repath render function is aligned; R6d decides when to *run* it.)
 
-**KAT.**  A `test_audit.py` case with a sidecar carrying `applied_case_ids=["SEL-11","REND-14"]` asserts the
-audit pass logs/counts them; a sidecar with `applied_case_ids=[]` asserts no case-ID event (both branches covered).
+**KAT.**  A repath-path test asserts the maintenance component renders the canonical (alias) form for an
+entity with a primary native-Latin alias, matching the N2 ingest render byte-for-byte (ingest/repath parity).
 
-**Subtleties.**  Mirror the exact dedup/eligibility guard the tier pass already uses (`action in {"tagged",
-"enriched"}`, min-2-parts) so the case-ID denominator reconciles with `counts["total"]`.  Purely additive to the
-audit surface — no change to write-path or contract.
+**Subtleties.**  Mirror N2's surface split exactly — the repath aligns the *compact path* only; no preserved
+surface and no persisted tag changes in the maintenance path.  Purely a render-alignment change; **no
+destructive library operation is performed by this sub-track** (R6d runs the repath under J3).
 
-**◆ boundary (register anneal).**  Re-read Purpose.  Confirm all three sessions enacted, `tox -m analyze` green,
-ledger complete.  **Planning-register anneal** (the integrative session is where the contract gets its public
-form — the anneal is the same act):
-- Durable files (`models.py`, `_pipeline_io.py`, `_pipeline.py`, `_tags.py`, `_audit.py` docstrings/comments)
-  carry **no plan coordinates** — no "S1/S2/S3", no "sidecar-case-ids sub-track", no `/plan-run` vocabulary.
-  State the property/reason/invariant (e.g. "applied contested-default case-IDs; set-union append-only per
-  C-CASE-PROV"), never the plan coordinate.
-- Grep the durable files against the **anneal denylist** (Notes for executors); translate any leaked coordinate
-  into standalone prose.
-- Report to the styleguide roadmap: rule-5.5 sidecar persistence is enacted; C-CASE-PROV frozen.  **No R6d
-  coordination needed** — sidecar-only, no persisted-tag/path change.
+**◆ boundary (register anneal).**  Re-read Purpose.  Confirm all three sessions enacted, `tox -m analyze`
+green, ledger complete.  **Planning-register anneal** (the integrative session is where the contract gets its
+public form — the anneal is the same act):
+- Durable files (`models.py`, `_mb_api.py`, `_artists.py`, `_tags.py`, `_pipeline_maint.py`
+  docstrings/comments) carry **no plan coordinates** — no "N1/N2/N3", no "path-canonical-name-forms
+  sub-track", no `/plan-run` vocabulary.  State the property/reason/invariant (e.g. "canonical entity
+  name-form from MB's primary-flagged alias per NORM-2/C-CANON"), never the plan coordinate.
+- Grep the durable files against the **anneal denylist** (Notes for executors); translate any leaked
+  coordinate into standalone prose.
+- Report to the styleguide roadmap: rule-3.1/NORM-2 canonical-path rendering is enacted; C-CANON frozen.
+  **R6d coordination noted** — the repath render is aligned; R6d runs the destructive library-wide repath
+  under J3 (this sub-track lands the render, not the repath).
 
 ## Cross-session contracts
 
-### C-CASE-PROV — applied contested-default case-IDs in the provenance sidecar *(field + merge FROZEN at S1; source set FROZEN at S2)*
+### C-CANON — canonical entity name-form resolution *(field + resolver FROZEN at N1)*
 
-**Field + persistence (frozen at S1).**  `ProvenanceSidecar.applied_case_ids: list[str]` (default `[]`) records
-the register case-IDs (`<LAYER>-<n>`, per C-CASE) of the contested-case (P2) neutral defaults that were applied
-for the release.  Persisted in the work-dir provenance sidecar (`freedb_disc_*.yaml` or
-`music_annotator_provenance.yaml`), under the same C-PROV write discipline as `annotation_tier` (written once
-per work dir, after `_verify_copy`, before the journal append).  **Merge semantics: set-union, append-only** —
-`_write_provenance_fields` unions the incoming set with the recorded set and writes the **sorted** union; an
-incoming empty list never shrinks or erases the recorded set.  This is deliberately *not* the monotonic-rank
-rule of `annotation_tier` (a set grows; it has no rank).  Serialization is order-normalised (sorted) for
-byte-stable re-writes.  Free-text is never written to tags (5.5): the case-IDs live only in the sidecar.
+**Alias data + resolver (frozen at N1).**  `MBArtist.alias_list: list[MBAlias]` (default `[]`) carries the
+entity's MB aliases; `canonical_artist_form(artist) -> str` returns the entity's **canonical name-form** per
+STYLEGUIDE 3.1/NORM-2 — the **primary-flagged MB alias** matching the native/reception rule (native alias
+where Latin-script; established Latin-reception alias where non-Latin), falling back to `MBArtist.name` when no
+qualifying primary alias exists.  **Authority-deference invariant (D-A8): the resolved form is always a form
+MB itself asserts** — a primary alias or the display name — never a locally-authored form, editorial table, or
+new scholarly romanisation.  The resolver is total (never raises; always returns a non-empty string given a
+populated `MBArtist`).  Deterministic: the same artist resolves to the same form regardless of release
+(3.1 "selected once, not per release").
 
-**Source set (FROZEN at S2).**  Emitted case-IDs and their detection conditions (from `collect_applied_case_ids`
-in `_tags.py`):
-- **SEL-11** (run-derived): `tags.cea_soloist_names` non-empty — soloists identified but not promoted to path.
-- **REND-1** (structural): `tags.composer` non-empty AND `tags.is_classical == "1"` — composer never appended to `ARTIST`.
-- **REND-2** (structural): same condition as REND-1 — composer never prefixed to `ALBUM`.
-- **REND-14** (structural): `tags.cea_soloist_names or tags.conductor or tags.cea_ensembles` non-empty — billing-order composite assembled.
-- **NORM-1, NORM-2**: no clean application site found; not emitted (see D-1).
+**Alias source mechanism (frozen at N1 inflection).**  *To be frozen at N1* — either the `"aliases"` include
+on the existing artist fetches (if verified to attach to nested artist entities) or a dedicated
+`fetch_artist_aliases(mbid)` under the two-layer defensive-download pattern with a per-MBID cache.  The N1
+`@architect` inflection rules this against the raw `mb.get_*` dict, not the REST JSON.
 
-**Flavour:** compiler-enforced (the Pydantic field type; mypy strict on the merge arm) **+ test-enforced** (the
-S1 set-union KATs: union grows, empty-never-erases, round-trip; the S2 behavioural KATs: right case-IDs per
-release shape) **+ prose-enforced** (the source-set ruling, cited to 5.5/P2 and the register).  **Defined-in:**
-S1 (field + merge) / S2 (source set).  **Consumed-by:** S2 (writes the field), S3 (reads it in audit), any
-future sidecar reader / Act III-b re-derivation (the case-IDs are durable provenance).  Over-specified per
-Category-A: carries the set-union-vs-monotonic asymmetry and the empty-never-erases guarantee even though only
-S1's tests immediately exercise them.
+**Surface scope (frozen at N1/N2).**  C-CANON applies to the **compact path projection only** (4.5) —
+performers component, and composer only if N1 extends the resolver there.  It **never** applies to preserved
+surfaces (`ARTIST`/`ALBUMARTIST`, CE verbatim tags — REND-1/4.3): those stay as-credited (the D-A7 surface
+split).
+
+**Flavour:** compiler-enforced (the `MBArtist.alias_list` Pydantic field + the resolver signature; mypy strict)
+**+ test-enforced** (the N1 resolver KATs: primary-alias-wins, no-primary fallback, no-alias fallback; the N2
+behavioural KATs: canonical in path, preserved tags unchanged; the N3 ingest/repath parity KAT) **+
+prose-enforced** (the D-A8 authority-deference invariant; the D-A7 surface split, cited to 3.1/NORM-2/4.5 and
+REND-1/4.3).  **Defined-in:** N1 (field + resolver + source mechanism).  **Consumed-by:** N2 (compact path
+render), N3 (maintenance repath render), any future full-projection/playlist canonical-form consumer, R6d (the
+one-pass repath renders canonical via the aligned N3 surface).  Over-specified per Category-A: carries the
+locale/primary selection even though N2's first consumer uses only the primary-alias branch.
 
 ### Consumed (frozen upstream — invalidation is out of scope for this sub-track)
 
-- **C-TIER / C-AR** (R2 / R3b) — the sibling `ProvenanceSidecar` fields and their monotonic-upgrade merge arms;
-  the new arm sits beside them without disturbing them.  Validate-only.
-- **C-PROV** (repo `AGENTS.md`, transaction-journal/confirmation-provenance invariant) — the once-per-work-dir,
-  post-`_verify_copy`, pre-journal-append write ordering.  `applied_case_ids` is written at the *same* gated
-  site as `annotation_tier`; S2 must not append it before `_verify_copy` succeeds.
-- **C-CASE** (styleguide arc) — register case-IDs are append-only, never renumbered; emitted strings are the
-  survivor IDs after any consolidation.
-- **STYLEGUIDE v1 rule 5.5 / P2 / layer 5** — the authority; no ruling is re-opened.
+- **STYLEGUIDE v1 3.1 / 3.2 / NORM-2 / NORM-3 / 4.5** — the authority: one canonical form per entity (native/
+  reception per NORM-2; aliases are evidence per NORM-3); compact projections render canonical (3.2); the path
+  is the compact assembled projection (4.5).  No ruling is re-opened.
+- **REND-1 / REND-19 / 4.3** — `ARTIST`/`ALBUMARTIST` are preserved verbatim claims.  C-CANON does **not**
+  touch them (the D-A7 surface split).  Validate-only.
+- **C-RA-GRAMMAR / C-NOSOLO** (A-shards) — the composite-tag grammar and no-soloist-in-path rules; the path
+  performers component is conductors-then-ensembles with soloists excluded — N2 canonicalises the forms
+  *within* that frozen structure, never changes which positions the path carries.  Validate-only.
+- **Defensive-download invariant** (repo `AGENTS.md`) — any dedicated `fetch_artist_aliases` follows the
+  two-layer `@_mb_retry` + `_mb_call` pattern, distinguishing 4xx-permanent from 5xx-transient.
+- **"Path is a handle, not a manifest" / uniform-ceiling-ragged-floor** (C-CLASS/C-INIT inputs to 4.5) — the
+  canonicalisation changes name *forms*, not path *structure*; the handle stays a handle.
 
 ### Produced
 
-- **C-CASE-PROV** — field + merge at S1, source set at S2.  Sidecar-only; **no output to R6d planning** (no
-  persisted-tag or path change).
+- **C-CANON** — alias field + resolver at N1; compact-path render at N2; maintenance-repath alignment at N3.
+  **Coordinates with R6d** (the destructive library-wide repath): the render is landed here; R6d runs the
+  repath under J3.  Distinct from the sidecar-case-ids shard, which had no R6d coupling.
 
 ## Progress ledger
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 | Add applied_case_ids field and set-union merge to ProvenanceSidecar | done | 856dfec | C-CASE-PROV (field + merge) |
-| 2 | Source and thread applied contested-default case-IDs into the sidecar | done | 55dd0c6 | C-CASE-PROV (source set: SEL-11 run-derived; REND-1/REND-2/REND-14 structural; NORM-1/NORM-2 no clean site) |
-| 3 ◆ | Surface applied case-IDs in the audit tier pass | done | a3a9e0c+441bddb | C-CASE-PROV audit surface; ◆ still-on-intent |
+| 1 @architect | Add artist alias-list and canonical-form resolver | pending | | |
+| 2 | Render canonical name-forms in the destination path | pending | | |
+| 3 ◆ | Align the maintenance repath to canonical forms + anneal | pending | | |
 
 ## Action-frame digest
 
-### S2 — 2026-08-09
-Discovery/flex: Source set narrowed — NORM-1 and NORM-2 have no clean application site in the pipeline; emitted set is {SEL-11, REND-1, REND-2, REND-14}.
-Affected: C-CASE-PROV source set (was "to be frozen at S2"; now frozen with narrower set)
-Deferred: no — S3 reads whatever is in applied_case_ids; narrower set does not affect the audit surface contract.
-Texture: Plan's D-1 anticipated this exact scenario; internal-continue verdict. No downstream contract broken.
-
-### S3 ◆ — 2026-08-10
-Discovery/flex: Anneal gate found one residual plan coordinate in _audit.py:384 runtime message ("S3 write path"); fixed before ledger-done.
-Affected: none (cosmetic anneal fix; no contract change)
-Deferred: no — fixed in commit 441bddb.
-Texture: Boundary fork returned still-on-intent; all three sessions enacted, C-CASE-PROV fully frozen, sub-track complete.
+*(none yet)*
 
 ## Discoveries & risks
 
-- **D-1 (S2 source-set judgment — RESOLVED).**  NORM-1 and NORM-2 have no clean application site in the
-  pipeline (no ensemble-specific credited-vs-canonical branch; no name-form selection logic). Source set frozen
-  as {SEL-11 run-derived; REND-1/REND-2/REND-14 structural}. Internal-continue — S3 unaffected.
-- **D-2 (composite-tag-grammar shard provisionally discharged).**  The substrate survey found ARTIST/ALBUMARTIST
-  already render verbatim MB credits with no author-splicing (REND-1/4.3 satisfied) and CEA composites already
-  correctly separated (C-RA-GRAMMAR) — no un-enacted grammar work without an operator-named target.  Folded to
-  ROADMAP-styleguide D-A6.  Not a risk to *this* sub-track; recorded so a future node-A shard does not re-derive
-  it.  **internal-continue** (does not affect the sidecar-case-ids sessions).
-- **D-3 (normalisation shard carries an unresolved conflict).**  STYLEGUIDE 3.1 (compact projections render
-  canonical) vs. REND-1/4.3 (`ARTIST` preserved/verbatim) conflict, plus a library-wide repath requiring R6d
-  coordination — needs adjudication before that shard is shardable.  Recorded for the next node-A boundary; **no
-  bearing on this sub-track** (sidecar-only).
-- **D-4 (no R6d coupling — sequencing freedom).**  Unlike the other node-A shards, this one changes no persisted
-  tag and no path, so it is **independent of R6d** and can land any time without the "re-derive once" pressure.
-  No dependency inversion; safe to land now.
+- **D-1 (N1 alias-attachment mechanism — the inflection judgment; OPEN until N1).**  musicbrainzngs may not
+  attach `aliases` to nested artist entities on a release fetch even with the include (a known library-vs-REST
+  gap, AGENTS.md).  N1 must verify against the raw `mb.get_*` dict and freeze either the include path or a
+  dedicated `fetch_artist_aliases`.  If a dedicated fetch is needed, N1 grows toward the top of its band (the
+  defensive-download wiring + cache).  *Additive-reshard* only if the dedicated fetch proves large enough to
+  warrant its own row — surface at the N1 boundary; do not silently absorb.
+- **D-2 (composer path name-form — scope decision at N1/N2).**  The path composer is `last_name(sort_name)`
+  (an MB-asserted, stable surname).  Default: N2 leaves it unchanged (already MB-sourced and recognisable per
+  D-A8).  If N2 finds the composer surname violates NORM-2 for some entity (e.g. non-Latin composer rendered
+  in a non-reception form), that is a discovery — route it through the *same* primary-alias resolver, never a
+  new mechanism.  *internal-continue* unless a real violation surfaces.
+- **D-3 (R6d coupling — sequencing constraint, not a risk to this sub-track).**  This shard changes persisted
+  paths for *new* ingests only; the destructive library-wide repath is R6d's under J3 (D-A7/D-A5).  The N3
+  maintenance-repath alignment is the surface R6d drives — landing it here is what lets R6d re-path once, not
+  piecemeal.  No destructive op in this sub-track.  *internal-continue.*
+- **D-4 (temporary library inconsistency — accepted, D-A7).**  Until R6d, the on-disk library mixes
+  as-credited (old dirs) and canonical (new dirs) forms.  Accepted by the operator; not a defect to remediate
+  in-track.  Noted so `/plan-run` does not treat it as an in-track discovery.
 - **D-5 (stale census/NOTES `cea_album_soloists_unified` refs — pre-existing, out of scope).**  Carried down
-  from the A-shards ◆ deferral and both roadmaps' R6d caveat: `census-impl.md` / `NOTES.md` still describe the
-  deleted field.  A doc-freshness item for R6d, **not** this sub-track's work (census-artifact content refresh).
-  Noted so `/plan-run` does not treat it as an in-track discovery.
+  from prior boundaries and both roadmaps' R6d caveat: `census-impl.md` / `NOTES.md` still describe a deleted
+  field.  A doc-freshness item for R6d, **not** this sub-track's work.  Noted so `/plan-run` does not treat it
+  as an in-track discovery.
 
 ## Notes for executors
 
-- **Tier routing.**  S1, S2 are **Opus** (durable contract freeze; the sourcing-model judgment).  S3 is
-  **Sonnet** (mechanical audit-surface mirror of `_audit_tier_pass`).  `juncture-tier: opus` — kept because
-  C-CASE-PROV is durable sidecar-persisted state and S2's source set is a judgment tests cannot fully catch,
-  despite the sidecar-only / no-R6d posture.
-- **Register: application, not authoring.**  No new editorial decisions.  Every applied case-ID is an
-  *already-frozen* v1 ruling; S2 records which bit, it does not decide.  If a row seems to *need* a new
-  contested-case ruling, that is a discovery (surface it), not a licence to decide.
+- **Tier routing.**  N1 is **Opus + `@architect` inflection** (the alias-source-mechanism design judgment; the
+  durable C-CANON resolver freeze).  N2, N3 are **Sonnet** (mechanical resolver-threading over the frozen
+  substrate).  `juncture-tier: opus` — kept: C-CANON is durable and the alias mechanism is a judgment tests
+  alone cannot catch.
+- **Register: authority-deference, not authoring (D-A8).**  The canonical form is always a form MB itself
+  asserts (a primary alias or the display name).  No local editorial name table, no synthesised form, no new
+  scholarly romanisation, no new annotation convention.  If a row seems to *need* an authored form, that is a
+  discovery (surface it), not a licence to author.
+- **Surface split is load-bearing (D-A7).**  C-CANON touches the **compact path only**.  `ARTIST`/
+  `ALBUMARTIST` and CE verbatim tags stay as-credited (REND-1/4.3).  Every render-site change must carry a
+  test asserting the preserved surfaces are unchanged.
 - **REGISTER rule (durable-file discipline).**  In source/tests, state the *property/reason/invariant* — never
-  the plan coordinate.  "applied contested-default case-IDs; set-union append-only" is right; "the S2
-  case-ID threading" is not.  Plan vocabulary (S1/S2/S3, sub-track names, `/plan-run`) lives only in
-  `PLAN.md` / `ROADMAP*.md` / the ledger / commit messages.  See also the repo `AGENTS.md` REGISTER block.
+  the plan coordinate.  "canonical entity name-form from MB's primary-flagged alias per NORM-2/C-CANON" is
+  right; "the N2 path-canonicalisation" is not.  Plan vocabulary (N1/N2/N3, sub-track names, `/plan-run`)
+  lives only in `PLAN.md` / `ROADMAP*.md` / the ledger / commit messages.  See also the repo `AGENTS.md`
+  REGISTER block.
 - **Anneal denylist (◆ gate greps durable files for these).**  Seeded from the `/plan-run` default, tuned for
   this project's vocabulary:
-  - `\bS[1-9]\b` (plan session coordinates) — **but** allow the legitimate STYLEGUIDE-rule-section forms
-    (`\b[45]\.[0-9]\b` like "4.5", "5.5" are register/rule cites, not plan coordinates — do **not** flag).
+  - `\bN[1-9]\b` (this sub-track's plan session coordinates) **and** `\bS[1-9]\b` (prior sub-tracks') — **but**
+    allow the STYLEGUIDE-rule-section forms (`\b[1-5]\.[0-9]\b` like "3.1", "4.5", "5.2" are register/rule
+    cites, not plan coordinates — do **not** flag).
   - `sub-track`, `plan-run`, `plan-shard`, `halt-at-boundaries`, `run-to-boundary`
-  - `C-CASE-PROV` **only outside docstrings that legitimately name the contract** — contract names in
-    docstrings are the intended durable form (the C-TIER/C-AR precedent); flag bare "S2 freeze"-style prose,
-    not the contract name itself.
+  - `C-CANON` **only outside docstrings that legitimately name the contract** — contract names in docstrings
+    are the intended durable form (the C-TIER/C-CASE-PROV precedent); flag bare "N1 freeze"-style prose, not
+    the contract name itself.
   - `juncture`, `inflection`, `action-frame`, `◆`
-  - Do **not** add `case-ID` / `applied_case_ids` / register IDs (`SEL-`, `NORM-`, `REND-`) to the denylist —
-    these are legitimate domain vocabulary this sub-track deliberately persists.
-- **Invariants to preserve:** C-PROV write ordering (case-IDs written at the same gated site as
-  `annotation_tier`, after `_verify_copy`, before journal append); C-TIER/C-AR merge arms untouched; C-CASE
-  append-only (emit survivor IDs); nothing free-text in tags (5.5 — case-IDs live only in the sidecar); the
-  defensive-download and confirmation-provenance invariants (untouched — this sub-track is not in the
-  copy/verify network path).
+  - Do **not** add `alias`, `canonical`, `NORM-2`, `primary`, or register IDs (`NORM-`, `REND-`, `SEL-`) to
+    the denylist — these are legitimate domain vocabulary this sub-track deliberately renders and cites.
+- **Invariants to preserve:** the D-A7 surface split (preserved tags unchanged); C-RA-GRAMMAR / C-NOSOLO (the
+  path carries conductors-then-ensembles, soloists excluded — canonicalise forms within that structure, never
+  change which positions the path carries); the defensive-download pattern (any `fetch_artist_aliases` follows
+  `@_mb_retry` + `_mb_call`); "path is a handle, not a manifest" (change name forms, not path structure); the
+  confirmation-provenance and copy/verify invariants (untouched — this sub-track is not in the copy/verify
+  network path).
 - **Every row runs `~/.local/bin/tox -m analyze` before ledger-done** (build + test at 100% branch coverage +
   strict mypy + ruff + pylint 10.00/10 + pyupgrade).  Import order via `~/.local/bin/tox -m edit`, never
   hand-edited.
-- **Suggested first `/plan-run` invocation:** `halt-at-boundaries` — this is the first sidecar-provenance
-  application shard from the styleguide arc; the "persist an applied-ruling set" pattern is unproven here, so
-  stop after S1 for an operator check that the C-CASE-PROV freeze (especially the set-union-vs-monotonic
-  merge semantics) is right before S2 consumes it.  Once S1 confirms the pattern, `run-to-boundary` through the
-  S3 ◆.
+- **Suggested first `/plan-run` invocation:** `halt-at-boundaries` — the alias-source-mechanism (D-1) is the
+  first unproven substrate judgment in this shard; stop after N1 for an operator check that the C-CANON freeze
+  (especially the alias-attachment mechanism and the primary-alias selection rule) is right before N2 consumes
+  it.  Once N1 confirms the pattern, `run-to-boundary` through the N3 ◆.

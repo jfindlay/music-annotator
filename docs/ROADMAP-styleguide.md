@@ -130,14 +130,19 @@ operator recommendations carried to V1b (see Discoveries appendix D-A1/D-A2).
   (`ARTIST` et al.); normalisation changes (canonical name-forms in paths).  Application shards that change
   persisted tags or paths coordinate with the library-completion arc's R6 re-derivation — prefer landing
   them so R6d re-paths once, not piecemeal.
-  **IN PROGRESS (2026-08-09, sub-track "sidecar-case-ids", `docs/PLAN.md` 0/3):** the rule-5.5
-  `ProvenanceSidecar` case-ID persistence shard — S1 adds the `applied_case_ids` field + set-union monotonic
-  merge (freezes C-CASE-PROV), S2 sources + threads the run-derived contested-default (P2) case-IDs, S3
-  surfaces them in `audit` + register anneal.  **Sidecar-only: no persisted-tag or path change, no R6d
-  coupling** (distinct from the other two remaining shards, which do repath and must coordinate with R6d).
-  Substrate survey finding folded: composite-tag grammar (`ARTIST` et al.) appears **largely already satisfied
-  by v1's enacted state** (ARTIST/ALBUMARTIST already verbatim; CEA composite correctly separated) — that
-  shard's premise is provisionally discharged pending an operator-named target (see Discoveries D-A6).
+  **DONE (2026-08-11, sub-track "sidecar-case-ids", `docs/PLAN.md` 3/3; commits `856dfec` / `55dd0c6` /
+  `a3a9e0c`+`441bddb`; ◆ still-on-intent):** the rule-5.5 `ProvenanceSidecar` case-ID persistence shard —
+  the `applied_case_ids` field + set-union monotonic merge, sourcing + threading of the run-derived
+  contested-default (P2) case-IDs, and the `audit`-surface enumeration all landed.  **Froze C-CASE-PROV**
+  (field + set-union-append-only merge; source set {SEL-11 run-derived; REND-1/REND-2/REND-14 structural;
+  NORM-1/NORM-2 no clean application site}).  Sidecar-only — no persisted-tag or path change, no R6d coupling.
+  **IN PROGRESS (2026-08-11, sub-track "path-canonical-name-forms"):** the normalisation shard — render
+  STYLEGUIDE 3.1/NORM-2 canonical entity name-forms in the compact path projection (4.5), sourced from MB's
+  own primary-flagged aliases (authority-deference posture, D-A7).  **Path-changing but code-only now**: the
+  destructive library-wide repath rides R6d's one pass (D-A5 precedent); this shard only makes new ingests
+  render canonical.  Substrate survey findings folded: composite-tag grammar (`ARTIST` et al.) is **discharged
+  by v1's enacted state** (ARTIST/ALBUMARTIST already verbatim by design — REND-1/4.3; not a defect), and the
+  D-A6 "3.1-vs-REND-1 conflict" is **dissolved** (they govern different surfaces — see D-A6/D-A7).
 - **P — Public conventions spec.**  The externalised projection of the styleguide (= R6e in the library-completion
   ROADMAP; finalises alongside the Act II freeze).  Derivation, not duplication.
 - **C — CEv3.**  The CE successor on Picard v3, platforming the styleguide's MB-derivable partition.  Graduates to its
@@ -226,3 +231,30 @@ E0 1 ✓ · V1a 3 ✓ · V1b 3 ✓ → **v1 reached in 7 sessions (2026-07-30)**
   adjudication (which surfaces render canonical vs. preserved forms) before the normalisation shard is
   shardable; and it triggers a library-wide repath that must coordinate with R6d.  Neither is a blocker for
   the sidecar-case-ids shard (sidecar-only, R6d-independent).
+  **SUPERSEDED (2026-08-11, D-A7): the conflict was a category error.**  3.1/NORM-2 govern the *compact*
+  projection (the path, 4.5); REND-1/4.3 govern `ARTIST`/`ALBUMARTIST` (*preserved/full* surfaces, 4.3).  The
+  v1 register-split (4.1 assembled-vs-preserved; 3.2 compact-vs-full) already resolves them to different
+  surfaces — there is nothing to adjudicate between the two rules.  `ARTIST` stays verbatim; the path renders
+  canonical.  The normalisation shard *is* shardable (see D-A7).
+
+- **D-A7 (2026-08-11, path-canonical-name-forms shard boundary — supersedes the D-A6 conflict).**  Two
+  operator rulings unblock the normalisation shard.  (1) **No rule conflict** — 3.1 (path, compact) and
+  REND-1/4.3 (`ARTIST`, preserved) apply to different surfaces (D-A6 superseded above).  A code audit found
+  the real gap: **no canonical-form machinery exists anywhere in `src/`** — all path name-forms render
+  verbatim from `MBArtist.name` / `sort_name` (`_tags.py:430`, `:587`, `:1224`), so the path can render
+  "Vienna Philharmonic" where NORM-2 demands "Wiener Philharmoniker".  The shard has genuine work.  (2)
+  **Canonical-form source = MB's own primary-flagged aliases** (operator, authority-deference posture): fetch
+  the artist alias-list, prefer the primary-flagged alias per NORM-2's native/reception rule, fall back to
+  `MBArtist.name`.  The *only* editorial act is selecting among MB's own asserted forms — never a local
+  editorial table, never a form MB does not hold.  (3) **Sequencing: code-only now, repath rides R6d** (D-A5
+  precedent) — new ingests render canonical; the destructive library-wide repath defers to R6d's one pass
+  under J3.  Temporary as-credited/canonical inconsistency in the library until R6d, accepted.
+
+- **D-A8 (posture, 2026-08-11) — MB-authority deference (durable design posture).**  Operator: accept MB data
+  as the source of authority even where fallible/incomplete; modify it only "as defensibly and plainly as
+  possible"; **introduce no new conventions in annotation style or music scholarship**.  Improving on MB to
+  serve one collector's taste does not scale across users or time; the good-engineering choice is to defer to
+  MB's own assertions and select among them plainly.  This sharpens the arc's *generative-neutrality* and
+  *CE-continuity* postures into an authority-deference rule that anchors this shard (canonical form = MB's own
+  primary alias, not an authored form) and every future application shard.  Prose-enforced; belongs in the
+  styleguide's foundational-principles register at the next V1b/L-loop touch.
