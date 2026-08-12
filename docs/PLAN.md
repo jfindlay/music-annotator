@@ -299,7 +299,7 @@ though S2 is the first consumer over a 3-group population.
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 @architect | Add work-group modal-depth clamp to build_dest_path | done | 4fe4025 | C-W3b-INT (work_group_modal_depth helper + build_dest_path group_modal_depth param; corner pins: tie→shallower, PL=0 excluded; all-orphan→0; min() clamp down-only) |
-| 2 | Thread work-group modal depth through the render callers | pending | | |
+| 2 | Thread work-group modal depth through the render callers | done | 4de8c70 | C-W3b-INT caller threading (run/repath/regroup all compute and pass group modal depth; ingest/maintenance parity KAT) |
 | 3 ◆ | Refresh the depth census + anneal | pending | | |
 
 ## Action-frame digest
