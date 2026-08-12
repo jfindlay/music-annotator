@@ -254,11 +254,55 @@ class AccurateRipSummary(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class MBAlias(BaseModel):
+    """A single alias entry from the MusicBrainz ``alias-list`` on a work or artist.
+
+    MusicBrainz stores one or more aliases per entity covering different locales, scripts, and name types.
+    Each alias carries an optional ``locale`` (ISO 639-1 language code, e.g. ``"en"``, ``"ru"``), an optional
+    ``type`` (e.g. ``"Work name"``, ``"Artist name"``, ``"Search hint"``), and an optional ``primary`` marker
+    (the string ``"primary"`` when the alias is the primary form for its locale, ``None`` otherwise).
+
+    The ``musicbrainzngs`` library returns the alias display text under the key ``"alias"`` (not ``"name"``).
+    The ``model_validator`` below remaps ``"alias"`` → ``"name"`` before Pydantic processes the dict so
+    that the ``name`` field populates correctly from raw ``mb.get_*`` output.
+
+    Important attributes: ``name``, ``locale``, ``type``, ``primary``.
+    """
+
+    name: str = ""
+    sort_name: str = Field(default="", alias="sort-name")
+    locale: str | None = None
+    type: str = ""
+    primary: str | None = None
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def remap_alias_key(cls, data: object) -> object:
+        """Remap the ``"alias"`` key to ``"name"`` before field population.
+
+        ``musicbrainzngs`` returns the alias display text under the key ``"alias"`` in the raw dict
+        (matching the MMD 2.0 XML attribute name), not ``"name"`` as the REST JSON API uses.  This
+        validator remaps the key so the ``name`` field is populated correctly from ``mb.get_*`` output.
+
+        :param data: The raw input dict (or any other value) before Pydantic field validation.
+        :returns: The input unchanged when it is not a dict, or a copy with ``"alias"`` remapped to
+            ``"name"`` (only when ``"name"`` is not already present).
+        """
+        if isinstance(data, dict) and "alias" in data and "name" not in data:
+            data = dict(data)
+            data["name"] = data.pop("alias")
+        return data
+
+
 class MBArtist(BaseModel):
     """A single artist entity as returned inside an artist-credit or relation.
 
     Important attributes: ``id`` (MBID), ``name`` (display name), ``sort_name`` (sortable form), ``type`` (e.g.
-    ``"Person"``), ``disambiguation`` (short comment differentiating artists with the same name).
+    ``"Person"``), ``disambiguation`` (short comment differentiating artists with the same name),
+    ``alias_list`` (MB aliases for this artist, populated by a dedicated alias fetch — empty when the artist
+    appears only as a nested entity in a release/recording response).
     """
 
     id: str = ""
@@ -266,6 +310,7 @@ class MBArtist(BaseModel):
     sort_name: str = Field(default="", alias="sort-name")
     type: str = ""
     disambiguation: str = ""
+    alias_list: list[MBAlias] = Field(default_factory=list, alias="alias-list")
 
     model_config = {"populate_by_name": True}
 
@@ -682,26 +727,6 @@ class MBLifeSpan(BaseModel):
     begin: str = ""
     end: str = ""
     ended: bool = False
-
-    model_config = {"populate_by_name": True}
-
-
-class MBAlias(BaseModel):
-    """A single alias entry from the MusicBrainz ``alias-list`` on a work.
-
-    MusicBrainz stores one or more aliases per work covering different locales, scripts, and name types.
-    Each alias carries an optional ``locale`` (ISO 639-1 language code, e.g. ``"en"``, ``"ru"``), an optional
-    ``type`` (e.g. ``"Work name"``, ``"Search hint"``), and an optional ``primary`` marker (the string
-    ``"primary"`` when the alias is the primary form for its locale, ``None`` otherwise).
-
-    Important attributes: ``name``, ``locale``, ``type``, ``primary``.
-    """
-
-    name: str = ""
-    sort_name: str = Field(default="", alias="sort-name")
-    locale: str | None = None
-    type: str = ""
-    primary: str | None = None
 
     model_config = {"populate_by_name": True}
 

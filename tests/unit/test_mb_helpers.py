@@ -23,6 +23,7 @@ from pytest_mock import MockerFixture
 
 import music_annotator
 from music_annotator import (
+    fetch_artist_aliases,
     fetch_cover_art,
     fetch_recording_detail,
     fetch_release,
@@ -46,7 +47,7 @@ from music_annotator._mb_api import (
 )
 from music_annotator._net import RetryDecision
 from music_annotator._pipeline_io import _check_collisions
-from music_annotator.models import MBAttribute, MBRecording, MBWork, TransactionEntry
+from music_annotator.models import MBArtist, MBAttribute, MBRecording, MBWork, TransactionEntry
 
 # ---------------------------------------------------------------------------
 # fetch_cover_art — retry behaviour
@@ -3129,3 +3130,166 @@ class TestGetBottomWorkNoCache:
         result = _get_bottom_work(stub, no_cache=True)
 
         assert result.title == "Fresh"
+
+
+# ---------------------------------------------------------------------------
+# fetch_artist_aliases — alias population and two-level cache
+# ---------------------------------------------------------------------------
+
+
+class TestFetchArtistAliases:
+    """Tests for fetch_artist_aliases() — alias population from raw MB dict and two-level cache.
+
+    The critical test verifies that aliases populate ``MBArtist.alias_list`` from the raw
+    ``mb.get_artist_by_id`` dict shape (which uses ``"alias"`` as the display-text key, not
+    ``"name"``).  This exercises the ``MBAlias.remap_alias_key`` model_validator.
+    """
+
+    def setup_method(self) -> None:
+        """Clear the module-level artist cache before each test."""
+        music_annotator._mb_api._ARTIST_CACHE.clear()  # pylint: disable=protected-access
+
+    def _raw_artist_dict(self, artist_id: str, name: str, aliases: list[dict[str, object]]) -> dict[str, object]:
+        """Return a minimal artist API response dict in the musicbrainzngs shape.
+
+        Uses ``"alias"`` (not ``"name"``) for the alias display text, matching the actual
+        ``mb.get_artist_by_id`` output.
+
+        :param artist_id: Artist MBID.
+        :param name: Artist display name.
+        :param aliases: List of alias dicts using the ``"alias"`` key for the display text.
+        :returns: Dict suitable for ``mb.get_artist_by_id`` mock return value.
+        """
+        return {"artist": {"id": artist_id, "name": name, "alias-list": aliases}}
+
+    def test_aliases_populate_from_raw_mb_dict_alias_key(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Aliases from the raw MB dict (using the 'alias' key) populate MBArtist.alias_list correctly.
+
+        This is the critical test: the raw ``mb.get_artist_by_id`` response uses ``"alias"`` for the
+        display text (not ``"name"``).  The MBAlias model_validator must remap it so ``alias.name``
+        is populated.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._net.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_artist_by_id",
+            return_value=self._raw_artist_dict(
+                "a-1",
+                "Vienna Philharmonic",
+                [{"alias": "Wiener Philharmoniker", "type": "Artist name", "primary": "primary", "locale": "de"}],
+            ),
+        )
+
+        result = fetch_artist_aliases("a-1")
+
+        assert result.name == "Vienna Philharmonic"
+        assert len(result.alias_list) == 1
+        assert result.alias_list[0].name == "Wiener Philharmoniker"
+        assert result.alias_list[0].primary == "primary"
+        assert result.alias_list[0].type == "Artist name"
+
+    def test_404_returns_empty_artist(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """An authoritative 404 (MBID not found) returns an empty MBArtist with alias_list == [].
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._net.time.sleep")
+        err = mb.ResponseError(cause=HTTPError("https://mb/", 404, "Not Found", {}, None))  # type: ignore[arg-type]
+        mocker.patch("music_annotator._mb_api.mb.get_artist_by_id", side_effect=err)
+
+        result = fetch_artist_aliases("a-missing")
+
+        assert result.alias_list == []
+        assert result.name == ""
+
+    def test_l1_cache_hit_skips_network(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When the artist is already in _ARTIST_CACHE (L1), the network is not accessed.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        cached = MBArtist.model_validate({"id": "a-2", "name": "Berliner Philharmoniker"})
+        music_annotator._mb_api._ARTIST_CACHE["a-2"] = cached  # pylint: disable=protected-access
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_artist_by_id")
+
+        result = fetch_artist_aliases("a-2")
+
+        mock_get.assert_not_called()
+        assert result is cached
+
+    def test_l2_cache_hit_skips_network(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When the artist JSON is on disk (L2), the network is not accessed.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        cache_dir = Path("/cache/music-annotator/artist")
+        fs.create_dir(str(cache_dir))
+        artist = MBArtist.model_validate({"id": "a-3", "name": "Wiener Philharmoniker"})
+        (cache_dir / "a-3.json").write_text(artist.model_dump_json(by_alias=True), encoding="utf-8")
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._net.time.sleep")
+        mock_get = mocker.patch("music_annotator._mb_api.mb.get_artist_by_id")
+
+        result = fetch_artist_aliases("a-3")
+
+        mock_get.assert_not_called()
+        assert result.name == "Wiener Philharmoniker"
+
+    def test_cache_miss_writes_disk_and_populates_l1(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """On a cache miss the artist is fetched, written to disk, and stored in L1.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/cache")
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._net.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_artist_by_id",
+            return_value=self._raw_artist_dict("a-4", "Berliner Philharmoniker", []),
+        )
+
+        result = fetch_artist_aliases("a-4")
+
+        assert result.name == "Berliner Philharmoniker"
+        cache_file = Path("/cache/music-annotator/artist/a-4.json")
+        assert cache_file.exists()
+        assert not cache_file.with_suffix(".tmp").exists()
+        assert MBArtist.model_validate_json(cache_file.read_text(encoding="utf-8")).id == "a-4"
+        assert music_annotator._mb_api._ARTIST_CACHE.get("a-4") is not None  # pylint: disable=protected-access
+
+    def test_no_cache_bypasses_both_layers(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """When no_cache=True both L1 and L2 are bypassed; a fresh network fetch is made.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        cache_dir = Path("/cache/music-annotator/artist")
+        fs.create_dir(str(cache_dir))
+        stale = MBArtist.model_validate({"id": "a-5", "name": "STALE"})
+        (cache_dir / "a-5.json").write_text(stale.model_dump_json(by_alias=True), encoding="utf-8")
+        music_annotator._mb_api._ARTIST_CACHE["a-5"] = stale  # pylint: disable=protected-access
+
+        mocker.patch.dict(os.environ, {"XDG_CACHE_HOME": "/cache"})
+        mocker.patch("music_annotator._net.time.sleep")
+        mocker.patch(
+            "music_annotator._mb_api.mb.get_artist_by_id",
+            return_value=self._raw_artist_dict("a-5", "Fresh", []),
+        )
+
+        result = fetch_artist_aliases("a-5", no_cache=True)
+
+        assert result.name == "Fresh"
+        # Disk file must be unchanged (stale still on disk, not overwritten).
+        assert MBArtist.model_validate_json((cache_dir / "a-5.json").read_text(encoding="utf-8")).name == "STALE"

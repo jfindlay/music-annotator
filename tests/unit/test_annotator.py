@@ -21,6 +21,7 @@ from music_annotator import (
     build_dest_path,
     build_track_tags,
     build_work_hierarchy,
+    canonical_artist_form,
     collect_work_dates,
     collect_work_tags_and_key,
     configure_color,
@@ -45,6 +46,7 @@ from music_annotator.models import (
     AnnotationTier,
     ArtistEntry,
     MBAlias,
+    MBArtist,
     MBArtistRelation,
     MBLabelRelation,
     MBPlaceRelation,
@@ -4819,3 +4821,86 @@ class TestClassicalTopDir:
         assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
         assert "Various" in rel.parts[1], f"Expected 'Various' in compilation top_dir, got {rel.parts[1]!r}"
         assert "Great Piano Concertos" in rel.parts[1], f"Expected album title in compilation top_dir, got {rel.parts[1]!r}"
+
+
+# ---------------------------------------------------------------------------
+# canonical_artist_form
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalArtistForm:
+    """Tests for canonical_artist_form — primary-alias selection per STYLEGUIDE 3.1/NORM-2.
+
+    The resolver is total: it always returns a non-empty string when the artist has a name.
+    It selects the primary-flagged MB alias (preferring substantive name-form types) and falls
+    back to ``MBArtist.name`` when no primary alias exists.
+    """
+
+    def test_primary_native_latin_alias_preferred_over_display_name(self) -> None:
+        """An artist with a primary-flagged native-Latin alias resolves to the alias, not the display name.
+
+        KAT (a): "Wiener Philharmoniker" is the primary alias; "Vienna Philharmonic" is the display
+        name.  The resolver must return the alias.
+        """
+        artist = MBArtist.model_validate(
+            {
+                "id": "a1",
+                "name": "Vienna Philharmonic",
+                "alias-list": [
+                    {"alias": "Wiener Philharmoniker", "type": "Artist name", "primary": "primary", "locale": "de"},
+                ],
+            }
+        )
+        assert canonical_artist_form(artist) == "Wiener Philharmoniker"
+
+    def test_no_alias_falls_back_to_name(self) -> None:
+        """An artist with no aliases resolves to the display name.
+
+        KAT (b): fallback proof — when alias_list is empty, artist.name is returned.
+        """
+        artist = MBArtist.model_validate({"id": "a2", "name": "Herbert von Karajan"})
+        assert canonical_artist_form(artist) == "Herbert von Karajan"
+
+    def test_non_primary_alias_falls_back_to_name(self) -> None:
+        """An artist with only a non-primary alias resolves to the display name.
+
+        KAT (c): primary-only proof — a non-primary alias (primary is None) must not be selected;
+        the resolver falls back to artist.name.
+        """
+        artist = MBArtist.model_validate(
+            {
+                "id": "a3",
+                "name": "Berlin Philharmonic",
+                "alias-list": [
+                    {"alias": "Berliner Philharmoniker", "type": "Artist name", "locale": "de"},
+                ],
+            }
+        )
+        assert canonical_artist_form(artist) == "Berlin Philharmonic"
+
+    def test_typed_primary_preferred_over_untyped_primary(self) -> None:
+        """When multiple primary aliases exist, a typed one (Artist name) is preferred over an untyped one."""
+        artist = MBArtist.model_validate(
+            {
+                "id": "a4",
+                "name": "Some Orchestra",
+                "alias-list": [
+                    {"alias": "Untyped Primary", "primary": "primary", "locale": "en"},
+                    {"alias": "Typed Primary", "type": "Artist name", "primary": "primary", "locale": "de"},
+                ],
+            }
+        )
+        assert canonical_artist_form(artist) == "Typed Primary"
+
+    def test_untyped_primary_used_when_no_typed_primary(self) -> None:
+        """When only an untyped primary alias exists, it is returned (any primary beats no primary)."""
+        artist = MBArtist.model_validate(
+            {
+                "id": "a5",
+                "name": "Some Ensemble",
+                "alias-list": [
+                    {"alias": "Primary Alias", "primary": "primary", "locale": "en"},
+                ],
+            }
+        )
+        assert canonical_artist_form(artist) == "Primary Alias"

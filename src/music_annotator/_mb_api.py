@@ -26,7 +26,7 @@ import musicbrainzngs.musicbrainz as _mbmz
 import structlog
 
 from music_annotator._net import NetPolicy, RetryDecision, retrieve
-from music_annotator.models import JSON, CoverArt, CoverImage, MBArtistRelation, MBRecording, MBRelease, MBWork
+from music_annotator.models import JSON, CoverArt, CoverImage, MBArtist, MBArtistRelation, MBRecording, MBRelease, MBWork
 
 # ---------------------------------------------------------------------------
 # Workaround for a musicbrainzngs bug: parse_recording omits "first-release-date"
@@ -205,6 +205,9 @@ log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 
 #: In-process cache: work_id → MBWork, avoids redundant API calls for shared parents.
 _WORK_CACHE: dict[str, MBWork] = {}
+
+#: In-process cache: artist_id → MBArtist, avoids redundant alias fetches within a single run.
+_ARTIST_CACHE: dict[str, MBArtist] = {}
 
 
 def init_mb(user_agent: str) -> None:
@@ -999,6 +1002,79 @@ def fetch_work_detail(work_id: str, no_cache: bool = False) -> MBWork:
 
     _WORK_CACHE[work_id] = work
     return work
+
+
+def _get_artist_by_id(artist_id: str) -> dict[str, JSON]:
+    """Thin typed wrapper around ``mb.get_artist_by_id`` with the ``"aliases"`` include.
+
+    Requests the full alias list for the artist so that ``MBArtist.alias_list`` is populated with
+    primary-flagged, locale-tagged entries.  Called as the ``fetch`` argument to
+    :func:`~music_annotator._net.retrieve`; retry and polite-delay are handled by the caller.
+
+    :param artist_id: The MusicBrainz artist MBID.
+    :returns: The raw response dict from ``musicbrainzngs``.
+    """
+    result: dict[str, JSON] = mb.get_artist_by_id(artist_id, includes=["aliases"])
+    return result
+
+
+def fetch_artist_aliases(artist_id: str, *, no_cache: bool = False) -> MBArtist:
+    """Fetch an artist's full alias list from MusicBrainz.
+
+    Uses a two-level cache.  The in-process :data:`_ARTIST_CACHE` dict (L1) is checked first; it
+    avoids even a disk read for artists that appear multiple times within a single run.  The on-disk
+    cache (L2) at ``~/.cache/music-annotator/artist/<artist_id>.json`` is checked next when
+    ``no_cache`` is ``False``; a hit avoids the network entirely.  On a miss the artist is fetched
+    via :func:`_get_artist_by_id`, written atomically to the disk cache via a temp-file +
+    :meth:`~pathlib.Path.replace`, stored in :data:`_ARTIST_CACHE`, and returned.  Pass
+    ``no_cache=True`` to bypass both cache layers and always fetch from the network.
+
+    An authoritative 404 (MBID not found) yields an empty :class:`~music_annotator.models.MBArtist`
+    with ``alias_list == []``; the canonical-form resolver then falls back to ``MBArtist.name``.
+
+    The dedicated per-MBID fetch (artist as direct query target) is used rather than the ``"aliases"``
+    include on the release/recording fetch because the MB webservice does not reliably emit
+    ``<alias-list>`` for artists nested in ``artist-credit``/relations on a release/recording query —
+    sub-entity aliases attach only when the sub-entity is the direct query target.
+
+    :param artist_id: The MusicBrainz artist MBID (UUID string).
+    :param no_cache: When ``True``, bypass both the in-process and on-disk caches.  Defaults to
+        ``False``.
+    :returns: An :class:`~music_annotator.models.MBArtist` instance with ``alias_list`` populated,
+        or an empty model when the MBID is not found (authoritative 404).
+    :raises Exception: Re-raises the last exception on a FATAL classification or RETRY exhaustion.
+    """
+    if not no_cache and artist_id in _ARTIST_CACHE:
+        log.debug("fetch_artist_aliases_l1_cache_hit", artist_id=artist_id)
+        return _ARTIST_CACHE[artist_id]
+
+    if not no_cache:
+        cache_path = _metadata_cache_dir("artist") / f"{artist_id}.json"
+        if cache_path.is_file():
+            log.debug("fetch_artist_aliases_l2_cache_hit", artist_id=artist_id)
+            artist = MBArtist.model_validate_json(cache_path.read_text(encoding="utf-8"))
+            _ARTIST_CACHE[artist_id] = artist
+            return artist
+
+    log.debug("fetch_artist_aliases", artist_id=artist_id)
+    policy = NetPolicy(
+        classify=_mb_data_classify,
+        event="mb_artist",
+        log_fields={"artist_id": artist_id},
+    )
+    raw = retrieve(lambda: _get_artist_by_id(artist_id), policy)
+    result: dict[str, JSON] = raw if raw is not None else {}
+    artist = MBArtist.model_validate(result.get("artist", {}))
+
+    if not no_cache:
+        cache_path = _metadata_cache_dir("artist") / f"{artist_id}.json"
+        tmp_path = cache_path.with_suffix(".tmp")
+        tmp_path.write_text(artist.model_dump_json(by_alias=True), encoding="utf-8")
+        tmp_path.replace(cache_path)
+        log.debug("artist_cache_written", artist_id=artist_id)
+
+    _ARTIST_CACHE[artist_id] = artist
+    return artist
 
 
 def fetch_acoustid_id(recording_mbid: str, no_cache: bool = False) -> str:

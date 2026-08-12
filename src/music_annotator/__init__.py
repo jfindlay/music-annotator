@@ -83,6 +83,7 @@ from music_annotator._artists import (
     artist_credit_phrase,
     artist_ids,
     artist_sort_names,
+    canonical_artist_form,
     is_choir,
     is_ensemble,
     is_orchestra,
@@ -104,6 +105,7 @@ from music_annotator._discover import (
 )
 from music_annotator._mb_api import (
     fetch_acoustid_id,
+    fetch_artist_aliases,
     fetch_cover_art,
     fetch_recording_detail,
     fetch_release,
@@ -162,6 +164,7 @@ __all__ = [
     "fetch_recording_detail",
     "fetch_cover_art",
     "fetch_work_detail",
+    "fetch_artist_aliases",
     "fetch_acoustid_id",
     "is_ensemble",
     "is_choir",
@@ -169,6 +172,7 @@ __all__ = [
     "artist_credit_phrase",
     "artist_ids",
     "artist_sort_names",
+    "canonical_artist_form",
     "last_name",
     "build_work_hierarchy",
     "strip_common_prefix",

@@ -7,7 +7,7 @@ MusicBrainz API.
 
 from __future__ import annotations
 
-from music_annotator.models import MBArtistCredit
+from music_annotator.models import MBAlias, MBArtist, MBArtistCredit
 
 #: Substrings identifying orchestral ensembles (from CEA_ORCHESTRAS).
 ORCHESTRA_STRINGS: frozenset[str] = frozenset(
@@ -165,3 +165,43 @@ def last_name(sort_name: str) -> str:
         comma is present.
     """
     return sort_name.split(",")[0].strip()
+
+
+#: Alias type strings that represent the entity's own name (native or legal form), as opposed to
+#: search hints or transliterations.  Used by :func:`canonical_artist_form` to prefer substantive
+#: name-form aliases over search-optimisation entries.
+_CANONICAL_ALIAS_TYPES: frozenset[str] = frozenset({"Artist name", "Legal name"})
+
+
+def canonical_artist_form(artist: MBArtist) -> str:
+    """Return the canonical name-form for an artist per STYLEGUIDE 3.1/NORM-2.
+
+    Selects the entity's canonical name-form from MB's own primary-flagged aliases (authority-deference
+    posture: the resolved form is always a form MB itself asserts — never a locally-authored form,
+    editorial table, or new scholarly romanisation).
+
+    Selection logic:
+
+    1. Collect all aliases where ``primary == "primary"``.
+    2. Among those, prefer aliases whose ``type`` is ``"Artist name"`` or ``"Legal name"`` (substantive
+       name-form entries, as opposed to search hints or transliterations).
+    3. If no typed primary alias exists, fall back to any primary alias regardless of type.
+    4. If no primary alias exists at all, fall back to ``artist.name`` (the MB display name).
+
+    The resolver is total: it never raises and always returns a non-empty string when ``artist.name``
+    is non-empty.  When both ``alias_list`` and ``name`` are empty (a default-constructed
+    :class:`~music_annotator.models.MBArtist`), it returns ``""`` — callers that need a guaranteed
+    non-empty string should ensure the artist has a name.
+
+    :param artist: The :class:`~music_annotator.models.MBArtist` entity to resolve.
+    :returns: The canonical name-form string — a primary-flagged MB alias when one exists, otherwise
+        ``artist.name``.
+    """
+    primary_aliases: list[MBAlias] = [a for a in artist.alias_list if a.primary == "primary"]
+    if not primary_aliases:
+        return artist.name
+
+    # Prefer a substantive name-form alias (Artist name / Legal name) over other primary types.
+    typed = [a for a in primary_aliases if a.type in _CANONICAL_ALIAS_TYPES]
+    chosen = typed[0] if typed else primary_aliases[0]
+    return chosen.name or artist.name

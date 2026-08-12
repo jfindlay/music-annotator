@@ -395,6 +395,33 @@ class TestMBArtist:
         assert a.sort_name == ""
         assert a.type == ""
 
+    def test_alias_list_defaults_empty(self) -> None:
+        """alias_list defaults to an empty list on a default-constructed MBArtist."""
+        a = MBArtist()
+        assert a.alias_list == []
+
+    def test_alias_list_populated_from_alias_key(self) -> None:
+        """alias-list entries with the 'alias' key (musicbrainzngs shape) populate alias_list correctly.
+
+        Verifies the MBAlias model_validator remapping: the raw dict uses ``"alias"`` for the display
+        text (matching the musicbrainzngs output), which must be remapped to ``name`` before Pydantic
+        processes the field.
+        """
+        a = MBArtist.model_validate(
+            {
+                "id": "a1",
+                "name": "Vienna Philharmonic",
+                "alias-list": [
+                    {"alias": "Wiener Philharmoniker", "type": "Artist name", "primary": "primary", "locale": "de"},
+                ],
+            }
+        )
+        assert len(a.alias_list) == 1
+        assert a.alias_list[0].name == "Wiener Philharmoniker"
+        assert a.alias_list[0].primary == "primary"
+        assert a.alias_list[0].type == "Artist name"
+        assert a.alias_list[0].locale == "de"
+
 
 # ---------------------------------------------------------------------------
 # MBWork
