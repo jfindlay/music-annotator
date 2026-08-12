@@ -213,9 +213,14 @@ step-3 watch item that could reshard R3 order.
   arc closed.  ◆ closed; hands off to E + R4b.
 - **R4b** Cross-medium fragmentation inventory (A-c): enumerate before designing; remedies may route
   to class B or III-b.  Runs parallel to E (inventory-first; largely independent of attribution policy).
-  **IN PROGRESS 2026-07-23 — sharded to `docs/PLAN-fragmentation.md`** (2 sessions: S1 read-only fragmentation
-  scanner + shape taxonomy freezing C-FRAG-TAX; S2 ◆ census artifact + remedy-routing).  `juncture-tier: opus`
-  (arc default retained: the read-only inventory is low-criticality, but the S2 ◆ remedy-routing feeds J2/R6).
+  **DONE 2026-07-23 (`docs/PLAN-fragmentation.md` 2/2 rows; commits `fac01f3` scanner + C-FRAG-TAX / `b5f7d76`
+  census + remedy-routing; ◆ still-on-intent).**  S1 froze **C-FRAG-TAX** (the fragmentation-shape vocabulary)
+  in the read-only `scripts/scan_fragmentation.py`; S2 produced the documentary census
+  (`docs/census-fragmentation.{md,json}`) on the D-A2 posture (hades not mounted) — **5 rg-multi-release
+  pre-ingest candidates, 0 per-medium-credit-variance, 0 rg-vs-release-split; all 5 routed to III-b**.  The one
+  arc-boundary finding (C-S0 aggregates within a release, not across a release-group, so box sets modelled as
+  multiple releases fragment despite C-S0) is folded into the Discoveries appendix below as an R6d-planning
+  input, not re-opened in-arc (D-4).
 - **R4c DISSOLVED into E (2026-07-22).**  R4c was scoped as a "small additive allowlist" widening the
   mechanical `top_work.type == "Concerto"` path-injection gate (`_tags.py:1189`) to a few more
   canonical-soloist dirs.  Operator refutation (2026-07-22): an allowlist is the tell of a *missing
@@ -275,10 +280,19 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   of R6d as pure code+test grammar fixes — logically independent of the destructive repath; R6d now
   re-derives against already-corrected code.  Froze **C-NOSOLO** (no soloist enters the path
   component) and **C-RA-GRAMMAR** (recording-artist composite: billing order under
-  `CEA_RECORDING_ARTIST`, no rename).  ◆ boundary `still-on-intent`.  **R6d planning caveat:**
+  `CEA_RECORDING_ARTIST`, no rename).  ◆ boundary `still-on-intent`.  **R6d planning caveat (stale docs):**
   `census-impl.md` / `NOTES.md` still describe the now-deleted `cea_album_soloists_unified`
   concerto-injection path rule — refresh before R6d consumes the census so R6d planning does not
-  read a superseded rule.
+  read a superseded rule.  **R6d planning caveat (paths-only vs tag-content — surfaced 2026-08-12,
+  R6a shard):** the offline maintenance engine `repath`/`regroup`/`unify` re-derives **paths only**,
+  from *embedded tags*, with **no MB network call** (`_pipeline_maint.py`).  So R6d's "one-pass
+  re-derivation" as currently built re-paths the library under the latest `build_dest_path` policy
+  (depth clamp, canonical name-forms, class/composer/work structure — all in one `repath`) but does
+  **not** regenerate tag *content* (`CEA_*`, billing order, `IS_CLASSICAL`, …) from MB.  If R6d's
+  intent includes tag-content re-derivation, that needs either a new offline tag-regeneration pass or
+  a bulk re-`apply`/`search` — an explicit R6d PLAN-derivation scope decision, not covered by the
+  existing repath engine.  (This is why the path-shaping code-only shards — canonical-name-forms,
+  R6a depth — can land ahead of R6d: `repath` already re-derives their path output on demand.)
 - **R6e** Conventions-spec finalisation (integrative writeup; consistently under-scheduled — allocate
   a full session minimum).
 
@@ -519,3 +533,22 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   library-wide tag rename** at R6d; (2) **stale census/NOTES docs** still reference the deleted
   `cea_album_soloists_unified` field — a doc-freshness item to clear before R6d consumes the census.
   No frozen contract invalidated; no destructive-HALT.  R6d re-derives against corrected code.
+
+- **R4b ◆ boundary (2026-07-23; folded up 2026-08-12) — C-S0 is release-scoped, not release-group-scoped
+  (R6d-planning input).**  The fragmentation census (`docs/census-fragmentation.{md,json}`) confirmed that
+  C-S0 aggregates media *within* a release (album MBID), **not across releases in a release-group**, so box
+  sets modelled by MB as multiple releases fragment across top_dirs despite C-S0 — 5 such rg-multi-release
+  candidates found (documentary census; hades unmounted, D-A2 posture), all **routed to III-b regroup**.  This
+  is the same shape J2 already ruled on (C-S0 stays release-scoped; the rg-multi-release regroup folds into
+  R6d planning with the live hades scan as the authoritative prerequisite).  Static-frame consequence for R6d:
+  the III-b regroup pass must handle rg-multi-release consolidation, and the **live hades scan is load-bearing**
+  (the Furtwängler-style partial-ingest scenario — some discs already in `Done/` — means the documentary count
+  is a floor, not the truth).  Not an in-arc contract change (D-4); an R6d-planning input.  No destructive-HALT.
+
+- **Styleguide-arc node-A tail (2026-08-12) — no shardable styleguide sub-track remains.**  With
+  `path-canonical-name-forms` done (C-CANON), the styleguide arc's node A has exhausted its three enumerated
+  application shards (editorial-notes field / composite-tag grammar / normalisation — done or discharged); its
+  other post-v1 nodes are operator/trigger-paced (P = R6e here; C = CEv3, own future roadmap; L = perpetual
+  loop).  Consequence: the sole live agent-shardable frontier is this arc's **R6** (Act III-a), and R6a/R6b/R6c
+  are runnable now on `Done/` (operator-confirmed 2026-08-12) — only R6d is J3-gated.  R6a (depth normalisation)
+  is sharded first (`docs/PLAN.md`, 2026-08-12).

@@ -1,400 +1,379 @@
 <!-- juncture-tier: opus -->
-<!-- sub-track: path-canonical-name-forms (post-v1 styleguide application, node A) — render STYLEGUIDE 3.1/NORM-2
-     canonical entity name-forms in the compact path projection (rule 4.5), sourced from MB's own primary-flagged
-     aliases (D-A7/D-A8 authority-deference posture).  CODE-ONLY: new ingests render canonical; the destructive
-     library-wide repath rides R6d's one pass (D-A5 precedent).  This IS a /plan-run target: model + fetch + tags
-     + maintenance-path changes verifiable by the src/tests gate with zero library access. -->
+<!-- sub-track: R6a (hierarchy-depth normalisation) — library-completion arc (docs/ROADMAP.md), Act III-a.  Render the
+     frozen uniform-ceiling/ragged-floor depth rule (STYLEGUIDE 4.5; NOTES "two durable rules"; C-W3b, graduated from
+     provisional at J2) in build_dest_path so a work-group's over-resolved branches clamp to the group's modal depth.
+     CODE-ONLY: new ingests render clamped; the destructive library-wide repath rides R6d's one J3-gated pass (D-A5/D-A7
+     precedent).  This IS a /plan-run target: build_dest_path + caller-threading + tests, verifiable by the src/tests
+     gate; the fresh scan_nonuniform_depth.py run is the substrate-session gating step (operator mounts the library). -->
 
-# PLAN — path-canonical-name-forms: STYLEGUIDE 3.1/NORM-2 canonical name-forms in the destination path
+# PLAN — R6a: uniform-ceiling / ragged-floor hierarchy-depth normalisation in the destination path
 
 ## Purpose (design intent)
 
 *(Re-read at every ◆ boundary — anti-defocus anchor.)*
 
-STYLEGUIDE rule 3.1 (one canonical form per entity) and NORM-2 (native Latin-script name; established Latin
-reception form for non-Latin script) require that **compact projections render one canonical name-form per
-entity, selected once, not per release**.  Rule 4.5 makes the destination path "the compact assembled
-projection" — so the path's performers component (conductors, ensembles) and composer component are exactly
-where 3.1/NORM-2 apply.  A code audit (D-A7) found that **no canonical-form machinery exists anywhere in
-`src/`**: every path name-form renders verbatim from `MBArtist.name` (as-credited display name) or
-`last_name(MBArtist.sort_name)`, so the path can render "Vienna Philharmonic" where NORM-2 demands "Wiener
-Philharmoniker".  This sub-track closes that gap.
+STYLEGUIDE 4.5 and the NOTES "two durable rules" fix the path-depth policy: **uniform ceiling, ragged floor** —
+render each leaf at `min(its own tree depth, the work-group's modal tree depth)`.  Over-resolved branches **clamp
+down** (removing structure the path does not need — faithful); shallow branches are **never padded up** (inventing
+structure that is not there — unfaithful).  J2 (2026-07-30) graduated **C-W3b** from provisional: the rule, the
+two-sub-shape routing, and the corner pins (modal ties → shallower; PL=0 orphans excluded) are frozen.  J2
+explicitly left the **`build_dest_path` interface mechanics (the `depth_clamp` posture) and the tag-data-sufficiency
+question** to "R6a PLAN derivation" — this shard.
 
-The D-A6 "3.1-vs-REND-1 conflict" is **dissolved** (D-A7): 3.1/NORM-2 govern the *compact* projection (the
-path); REND-1/4.3 govern `ARTIST`/`ALBUMARTIST` (*preserved/full* surfaces, verbatim by design).  They apply
-to different surfaces; `ARTIST` stays verbatim, the path renders canonical.  No preserved surface changes.
+A code audit (survey 2026-08-12) confirmed **no depth-clamp machinery exists**: `build_dest_path` (`_tags.py:1089`)
+reads `CWP_PART_LEVELS` per-track (`:1333`) and emits one intermediate directory per level when `part_levels >= 2`
+(`:1387–1417`), with **no group context and no clamp**.  Depth is set upstream in `build_cwp_tags`
+(`cwp.part_levels = len(work_hierarchy) - 1`, `_tags.py:498`).  So a work-group whose modal depth is 2 but whose
+Handel "Water Music" movement III carries sub-parts IIIa/IIIb renders that one movement at PL=3 — the exact "ragged
+depth" the rule targets (Shapes C/D of the census).
 
-**MB-authority-deference posture (D-A8 — the register anchor).**  The canonical form is **MB's own
-primary-flagged alias** (native/reception form per NORM-2), falling back to `MBArtist.name`.  The *only*
-editorial act is **selecting among MB's own asserted forms** — never a local editorial name table, never a
-form MB does not hold, never a new annotation convention or scholarly romanisation.  Accept MB as the source
-of authority even where fallible; modify it only as defensibly and plainly as possible.  This posture is the
-sub-track's neutrality guarantee (it scales across users and time; a private name authority does not).
+**Scope is narrow and the census small (Shapes C/D = 3 groups at L2-design time).**  This is not a large migration;
+it is a permanent-policy interface decision over a small population (BACKLOG:279–281: "changes the path output for
+~3% of the library and becomes the permanent policy for all future `run()`").
 
-**Sequencing (D-A7, D-A5 precedent).**  This shard is **code-only**: it changes how *new* ingests render the
-path, verified by the src/tests gate.  The destructive library-wide repath (renaming existing directories to
-canonical forms) is **deferred to R6d's one-pass re-derivation** under the J3 gate — this sub-track never runs
-a destructive library operation.  A temporary as-credited/canonical inconsistency in the on-disk library
-(old dirs as-credited, new dirs canonical) is accepted until R6d.
+**Interface posture (resolved at this PLAN derivation — the S1 inflection judgments):**
+
+1. **Direct parameter, not `model_extra`.**  `build_dest_path` receives the work-group's modal depth as an explicit
+   typed parameter; callers (`run`/`repath`/`regroup`) compute it from the group and pass it.  Chosen over the
+   BACKLOG:315 `cwp_render_levels`-as-`model_extra` sketch because `model_extra` access is loosely typed (tension
+   with the repo's strict-mypy / no-`Any` rule) and couples the depth decision into the tag-model lifecycle; a
+   direct parameter keeps the data flow explicit and unit-testable, and matches the BACKLOG:302 "callers pass the
+   group context" clause.  **Tradeoff:** every caller must now assemble the work-group and compute the modal depth
+   (more caller-side wiring) — worse on caller simplicity than a self-contained `model_extra` read, accepted as the
+   price of typed, explicit depth flow.
+2. **Default already-modal (clamp on by default), not default-`None`.**  Since new-ingest rendering *is* the
+   deliverable, the clamp is **on** for `run()` immediately.  BACKLOG:300's "default `None` until repath completes"
+   was written pre-J2 when repath and ingest were coupled; with the D-A5 code-only split, new ingests render clamped
+   now and the existing library re-derives when `repath` runs (R6d's one J3-gated pass).  **Matches the
+   canonical-name-forms precedent** (new ingests render canonical now; repath rides R6d).  **Tradeoff:** existing
+   `Done/` dirs are temporarily non-conformant for the Shapes-C/D groups until R6d — the accepted D-A4-style
+   inconsistency — worse on immediate library uniformity than an in-shard repath, accepted to keep this shard off
+   the J3 gate and inside the fast src/tests inner loop.
+
+**Sequencing (D-A5/D-A7 precedent).**  Code-only: `build_dest_path` renders clamped depth for new ingests, verified
+by the src/tests gate.  The destructive library-wide depth-repath is the existing offline `repath` engine
+(`_pipeline_maint.py:405` — recomputes every path from `build_dest_path`, no network), run once under R6d's J3
+gate.  This shard lands the render; R6d runs the repath.  No destructive library operation in R6a.
 
 The three sessions, in landing order:
 
-1. **N1 @architect — Alias substrate + canonical-form resolver.**  Add artist alias data (fetch include or a
-   dedicated alias fetch — the inflection ruling; see N1 detail) and `MBArtist.alias_list`, and a
-   `canonical_artist_form(artist) -> str` resolver (prefer primary-flagged native/reception alias per NORM-2,
-   else `MBArtist.name`).  Freezes **C-CANON**.
-2. **N2 — Render canonical name-forms in the destination path.**  Call the resolver at the path performers /
-   composer assembly sites so the compact path projection carries canonical forms.  Consumes C-CANON.
-3. **N3 ◆ — Align the maintenance repath + register anneal.**  Make the `_pipeline_maint.py` repath/regroup
-   path render canonical too (so R6d's future one-pass repath produces canonical dirs, not as-credited);
-   close the sub-track; anneal the planning register.
+1. **S1 @architect — Modal-depth substrate + clamped `build_dest_path` interface.**  Add a work-group modal-depth
+   helper (frozen corner pins: modal ties → shallower; PL=0 orphans excluded) and the group-modal-depth parameter
+   on `build_dest_path`, clamping `part_levels` to `min(own, modal)` at the depth branch.  Freezes **C-W3b-INT**.
+2. **S2 — Thread the modal depth through the render callers.**  Compute the work-group modal depth in `run`,
+   `repath`, `regroup` and pass it to `build_dest_path` so ingest and maintenance render identically.  Consumes
+   C-W3b-INT.
+3. **S3 ◆ — Fresh scan gate + census refresh + register anneal.**  Re-run `scan_nonuniform_depth.py` against the
+   complete library (the gating step; distinguish scan-not-run from no-findings), validate the six-shape taxonomy
+   against the fresh scan (a new mishandled shape = J2 reopen trigger), refresh the stale 36-group census; close
+   the sub-track; anneal the planning register.
 
 ## Verify gate
 
-Discovered from `pyproject.toml` (tox envs); do not assume `make`.  Both are **binding** — this is a code
-sub-track.  (Confirm green at shard time before N1.)
+Discovered from `pyproject.toml` (tox envs); do not assume `make`.  Both **binding** — this is a code sub-track.
+(Confirm green at shard time before S1.)
 
 - **VERIFY_TEST**: `~/.local/bin/tox -e test` (`pytest tests/`; **100% branch coverage enforced**, `fail_under = 100`).
 - **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` (`mypy src/ tests/`, strict).
-- Full gate before declaring any row done: `~/.local/bin/tox -m analyze` (build + test + check_type + check_format
-  + check_lint 10.00/10 + check_upgrade).  The `AGENTS.md` "never skip `tox -m analyze`" rule applies to every row.
+- Full gate before any row is declared done: `~/.local/bin/tox -m analyze` (build + test + check_type + check_format
+  + check_lint 10.00/10 + check_upgrade).  The AGENTS.md "never skip `tox -m analyze`" rule applies to every row.
+- **S3 scan step is not gate-covered:** `scripts/scan_nonuniform_depth.py` lives outside `src/`+`tests/` (like
+  `scan_fragmentation.py` / `census_original.py`); it runs clean under `venv/bin/python -m py_compile` and
+  best-effort `venv/bin/mypy scripts/` but is not `tox`-enforced.  Its gating role is producing a fresh scan the S3
+  ◆ review consumes, not passing the gate.
 
 ## Session list
 
 | # | Session | Cat | Tier | Consumes | Expected files |
 |---|---------|-----|------|----------|----------------|
-| 1 @architect | Add artist alias-list and canonical-form resolver | A | Opus | STYLEGUIDE 3.1/NORM-2/NORM-3, D-A8 posture | `src/music_annotator/models.py`, `src/music_annotator/_mb_api.py`, `src/music_annotator/_artists.py`, `tests/unit/test_models.py`, `tests/unit/test_mb_helpers.py`, `tests/unit/test_annotator.py` |
-| 2 | Render canonical name-forms in the destination path | B | Sonnet | **C-CANON**, STYLEGUIDE 4.5 | `src/music_annotator/_tags.py`, `tests/unit/test_pipeline.py`, `tests/unit/test_annotator.py` |
-| 3 ◆ | Align the maintenance repath to canonical forms + anneal | I | Sonnet | **C-CANON** | `src/music_annotator/_pipeline_maint.py`, `tests/unit/test_pipeline.py` |
+| 1 @architect | Add work-group modal-depth clamp to build_dest_path | A | Opus | C-W3b (rule + corner pins), STYLEGUIDE 4.5, NOTES two-rules | `src/music_annotator/_tags.py`, `src/music_annotator/_works.py`, `tests/unit/test_annotator.py` |
+| 2 | Thread work-group modal depth through the render callers | B | Sonnet | **C-W3b-INT** | `src/music_annotator/_pipeline.py`, `src/music_annotator/_pipeline_maint.py`, `tests/unit/test_pipeline.py`, `tests/unit/test_pipeline_maint.py` |
+| 3 ◆ | Refresh the depth census + anneal | I | Sonnet | **C-W3b-INT**, `scan_nonuniform_depth.py` | `scripts/scan_nonuniform_depth.py`, `docs/BACKLOG.md`, `tests/unit/test_annotator.py` |
 
-`Cat`: **N1 is A (substrate)** — it adds the alias data surface + the resolver contract that N2/N3 and every
-future canonical-rendering site consume; over-specify the resolver (carry the primary/locale selection even if
-N2 uses only the primary-alias branch first).  **N2 is B** — it threads the resolver through the compact-path
-render sites; internally self-contained once C-CANON exists.  **N3 is I (integrative)** — it gives the
-contract its operator-visible/durable form (the maintenance repath is the surface R6d will drive), closes the
-◆, and carries the register anneal.
-`Tier`: **N1 is Opus + `@architect` inflection.**  The alias-attachment mechanism is a genuine design-error-cost
-point (lever 3): musicbrainzngs is known to attach `aliases` inconsistently to nested artist entities on a
-release fetch (AGENTS.md "musicbrainzngs implementation" caveat — verify against the raw dict, not the REST
-JSON), so the substrate row may need a dedicated `fetch_artist_aliases` under the defensive-download pattern
-rather than an include flag.  That choice, plus the C-CANON resolver shape, is the inflection judgment.  **N2,
-N3 are Sonnet** — mechanical resolver-threading over a frozen substrate, strong inner loop (lever 5: 100%
-branch coverage + strict mypy).  `juncture-tier: opus` — kept: C-CANON is a durable resolver contract every
-future name-rendering site consumes, and the alias-source mechanism is a judgment tests alone cannot catch.
+`Cat`: **S1 is A (substrate)** — freezes **C-W3b-INT**, the modal-depth helper + `build_dest_path` clamp interface
+that S2's caller-threading and every future clamped render consume; over-specify (carry the group-context parameter
+and the corner-pin logic even though S2 is the first consumer).  **S2 is B** — mechanical threading of the frozen
+interface through the three callers; self-contained once C-W3b-INT exists.  **S3 is I (integrative)** — the
+fresh-scan gate + taxonomy validation + census refresh give the contract its operator-visible/durable form (the
+fresh scan is what R6d's repath will re-derive against), close the ◆, carry the anneal.
+
+`Tier`: **S1 is Opus + `@architect` inflection.**  BACKLOG:279 names it "an architectural boundary decision …
+permanent policy for all future `run()`"; the interface posture (resolved above) and the **tag-data-sufficiency
+question** — can `CWP_PART_LEVELS` + the group modal depth distinguish faithful-over-resolution (clamp) from a
+data-gap shallowness (preserve) *without* a MB network call — is the S1 judgment tests alone cannot catch (lever 3:
+design-error cost).  **S2, S3 are Sonnet** — mechanical over a frozen interface with a strong inner loop (lever 5:
+100% branch coverage + strict mypy).  `juncture-tier: opus` — kept (arc default; C-W3b-INT is durable permanent path
+policy).
 
 **Sizing (levers named).**  Default band ~150–400 LOC / 2–4 files.
 
-- **N1 ≈ 120–200 LOC, 3–4 files** (alias model reuse + fetch wiring + resolver + tests).  Within band.
-  **Irreducible unit (lever 2, floor):** the alias data source, the `MBArtist.alias_list` field, and the
-  resolver are one contract — a resolver with no alias data is a no-op; alias data with no resolver is unused.
-  Kept whole.  One-line-commit-title check: "Add artist alias-list and canonical-form resolver" — passes.
-- **N2 ≈ 60–120 LOC, 2–3 files** (call the resolver at the path performers + composer sites + tests).  Under
-  the band; a **separate session by the one-line-commit-title corollary** — "render canonical name-forms in
-  the path" is a distinct render-path surface with no shared implementation with N1's resolver definition.
-  Splitting N1's "define the resolver" from N2's "call the resolver" is legitimate at the contract-sharp
-  C-CANON boundary (N1 freezes the interface N2 consumes).  Not fractured below the floor.
-- **N3 ≈ 40–80 LOC, 2 files** (maintenance-path resolver call + tests + anneal).  Under the band; a **separate
-  session by the one-line-commit-title corollary** — the maintenance/repath surface (`_pipeline_maint.py`) is
-  a distinct code path from the primary ingest path N2 touches; merging into N2 yields an "and"-joined title
-  (render in ingest AND align the repath).  It is already one irreducible unit (the repath render site + its
-  coverage + the anneal).
+- **S1 ≈ 150–250 LOC, 3 files** (modal-depth helper + corner-pin logic + `build_dest_path` parameter + clamp +
+  tests).  Within band.  **Irreducible unit (lever 2, floor):** the modal-depth computation, the corner pins, and
+  the clamp interface are one contract — a modal helper with no interface to consume it is dead code; the interface
+  with no modal source is a no-op.  Kept whole.  **Lever 3 (design-error cost ↑):** high cost-of-wrong is *why* S1
+  is Opus+inflection, not why it fractures.  One-line title: "Add work-group modal-depth clamp to build_dest_path"
+  — passes.
+- **S2 ≈ 80–150 LOC, 4 files** (compute modal depth in `run`/`repath`/`regroup` + pass it + tests).  **Separate
+  session by the one-line-commit-title corollary** — "thread the modal depth through the callers" is distinct from
+  "define the clamp"; split legitimately at the contract-sharp C-W3b-INT boundary (S1 freezes the interface S2
+  consumes).  **Lever 1 (ambient complexity):** the three-caller threading (each caller assembles the work-group)
+  is the real work; not fractured below the floor.
+- **S3 ≈ 40–100 LOC + scan run, 3 files** (scan-run gate + taxonomy-validation note + census refresh + a
+  no-regression parity test + anneal).  Under band; **separate by the corollary** — the fresh-scan/census/anneal is
+  one integrative unit; merging into S2 yields an "and"-joined title.  Not fractured below the floor (the scan
+  *validates* the taxonomy the anneal reports).
 
 ## Session detail
 
-### N1 @architect — Add artist alias-list and canonical-form resolver — freezes C-CANON
+### S1 @architect — Add work-group modal-depth clamp to build_dest_path — freezes C-W3b-INT
 
-**Deliverable.**  `MBArtist` gains alias data and the pipeline gains a canonical-form resolver:
-- `models.py`: add `alias_list: list[MBAlias] = Field(default_factory=list, alias="alias-list")` to `MBArtist`
-  (`~265`), **reusing the existing `MBAlias` model** (`~689`, already carries `name`/`locale`/`type`/`primary`
-  and `populate_by_name`).  Update the `MBArtist` class docstring's attribute list.
-- `_mb_api.py`: obtain artist aliases.  **Inflection ruling (see Subtleties):** either add `"aliases"` to the
-  artist includes on the release/recording fetch *if verified to attach to nested artist entities*, or add a
-  dedicated `fetch_artist_aliases(mbid)` following the two-layer defensive-download pattern (`@_mb_retry` +
-  `_mb_call`, 4xx-permanent / 5xx-transient) with a `_WORK_CACHE`-style per-MBID cache.
-- `_artists.py`: add `canonical_artist_form(artist: MBArtist) -> str` — return the **primary-flagged alias**
-  whose form matches NORM-2 (native alias where the entity is Latin-script; established Latin-reception alias
-  where non-Latin), falling back to `artist.name` when no qualifying primary alias exists.  Plain, total,
-  MB-sourced (D-A8): no local table, no authored form.
+**Deliverable.**  `build_dest_path` clamps per-track depth to the work-group modal depth:
+- `_works.py` (or `_tags.py` near `build_cwp_tags`): add `work_group_modal_depth(part_levels_list: list[int]) ->
+  int` — the modal `CWP_PART_LEVELS` over a work-group's tracks, with the **frozen corner pins**: on a modal tie,
+  choose the **shallower** depth; **exclude PL=0 orphans** (Shape E) from the modal computation.  Total, pure, no
+  I/O.
+- `_tags.py`: `build_dest_path` gains a typed parameter carrying the work-group modal depth (name at implementer
+  discretion, e.g. `group_modal_depth: int | None = None`).  At the depth branch (`:1333`, `:1387`), the effective
+  level count becomes `min(part_levels, group_modal_depth)` when the parameter is supplied.  **Posture: default
+  already-modal** for `run()` — but the *parameter default* is `None` = "no group context, render own depth" (so a
+  caller that genuinely has no group, e.g. a single-file diagnostic, still works); the clamp engages whenever a
+  caller passes the modal depth, which S2 makes `run()`/`repath()`/`regroup()` always do.  (This reconciles "default
+  already-modal" behaviour with a safe parameter default: the *pipeline* default is modal because the callers always
+  pass it; the *function* tolerates absence.)
+- Update the `build_dest_path` and helper docstrings to state the property (uniform-ceiling/ragged-floor clamp to
+  the work-group modal depth), never the plan coordinate.
 
-**KAT (the freeze witness for C-CANON).**  In `test_annotator.py`, over `canonical_artist_form`:
-(a) an artist with a primary-flagged native-Latin alias ("Wiener Philharmoniker") whose `name` is the
-anglicised form ("Vienna Philharmonic") resolves to the **alias**; (b) an artist with no alias resolves to
-`name` (fallback proof); (c) an artist with only a non-primary alias resolves to `name` (primary-only proof).
-Plus a `test_models.py` `MBArtist().alias_list == []` default test, and (in `test_mb_helpers.py`) a fetch test
-proving aliases populate `MBArtist.alias_list` from the raw MB dict (verify against the actual `mb.get_*`
-key names, per the AGENTS.md musicbrainzngs caveat — not the REST JSON alone).
-
-**Subtleties.**
-- **The alias-attachment inflection (the `@architect` judgment).**  musicbrainzngs may not attach `aliases` to
-  artists nested inside `artist-credits`/relations on a release fetch even with the include — a known
-  library-vs-REST-JSON gap (AGENTS.md).  **Verify by printing the raw `mb.get_release_by_id` dict** before
-  committing to the include path; if aliases do not attach, freeze the dedicated-fetch mechanism instead.
-  This is the design-error-cost point the Opus tier + inflection marker exist for; the wrong choice here is
-  costly to revise after C-CANON is consumed.
-- **NORM-2 selection is MB-sourced only (D-A8).**  "Native where Latin-script; established reception where
-  non-Latin" is realised by *reading MB's own primary-alias flags and locales*, not by authoring a form.
-  Where MB holds no primary alias, fall back to `name` plainly — do not synthesise.
-- **Over-specify per Category-A.**  Carry the locale/primary selection logic in the resolver even though N2's
-  first consumer may only need the primary-alias branch — a downstream full-projection consumer (playlists,
-  as-credited-variant surfaces) will want it, and adding it later is costlier (compiler-contract rigidity).
-- **100%-branch-coverage gate.**  The resolver's primary-alias branch, the no-primary branch, and the
-  no-alias fallback branch each need an explicit test; the fetch/parse path needs both populated and empty
-  alias-list cases.
-
-**Deferrals.**  No path rendering (N2); no maintenance-path change (N3).
-
-### N2 — Render canonical name-forms in the destination path
-
-*(Lower-fidelity sketch — correct for a post-substrate row; crisply specified after C-CANON freezes at N1.)*
-
-**Deliverable.**  Thread `canonical_artist_form` into the compact-path render sites so the destination path
-carries canonical entity forms (STYLEGUIDE 4.5):
-- **Performers component** (`_tags.py:1224–1227`): replace `[e.name for e in tags.cea_album_conductors_list]`
-  / `cea_album_ensembles_list` with the canonical form.  The `ArtistEntry` construction sites (`_tags.py:433`,
-  `_works.py:254`) are the natural place to carry the canonical form alongside `name`/`sort` — freeze at N1
-  detail whether the resolver is called at `ArtistEntry` construction (once, carried) or at path assembly
-  (per-render); prefer construction so all downstream path/tag readers see one resolved form.
-- **Composer component** (`_tags.py:587`): the path composer is `last_name(sort_name)`.  Per D-A8, the
-  MB sort-name surname is already an MB-asserted, stable, recognisable form — **N2 leaves it as-is unless N1's
-  ruling extends the resolver to composer name-forms**; if the operator wants composer canonicalisation, it
-  routes through the same primary-alias resolver, not a new mechanism.  (Default: performers only; composer
-  unchanged — surface as an N2 discovery if the composer path is found to violate NORM-2.)
-
-**KAT (behavioural witness).**  A `build_dest_path`-level test over a release whose ensemble has a primary
-native-Latin alias asserts the path performers component carries the **alias** form, not the anglicised
-`name`; a release whose entities have no aliases asserts the path is **unchanged** from the pre-N2 as-credited
-form (no-regression proof).  Preserved surfaces (`ARTIST`/`ALBUMARTIST`) asserted **unchanged** (the D-A7
-surface split — the path canonicalises, the preserved tags do not).
+**KAT (the freeze witness for C-W3b-INT).**  In `test_annotator.py`, over `build_dest_path` + the modal helper:
+(a) **clamp-down** — a work-group with modal depth 2 and one PL=3 over-resolved movement (Handel Water Music
+IIIa/IIIb shape) renders that movement's path at **2 levels** (the over-resolution removed), not 3;
+(b) **ragged-floor preserved** — a work-group with modal depth 2 and one genuinely-shallow PL=1 node (Shape A
+overture-among-acts) renders the shallow node **unchanged at 1 level** (never padded up);
+(c) **modal-tie → shallower** — a group split evenly (e.g. {2,2,3,3}) resolves the tie to the **shallower** modal;
+(d) **PL=0 orphan excluded** — a group with a PL=0 orphan (Shape E) computes the modal over the non-orphan tracks;
+(e) **no-group / parameter-absent** — `build_dest_path(..., group_modal_depth=None)` renders own depth (backward
+compatibility / no-regression proof).
 
 **Subtleties.**
-- **Preserved surfaces must not change (D-A7).**  `ARTIST`/`ALBUMARTIST` and the CE verbatim tags stay
-  as-credited — N2 touches only the compact-path assembly, never the preserved-tag render.  A test asserting
-  `ARTIST` unchanged guards the surface split.
-- **Layer-routing.**  Canonicalisation is a *rendering* concern (layer 4) over the one model — the resolved
-  form is a projection, not a mutation of the model's credit data (P1).  Keep the as-credited credit intact in
-  the model; render canonical only at the compact-path surface.
-- **match/case coverage.**  Instrumenting the render sites must not mint unreachable arms; cover both the
-  alias-present and alias-absent path outcomes.
+- **The tag-data-sufficiency inflection (the `@architect` judgment).**  J2 left open whether `CWP_PART_LEVELS` + the
+  group modal depth can distinguish **faithful over-resolution** (clamp) from a **data-quality-gap shallowness**
+  (preserve + surface upstream) *without a MB network call*.  Ruling to make and freeze at S1: the clamp is **purely
+  a down-projection** — it only ever *reduces* a leaf's depth to the modal, and **never pads up**, so the data-gap
+  case (a node shallower than modal) is **automatically left untouched** by a `min()` clamp.  Therefore the
+  min-clamp needs **no** gap-vs-faithful discrimination and **no** network call: the asymmetry of the rule (clamp
+  down only) makes the distinction moot for *rendering*.  (The upstream data-gap *surfacing* — flagging the missing
+  `part-of` link — is a separate MB-upstream concern, Shape E, explicitly out of scope here.)  Confirm this
+  reasoning against the census shapes before freezing; if a shape is found where min-clamp mis-renders, that is the
+  reopen trigger J2 named.
+- **Over-specify per Category-A.**  Carry the corner-pin logic (tie → shallower, PL=0 exclusion) and the group
+  parameter now even though S2 is the first consumer and the census population is 3 groups — a future
+  full-projection/audit consumer or a new shape will want them, and adding them later is costlier (compiler-contract
+  rigidity).
+- **100%-branch-coverage gate.**  The clamp branch, the parameter-absent branch, the modal-tie branch, and the
+  PL=0-exclusion branch each need an explicit test; any `match/case` over shape needs a `case _: # pragma: no cover`
+  arm if the union is exhaustive.
+- **"Path is a handle, not a manifest."**  The clamp changes *depth* (how many nested dirs), never *which* entities
+  the path carries — the handle stays a handle.
 
-**Deferrals.**  No maintenance-path change (N3); no destructive repath (R6d).
+**Deferrals.**  No caller threading (S2); no fresh scan / census refresh (S3); no destructive repath (R6d).
 
-### N3 ◆ — Align the maintenance repath to canonical forms + register anneal
+### S2 — Thread work-group modal depth through the render callers
+
+*(Lower-fidelity sketch — correct for a post-substrate row; crisply specified after C-W3b-INT freezes at S1.)*
+
+**Deliverable.**  Compute the work-group modal depth at each `build_dest_path` caller and pass it, so ingest and
+maintenance render identically:
+- `_pipeline.py` `run()` (the work-group loop): assemble each work-group's `CWP_PART_LEVELS` set, compute the modal
+  via the S1 helper, pass it to `build_dest_path`.
+- `_pipeline_maint.py` `repath()` (`:405`) and `regroup()` (`:620`): same, from the embedded-tag work-group each
+  builds offline.  This is the site R6d's one-pass repath drives — after S2, `repath` re-derives existing paths at
+  clamped depth.
+- Freeze at S1 detail whether the modal depth is computed once per work-group and shared (preferred — one
+  computation per group) or per-track (redundant); prefer per-group.
+
+**KAT (behavioural witness).**  A `run()`-level (or `repath()`-level) test over a work-group with a Shape-C/D
+over-resolved movement asserts the emitted path clamps to the modal depth; a uniform-depth group asserts the path
+is **unchanged** from pre-S2 (no-regression).  A `repath`-vs-`run` parity assertion (same group → byte-identical
+path) guards ingest/maintenance identity.
+
+**Subtleties.**
+- **Ingest/maintenance parity is the point.**  `run` and `repath`/`regroup` must compute the modal depth the same
+  way or the library repath (R6d) would diverge from new ingests.  A parity test guards it.
+- **Group assembly off embedded tags.**  `repath`/`regroup` have no `MBRelease` (they call `build_dest_path` with
+  empty `MBRelease()`); the work-group must be assembled from `CWP_WORKID_TOP` on the embedded tags exactly as
+  `scan_nonuniform_depth.py` groups.  Reuse that grouping definition; do not mint a second one.
+- **match/case coverage.**  Cover both clamp-engaged and clamp-noop caller outcomes.
+
+**Deferrals.**  No fresh scan / census (S3); no destructive repath (R6d).
+
+### S3 ◆ — Refresh the depth census + register anneal
 
 *(Lower-fidelity sketch — post-substrate integrative row.)*
 
-**Deliverable.**  Make the `_pipeline_maint.py` repath/regroup path render canonical forms too, so R6d's future
-one-pass repath produces canonical directories (not as-credited):
-- `_canonical_composer_component` (`_pipeline_maint.py:721–743`) and any performer-component derivation in the
-  repath path route through the same C-CANON resolver / carried canonical form as the primary ingest path
-  (N2), so ingest and repath render **identically**.  (This is consistency, not a new destructive op — the
-  repath render function is aligned; R6d decides when to *run* it.)
+**Deliverable.**  Validate the frozen taxonomy against a fresh scan and refresh the stale census:
+- Re-run `scripts/scan_nonuniform_depth.py` against the **complete library** (operator mounts it — confirmed
+  2026-08-12).  **Distinguish scan-not-run (unmounted/empty root → never report clean) from no-findings** (the R4b
+  D-1 hazard); if the library is unmounted at execution, S3 records the scan as *not run* and the ◆ review notes the
+  census refresh as pending, rather than asserting the taxonomy holds.
+- **Validate the six-shape taxonomy** (A/B/C/D/E/F, BACKLOG:340–347) against the fresh scan.  A new shape the
+  uniform-ceiling min-clamp mishandles is the **J2 reopen trigger** (surface as a discovery; do not silently
+  absorb).  If the taxonomy holds, refresh the "36-group / 3.6%" figures in `docs/BACKLOG.md` to the current
+  library.
+- Optionally have the scanner emit a small machine-readable artifact (JSON) if that eases the R6d prerequisite;
+  implementer judgment, not a freeze.
 
-**KAT.**  A repath-path test asserts the maintenance component renders the canonical (alias) form for an
-entity with a primary native-Latin alias, matching the N2 ingest render byte-for-byte (ingest/repath parity).
+**KAT.**  A no-regression parity test asserting the S1/S2 clamp behaviour still holds against a representative
+Shape-C/D fixture (belt-and-suspenders over the S1/S2 KATs; the integrative session's behavioural pin).
 
-**Subtleties.**  Mirror N2's surface split exactly — the repath aligns the *compact path* only; no preserved
-surface and no persisted tag changes in the maintenance path.  Purely a render-alignment change; **no
-destructive library operation is performed by this sub-track** (R6d runs the repath under J3).
+**Subtleties.**  No `src/` change in S3 unless a scanner helper is promoted (it should not be — keep the scanner
+standalone per the `scan_fragmentation.py`/`census_original.py` precedent).  Purely a render-validation + census +
+anneal row; **no destructive library operation** (R6d runs the repath under J3).
 
-**◆ boundary (register anneal).**  Re-read Purpose.  Confirm all three sessions enacted, `tox -m analyze`
-green, ledger complete.  **Planning-register anneal** (the integrative session is where the contract gets its
-public form — the anneal is the same act):
-- Durable files (`models.py`, `_mb_api.py`, `_artists.py`, `_tags.py`, `_pipeline_maint.py`
-  docstrings/comments) carry **no plan coordinates** — no "N1/N2/N3", no "path-canonical-name-forms
-  sub-track", no `/plan-run` vocabulary.  State the property/reason/invariant (e.g. "canonical entity
-  name-form from MB's primary-flagged alias per NORM-2/C-CANON"), never the plan coordinate.
-- Grep the durable files against the **anneal denylist** (Notes for executors); translate any leaked
-  coordinate into standalone prose.
-- Report to the styleguide roadmap: rule-3.1/NORM-2 canonical-path rendering is enacted; C-CANON frozen.
-  **R6d coordination noted** — the repath render is aligned; R6d runs the destructive library-wide repath
-  under J3 (this sub-track lands the render, not the repath).
+**◆ boundary (register anneal).**  Re-read Purpose.  Confirm all three sessions enacted, `tox -m analyze` green,
+ledger complete.  **Planning-register anneal** (the integrative session is where the contract gets its public form —
+the anneal is the same act):
+- Durable files (`_tags.py`, `_works.py`, `_pipeline.py`, `_pipeline_maint.py`, `scan_nonuniform_depth.py`
+  docstrings/comments) carry **no plan coordinates** — no "S1/S2/S3", no "R6a", no "path-depth-normalisation
+  sub-track", no `/plan-run` vocabulary.  State the property/reason/invariant (e.g. "clamp leaf depth to the
+  work-group modal depth per the uniform-ceiling/ragged-floor rule, STYLEGUIDE 4.5 / C-W3b"), never the plan
+  coordinate.
+- Grep the durable files against the **anneal denylist** (Notes for executors); translate any leaked coordinate into
+  standalone prose.
+- Report to the library-completion roadmap: the depth-clamp render is enacted; C-W3b-INT frozen.  **R6d coordination
+  noted** — the clamp render is aligned in `repath`/`regroup`; R6d runs the destructive library-wide depth-repath
+  under J3 (this sub-track lands the render, not the repath), as one part of its paths-only one-pass (see the
+  ROADMAP R6d tag-content-scope caveat).
 
 ## Cross-session contracts
 
-### C-CANON — canonical entity name-form resolution *(field + resolver FROZEN at N1)*
+### C-W3b-INT — the build_dest_path depth-clamp interface *(FROZEN at S1)*
 
-**Alias data + resolver (frozen at N1).**  `MBArtist.alias_list: list[MBAlias]` (default `[]`) carries the
-entity's MB aliases; `canonical_artist_form(artist) -> str` returns the entity's **canonical name-form** per
-STYLEGUIDE 3.1/NORM-2 — the **primary-flagged MB alias** matching the native/reception rule (native alias
-where Latin-script; established Latin-reception alias where non-Latin), falling back to `MBArtist.name` when no
-qualifying primary alias exists.  **Authority-deference invariant (D-A8): the resolved form is always a form
-MB itself asserts** — a primary alias or the display name — never a locally-authored form, editorial table, or
-new scholarly romanisation.  The resolver is total (never raises; always returns a non-empty string given a
-populated `MBArtist`).  Deterministic: the same artist resolves to the same form regardless of release
-(3.1 "selected once, not per release").
+**Modal-depth helper + clamp interface (frozen at S1).**  `work_group_modal_depth(part_levels_list) -> int` returns
+the work-group's modal `CWP_PART_LEVELS` with the frozen corner pins (modal tie → shallower; PL=0 orphans excluded).
+`build_dest_path` gains a typed group-modal-depth parameter; the effective per-leaf level count is `min(own
+part_levels, group_modal_depth)` when supplied, else own depth (parameter default `None` = own depth).  **Rule
+invariant (C-W3b, J2-frozen): clamp down only, never pad up** — the `min()` makes this structural, so no
+gap-vs-faithful discrimination and **no MB network call** is needed at render (the tag-data-sufficiency question,
+resolved: the rule's asymmetry moots it for rendering; upstream data-gap surfacing is a separate MB-upstream concern,
+out of scope).  The helper is total (never raises; returns a non-negative int).  Deterministic: the same work-group
+resolves to the same modal depth regardless of release.
 
-**Alias source mechanism (FROZEN at N1 inflection — dedicated `fetch_artist_aliases`).**  The mechanism is a
-**dedicated `fetch_artist_aliases(mbid) -> MBArtist`** (artist as direct query target), *not* the `"aliases"`
-include on the release/recording fetch.  Signature and wiring:
+**Posture (frozen at S1).**  *Default already-modal* at the pipeline level (callers always pass the modal depth, so
+new ingests clamp immediately) reconciled with a *safe function default* (`None` → own depth, so a group-less caller
+still renders).  Chosen carrier: **direct typed parameter**, not `cwp_render_levels` `model_extra`
+(strict-mypy/no-`Any` house rule; explicit data flow).  The existing library re-derives via the offline `repath`
+engine (`_pipeline_maint.py:405`) — R6d's one J3-gated pass; temporary Shapes-C/D non-conformance until then
+(D-A4-style, accepted).
 
-- `_mb_api.py`: `_get_artist_by_id(artist_id) -> dict[str, JSON]` wrapping `mb.get_artist_by_id(artist_id,
-  includes=["aliases"])`, and `fetch_artist_aliases(artist_id, no_cache=False) -> MBArtist` routing through
-  `retrieve(..., NetPolicy(classify=_mb_data_classify, event="mb_artist", ...))` — the **same two-layer
-  defensive-download path** as `fetch_recording_detail`/`fetch_work_detail` (4xx-permanent via `_mb_data_classify`
-  NO_DATA/FATAL, 5xx/OSError transient RETRY).  Returns `MBArtist.model_validate(result.get("artist", {}))`;
-  an authoritative 404 yields an empty `MBArtist` (`alias_list == []`) — the resolver then falls back to `name`.
-- **Cache:** a module-level `_ARTIST_CACHE: dict[str, MBArtist]` mirroring `_WORK_CACHE` (L1 in-process, keyed by
-  artist MBID).  On-disk L2 (`artist/<mbid>.json`) is **optional per implementer judgment** — the L1 cache is the
-  mandated floor (dedup within a run); L2 parity with the work cache is the recommended default but not a freeze.
-
-**Why dedicated, not the include (the inflection ruling).**  Confirmed from the vendored library source:
-`mbxml.parse_artist` *does* carry `"alias-list": parse_alias_list` (so the parser can decode nested-artist
-aliases), and `"aliases"` *is* a valid `inc` for `release`/`recording`.  But the MB **webservice** does not
-reliably emit `<alias-list>` for artists nested in `artist-credit`/relations on a release/recording query —
-sub-entity aliases attach only when the sub-entity is the **direct** query target (the documented
-library-vs-REST gap, AGENTS.md; PLAN D-1).  The include path is therefore an unsound foundation for a durable
-resolver that must see the **complete, `primary`/`locale`-flagged** alias set to make the NORM-2 selection
-deterministically "once, not per release".  The dedicated per-MBID fetch *is* the direct-query-target case and
-gets the full authoritative alias-list.  **Load-bearing assumption (not live-verified — this environment has no
-network/interpreter):** that the webservice does not propagate sub-entity aliases.  The dedicated-fetch ruling
-is robust **either way** — if propagation were partial it would still be unreliable/incomplete for the resolver,
-so the dedicated fetch is correct even in the favourable case.  Tradeoff: one extra MB round-trip per distinct
-artist MBID (mitigated by `_ARTIST_CACHE` + the existing 1 req/s polite delay); worse on network economy than a
-zero-round-trip include, accepted as the price of a sound authority-complete substrate.
-
-**`MBAlias` raw-key correction (FROZEN at N1 — required for the field to populate).**  The raw musicbrainzngs
-alias dict stores the display text under key **`"alias"`** (`mbxml.parse_alias`: `result["alias"] = alias.text`),
-**not** `"name"`.  `MBAlias.name` currently has no mapping for `"alias"`, so `MBArtist.alias_list` would parse to
-empty `name` fields straight from `mb.get_*`.  N1 **must** make `MBAlias` accept the real key — either a
-`model_validator(mode="before")` remapping `"alias"` → `name` (preferred: preserves the existing `MBAlias().name`
-default-test and the `_work_aliases` `.name` reads unchanged), or an `AliasChoices("name", "alias")` on the field.
-The `test_mb_helpers.py` fetch KAT **must** feed a dict with the `"alias"` key (the real `mb.get_*` shape), not
-`"name"` — this is exactly the AGENTS.md "verify against actual `mb.get_*` key names, not REST JSON" caveat, and
-the existing work-alias tests do **not** cover it (they use `"name"`), so it is currently latent/untested.
-
-**Resolver call-site freeze (for N2 to consume).**  `canonical_artist_form(artist: MBArtist) -> str` reads
-`artist.alias_list` — so N2/N3 must ensure the `MBArtist` reaching the resolver has been **hydrated via
-`fetch_artist_aliases`** (the artist-credit/relation `MBArtist` off a release fetch will have `alias_list == []`).
-N1 freezes the resolver signature over a populated `MBArtist`; the hydration call-site (where N2 resolves each
-path-performer artist MBID through `fetch_artist_aliases` before rendering) is an **N2 wiring concern**, flagged
-here so N2 does not call the resolver on an unhydrated credit artist and silently get the `name` fallback.
-
-**Surface scope (frozen at N1/N2).**  C-CANON applies to the **compact path projection only** (4.5) —
-performers component, and composer only if N1 extends the resolver there.  It **never** applies to preserved
-surfaces (`ARTIST`/`ALBUMARTIST`, CE verbatim tags — REND-1/4.3): those stay as-credited (the D-A7 surface
-split).
-
-**Flavour:** compiler-enforced (the `MBArtist.alias_list` Pydantic field + the resolver signature; mypy strict)
-**+ test-enforced** (the N1 resolver KATs: primary-alias-wins, no-primary fallback, no-alias fallback; the N2
-behavioural KATs: canonical in path, preserved tags unchanged; the N3 ingest/repath parity KAT) **+
-prose-enforced** (the D-A8 authority-deference invariant; the D-A7 surface split, cited to 3.1/NORM-2/4.5 and
-REND-1/4.3).  **Defined-in:** N1 (field + resolver + source mechanism).  **Consumed-by:** N2 (compact path
-render), N3 (maintenance repath render), any future full-projection/playlist canonical-form consumer, R6d (the
-one-pass repath renders canonical via the aligned N3 surface).  Over-specified per Category-A: carries the
-locale/primary selection even though N2's first consumer uses only the primary-alias branch.
+**Flavour:** compiler-enforced (the `build_dest_path` parameter + the helper signature; mypy strict) **+
+test-enforced** (the S1 KATs: clamp-down, ragged-floor-preserved, modal-tie, PL=0-exclusion, parameter-absent; the
+S2 parity/no-regression KATs) **+ prose-enforced** (the uniform-ceiling/ragged-floor rule and clamp-down-only
+invariant, cited to STYLEGUIDE 4.5 / NOTES two-rules / C-W3b).  **Defined-in:** S1.  **Consumed-by:** S2 (caller
+threading), S3 (validation), R6d (the one-pass `repath` renders clamped via the S2-aligned callers), any future
+audit/full-projection depth consumer.  Over-specified per Category-A: carries the corner pins and group parameter
+though S2 is the first consumer over a 3-group population.
 
 ### Consumed (frozen upstream — invalidation is out of scope for this sub-track)
 
-- **STYLEGUIDE v1 3.1 / 3.2 / NORM-2 / NORM-3 / 4.5** — the authority: one canonical form per entity (native/
-  reception per NORM-2; aliases are evidence per NORM-3); compact projections render canonical (3.2); the path
-  is the compact assembled projection (4.5).  No ruling is re-opened.
-- **REND-1 / REND-19 / 4.3** — `ARTIST`/`ALBUMARTIST` are preserved verbatim claims.  C-CANON does **not**
-  touch them (the D-A7 surface split).  Validate-only.
-- **C-RA-GRAMMAR / C-NOSOLO** (A-shards) — the composite-tag grammar and no-soloist-in-path rules; the path
-  performers component is conductors-then-ensembles with soloists excluded — N2 canonicalises the forms
-  *within* that frozen structure, never changes which positions the path carries.  Validate-only.
-- **Defensive-download invariant** (repo `AGENTS.md`) — any dedicated `fetch_artist_aliases` follows the
-  two-layer `@_mb_retry` + `_mb_call` pattern, distinguishing 4xx-permanent from 5xx-transient.
-- **"Path is a handle, not a manifest" / uniform-ceiling-ragged-floor** (C-CLASS/C-INIT inputs to 4.5) — the
-  canonicalisation changes name *forms*, not path *structure*; the handle stays a handle.
+- **C-W3b (J2-graduated)** — the uniform-ceiling/ragged-floor *rule* + two-sub-shape routing + corner pins.  R6a
+  freezes its *interface* (C-W3b-INT); it does **not** re-open the rule.  A shape the min-clamp mishandles is a
+  finding for the arc boundary (J2 reopen trigger), not an in-arc rule change.
+- **C-CLASS / C-INIT (J2-ratified)** — the top-level class scheme and within-classical first component.  The clamp
+  changes depth *below* `work_dir`, never the class/top_dir structure.  Validate-only.
+- **C-L0 / C-L1** — leaf/intermediate numbering.  The clamp changes *how many* intermediate dirs render, never their
+  numbering grammar.  Validate-only.
+- **C-PROV / C-MOVE** — move/verify/journal provenance.  The `repath`/`regroup` threading (S2) preserves the journal
+  provenance chain unchanged (the clamp only changes the computed destination, not the copy/verify/journal
+  ordering).  Validate-only.
+- **"Path is a handle, not a manifest"** — the clamp changes name *depth*, not path *identity*; the handle stays a
+  handle.
 
 ### Produced
 
-- **C-CANON** — alias field + resolver at N1; compact-path render at N2; maintenance-repath alignment at N3.
-  **Coordinates with R6d** (the destructive library-wide repath): the render is landed here; R6d runs the
-  repath under J3.  Distinct from the sidecar-case-ids shard, which had no R6d coupling.
+- **C-W3b-INT** — the depth-clamp interface at S1; caller threading at S2; census validation at S3.  **Coordinates
+  with R6d** (the destructive library-wide depth-repath): the render is landed here; R6d runs the `repath` one-pass
+  under J3.  Distinct from the canonical-name-forms shard's R6d coupling only in the surface it aligns (depth vs.
+  name-form) — both ride the same R6d `repath` pass.
 
 ## Progress ledger
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 @architect | Add artist alias-list and canonical-form resolver | done | e0f7c3a | C-CANON (field + resolver + source mechanism: dedicated fetch_artist_aliases + _ARTIST_CACHE; MBAlias "alias" key remap; resolver call-site hydration is N2 wiring concern) |
-| 2 | Render canonical name-forms in the destination path | done | 575169d | C-CANON compact-path render (performers component; composer unchanged per D-A8; D-A7 surface split preserved) |
-| 3 ◆ | Align the maintenance repath to canonical forms + anneal | done | 238fde0 | C-CANON maintenance-repath alignment; anneal clean (plan coordinates translated in 14 files) |
+| 1 @architect | Add work-group modal-depth clamp to build_dest_path | pending | | |
+| 2 | Thread work-group modal depth through the render callers | pending | | |
+| 3 ◆ | Refresh the depth census + anneal | pending | | |
 
 ## Action-frame digest
 
-### N1 — 2026-08-11
-Discovery/flex: Inflection design confirmed dedicated fetch_artist_aliases; surfaced two subtleties frozen into C-CANON: (i) MBAlias raw key is "alias" not "name" (model_validator added); (ii) resolver hydration is N2 wiring concern (credit artists off release fetch have alias_list == []).
-Affected: C-CANON (alias source mechanism, MBAlias key correction, resolver call-site note — all frozen)
-Deferred: no — both subtleties resolved in N1 implementation; N2 must hydrate via fetch_artist_aliases before calling resolver.
-Texture: __init__.py was an extra file (allowed — AGENTS.md requires __all__ kept up to date). design-confident verdict; self-continued.
-
-### N3 ◆ — 2026-08-12
-Discovery/flex: Anneal touched 14 files (broader than the 2-file N3 column); _hydrate_performer_lists MBID-reconstruction uses positional zip with count-mismatch fallback to as-credited (safe degradation, covered by no-alias KAT).
-Affected: none — anneal is the integrative session's defining duty; degradation is safe and documented.
-Deferred: no — boundary fork returned still-on-intent; all four aims enacted, all frozen contracts intact.
-Texture: D-1 alias-attachment premise (MB webservice sub-entity propagation) inferred not live-verified; dedicated-fetch ruling robust either way. R6d coordination noted: render surface landed and parity-tested.
+*(none yet)*
 
 ## Discoveries & risks
 
-- **D-1 (N1 alias-attachment mechanism — the inflection judgment; RESOLVED at N1 inflection design).**  Ruled:
-  **dedicated `fetch_artist_aliases(mbid)`**, not the `"aliases"` include (the webservice does not reliably emit
-  sub-entity aliases on a release/recording query; the include path is unsound for a complete-alias-set resolver).
-  Two subtleties surfaced and frozen into C-CANON: (i) the raw musicbrainzngs alias key is **`"alias"`**, not
-  `"name"` — `MBAlias` must remap it (latent/untested in the existing work-alias code); (ii) resolver hydration is
-  an **N2 wiring concern** — credit/relation artists off a release fetch carry `alias_list == []`, so N2 must
-  hydrate via `fetch_artist_aliases` before calling the resolver.  N1 grows toward the top of its band (the
-  defensive-download wiring + `_ARTIST_CACHE`).  Sized within band (one wrapper + one fetch + one cache dict,
-  mirroring `fetch_work_detail`); **no additive-reshard warranted** — the dedicated fetch is a bounded
-  same-pattern addition, not a new row's worth of work.
-- **D-2 (composer path name-form — scope decision at N1/N2).**  The path composer is `last_name(sort_name)`
-  (an MB-asserted, stable surname).  Default: N2 leaves it unchanged (already MB-sourced and recognisable per
-  D-A8).  If N2 finds the composer surname violates NORM-2 for some entity (e.g. non-Latin composer rendered
-  in a non-reception form), that is a discovery — route it through the *same* primary-alias resolver, never a
-  new mechanism.  *internal-continue* unless a real violation surfaces.
-- **D-3 (R6d coupling — sequencing constraint, not a risk to this sub-track).**  This shard changes persisted
-  paths for *new* ingests only; the destructive library-wide repath is R6d's under J3 (D-A7/D-A5).  The N3
-  maintenance-repath alignment is the surface R6d drives — landing it here is what lets R6d re-path once, not
-  piecemeal.  No destructive op in this sub-track.  *internal-continue.*
-- **D-4 (temporary library inconsistency — accepted, D-A7).**  Until R6d, the on-disk library mixes
-  as-credited (old dirs) and canonical (new dirs) forms.  Accepted by the operator; not a defect to remediate
-  in-track.  Noted so `/plan-run` does not treat it as an in-track discovery.
-- **D-5 (stale census/NOTES `cea_album_soloists_unified` refs — pre-existing, out of scope).**  Carried down
-  from prior boundaries and both roadmaps' R6d caveat: `census-impl.md` / `NOTES.md` still describe a deleted
-  field.  A doc-freshness item for R6d, **not** this sub-track's work.  Noted so `/plan-run` does not treat it
-  as an in-track discovery.
+- **D-1 (S1 tag-data-sufficiency — the inflection judgment; provisionally resolved at PLAN derivation).**  J2 left
+  open whether the clamp can distinguish faithful-over-resolution from a data-gap without a MB call.  Resolution to
+  confirm-and-freeze at S1: the rule is **clamp-down-only**, so a `min()` to the modal depth **automatically** leaves
+  data-gap-shallow nodes untouched and needs no discrimination and no network call.  *internal-continue* unless a
+  census shape is found where min-clamp mis-renders — that is a **destructive-HALT / J2-reopen** signal (the rule,
+  not just the interface, would be wrong).
+- **D-2 (fresh-scan population — additive-reshard signal).**  The 36-group / 3.6% census is stale by construction
+  (BACKLOG:337).  If the fresh S3 scan surfaces a **new shape** the uniform-ceiling rule mishandles, or a much
+  larger/varied population, that is J2's named reopen trigger — surface it; do **not** absorb it in-track.
+  *additive-reshard* (a new-shape handling row) or *destructive-HALT* (rule wrong), decided live at the S3 scan.
+- **D-3 (host-path silent-no-op hazard — carried from R4b D-1 / scan_nonuniform_depth ROOT).**  The scanner's `ROOT`
+  is machine-specific (`scan_nonuniform_depth.py:25`, `~/Remote/hades/Music/Done`).  S3 **must** distinguish
+  scan-not-run (unmounted/empty root → never "clean") from no-findings.  Operator mounts the library before
+  `/plan-run` (confirmed 2026-08-12); if unmounted at execution, the census refresh is recorded pending, not
+  asserted.  *internal-continue* (S3 handles it structurally).
+- **D-4 (R6d coupling — sequencing constraint, not a risk).**  This shard changes computed paths for *new* ingests
+  only; the destructive library-wide depth-repath is R6d's one J3-gated `repath` pass (D-A5/D-A7).  The S2
+  `repath`/`regroup` threading is the surface R6d drives.  No destructive op in this sub-track.  *internal-continue.*
+- **D-5 (R6d is paths-only — carried up to ROADMAP R6d node 2026-08-12).**  `repath`/`regroup`/`unify` re-derive
+  paths only, offline from embedded tags — they do **not** regenerate tag *content* from MB.  R6d's "one-pass
+  re-derivation" scope (paths-only vs. also tag-content) is an R6d-planning decision, folded into the ROADMAP R6d
+  node.  Noted so `/plan-run` does not treat it as an in-track R6a discovery.  *internal-continue.*
+- **D-6 (temporary library inconsistency — accepted, D-A4-style).**  Until R6d's repath, the on-disk library mixes
+  over-resolved (old Shapes-C/D dirs) and clamped (new ingests) depth.  Accepted by the operator (posture 1); not a
+  defect to remediate in-track.  Noted so `/plan-run` does not treat it as an in-track discovery.
 
 ## Notes for executors
 
-- **Tier routing.**  N1 is **Opus + `@architect` inflection** (the alias-source-mechanism design judgment; the
-  durable C-CANON resolver freeze).  N2, N3 are **Sonnet** (mechanical resolver-threading over the frozen
-  substrate).  `juncture-tier: opus` — kept: C-CANON is durable and the alias mechanism is a judgment tests
-  alone cannot catch.
-- **Register: authority-deference, not authoring (D-A8).**  The canonical form is always a form MB itself
-  asserts (a primary alias or the display name).  No local editorial name table, no synthesised form, no new
-  scholarly romanisation, no new annotation convention.  If a row seems to *need* an authored form, that is a
-  discovery (surface it), not a licence to author.
-- **Surface split is load-bearing (D-A7).**  C-CANON touches the **compact path only**.  `ARTIST`/
-  `ALBUMARTIST` and CE verbatim tags stay as-credited (REND-1/4.3).  Every render-site change must carry a
-  test asserting the preserved surfaces are unchanged.
-- **REGISTER rule (durable-file discipline).**  In source/tests, state the *property/reason/invariant* — never
-  the plan coordinate.  "canonical entity name-form from MB's primary-flagged alias per NORM-2/C-CANON" is
-  right; "the N2 path-canonicalisation" is not.  Plan vocabulary (N1/N2/N3, sub-track names, `/plan-run`)
-  lives only in `PLAN.md` / `ROADMAP*.md` / the ledger / commit messages.  See also the repo `AGENTS.md`
-  REGISTER block.
-- **Anneal denylist (◆ gate greps durable files for these).**  Seeded from the `/plan-run` default, tuned for
-  this project's vocabulary:
-  - `\bN[1-9]\b` (this sub-track's plan session coordinates) **and** `\bS[1-9]\b` (prior sub-tracks') — **but**
-    allow the STYLEGUIDE-rule-section forms (`\b[1-5]\.[0-9]\b` like "3.1", "4.5", "5.2" are register/rule
-    cites, not plan coordinates — do **not** flag).
+- **Tier routing.**  S1 is **Opus + `@architect` inflection** (the C-W3b-INT interface + tag-data-sufficiency design
+  judgment; permanent path-depth policy).  S2, S3 are **Sonnet** (mechanical threading + scan/census/anneal over the
+  frozen interface).  `juncture-tier: opus` — kept.
+- **Register: render the rule, don't re-open it.**  C-W3b (the rule) is J2-frozen; R6a freezes only its interface.
+  If a row seems to *need* a rule change (a new shape mis-clamps), that is a **discovery / J2-reopen** (surface it),
+  not a licence to re-adjudicate the rule in-track.
+- **Clamp-down-only is load-bearing.**  The `min()` to the modal depth **never pads up**.  Every render-site change
+  must carry a test asserting a genuinely-shallow (ragged-floor) node is left unchanged — never padded.
+- **Ingest/maintenance parity is load-bearing.**  `run` and `repath`/`regroup` must compute the work-group modal
+  depth identically (reuse the `scan_nonuniform_depth.py` `CWP_WORKID_TOP` grouping; do not mint a second grouping).
+  A parity test guards it — R6d's repath must render byte-identically to new ingests.
+- **REGISTER rule (durable-file discipline).**  In source/tests, state the *property/reason/invariant* — never the
+  plan coordinate.  "clamp leaf depth to the work-group modal depth per the uniform-ceiling/ragged-floor rule
+  (STYLEGUIDE 4.5 / C-W3b)" is right; "the S1 depth-clamp" is not.  Plan vocabulary (S1/S2/S3, R6a, sub-track names,
+  `/plan-run`) lives only in `PLAN.md` / `ROADMAP*.md` / the ledger / commit messages.  See the repo `AGENTS.md`
+  "Register rule" block.
+- **Anneal denylist (◆ gate greps durable files for these).**  Seeded from the `/plan-run` default, tuned for this
+  project's vocabulary:
+  - `\bS[1-9]\b` (this sub-track's plan session coordinates) **and** `\bN[1-9]\b` (prior sub-tracks') — **but** allow
+    the STYLEGUIDE-rule-section forms (`\b[1-5]\.[0-9]\b` like "4.5", "3.1" are register/rule cites, not plan
+    coordinates — do **not** flag).
+  - `\bR6[a-e]\b`, `\bR[0-9]\b` (roadmap node coordinates) — flag in durable source/tests; legitimate only in
+    PLAN/ROADMAP/ledger/commit messages.
   - `sub-track`, `plan-run`, `plan-shard`, `halt-at-boundaries`, `run-to-boundary`
-  - `C-CANON` **only outside docstrings that legitimately name the contract** — contract names in docstrings
-    are the intended durable form (the C-TIER/C-CASE-PROV precedent); flag bare "N1 freeze"-style prose, not
-    the contract name itself.
+  - `C-W3b-INT` **only outside docstrings that legitimately name the contract** — contract names in docstrings are
+    the intended durable form; flag bare "S1 freeze"-style prose, not the contract name itself.
   - `juncture`, `inflection`, `action-frame`, `◆`
-  - Do **not** add `alias`, `canonical`, `NORM-2`, `primary`, or register IDs (`NORM-`, `REND-`, `SEL-`) to
-    the denylist — these are legitimate domain vocabulary this sub-track deliberately renders and cites.
-- **Invariants to preserve:** the D-A7 surface split (preserved tags unchanged); C-RA-GRAMMAR / C-NOSOLO (the
-  path carries conductors-then-ensembles, soloists excluded — canonicalise forms within that structure, never
-  change which positions the path carries); the defensive-download pattern (any `fetch_artist_aliases` follows
-  `@_mb_retry` + `_mb_call`); "path is a handle, not a manifest" (change name forms, not path structure); the
-  confirmation-provenance and copy/verify invariants (untouched — this sub-track is not in the copy/verify
-  network path).
-- **Every row runs `~/.local/bin/tox -m analyze` before ledger-done** (build + test at 100% branch coverage +
-  strict mypy + ruff + pylint 10.00/10 + pyupgrade).  Import order via `~/.local/bin/tox -m edit`, never
-  hand-edited.
-- **Suggested first `/plan-run` invocation:** `halt-at-boundaries` — the alias-source-mechanism (D-1) is the
-  first unproven substrate judgment in this shard; stop after N1 for an operator check that the C-CANON freeze
-  (especially the alias-attachment mechanism and the primary-alias selection rule) is right before N2 consumes
-  it.  Once N1 confirms the pattern, `run-to-boundary` through the N3 ◆.
+  - Do **not** add `depth`, `modal`, `part_levels`, `CWP_PART_LEVELS`, `clamp`, `uniform-ceiling`, `ragged-floor`,
+    `C-W3b`, or `W3b` to the denylist — these are legitimate domain/rule vocabulary this sub-track deliberately
+    renders and cites.  (`C-W3b` names the frozen rule; `W3b` appears in NOTES/BACKLOG as durable rule vocabulary.)
+- **Invariants to preserve:** the clamp-down-only rule (C-W3b); ingest/maintenance parity; C-CLASS/C-INIT (class and
+  top_dir structure unchanged — clamp acts below `work_dir`); C-L0/C-L1 (numbering grammar unchanged); the
+  C-PROV/C-MOVE provenance and confirmation-provenance/copy-verify invariants (untouched — R6a is not in the
+  copy/verify network path; `repath` threading only changes the computed destination, not the move/journal ordering);
+  "path is a handle, not a manifest" (change depth, not identity).
+- **Every row runs `~/.local/bin/tox -m analyze` before ledger-done** (build + test at 100% branch coverage + strict
+  mypy + ruff + pylint 10.00/10 + pyupgrade).  Import order via `~/.local/bin/tox -m edit`, never hand-edited.
+- **Suggested first `/plan-run` invocation:** `halt-at-boundaries` — the C-W3b-INT interface (posture + carrier + the
+  D-1 tag-data-sufficiency ruling) is the first unproven substrate judgment in this shard; stop after S1 for an
+  operator check that the freeze (especially the clamp-down-only / no-network reasoning and the corner pins) is right
+  before S2 consumes it.  Once S1 confirms, `run-to-boundary` through the S3 ◆.

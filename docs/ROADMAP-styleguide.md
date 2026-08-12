@@ -136,13 +136,21 @@ operator recommendations carried to V1b (see Discoveries appendix D-A1/D-A2).
   contested-default (P2) case-IDs, and the `audit`-surface enumeration all landed.  **Froze C-CASE-PROV**
   (field + set-union-append-only merge; source set {SEL-11 run-derived; REND-1/REND-2/REND-14 structural;
   NORM-1/NORM-2 no clean application site}).  Sidecar-only — no persisted-tag or path change, no R6d coupling.
-  **IN PROGRESS (2026-08-11, sub-track "path-canonical-name-forms"):** the normalisation shard — render
-  STYLEGUIDE 3.1/NORM-2 canonical entity name-forms in the compact path projection (4.5), sourced from MB's
-  own primary-flagged aliases (authority-deference posture, D-A7).  **Path-changing but code-only now**: the
-  destructive library-wide repath rides R6d's one pass (D-A5 precedent); this shard only makes new ingests
-  render canonical.  Substrate survey findings folded: composite-tag grammar (`ARTIST` et al.) is **discharged
-  by v1's enacted state** (ARTIST/ALBUMARTIST already verbatim by design — REND-1/4.3; not a defect), and the
-  D-A6 "3.1-vs-REND-1 conflict" is **dissolved** (they govern different surfaces — see D-A6/D-A7).
+  **DONE (2026-08-12, sub-track "path-canonical-name-forms", `docs/PLAN.md` 3/3; commits `e0f7c3a` /
+  `575169d` / `238fde0`; ◆ still-on-intent):** the normalisation shard — render STYLEGUIDE 3.1/NORM-2
+  canonical entity name-forms in the compact path projection (4.5), sourced from MB's own primary-flagged
+  aliases (authority-deference posture, D-A7/D-A8).  **Froze C-CANON** (`MBArtist.alias_list` +
+  `canonical_artist_form` resolver; alias source = a dedicated `fetch_artist_aliases(mbid)` on the two-layer
+  defensive-download path with an `_ARTIST_CACHE`, *not* the release-fetch `"aliases"` include — the
+  webservice does not reliably emit sub-entity aliases on a release query; plus the `MBAlias` raw-key remap
+  `"alias"`→`name`).  **Path-changing but code-only now**: new ingests render canonical; the destructive
+  library-wide repath rides R6d's one pass (D-A5 precedent), accepted temporary as-credited/canonical
+  library inconsistency until then (D-A4-style).  Substrate survey findings folded: composite-tag grammar
+  (`ARTIST` et al.) is **discharged by v1's enacted state** (ARTIST/ALBUMARTIST already verbatim by design —
+  REND-1/4.3; not a defect), and the D-A6 "3.1-vs-REND-1 conflict" is **dissolved** (they govern different
+  surfaces — see D-A6/D-A7).  **With this shard, node A has no auto-obvious remaining agent-shardable target:**
+  the three originally-enumerated shards (editorial-notes field, composite-tag grammar, normalisation) are all
+  done or discharged; further A-shards are L-loop/operator-elected.
 - **P — Public conventions spec.**  The externalised projection of the styleguide (= R6e in the library-completion
   ROADMAP; finalises alongside the Act II freeze).  Derivation, not duplication.
 - **C — CEv3.**  The CE successor on Picard v3, platforming the styleguide's MB-derivable partition.  Graduates to its
@@ -258,3 +266,16 @@ E0 1 ✓ · V1a 3 ✓ · V1b 3 ✓ → **v1 reached in 7 sessions (2026-07-30)**
   *CE-continuity* postures into an authority-deference rule that anchors this shard (canonical form = MB's own
   primary alias, not an authored form) and every future application shard.  Prose-enforced; belongs in the
   styleguide's foundational-principles register at the next V1b/L-loop touch.
+
+- **D-A9 (2026-08-12, path-canonical-name-forms ◆ — durable substrate fact for the L-loop / any future
+  alias-consuming shard).**  The canonical-form resolver (C-CANON) sources aliases via a **dedicated
+  `fetch_artist_aliases(mbid)`** (artist as the *direct* query target), **not** the `"aliases"` include on a
+  release/recording fetch: the MB webservice does not reliably emit `<alias-list>` for artists nested in
+  `artist-credit`/relations on a release query (the documented library-vs-REST gap; AGENTS.md), so the
+  include path is an unsound foundation for a resolver that must see the complete `primary`/`locale`-flagged
+  alias set to select "once, not per release".  Two enacted subtleties any future alias work inherits: (i)
+  the raw musicbrainzngs alias key is **`"alias"`**, not `"name"` (`MBAlias` remaps it — previously latent);
+  (ii) credit/relation artists off a release fetch carry `alias_list == []`, so a consumer must **hydrate via
+  `fetch_artist_aliases`** before calling `canonical_artist_form` or silently get the `name` fallback.
+  Load-bearing but not live-verified (no network in the dev environment); the dedicated-fetch ruling is
+  robust either way (partial propagation would still be incomplete).  Prose-enforced; no schema re-open.
