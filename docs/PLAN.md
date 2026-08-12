@@ -300,7 +300,7 @@ though S2 is the first consumer over a 3-group population.
 |---|---------|--------|--------|-------|
 | 1 @architect | Add work-group modal-depth clamp to build_dest_path | done | 4fe4025 | C-W3b-INT (work_group_modal_depth helper + build_dest_path group_modal_depth param; corner pins: tie→shallower, PL=0 excluded; all-orphan→0; min() clamp down-only) |
 | 2 | Thread work-group modal depth through the render callers | done | 4de8c70 | C-W3b-INT caller threading (run/repath/regroup all compute and pass group modal depth; ingest/maintenance parity KAT) |
-| 3 ◆ | Refresh the depth census + anneal | pending | | |
+| 3 ◆ | Refresh the depth census + anneal | done | 73e11ba | C-W3b-INT census validation (taxonomy holds; no new mishandled shape; 63 groups / 1.8%; boundary still-on-intent) |
 
 ## Action-frame digest
 
@@ -309,6 +309,12 @@ Discovery/flex: Inflection design-confident; D-1 tag-data-sufficiency dissolved 
 Affected: C-W3b-INT (frozen as designed; no contract flex)
 Deferred: no — all three advisory notes (Shape F, determinism phrasing, all-orphan edge) resolved in S1 implementation. S2 must reuse scanner grouping and include repath-vs-run parity KAT.
 Texture: design-confident verdict; self-continued. Extra file __init__.py not needed (work_group_modal_depth is internal, not added to __all__).
+
+### S3 ◆ — 2026-08-12
+Discovery/flex: Fresh scan (12,148 FLACs, 3,509 groups, 63 non-uniform / 1.8%): six-shape taxonomy holds; D-2 reopen trigger did not fire. Notable new groups: Wagner Ring Karajan {1,2,3,4} and Ring Solti {2,3,4} — both Shape D, handled correctly by min-clamp. Boundary fork: still-on-intent.
+Affected: none — taxonomy validation confirmed C-W3b-INT as designed; no contract flex.
+Deferred: no — boundary fork reconciled one deviation (run() grouping key uses cwp_workid_top-or-musicbrainz_workid fallback; repath/regroup use cwp_workid_top alone — not a parity break since embedded tags always have cwp_workid_top populated). R6d coordination noted: render surface landed; repath rides R6d.
+Texture: D-3 scan-not-run hazard handled structurally (scanner exits with clear error if root not mounted). Anneal clean.
 
 ## Discoveries & risks
 
