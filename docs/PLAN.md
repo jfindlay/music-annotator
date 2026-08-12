@@ -310,7 +310,7 @@ locale/primary selection even though N2's first consumer uses only the primary-a
 |---|---------|--------|--------|-------|
 | 1 @architect | Add artist alias-list and canonical-form resolver | done | e0f7c3a | C-CANON (field + resolver + source mechanism: dedicated fetch_artist_aliases + _ARTIST_CACHE; MBAlias "alias" key remap; resolver call-site hydration is N2 wiring concern) |
 | 2 | Render canonical name-forms in the destination path | done | 575169d | C-CANON compact-path render (performers component; composer unchanged per D-A8; D-A7 surface split preserved) |
-| 3 ◆ | Align the maintenance repath to canonical forms + anneal | pending | | |
+| 3 ◆ | Align the maintenance repath to canonical forms + anneal | done | 238fde0 | C-CANON maintenance-repath alignment; anneal clean (plan coordinates translated in 14 files) |
 
 ## Action-frame digest
 
@@ -319,6 +319,12 @@ Discovery/flex: Inflection design confirmed dedicated fetch_artist_aliases; surf
 Affected: C-CANON (alias source mechanism, MBAlias key correction, resolver call-site note — all frozen)
 Deferred: no — both subtleties resolved in N1 implementation; N2 must hydrate via fetch_artist_aliases before calling resolver.
 Texture: __init__.py was an extra file (allowed — AGENTS.md requires __all__ kept up to date). design-confident verdict; self-continued.
+
+### N3 ◆ — 2026-08-12
+Discovery/flex: Anneal touched 14 files (broader than the 2-file N3 column); _hydrate_performer_lists MBID-reconstruction uses positional zip with count-mismatch fallback to as-credited (safe degradation, covered by no-alias KAT).
+Affected: none — anneal is the integrative session's defining duty; degradation is safe and documented.
+Deferred: no — boundary fork returned still-on-intent; all four aims enacted, all frozen contracts intact.
+Texture: D-1 alias-attachment premise (MB webservice sub-entity propagation) inferred not live-verified; dedicated-fetch ruling robust either way. R6d coordination noted: render surface landed and parity-tested.
 
 ## Discoveries & risks
 
