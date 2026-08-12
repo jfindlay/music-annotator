@@ -71,7 +71,7 @@ from music_annotator._tags import (
     build_track_tags,
     collect_applied_case_ids,
 )
-from music_annotator._works import build_work_hierarchy, select_primary_performance_work
+from music_annotator._works import build_work_hierarchy, select_primary_performance_work, work_group_modal_depth
 from music_annotator.models import (
     AccurateRipSummary,
     AccurateRipTrack,
@@ -1744,6 +1744,32 @@ def run(
                 barcode=release.barcode,
             )
 
+    # Compute the work-group modal depth per group and build a per-track lookup.
+    # Groups tracks by (CWP_WORKID_TOP or MUSICBRAINZ_WORKID), mirroring the scanner grouping
+    # in scripts/scan_nonuniform_depth.py (which groups by (release_dir, CWP_WORKID_TOP)).
+    # Within one run() call all tracks share the same release dir, so the grouping key is the
+    # top-work MBID alone.  The modal depth is computed once per group and shared across all
+    # tracks in that group, clamping over-resolved branches to the group ceiling per the
+    # uniform-ceiling/ragged-floor rule (STYLEGUIDE 4.5 / C-W3b).
+    _run_work_groups: dict[str, list[int]] = defaultdict(list)
+    for _gidx in range(len(all_media_pairs)):
+        _t = tags_map[_gidx]
+        _twid = _t.cwp_workid_top or _t.musicbrainz_workid
+        _run_work_groups[_twid].append(_gidx)
+
+    # modal_depth_by_idx: global_idx → group modal depth (int | None).
+    # None means no group context (all-orphan group, PL=0 for all tracks) — build_dest_path
+    # renders own depth, which is already 0, so the result is identical.
+    modal_depth_by_idx: dict[int, int | None] = {}
+    for _twid, _group_idxs in _run_work_groups.items():
+        _part_levels = [int(tags_map[_i].cwp_part_levels or "0") for _i in _group_idxs]
+        _modal = work_group_modal_depth(_part_levels)
+        # When modal is 0 (all-orphan group), pass None so build_dest_path uses own depth
+        # unchanged — equivalent outcome, avoids a redundant min(0, 0) clamp.
+        _modal_or_none: int | None = _modal if _modal > 0 else None
+        for _i in _group_idxs:
+            modal_depth_by_idx[_i] = _modal_or_none
+
     # Build the copy plan from the copy_subset only (selected medium).
     # CopyPlanEntry.idx is the GLOBAL index into tags_map so tags_map[entry.idx] resolves
     # correctly even though the plan only covers the selected medium.
@@ -1757,7 +1783,14 @@ def run(
         # 1-based position within the copy subset — used as the leaf nn fallback when
         # CWP_ORDERING_KEY_0 is absent.  Scoped to the copy subset so filenames are
         # monotonically increasing within the actioned medium regardless of disc position.
-        dest_base = build_dest_path(dest_root, release, track, final_tags, global_track_idx=copy_subset_pos + 1)
+        dest_base = build_dest_path(
+            dest_root,
+            release,
+            track,
+            final_tags,
+            global_track_idx=copy_subset_pos + 1,
+            group_modal_depth=modal_depth_by_idx.get(global_idx),
+        )
         dest_file = dest_base.with_suffix(src_file.suffix.lower())
         log.info("copy_track", src=src_file.name, dest=str(dest_file.relative_to(dest_root)))
         plan.append(CopyPlanEntry(idx=global_idx, src_file=src_file, dest_file=dest_file))

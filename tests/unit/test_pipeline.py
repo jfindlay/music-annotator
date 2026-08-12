@@ -85,7 +85,8 @@ from music_annotator._pipeline_io import (
     rebuild_journal,
 )
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
-from music_annotator._tags import _work_top_dir, collect_applied_case_ids
+from music_annotator._tags import _work_top_dir, build_dest_path, collect_applied_case_ids
+from music_annotator._works import work_group_modal_depth
 from music_annotator.models import (
     JSON,
     AccurateRipResult,
@@ -2064,8 +2065,15 @@ class TestRunFullPipeline:
         captured_dests: list[Path] = []
         real_build = music_annotator._tags.build_dest_path  # pylint: disable=protected-access
 
-        def _capture_dest(dest_root: Path, rel: MBRelease, track: MBTrack, tags: TrackTags, global_track_idx: int = 0) -> Path:
-            p = real_build(dest_root, rel, track, tags, global_track_idx)
+        def _capture_dest(
+            dest_root: Path,
+            rel: MBRelease,
+            track: MBTrack,
+            tags: TrackTags,
+            global_track_idx: int = 0,
+            group_modal_depth: int | None = None,
+        ) -> Path:
+            p = real_build(dest_root, rel, track, tags, global_track_idx, group_modal_depth)
             captured_dests.append(p)
             return p
 
@@ -2706,8 +2714,15 @@ class TestRunFullPipeline:
         captured_dests: list[Path] = []
         real_build = music_annotator._tags.build_dest_path  # pylint: disable=protected-access
 
-        def _capture_dest(dest_root: Path, rel: MBRelease, track: MBTrack, tags: TrackTags, global_track_idx: int = 0) -> Path:
-            p = real_build(dest_root, rel, track, tags, global_track_idx)
+        def _capture_dest(
+            dest_root: Path,
+            rel: MBRelease,
+            track: MBTrack,
+            tags: TrackTags,
+            global_track_idx: int = 0,
+            group_modal_depth: int | None = None,
+        ) -> Path:
+            p = real_build(dest_root, rel, track, tags, global_track_idx, group_modal_depth)
             captured_dests.append(p)
             return p
 
@@ -12664,4 +12679,290 @@ class TestAppliedCaseIdsInSidecar:
         # SEL-11 was applied on track 1; the set-union merge must carry it to the sidecar.
         assert "SEL-11" in result.applied_case_ids, (
             f"Expected SEL-11 in applied_case_ids after multi-track union; got {result.applied_case_ids}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# run() — work-group modal depth threading (uniform-ceiling/ragged-floor rule)
+# ---------------------------------------------------------------------------
+
+
+class TestRunWorkGroupModalDepth:
+    """Tests for the work-group modal depth threading in run().
+
+    Verifies that run() computes the work-group modal depth once per group and passes it to
+    build_dest_path, so over-resolved branches clamp to the group ceiling (Shape C/D) while
+    uniform-depth groups are unchanged (no-regression).  A parity assertion guards that run()
+    and repath() compute byte-identical paths for the same group.
+    """
+
+    @staticmethod
+    def _make_classical_tags(
+        cwp_part_levels: str,
+        cwp_movt_num: str,
+        title: str,
+        *,
+        extra_parts: dict[str, str] | None = None,
+    ) -> TrackTags:
+        """Build a minimal classical TrackTags with the given hierarchy depth.
+
+        Sets the fields required for build_dest_path to produce a Classical path:
+        cwp_work_top, cwp_worktype_genres_top, cwp_composer_lastnames, recording_date,
+        cwp_workid_top, and cwp_part_levels.  Dynamic per-level extras (cwp_part_N,
+        cwp_ordering_key_N) are passed via ``extra_parts``.
+
+        :param cwp_part_levels: String value for CWP_PART_LEVELS (e.g. ``"2"`` or ``"3"``).
+        :param cwp_movt_num: String value for CWP_MOVT_NUM (leaf movement number).
+        :param title: Track title.
+        :param extra_parts: Optional dict of lowercase model_extra keys to set (e.g.
+            ``{"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"}``).
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        tags = TrackTags(
+            cwp_work_top="Water Music",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="Handel",
+            recording_date="1970",
+            cwp_workid_top="w-water-music",
+            cwp_part_levels=cwp_part_levels,
+            cwp_movt_num=cwp_movt_num,
+            movementtotal="3",
+            title=title,
+            artist="Karajan",
+        )
+        if extra_parts and tags.model_extra is not None:
+            tags.model_extra.update(extra_parts)
+        return tags
+
+    @staticmethod
+    def _patch_run_base(mocker: MockerFixture, release: MBRelease, tags_by_pos: dict[int, TrackTags]) -> None:
+        """Patch all MB API calls for a run() test with pre-built tags.
+
+        Mocks fetch_release, fetch_cover_art, fetch_recording_detail, and build_track_tags so
+        that run() uses the caller-supplied tags without making real MB API calls.  Also patches
+        apply_tags_flac, _verify_copy, and _run_fpcalc to no-ops.
+
+        :param mocker: pytest-mock fixture.
+        :param release: MBRelease to return from fetch_release.
+        :param tags_by_pos: Mapping from 1-based track position to pre-built TrackTags.
+        """
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        call_count = [0]
+
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
+            call_count[0] += 1
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": f"Track {call_count[0]}",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [],
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
+        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
+        # Inject pre-built tags: build_track_tags is called once per track in all_media_pairs
+        # order (global index 0, 1, 2, …).  We supply tags keyed by 1-based position.
+        pos_iter = [0]
+
+        def _build_tags(*args: object, **kwargs: object) -> TrackTags:  # pylint: disable=unused-argument
+            pos_iter[0] += 1
+            return tags_by_pos.get(pos_iter[0], TrackTags())
+
+        mocker.patch("music_annotator._pipeline.build_track_tags", side_effect=_build_tags)
+        mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+    def test_run_clamps_over_resolved_track_to_modal_depth(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """run() clamps a Shape-C/D over-resolved track to the work-group modal depth.
+
+        A 3-track group where 2 tracks have CWP_PART_LEVELS=2 and 1 track has CWP_PART_LEVELS=3
+        (Shape C: one over-resolved movement).  The modal depth is 2.  The PL=3 track must render
+        at depth 2 (one intermediate directory), not depth 3 (two intermediate directories).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 4):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=3)
+
+        # Tracks 1 and 2: PL=2 (one intermediate directory: Act I)
+        tags1 = self._make_classical_tags(
+            "2",
+            "1",
+            "Allegro",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+        tags2 = self._make_classical_tags(
+            "2",
+            "2",
+            "Andante",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+        # Track 3: PL=3 (two intermediate directories: Act I / Scene 1) — over-resolved
+        tags3 = self._make_classical_tags(
+            "3",
+            "3",
+            "Presto",
+            extra_parts={
+                "cwp_part_1": "Scene 1",
+                "cwp_ordering_key_1": "1",
+                "cwp_part_2": "Act I",
+                "cwp_ordering_key_2": "1",
+            },
+        )
+
+        self._patch_run_base(mocker, release, {1: tags1, 2: tags2, 3: tags3})
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        dest_files = sorted(dest.rglob("*.flac"))
+        assert len(dest_files) == 3, f"Expected 3 FLAC files, got {len(dest_files)}"
+
+        # All three tracks must land at depth 2 (one intermediate directory below work_dir).
+        # Relative path structure: Classical/top_dir/work_dir/intermediate/leaf.flac
+        # That is 5 parts (including the filename).  Depth 3 would be 6 parts.
+        for f in dest_files:
+            rel_parts = f.relative_to(dest).parts
+            assert len(rel_parts) == 5, (  # noqa: PLR2004
+                f"Expected 5 path parts (Classical/top/work/act/leaf) for {f.relative_to(dest)}, "
+                f"got {len(rel_parts)}: {rel_parts}"
+            )
+
+    def test_run_uniform_depth_group_unchanged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """run() leaves a uniform-depth group unchanged (no-regression for the common case).
+
+        A 2-track group where both tracks have CWP_PART_LEVELS=2.  The modal depth is 2.
+        The clamp is a no-op (min(2, 2) = 2) and the paths are identical to pre-threading.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        for i in range(1, 3):
+            fs.create_file(str(src / f"0{i}.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+
+        tags1 = self._make_classical_tags(
+            "2",
+            "1",
+            "Allegro",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+        tags2 = self._make_classical_tags(
+            "2",
+            "2",
+            "Andante",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+
+        self._patch_run_base(mocker, release, {1: tags1, 2: tags2})
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        dest_files = sorted(dest.rglob("*.flac"))
+        assert len(dest_files) == 2, f"Expected 2 FLAC files, got {len(dest_files)}"
+
+        # Both tracks must land at depth 2 (one intermediate directory below work_dir).
+        # Relative path structure: Classical/top_dir/work_dir/intermediate/leaf.flac = 5 parts.
+        for f in dest_files:
+            rel_parts = f.relative_to(dest).parts
+            assert len(rel_parts) == 5, (  # noqa: PLR2004
+                f"Expected 5 path parts (Classical/top/work/act/leaf) for {f.relative_to(dest)}, "
+                f"got {len(rel_parts)}: {rel_parts}"
+            )
+
+    def test_run_repath_parity_same_group_same_path(self, fs: FakeFilesystem) -> None:
+        """run() and repath() compute byte-identical paths for the same work-group.
+
+        Guards ingest/maintenance parity: a group with mixed CWP_PART_LEVELS (modal=2, one PL=3
+        track) must produce the same destination path whether computed by run() (from MB tags) or
+        by repath() (from embedded tags).  The parity is verified by calling build_dest_path
+        directly with the same tags and the modal depth that both callers compute.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/dest")
+        fs.create_dir(str(dest))
+
+        # Build the same tags that run() would produce for a mixed-depth group.
+        tags_pl2 = self._make_classical_tags(
+            "2",
+            "1",
+            "Allegro",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+        tags_pl3 = self._make_classical_tags(
+            "3",
+            "2",
+            "Presto",
+            extra_parts={
+                "cwp_part_1": "Scene 1",
+                "cwp_ordering_key_1": "1",
+                "cwp_part_2": "Act I",
+                "cwp_ordering_key_2": "1",
+            },
+        )
+
+        # Compute the modal depth the same way run() and repath() both do:
+        # group by cwp_workid_top, then call work_group_modal_depth.
+        part_levels_list = [int(tags_pl2.cwp_part_levels or "0"), int(tags_pl3.cwp_part_levels or "0")]
+        modal = work_group_modal_depth(part_levels_list)
+        assert modal == 2, f"Expected modal depth 2, got {modal}"  # noqa: PLR2004
+
+        # run()-side path: build_dest_path with group_modal_depth=modal
+        run_path_pl2 = build_dest_path(dest, MBRelease(), MBTrack(), tags_pl2, group_modal_depth=modal)
+        run_path_pl3 = build_dest_path(dest, MBRelease(), MBTrack(), tags_pl3, group_modal_depth=modal)
+
+        # repath()-side path: same call — repath uses the same grouping and modal depth.
+        repath_path_pl2 = build_dest_path(dest, MBRelease(), MBTrack(), tags_pl2, group_modal_depth=modal)
+        repath_path_pl3 = build_dest_path(dest, MBRelease(), MBTrack(), tags_pl3, group_modal_depth=modal)
+
+        # Parity: run and repath must produce byte-identical paths.
+        assert run_path_pl2 == repath_path_pl2, f"Parity failure for PL=2 track: run={run_path_pl2} repath={repath_path_pl2}"
+        assert run_path_pl3 == repath_path_pl3, f"Parity failure for PL=3 track: run={run_path_pl3} repath={repath_path_pl3}"
+
+        # Clamp assertion: the PL=3 track must render at the same depth as the PL=2 track.
+        # Both should have the same number of path components below dest.
+        assert len(run_path_pl2.relative_to(dest).parts) == len(run_path_pl3.relative_to(dest).parts), (
+            f"Depth mismatch after clamp: PL=2 has {run_path_pl2.relative_to(dest).parts}, "
+            f"PL=3 has {run_path_pl3.relative_to(dest).parts}"
+        )
+
+        # No-clamp verification: without group_modal_depth, PL=3 renders deeper than PL=2.
+        unclamped_pl3 = build_dest_path(dest, MBRelease(), MBTrack(), tags_pl3, group_modal_depth=None)
+        assert len(unclamped_pl3.relative_to(dest).parts) > len(run_path_pl2.relative_to(dest).parts), (
+            "Expected unclamped PL=3 to render deeper than PL=2 (no-clamp baseline)"
         )

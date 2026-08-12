@@ -60,6 +60,7 @@ from music_annotator._pipeline_io import (
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path
+from music_annotator._works import work_group_modal_depth
 from music_annotator.models import (
     ArtistEntry,
     CopyPlanEntry,
@@ -468,9 +469,10 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
         log.info("repath_nothing_to_move", dest_root=str(dest_root))
         return
 
-    # --- Build repath plan: (current_path, new_dest, acoustid, length_ms) ---
-    plan_pairs: list[tuple[Path, Path, str, int]] = []
-
+    # --- Pass 1: read tags for all existing files ---
+    # Collect (path, tags, file_dict, ext) tuples so that the work-group modal depth can be
+    # computed once per group before building the plan (compute-once-per-group invariant).
+    _repath_file_data: list[tuple[Path, TrackTags, dict[str, str], str]] = []
     for current_path in existing_files:
         ext = current_path.suffix.lower()
         try:
@@ -494,7 +496,35 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
         # to_file_dict() and therefore absent from the embedded tag dict; without hydration,
         # build_dest_path falls back to the raw CEA_ENSEMBLE_NAMES / ARTIST string.
         _hydrate_performer_lists(tags, file_dict)
+        _repath_file_data.append((current_path, tags, file_dict, ext))
 
+    # --- Compute work-group modal depth per group (once per group, not per track) ---
+    # Groups tracks by CWP_WORKID_TOP, mirroring the scanner grouping in
+    # scripts/scan_nonuniform_depth.py (which groups by (release_dir, CWP_WORKID_TOP)).
+    # repath operates across the whole library, so release_dir is implicit in the path; the
+    # grouping key is CWP_WORKID_TOP alone (consistent with the scanner's per-release-dir
+    # grouping because each release dir maps to one top-work MBID in practice).
+    _repath_work_groups: dict[str, list[int]] = {}
+    for _ri, (_rp, _rt, _rfd, _re) in enumerate(_repath_file_data):
+        _twid = _rt.cwp_workid_top
+        if _twid not in _repath_work_groups:
+            _repath_work_groups[_twid] = []
+        _repath_work_groups[_twid].append(_ri)
+
+    _repath_modal_by_idx: dict[int, int | None] = {}
+    for _twid, _group_idxs in _repath_work_groups.items():
+        _part_levels = [int(_repath_file_data[_i][1].cwp_part_levels or "0") for _i in _group_idxs]
+        _modal = work_group_modal_depth(_part_levels)
+        # When modal is 0 (all-orphan group), pass None so build_dest_path uses own depth
+        # unchanged — equivalent outcome, avoids a redundant min(0, 0) clamp.
+        _modal_or_none: int | None = _modal if _modal > 0 else None
+        for _i in _group_idxs:
+            _repath_modal_by_idx[_i] = _modal_or_none
+
+    # --- Pass 2: build repath plan using the per-group modal depth ---
+    plan_pairs: list[tuple[Path, Path, str, int]] = []
+
+    for _ri, (current_path, tags, file_dict, ext) in enumerate(_repath_file_data):
         # Construct minimal stand-in objects for build_dest_path.
         # release is kept for API stability (C-INIT removed the last internal use of
         # release.artist_credit in the classical path).  track.position is used only as the
@@ -504,7 +534,14 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
         stub_release = MBRelease()
         stub_track = MBTrack()
 
-        new_dest_base = build_dest_path(dest_root, stub_release, stub_track, tags, global_track_idx=0)
+        new_dest_base = build_dest_path(
+            dest_root,
+            stub_release,
+            stub_track,
+            tags,
+            global_track_idx=0,
+            group_modal_depth=_repath_modal_by_idx.get(_ri),
+        )
         new_dest = new_dest_base.with_suffix(ext)
 
         if new_dest == current_path:
@@ -691,9 +728,10 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
         log.info("regroup_nothing_to_regroup", dest_root=str(dest_root))
         return
 
-    # --- Build regroup plan: (current_path, new_dest, acoustid, length_ms, release_id) ---
-    plan_pairs: list[tuple[Path, Path, str, int, str]] = []
-
+    # --- Pass 1: read tags for all existing files ---
+    # Collect (path, tags, file_dict, ext, release_id) tuples so that the work-group modal
+    # depth can be computed once per group before building the plan.
+    _regroup_file_data: list[tuple[Path, TrackTags, dict[str, str], str, str]] = []
     for current_path, release_id in existing_files:
         ext = current_path.suffix.lower()
         try:
@@ -714,11 +752,43 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
         # Reconstruct performer ArtistEntry lists from embedded tags so that build_dest_path
         # renders canonical entity name-forms (primary-flagged MB alias per STYLEGUIDE 3.1/NORM-2).
         _hydrate_performer_lists(tags, file_dict)
+        _regroup_file_data.append((current_path, tags, file_dict, ext, release_id))
 
+    # --- Compute work-group modal depth per group (once per group, not per track) ---
+    # Groups tracks by CWP_WORKID_TOP, mirroring the scanner grouping in
+    # scripts/scan_nonuniform_depth.py (which groups by (release_dir, CWP_WORKID_TOP)).
+    _regroup_work_groups: dict[str, list[int]] = {}
+    for _ri, (_rp, _rt, _rfd, _re, _rrid) in enumerate(_regroup_file_data):
+        _twid = _rt.cwp_workid_top
+        if _twid not in _regroup_work_groups:
+            _regroup_work_groups[_twid] = []
+        _regroup_work_groups[_twid].append(_ri)
+
+    _regroup_modal_by_idx: dict[int, int | None] = {}
+    for _twid, _group_idxs in _regroup_work_groups.items():
+        _part_levels = [int(_regroup_file_data[_i][1].cwp_part_levels or "0") for _i in _group_idxs]
+        _modal = work_group_modal_depth(_part_levels)
+        # When modal is 0 (all-orphan group), pass None so build_dest_path uses own depth
+        # unchanged — equivalent outcome, avoids a redundant min(0, 0) clamp.
+        _modal_or_none: int | None = _modal if _modal > 0 else None
+        for _i in _group_idxs:
+            _regroup_modal_by_idx[_i] = _modal_or_none
+
+    # --- Pass 2: build regroup plan using the per-group modal depth ---
+    plan_pairs: list[tuple[Path, Path, str, int, str]] = []
+
+    for _ri, (current_path, tags, file_dict, ext, release_id) in enumerate(_regroup_file_data):
         stub_release = MBRelease()
         stub_track = MBTrack()
 
-        new_dest_base = build_dest_path(dest_root, stub_release, stub_track, tags, global_track_idx=0)
+        new_dest_base = build_dest_path(
+            dest_root,
+            stub_release,
+            stub_track,
+            tags,
+            global_track_idx=0,
+            group_modal_depth=_regroup_modal_by_idx.get(_ri),
+        )
         new_dest = new_dest_base.with_suffix(ext)
 
         if new_dest == current_path:

@@ -46,6 +46,7 @@ from music_annotator._pipeline_maint import (
     _unify_classical_composer_groups,
 )
 from music_annotator._tags import _work_top_dir
+from music_annotator._works import work_group_modal_depth
 from music_annotator.models import (
     ArtistEntry,
     MBArtist,
@@ -6262,3 +6263,456 @@ class TestHydratePerformerLists:
         # Counts mismatch (2 names, 1 MBID) → no MBIDs assigned.
         assert tags.cea_album_ensembles_list[0].mbid == ""
         assert tags.cea_album_ensembles_list[1].mbid == ""
+
+
+# ---------------------------------------------------------------------------
+# repath() / regroup() — work-group modal depth threading
+# ---------------------------------------------------------------------------
+
+
+def _make_classical_maint_tags(
+    cwp_part_levels: str,
+    cwp_movt_num: str,
+    title: str,
+    *,
+    extra_parts: dict[str, str] | None = None,
+) -> TrackTags:
+    """Build a minimal classical TrackTags for maintenance-mode modal-depth tests.
+
+    Sets the fields required for build_dest_path to produce a Classical path with the given
+    hierarchy depth.  Dynamic per-level extras (cwp_part_N, cwp_ordering_key_N) are passed via
+    ``extra_parts``.
+
+    :param cwp_part_levels: String value for CWP_PART_LEVELS (e.g. ``"2"`` or ``"3"``).
+    :param cwp_movt_num: String value for CWP_MOVT_NUM (leaf movement number).
+    :param title: Track title.
+    :param extra_parts: Optional dict of lowercase model_extra keys to set.
+    :returns: A :class:`~music_annotator.models.TrackTags` instance.
+    """
+    tags = TrackTags(
+        cwp_work_top="Water Music",
+        cwp_worktype_genres_top="Classical",
+        cwp_composer_lastnames="Handel",
+        recording_date="1970",
+        cwp_workid_top="w-water-music",
+        cwp_part_levels=cwp_part_levels,
+        cwp_movt_num=cwp_movt_num,
+        movementtotal="3",
+        title=title,
+        artist="Karajan",
+    )
+    if extra_parts and tags.model_extra is not None:
+        tags.model_extra.update(extra_parts)
+    return tags
+
+
+class TestRepathWorkGroupModalDepth:
+    """Tests for the work-group modal depth threading in repath().
+
+    Verifies that repath() computes the work-group modal depth once per group from embedded tags
+    and passes it to build_dest_path, so over-resolved branches clamp to the group ceiling
+    (Shape C/D) while uniform-depth groups are unchanged (no-regression).
+    """
+
+    def test_repath_clamps_over_resolved_track_to_modal_depth(self, fs: FakeFilesystem) -> None:
+        """repath() clamps a Shape-C/D over-resolved track to the work-group modal depth.
+
+        A 3-track group where 2 tracks have CWP_PART_LEVELS=2 and 1 track has CWP_PART_LEVELS=3.
+        The modal depth is 2.  The PL=3 track must move to a path with one intermediate directory
+        (depth 2), not two (depth 3).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Tracks 1 and 2: PL=2 (one intermediate directory: Act I)
+        tags1 = _make_classical_maint_tags(
+            "2",
+            "1",
+            "Allegro",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+        tags2 = _make_classical_maint_tags(
+            "2",
+            "2",
+            "Andante",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+        # Track 3: PL=3 (two intermediate directories: Act I / Scene 1) — over-resolved
+        tags3 = _make_classical_maint_tags(
+            "3",
+            "3",
+            "Presto",
+            extra_parts={
+                "cwp_part_1": "Scene 1",
+                "cwp_ordering_key_1": "1",
+                "cwp_part_2": "Act I",
+                "cwp_ordering_key_2": "1",
+            },
+        )
+
+        # Place all three tracks at their unclamped (old) paths.
+        # PL=2 tracks: Classical/Handel - Karajan/Water Music [rec 1970]/01 - Act I/01 - Allegro.flac
+        # PL=3 track:  Classical/Handel - Karajan/Water Music [rec 1970]/01 - Act I/01 - Scene 1/03 - Presto.flac
+        old_path1 = _make_library_flac(
+            dest_root,
+            "Classical/Handel - Karajan/Water Music [rec 1970]/01 - Act I/01 - Allegro.flac",
+            tags1,
+        )
+        old_path2 = _make_library_flac(
+            dest_root,
+            "Classical/Handel - Karajan/Water Music [rec 1970]/01 - Act I/02 - Andante.flac",
+            tags2,
+        )
+        # PL=3 track at its unclamped path (two intermediate dirs)
+        old_path3 = _make_library_flac(
+            dest_root,
+            "Classical/Handel - Karajan/Water Music [rec 1970]/01 - Act I/01 - Scene 1/03 - Presto.flac",
+            tags3,
+        )
+
+        # Compute the expected clamped path for track 3 (modal=2 → PL=3 clamped to PL=2)
+        modal = work_group_modal_depth([2, 2, 3])
+        assert modal == 2  # noqa: PLR2004
+        expected_path3 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags3, group_modal_depth=modal).with_suffix(".flac")
+
+        # Journal: all three at their old paths
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/02.flac",
+                    "destination": str(old_path2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/03.flac",
+                    "destination": str(old_path3),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
+
+        # PL=2 tracks: already at their clamped paths — no move expected.
+        assert old_path1.exists(), "PL=2 track 1 should remain at its original path (already clamped)"
+        assert old_path2.exists(), "PL=2 track 2 should remain at its original path (already clamped)"
+
+        # PL=3 track: must have moved to the clamped path (one intermediate dir, not two).
+        assert not old_path3.exists(), "PL=3 track should have moved away from its unclamped path"
+        assert expected_path3.exists(), f"PL=3 track should be at clamped path {expected_path3.relative_to(dest_root)}"
+
+        # Depth check: clamped path has 5 parts (Classical/top/work/act/leaf), not 6.
+        assert len(expected_path3.relative_to(dest_root).parts) == 5, (  # noqa: PLR2004
+            f"Expected 5 path parts after clamp, got {expected_path3.relative_to(dest_root).parts}"
+        )
+
+    def test_repath_uniform_depth_group_unchanged(self, fs: FakeFilesystem) -> None:
+        """repath() leaves a uniform-depth group unchanged (no-regression for the common case).
+
+        A 2-track group where both tracks have CWP_PART_LEVELS=2.  The modal depth is 2.
+        The clamp is a no-op and repath() produces an empty plan (no moves).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags1 = _make_classical_maint_tags(
+            "2",
+            "1",
+            "Allegro",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+        tags2 = _make_classical_maint_tags(
+            "2",
+            "2",
+            "Andante",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+
+        # Place tracks at their correct (already-clamped) paths.
+        canonical1 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags1, group_modal_depth=2).with_suffix(".flac")
+        canonical2 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags2, group_modal_depth=2).with_suffix(".flac")
+
+        canonical1.parent.mkdir(parents=True, exist_ok=True)
+        canonical1.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(canonical1, tags1)
+
+        canonical2.parent.mkdir(parents=True, exist_ok=True)
+        canonical2.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(canonical2, tags2)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(canonical1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/02.flac",
+                    "destination": str(canonical2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
+
+        # Both tracks must remain at their original paths (no move).
+        assert canonical1.exists(), "Uniform PL=2 track 1 must not be moved"
+        assert canonical2.exists(), "Uniform PL=2 track 2 must not be moved"
+
+        # No "repathed" entries should have been added.
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert not repathed, f"Expected no repathed entries for uniform group, got {repathed}"
+
+
+class TestRegroupWorkGroupModalDepth:
+    """Tests for the work-group modal depth threading in regroup().
+
+    Verifies that regroup() computes the work-group modal depth once per group from embedded tags
+    and passes it to build_dest_path, so over-resolved branches clamp to the group ceiling
+    (Shape C/D) while uniform-depth groups are unchanged (no-regression).
+    """
+
+    @staticmethod
+    def _make_split_tags_pl(
+        cwp_part_levels: str,
+        cwp_movt_num: str,
+        title: str,
+        *,
+        extra_parts: dict[str, str] | None = None,
+    ) -> TrackTags:
+        """Build TrackTags for a split-release regroup test with the given hierarchy depth.
+
+        Sets MUSICBRAINZ_ALBUMID so _confirm_fragmentation confirms the candidate via tag match.
+
+        :param cwp_part_levels: String value for CWP_PART_LEVELS.
+        :param cwp_movt_num: String value for CWP_MOVT_NUM.
+        :param title: Track title.
+        :param extra_parts: Optional dict of lowercase model_extra keys to set.
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        tags = TrackTags(
+            cwp_work_top="Water Music",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="Handel",
+            recording_date="1970",
+            cwp_workid_top="w-water-music",
+            cwp_part_levels=cwp_part_levels,
+            cwp_movt_num=cwp_movt_num,
+            movementtotal="3",
+            title=title,
+            artist="Karajan",
+            musicbrainz_albumid="split-rel-1",
+        )
+        if extra_parts and tags.model_extra is not None:
+            tags.model_extra.update(extra_parts)
+        return tags
+
+    def test_regroup_clamps_over_resolved_track_to_modal_depth(self, fs: FakeFilesystem) -> None:
+        """regroup() clamps a Shape-C/D over-resolved track to the work-group modal depth.
+
+        A 3-track group where 2 tracks have CWP_PART_LEVELS=2 and 1 track has CWP_PART_LEVELS=3.
+        The modal depth is 2.  The PL=3 track must move to a path with one intermediate directory
+        (depth 2), not two (depth 3).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags1 = self._make_split_tags_pl(
+            "2",
+            "1",
+            "Allegro",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+        tags2 = self._make_split_tags_pl(
+            "2",
+            "2",
+            "Andante",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+        tags3 = self._make_split_tags_pl(
+            "3",
+            "3",
+            "Presto",
+            extra_parts={
+                "cwp_part_1": "Scene 1",
+                "cwp_ordering_key_1": "1",
+                "cwp_part_2": "Act I",
+                "cwp_ordering_key_2": "1",
+            },
+        )
+
+        # Compute the expected clamped path for track 3.
+        modal = work_group_modal_depth([2, 2, 3])
+        assert modal == 2  # noqa: PLR2004
+        expected_path3 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags3, group_modal_depth=modal).with_suffix(".flac")
+
+        # Place tracks at their old paths (unclamped for track 3).
+        old_path1 = _make_library_flac(
+            dest_root,
+            "Classical/Handel - Karajan/Water Music [rec 1970]/01 - Act I/01 - Allegro.flac",
+            tags1,
+        )
+        old_path2 = _make_library_flac(
+            dest_root,
+            "Classical/Handel - Karajan/Water Music [rec 1970]/01 - Act I/02 - Andante.flac",
+            tags2,
+        )
+        old_path3 = _make_library_flac(
+            dest_root,
+            "Classical/Handel - Karajan/Water Music [rec 1970]/01 - Act I/01 - Scene 1/03 - Presto.flac",
+            tags3,
+        )
+
+        # Build a split-release scenario: two work_dirs for "split-rel-1".
+        # The phantom entry is in a DIFFERENT work_dir ("OldWater Music [rec 1970]") so that
+        # _confirm_fragmentation detects case-b fragmentation (>1 work_dir for one release_id).
+        # The real files are in "Water Music [rec 1970]"; the phantom is in "OldWater Music [rec 1970]".
+        phantom = dest_root / "Classical" / "Handel - Karajan" / "OldWater Music [rec 1970]" / "phantom.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(old_path2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/03.flac",
+                    "destination": str(old_path3),
+                    "action": "tagged",
+                },
+                # Phantom entry in a different work_dir to trigger the split-release detection.
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/phantom.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, dry_run=False, yes=True)
+
+        # PL=3 track must have moved to the clamped path.
+        assert not old_path3.exists(), "PL=3 track should have moved away from its unclamped path"
+        assert expected_path3.exists(), f"PL=3 track should be at clamped path {expected_path3.relative_to(dest_root)}"
+
+        # Depth check: clamped path has 5 parts (Classical/top/work/act/leaf), not 6.
+        assert len(expected_path3.relative_to(dest_root).parts) == 5, (  # noqa: PLR2004
+            f"Expected 5 path parts after clamp, got {expected_path3.relative_to(dest_root).parts}"
+        )
+
+    def test_regroup_uniform_depth_group_unchanged(self, fs: FakeFilesystem) -> None:
+        """regroup() leaves a uniform-depth group unchanged (no-regression for the common case).
+
+        A 2-track group where both tracks have CWP_PART_LEVELS=2.  The modal depth is 2.
+        The clamp is a no-op and regroup() produces an empty plan (no moves).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags1 = self._make_split_tags_pl(
+            "2",
+            "1",
+            "Allegro",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+        tags2 = self._make_split_tags_pl(
+            "2",
+            "2",
+            "Andante",
+            extra_parts={"cwp_part_1": "Act I", "cwp_ordering_key_1": "1"},
+        )
+
+        # Place tracks at their correct (already-clamped) paths.
+        canonical1 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags1, group_modal_depth=2).with_suffix(".flac")
+        canonical2 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags2, group_modal_depth=2).with_suffix(".flac")
+
+        canonical1.parent.mkdir(parents=True, exist_ok=True)
+        canonical1.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(canonical1, tags1)
+
+        canonical2.parent.mkdir(parents=True, exist_ok=True)
+        canonical2.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(canonical2, tags2)
+
+        # Build a split-release scenario with a phantom entry in a different work_dir.
+        phantom = dest_root / "Classical" / "Handel - Karajan" / "OtherWork [rec 1970]" / "phantom.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(canonical1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(canonical2),
+                    "action": "tagged",
+                },
+                # Phantom entry in a different work_dir to trigger the split-release detection.
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "split-rel-1",
+                    "source": "/src/phantom.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, dry_run=False, yes=True)
+
+        # Both tracks must remain at their original paths (no move).
+        assert canonical1.exists(), "Uniform PL=2 track 1 must not be moved"
+        assert canonical2.exists(), "Uniform PL=2 track 2 must not be moved"
+
+        # No "regrouped" entries should have been added.
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert not regrouped, f"Expected no regrouped entries for uniform group, got {regrouped}"
