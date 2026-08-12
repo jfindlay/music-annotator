@@ -1940,12 +1940,12 @@ class TestUnifyIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Integration test: annotation tier persisted at ingest time (S3 KAT)
+# Integration test: annotation tier persisted at ingest time (KAT)
 # ---------------------------------------------------------------------------
 
 
 class TestIngestPersistsAnnotationTier:
-    """KAT: integration test proving the annotation-tier write-and-read-back path (S3).
+    """KAT: integration test proving the annotation-tier write-and-read-back path.
 
     Two fixtures:
     (a) A release whose source FLAC carries an embedded MUSICBRAINZ_TRACKID matching the
@@ -2084,7 +2084,7 @@ class TestIngestPersistsAnnotationTier:
 
 
 # ---------------------------------------------------------------------------
-# Whipper integration test (S5 primary KAT)
+# Whipper integration test (primary KAT)
 # ---------------------------------------------------------------------------
 
 #: Minimal whipper native log body (before the SHA-256 line) for a 2-track disc.
@@ -2150,7 +2150,7 @@ def _make_whipper_release() -> MBRelease:
 
     The disc_list offsets ``[182, 67232]`` match the ``disc_id`` list written into
     ``00 - disc info.yaml`` by the whipper integration test fixture, enabling the
-    single-disc TOC promotion path (S3 / C-WHIP).
+    single-disc TOC promotion path (C-WHIP).
 
     :returns: An :class:`~music_annotator.models.MBRelease` instance.
     """
@@ -2213,7 +2213,7 @@ def _make_whipper_release() -> MBRelease:
 
 
 class TestWhipperIntegration:
-    """Primary KAT (S5): end-to-end whipper pipeline integration test.
+    """Primary KAT: end-to-end whipper pipeline integration test.
 
     Exercises the full public path on an embedded whipper-shaped fixture:
     dir recognition → TOC lookup (mocked MB) → tier promotion → AccurateRip tags written
@@ -2375,12 +2375,12 @@ class TestWhipperIntegration:
 
 
 # ---------------------------------------------------------------------------
-# S3 KAT: audit distinguishes ISRC-verified entries from search-resolved ones
+# KAT: audit distinguishes ISRC-verified entries from search-resolved ones
 # ---------------------------------------------------------------------------
 
 
 class TestAuditDistinguishesIsrcVerified:
-    """KAT (S3): _audit_tier_pass surfaces ISRC-promoted entries distinctly from search-resolved ones.
+    """KAT: _audit_tier_pass surfaces ISRC-promoted entries distinctly from search-resolved ones.
 
     An ISRC-promoted entry has ``annotation_tier == full-mb-verified`` and
     ``origin_source == "download"`` in its provenance sidecar.  The audit must log
@@ -2479,7 +2479,7 @@ class TestAuditDistinguishesIsrcVerified:
 
 
 # ---------------------------------------------------------------------------
-# S1 primary KAT: other-download end-to-end integration test (C-DL)
+# Primary KAT: other-download end-to-end integration test (C-DL)
 # ---------------------------------------------------------------------------
 
 
@@ -2551,7 +2551,7 @@ def _make_download_release(isrc_track1: str, isrc_track2: str) -> MBRelease:
 
 
 class TestOtherDownloadIsrcIntegration:
-    """Primary KAT (S1/C-DL): end-to-end other-download pipeline integration test.
+    """Primary KAT (C-DL): end-to-end other-download pipeline integration test.
 
     Exercises the full public path on an other-download-shaped fixture: ISRC-bearing FLAC
     files, no booklet PDF, no whipper log, no disc info yaml.  The pipeline must:
@@ -2714,7 +2714,7 @@ class TestOtherDownloadIsrcIntegration:
 
 
 # ---------------------------------------------------------------------------
-# S1 primary KAT: track-count mismatch operator override end-to-end (C-OVR)
+# Primary KAT: track-count mismatch operator override end-to-end (C-OVR)
 # ---------------------------------------------------------------------------
 
 
@@ -2895,7 +2895,7 @@ class TestRunMismatchOverrideIntegration:
 
 
 # ---------------------------------------------------------------------------
-# C-CLASS integration KATs: classical and audiobook class routing (S1, frozen)
+# C-CLASS integration KATs: classical and audiobook class routing
 # ---------------------------------------------------------------------------
 
 
@@ -2991,7 +2991,7 @@ def _patch_mb_audiobook(mocker: MockerFixture, release: MBRelease) -> None:
 
 
 class TestCClassIntegration:
-    """C-CLASS integration KATs: classical and audiobook class routing (S1, frozen).
+    """C-CLASS integration KATs: classical and audiobook class routing.
 
     These tests exercise the full pipeline end-to-end (no internal helpers patched) and verify
     that the C-CLASS routing produces the correct path structure for classical and audiobook releases.
@@ -3136,7 +3136,7 @@ class TestCClassIntegration:
 
 
 # ---------------------------------------------------------------------------
-# C-INIT integration KATs: within-classical initial component (S2, frozen)
+# C-INIT integration KATs: within-classical initial component
 # ---------------------------------------------------------------------------
 
 
@@ -3302,7 +3302,7 @@ def _patch_mb_recital(mocker: MockerFixture, release: MBRelease) -> None:
 
 
 class TestCInitIntegration:
-    """C-INIT integration KATs: within-classical initial component (S2, frozen).
+    """C-INIT integration KATs: within-classical initial component.
 
     These tests exercise the full pipeline end-to-end (no internal helpers patched) and verify
     that the C-INIT routing produces the correct within-classical path structure for recital

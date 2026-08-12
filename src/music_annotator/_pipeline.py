@@ -1277,7 +1277,7 @@ def _copy_tag_verify_journal_pass(
         final_tags.coverart_other_files = _filenames(cover.other)
         final_tags.coverart_unknown_files = _filenames(cover.unknown)
 
-        # Project AccurateRip flat fields onto final_tags (C-AR, S4).  The track position is
+        # Project AccurateRip flat fields onto final_tags (C-AR).  The track position is
         # the 1-based tracknumber from the MB medium; ar_tracks is keyed by that position.
         # confidence serializes as decimal string, empty when 0/absent (never "0").
         _track_pos_str = final_tags.tracknumber
@@ -1585,7 +1585,7 @@ def run(
 
     medium_pos = selected_medium.position
 
-    # Single-disc whipper TOC promotion (S3 / C-WHIP).
+    # Single-disc whipper TOC promotion (C-WHIP).
     # For multi-disc releases, toc_matched is set above by _select_medium_with_reason.
     # For single-disc releases that path is skipped, so toc_matched stays False even when a
     # matching 00 - disc info.yaml is present.  When the source is a whipper rip (origin_source
@@ -1813,7 +1813,7 @@ def run(
                     case _:  # pragma: no cover
                         pass
 
-    # --- Determine annotation tier (C-TIER / S3) ---
+    # --- Determine annotation tier (C-TIER) ---
     # Classify the identity evidence available for this ingest.  The signal drives the
     # annotation_tier written to the provenance sidecar inside _copy_tag_verify_journal_pass.
     #

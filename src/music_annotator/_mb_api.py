@@ -137,9 +137,9 @@ def _patched_safe_read(
 
     Retryable codes (503, 502, 500) and auth errors (401) are handled identically to the original.
 
-    **Surface note (S3):** After the S3 migration, this patch is exercised only by MB-data calls
+    **Surface note:** This patch is exercised only by MB-data calls
     (``mb.get_release_by_id``, ``mb.get_recording_by_id``, ``mb.get_work_by_id``).  CAA image
-    fetches moved off ``musicbrainzngs`` in S3 and no longer route through this function.
+    fetches use a direct ``urllib`` path and no longer route through this function.
     The remaining callers are confirmed MB-data only.
 
     Remove this function once musicbrainzngs2 ships the upstream fix (mbngs2-1: replace the

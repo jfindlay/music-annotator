@@ -226,7 +226,7 @@ _CLASS_VOCAB: frozenset[str] = frozenset({"Spoken Word", "Soundtracks", "Classic
 
 
 def _top_level_class(tags: TrackTags) -> str:
-    """Derive the top-level library class from embedded tags only (C-CLASS, frozen at S1).
+    """Derive the top-level library class from embedded tags only (C-CLASS).
 
     Routing table (first match wins; evaluated in order):
 
@@ -277,7 +277,7 @@ def _top_level_class(tags: TrackTags) -> str:
 
 
 def _classical_top_dir(tags: TrackTags) -> str | None:
-    """Derive the within-classical initial path component (C-INIT, frozen at S2).
+    """Derive the within-classical initial path component (C-INIT).
 
     Encodes the C-INIT rule: what is the primary attribution for a classical release?  Three cases
     evaluated in order (first match wins):
@@ -1092,8 +1092,8 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
     """Compute the destination path (without extension) for one annotated track.
 
     The first path component is the top-level library class derived by :func:`_top_level_class`
-    (C-CLASS, frozen at S1).  Classical releases use the within-classical initial component derived
-    by :func:`_classical_top_dir` (C-INIT, frozen at S2); non-classical releases use a
+    (C-CLASS).  Classical releases use the within-classical initial component derived
+    by :func:`_classical_top_dir` (C-INIT); non-classical releases use a
     class-appropriate ``top_dir`` shape.
 
     Classical layout — single-composer (dominant population, 2-level work hierarchy)::
@@ -1350,13 +1350,13 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
         key = int(primary_str) if primary_str.isdigit() else 0
         return str(key if key > 0 else fallback).zfill(w)
 
-    # Top-level library class (C-CLASS, frozen at S1).
+    # Top-level library class (C-CLASS).
     # Derived from embedded tags only so that repath/regroup/unify (which call build_dest_path
     # with empty MBRelease() stubs) reconstruct the correct class from tags alone.
     class_dir = safe_name(_top_level_class(tags))
 
     # top_dir: class-appropriate first component beneath the class prefix.
-    # Classical: C-INIT rule (frozen at S2) — compilation, recital, or single-composer default.
+    # Classical: C-INIT rule — compilation, recital, or single-composer default.
     # Non-classical: simple honest shapes per C-CLASS (R-3 — population is thin).
     match class_dir:
         case "Classical":

@@ -29,7 +29,7 @@ class RetryDecision(enum.Enum):
     """Classifier verdict for one failed fetch attempt — the load-bearing three-outcome shape.
 
     The three outcomes encode the universal terminal rule (C-NET-TERM).  Classifiers supplied by
-    callers (S2/S3/S4) map a raised exception to one of these outcomes by reading *typed* attributes
+    callers map a raised exception to one of these outcomes by reading *typed* attributes
     of the exception — status codes / exception types — never ``str(exc)``.
 
     See the ordering rule on :data:`RetryableClassifier`: ``HTTPError`` is a subclass of ``OSError``;
@@ -53,7 +53,7 @@ Must read *typed* attributes of the exception — status codes / exception types
 before extracting an HTTP status code will misclassify a 4xx as a transient transport failure.
 Every classifier MUST extract the typed status code (via ``exc.code`` for ``HTTPError``, or
 ``exc.cause.code`` for ``mb.ResponseError``) before any broad ``OSError``/transport check.
-Classifiers are supplied by the consuming session (S2/S3/S4); the core never inspects exception
+Classifiers are supplied by the consuming call site; the core never inspects exception
 structure itself.
 """
 

@@ -1495,7 +1495,7 @@ class TestReadAlbumidTag:
 
 
 class TestAuditConfirmsViaTag:
-    """Tests for audit()'s S7 tag-confirmation layer.
+    """Tests for audit()'s tag-confirmation layer.
 
     Verifies that fragmentation candidates are annotated with ``confirmed=True`` when the
     embedded ``MUSICBRAINZ_ALBUMID`` tag in a backing file matches the journal's ``release_id``,
@@ -1697,13 +1697,13 @@ class TestAuditConfirmsViaTag:
         assert len(work_a_calls) == 1
         assert work_a_calls[0].kwargs["confirmed"] is False
 
-    def test_confirmed_existing_s6_test_still_reports_warning_events(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Backward-compat: prior S6 warning events still appear; confirmed kwarg is now present too.
+    def test_confirmed_existing_test_still_reports_warning_events(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Backward-compat: warning events still appear; confirmed kwarg is now present too.
 
-        The S6 KAT (test_audit_reports_mixed_mbid_and_split_release) asserts on
+        The KAT (test_audit_reports_mixed_mbid_and_split_release) asserts on
         ``audit_multiple_release_ids`` and ``audit_split_release`` event names.  This test verifies
-        that those events still fire after S7's changes, and that each carries the new
-        ``confirmed`` kwarg (which S6 was unaware of).  No audio files are created so all
+        that those events still fire after tag-confirmation was added, and that each carries the new
+        ``confirmed`` kwarg.  No audio files are created so all
         candidates are stale, but the event names remain unchanged.
 
         :param mocker: pytest-mock fixture.

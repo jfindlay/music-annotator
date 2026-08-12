@@ -40,12 +40,15 @@ from music_annotator._pipeline_io import (
     _sha256_file,
 )
 from music_annotator._pipeline_maint import (
+    _hydrate_performer_lists,
     _move_verify_journal,
     _resolve_current_lib,
     _unify_classical_composer_groups,
 )
 from music_annotator._tags import _work_top_dir
 from music_annotator.models import (
+    ArtistEntry,
+    MBArtist,
     MBRelease,
     MBTrack,
     TrackTags,
@@ -1443,7 +1446,7 @@ class TestRegroup:
     def test_regroup_appends_journal_entry(self, fs: FakeFilesystem) -> None:
         """regroup() moves the file and appends a TransactionEntry(action="regrouped") to the journal.
 
-        This is the KAT for S8.  Constructs a confirmed case-(b) split-release scenario (one
+        Constructs a confirmed case-(b) split-release scenario (one
         release_id scattered across two work_dirs) and drives regroup(yes=True) through the full
         move+verify+journal provenance chain.  Asserts:
 
@@ -5806,7 +5809,7 @@ class TestRepathConfirmation:
 
 
 class TestCClassKATs:
-    """C-CLASS KATs for the tag-derivable class routing and the work_top_dir depth invariant (S1, frozen).
+    """C-CLASS KATs for the tag-derivable class routing and the work_top_dir depth invariant.
 
     These tests pin the substrate correctness core: the class must be derivable from embedded tags
     alone (so repath/regroup/unify reconstruct the correct class without a live MBRelease), and
@@ -5953,3 +5956,309 @@ class TestCClassKATs:
         assert "Mitsuko Uchida" in rel.parts[1], (
             f"Expected albumartist 'Mitsuko Uchida' in recital top_dir (C-INIT), got {rel.parts[1]!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# _hydrate_performer_lists — KAT for ingest/repath canonical-form parity
+# ---------------------------------------------------------------------------
+
+
+class TestHydratePerformerLists:
+    """KAT: _hydrate_performer_lists reconstructs ArtistEntry lists so repath renders canonical forms.
+
+    The ``cea_album_conductors_list``, ``cea_album_ensembles_list``, ``cea_conductors_list``, and
+    ``cea_ensembles_list`` fields are excluded from :meth:`~music_annotator.models.TrackTags.to_file_dict`
+    and therefore absent from the embedded tag dict read back from an audio file.  Without
+    :func:`~music_annotator._pipeline_maint._hydrate_performer_lists`, the repath path falls back
+    to the raw ``CEA_ENSEMBLE_NAMES`` / ``ARTIST`` string and cannot render canonical name-forms.
+
+    Two behavioural witnesses:
+
+    1. **Alias-present (ingest/repath parity)**: an ensemble whose hydrated ``MBArtist`` has a
+       primary native-Latin alias — after hydration, :func:`~music_annotator._tags.build_dest_path`
+       renders the alias form in the path, matching the ingest render byte-for-byte.
+    2. **Alias-absent (no-regression)**: an ensemble with no primary alias — the path carries the
+       as-credited display name unchanged, proving the resolver does not corrupt the no-alias case.
+
+    Both witnesses also verify that the ``ARTIST`` / ``ALBUMARTIST`` preserved tag surfaces are
+    unchanged (the compact-path-only scope of canonical-form rendering).
+    """
+
+    def _make_file_dict(
+        self,
+        *,
+        ensemble_name: str,
+        ensemble_sort: str,
+        album_artist_mbid: str,
+    ) -> dict[str, str]:
+        """Build a minimal embedded tag dict simulating a read-back from an audio file.
+
+        Populates the string tags that :func:`~music_annotator._pipeline_maint._hydrate_performer_lists`
+        reads to reconstruct performer :class:`~music_annotator.models.ArtistEntry` lists.
+
+        :param ensemble_name: As-credited ensemble display name (``CEA_ALBUM_ENSEMBLES``).
+        :param ensemble_sort: Ensemble sort name (``CEA_ALBUM_ENSEMBLES_SORT``).
+        :param album_artist_mbid: Value for ``MUSICBRAINZ_ALBUMARTISTID`` (the ensemble MBID when
+            no conductor is present, since ensemble MBIDs = album artist MBIDs minus conductor MBIDs).
+        :returns: An uppercase ``{KEY: value}`` dict as returned by ``_read_tags_flac``.
+        """
+        return {
+            "CEA_ALBUM_ENSEMBLES": ensemble_name,
+            "CEA_ALBUM_ENSEMBLES_SORT": ensemble_sort,
+            "MUSICBRAINZ_ALBUMARTISTID": album_artist_mbid,
+            "MUSICBRAINZ_CONDUCTORID": "",  # no conductor — ensemble MBIDs = album artist MBIDs
+        }
+
+    def test_hydrate_sets_album_ensembles_list_with_mbid(self) -> None:
+        """_hydrate_performer_lists populates cea_album_ensembles_list with an ArtistEntry carrying the MBID.
+
+        When ``CEA_ALBUM_ENSEMBLES`` has one name and ``MUSICBRAINZ_ALBUMARTISTID`` has one MBID
+        (with no conductor MBIDs to subtract), the two are zipped positionally and the resulting
+        :class:`~music_annotator.models.ArtistEntry` carries the MBID.
+
+        :raises AssertionError: If the list is not populated or the MBID is absent.
+        """
+        tags = TrackTags()
+        file_dict = self._make_file_dict(
+            ensemble_name="Vienna Philharmonic",
+            ensemble_sort="Vienna Philharmonic",
+            album_artist_mbid="vp-1",
+        )
+        _hydrate_performer_lists(tags, file_dict)
+
+        assert len(tags.cea_album_ensembles_list) == 1
+        entry = tags.cea_album_ensembles_list[0]
+        assert entry.name == "Vienna Philharmonic"
+        assert entry.mbid == "vp-1"
+
+    def test_hydrate_idempotent_when_list_already_populated(self) -> None:
+        """_hydrate_performer_lists is a no-op when cea_album_ensembles_list is already non-empty.
+
+        Ensures the function does not overwrite lists that were set by the ingest pipeline
+        (e.g. when called on a TrackTags that was not reconstructed from embedded tags).
+
+        :raises AssertionError: If the pre-existing list is overwritten.
+        """
+        existing_entry = ArtistEntry(name="Berlin Philharmonic", sort="Berlin Philharmonic", mbid="bp-1")
+        tags = TrackTags(cea_album_ensembles_list=[existing_entry])
+        file_dict = self._make_file_dict(
+            ensemble_name="Vienna Philharmonic",
+            ensemble_sort="Vienna Philharmonic",
+            album_artist_mbid="vp-1",
+        )
+        _hydrate_performer_lists(tags, file_dict)
+
+        # The pre-existing list must not be overwritten.
+        assert len(tags.cea_album_ensembles_list) == 1
+        assert tags.cea_album_ensembles_list[0].mbid == "bp-1"
+
+    def test_repath_renders_canonical_alias_form(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Repath path renders the primary-flagged MB alias, not the as-credited display name.
+
+        KAT (ingest/repath parity, alias-present): the ensemble "Vienna Philharmonic" has a
+        primary native-Latin alias "Wiener Philharmoniker".  After :func:`_hydrate_performer_lists`
+        reconstructs the ``cea_album_ensembles_list`` with the ensemble MBID, and
+        :func:`~music_annotator._tags.build_dest_path` calls
+        :func:`~music_annotator._mb_api.fetch_artist_aliases` on that MBID, the resolver selects
+        the alias.  The path must contain "Wiener Philharmoniker", not "Vienna Philharmonic" —
+        matching the ingest render byte-for-byte.
+
+        Preserved tag surfaces (``ARTIST``, ``ALBUMARTIST``) are asserted unchanged, freezing the
+        compact-path-only scope of canonical-form rendering.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        hydrated = MBArtist.model_validate(
+            {
+                "id": "vp-1",
+                "name": "Vienna Philharmonic",
+                "alias-list": [
+                    {"alias": "Wiener Philharmoniker", "type": "Artist name", "primary": "primary", "locale": "de"},
+                ],
+            }
+        )
+        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=hydrated)
+
+        tags = TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony No. 9",
+            cwp_workid_top="w1",
+            cwp_composer_lastnames="Beethoven",
+            cwp_worktype_genres_top="Classical",
+            artist="Vienna Philharmonic",
+            albumartist="Vienna Philharmonic",
+        )
+        file_dict = {
+            "CEA_ALBUM_ENSEMBLES": "Vienna Philharmonic",
+            "CEA_ALBUM_ENSEMBLES_SORT": "Vienna Philharmonic",
+            "MUSICBRAINZ_ALBUMARTISTID": "vp-1",
+            "MUSICBRAINZ_CONDUCTORID": "",
+        }
+
+        _hydrate_performer_lists(tags, file_dict)
+
+        result = build_dest_path(
+            dest_root,
+            MBRelease(),
+            MBTrack(),
+            tags,
+            global_track_idx=0,
+        )
+        path_str = str(result)
+
+        # Path performers component must carry the canonical alias form.
+        assert "Wiener Philharmoniker" in path_str, f"Expected canonical alias 'Wiener Philharmoniker' in path '{path_str}'"
+        # The anglicised display name must not appear in the path.
+        assert "Vienna Philharmonic" not in path_str, (
+            f"Display name 'Vienna Philharmonic' must not appear in path '{path_str}' (alias should replace it)"
+        )
+        # Preserved tag surfaces are unchanged — ARTIST and ALBUMARTIST stay as-credited.
+        assert tags.artist == "Vienna Philharmonic", "ARTIST tag must remain as-credited"
+        assert tags.albumartist == "Vienna Philharmonic", "ALBUMARTIST tag must remain as-credited"
+
+    def test_repath_unchanged_when_no_primary_alias(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Repath path is unchanged when the ensemble has no primary alias.
+
+        KAT (alias-absent, no-regression): the ensemble "Berlin Philharmonic" has no primary alias.
+        After :func:`_hydrate_performer_lists` reconstructs the ``cea_album_ensembles_list`` with
+        the ensemble MBID, :func:`~music_annotator._tags.build_dest_path` calls
+        :func:`~music_annotator._mb_api.fetch_artist_aliases` on that MBID and the resolver falls
+        back to ``MBArtist.name``.  The path must carry "Berlin Philharmonic" unchanged.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        hydrated = MBArtist.model_validate({"id": "bp-1", "name": "Berlin Philharmonic"})
+        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=hydrated)
+
+        tags = TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony No. 9",
+            cwp_workid_top="w1",
+            cwp_composer_lastnames="Beethoven",
+            cwp_worktype_genres_top="Classical",
+            artist="Berlin Philharmonic",
+            albumartist="Berlin Philharmonic",
+        )
+        file_dict = {
+            "CEA_ALBUM_ENSEMBLES": "Berlin Philharmonic",
+            "CEA_ALBUM_ENSEMBLES_SORT": "Berlin Philharmonic",
+            "MUSICBRAINZ_ALBUMARTISTID": "bp-1",
+            "MUSICBRAINZ_CONDUCTORID": "",
+        }
+
+        _hydrate_performer_lists(tags, file_dict)
+
+        result = build_dest_path(
+            dest_root,
+            MBRelease(),
+            MBTrack(),
+            tags,
+            global_track_idx=0,
+        )
+        path_str = str(result)
+
+        # No alias → resolver falls back to MBArtist.name → path unchanged from as-credited form.
+        assert "Berlin Philharmonic" in path_str, (
+            f"Expected as-credited name 'Berlin Philharmonic' in path '{path_str}' (no-alias fallback)"
+        )
+        # Preserved tag surfaces are unchanged.
+        assert tags.artist == "Berlin Philharmonic", "ARTIST tag must remain as-credited"
+        assert tags.albumartist == "Berlin Philharmonic", "ALBUMARTIST tag must remain as-credited"
+
+    def test_hydrate_sets_album_conductors_list_with_mbid(self) -> None:
+        """_hydrate_performer_lists populates cea_album_conductors_list with an ArtistEntry carrying the MBID.
+
+        When ``CEA_ALBUM_CONDUCTORS`` has one name and ``MUSICBRAINZ_CONDUCTORID`` has one MBID,
+        the two are zipped positionally and the resulting :class:`~music_annotator.models.ArtistEntry`
+        carries the MBID.
+
+        :raises AssertionError: If the list is not populated or the MBID is absent.
+        """
+        tags = TrackTags()
+        file_dict = {
+            "CEA_ALBUM_CONDUCTORS": "Herbert von Karajan",
+            "CEA_ALBUM_CONDUCTORS_SORT": "Karajan, Herbert von",
+            "MUSICBRAINZ_CONDUCTORID": "hvk-1",
+            "MUSICBRAINZ_ALBUMARTISTID": "hvk-1",
+        }
+        _hydrate_performer_lists(tags, file_dict)
+
+        assert len(tags.cea_album_conductors_list) == 1
+        entry = tags.cea_album_conductors_list[0]
+        assert entry.name == "Herbert von Karajan"
+        assert entry.mbid == "hvk-1"
+
+    def test_hydrate_sets_per_track_conductors_list(self) -> None:
+        """_hydrate_performer_lists populates cea_conductors_list from CEA_CONDUCTORS.
+
+        When ``CEA_CONDUCTORS`` has one name and ``MUSICBRAINZ_CONDUCTORID`` has one MBID,
+        the resulting :class:`~music_annotator.models.ArtistEntry` carries the MBID.
+
+        :raises AssertionError: If the list is not populated or the MBID is absent.
+        """
+        tags = TrackTags()
+        file_dict = {
+            "CEA_CONDUCTORS": "Herbert von Karajan",
+            "MUSICBRAINZ_CONDUCTORID": "hvk-1",
+            "MUSICBRAINZ_ALBUMARTISTID": "",
+        }
+        _hydrate_performer_lists(tags, file_dict)
+
+        assert len(tags.cea_conductors_list) == 1
+        assert tags.cea_conductors_list[0].mbid == "hvk-1"
+
+    def test_hydrate_sets_per_track_ensembles_list(self) -> None:
+        """_hydrate_performer_lists populates cea_ensembles_list from CEA_ENSEMBLES.
+
+        When ``CEA_ENSEMBLES`` has one name and ``MUSICBRAINZ_ALBUMARTISTID`` has one MBID
+        (with no conductor MBIDs to subtract), the resulting
+        :class:`~music_annotator.models.ArtistEntry` carries the MBID.
+
+        :raises AssertionError: If the list is not populated or the MBID is absent.
+        """
+        tags = TrackTags()
+        file_dict = {
+            "CEA_ENSEMBLES": "Vienna Philharmonic",
+            "CEA_ENSEMBLES_SORT": "Vienna Philharmonic",
+            "MUSICBRAINZ_CONDUCTORID": "",
+            "MUSICBRAINZ_ALBUMARTISTID": "vp-1",
+        }
+        _hydrate_performer_lists(tags, file_dict)
+
+        assert len(tags.cea_ensembles_list) == 1
+        assert tags.cea_ensembles_list[0].mbid == "vp-1"
+
+    def test_hydrate_no_mbid_when_counts_mismatch(self) -> None:
+        """_hydrate_performer_lists creates entries without MBIDs when name and MBID counts differ.
+
+        When the count of album ensemble names does not match the count of ensemble MBIDs (e.g.
+        two ensembles but only one MBID), entries are created without MBIDs and the canonical-form
+        resolver falls back to the as-credited name.
+
+        :raises AssertionError: If entries carry MBIDs despite the count mismatch.
+        """
+        tags = TrackTags()
+        file_dict = {
+            "CEA_ALBUM_ENSEMBLES": "Ensemble A; Ensemble B",
+            "CEA_ALBUM_ENSEMBLES_SORT": "Ensemble A; Ensemble B",
+            "MUSICBRAINZ_ALBUMARTISTID": "mbid-only-one",
+            "MUSICBRAINZ_CONDUCTORID": "",
+        }
+        _hydrate_performer_lists(tags, file_dict)
+
+        assert len(tags.cea_album_ensembles_list) == 2  # noqa: PLR2004
+        # Counts mismatch (2 names, 1 MBID) → no MBIDs assigned.
+        assert tags.cea_album_ensembles_list[0].mbid == ""
+        assert tags.cea_album_ensembles_list[1].mbid == ""

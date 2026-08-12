@@ -14,6 +14,10 @@ Also provides the shared primitives consumed by all four commands:
 * :func:`_resolve_current_lib`  — lineage walk that resolves the current on-disk path per file.
 * :func:`_tags_from_file_dict`  — reconstruct a :class:`~music_annotator.models.TrackTags` from
   an on-disk tag dict.
+* :func:`_hydrate_performer_lists` — reconstruct performer :class:`~music_annotator.models.ArtistEntry`
+  lists from embedded tags so that :func:`~music_annotator._tags.build_dest_path` can render
+  canonical entity name-forms (primary-flagged MB alias per STYLEGUIDE 3.1/NORM-2) in the
+  compact path projection.
 
 Private helpers used exclusively by :func:`unify`:
 
@@ -57,6 +61,7 @@ from music_annotator._pipeline_io import (
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path
 from music_annotator.models import (
+    ArtistEntry,
     CopyPlanEntry,
     MBRelease,
     MBTrack,
@@ -117,6 +122,120 @@ def _tags_from_file_dict(file_dict: dict[str, str]) -> TrackTags:
     else:
         tags.model_extra.update(extras)
     return tags
+
+
+def _hydrate_performer_lists(tags: TrackTags, file_dict: dict[str, str]) -> None:
+    """Reconstruct performer :class:`~music_annotator.models.ArtistEntry` lists from embedded tags.
+
+    The ``cea_album_conductors_list``, ``cea_album_ensembles_list``, ``cea_conductors_list``, and
+    ``cea_ensembles_list`` fields of :class:`~music_annotator.models.TrackTags` are internal
+    in-memory fields excluded from :meth:`~music_annotator.models.TrackTags.to_file_dict` and
+    therefore absent from the embedded tag dict read back from an audio file.  When
+    :func:`~music_annotator._tags.build_dest_path` is called with a :class:`TrackTags` reconstructed
+    from embedded tags (as in :func:`repath`, :func:`regroup`, and :func:`unify`), those lists are
+    empty and the path falls back to the raw ``CEA_ENSEMBLE_NAMES`` / ``ARTIST`` string — bypassing
+    the canonical name-form resolver.
+
+    This function reconstructs the lists from the embedded string tags and MBID tags so that
+    :func:`~music_annotator._tags.build_dest_path` can call
+    :func:`~music_annotator._mb_api.fetch_artist_aliases` and
+    :func:`~music_annotator._artists.canonical_artist_form` on each entry, rendering the
+    primary-flagged MB alias (per STYLEGUIDE 3.1/NORM-2) in the compact path projection.
+
+    MBID assignment strategy:
+
+    * **Album-level conductors**: ``MUSICBRAINZ_CONDUCTORID`` (slash-separated) holds the MBIDs
+      of all per-track conductors.  When the count of album conductor names (from
+      ``CEA_ALBUM_CONDUCTORS``) equals the count of conductor MBIDs, the two sequences are zipped
+      positionally.  Otherwise entries are created without MBIDs and the resolver falls back to the
+      as-credited name.
+    * **Album-level ensembles**: ``MUSICBRAINZ_ALBUMARTISTID`` (slash-separated) holds the MBIDs
+      of all album artists (from ``release.artist_credit``).  Conductor MBIDs are subtracted
+      (order-preserving) to isolate ensemble MBIDs.  When the count of album ensemble names (from
+      ``CEA_ALBUM_ENSEMBLES``) equals the count of remaining MBIDs, the two sequences are zipped
+      positionally.  Otherwise entries are created without MBIDs.
+    * **Per-track conductors/ensembles** (``cea_conductors_list`` / ``cea_ensembles_list``): the
+      same strategy is applied using ``CEA_CONDUCTORS`` / ``CEA_ENSEMBLES`` names and the full
+      ``MUSICBRAINZ_CONDUCTORID`` / ``MUSICBRAINZ_ALBUMARTISTID`` MBID sets.
+
+    Mutates ``tags`` in-place; returns ``None``.  The function is idempotent: calling it on a
+    ``TrackTags`` that already has non-empty lists is a no-op (the lists are only set when they
+    are currently empty, which is always the case for tags reconstructed from embedded files).
+
+    :param tags: The :class:`~music_annotator.models.TrackTags` instance to hydrate, as returned
+        by :func:`_tags_from_file_dict`.
+    :param file_dict: The uppercase ``{KEY: value}`` mapping read back from the audio file,
+        as returned by :func:`~music_annotator._pipeline_io._read_tags_flac` or
+        :func:`~music_annotator._pipeline_io._read_tags_mp3`.
+    """
+
+    def _split_semi(raw: str) -> list[str]:
+        """Split a semicolon-separated tag value into a list of non-empty stripped parts.
+
+        :param raw: A semicolon-separated string (e.g. ``"Karajan; Abbado"``).
+        :returns: List of non-empty stripped parts.
+        """
+        return [p.strip() for p in raw.split(";") if p.strip()]
+
+    def _split_slash(raw: str) -> list[str]:
+        """Split a slash-separated MBID tag value into a list of non-empty stripped parts.
+
+        :param raw: A slash-separated string (e.g. ``"mbid-1/mbid-2"``).
+        :returns: List of non-empty stripped parts.
+        """
+        return [p.strip() for p in raw.split("/") if p.strip()]
+
+    def _make_entries(names: list[str], sorts: list[str], mbids: list[str]) -> list[ArtistEntry]:
+        """Build :class:`~music_annotator.models.ArtistEntry` objects from parallel name/sort/MBID lists.
+
+        When ``mbids`` has the same length as ``names``, each entry receives its MBID so that
+        :func:`~music_annotator._tags.build_dest_path` can hydrate it via
+        :func:`~music_annotator._mb_api.fetch_artist_aliases`.  When lengths differ, entries are
+        created without MBIDs and the canonical-form resolver falls back to the as-credited name.
+
+        :param names: Display names (from ``CEA_ALBUM_CONDUCTORS`` etc.).
+        :param sorts: Sort names (from ``CEA_ALBUM_CONDUCTORS_SORT`` etc.); padded with ``""`` when
+            shorter than ``names``.
+        :param mbids: MBID strings; may be empty or a different length from ``names``.
+        :returns: A list of :class:`~music_annotator.models.ArtistEntry` objects.
+        """
+        use_mbids = len(mbids) == len(names)
+        entries: list[ArtistEntry] = []
+        for i, name in enumerate(names):
+            sort = sorts[i] if i < len(sorts) else ""
+            mbid = mbids[i] if use_mbids else ""
+            entries.append(ArtistEntry(name=name, sort=sort or name, mbid=mbid))
+        return entries
+
+    # --- Album-level conductors ---
+    album_conductor_names = _split_semi(file_dict.get("CEA_ALBUM_CONDUCTORS", ""))
+    album_conductor_sorts = _split_semi(file_dict.get("CEA_ALBUM_CONDUCTORS_SORT", ""))
+    conductor_mbids = _split_slash(file_dict.get("MUSICBRAINZ_CONDUCTORID", ""))
+
+    # --- Album-level ensembles ---
+    # Ensemble MBIDs: album artist MBIDs minus conductor MBIDs (order-preserving subtraction).
+    album_artist_mbids = _split_slash(file_dict.get("MUSICBRAINZ_ALBUMARTISTID", ""))
+    conductor_mbid_set = set(conductor_mbids)
+    ensemble_mbids = [m for m in album_artist_mbids if m not in conductor_mbid_set]
+
+    album_ensemble_names = _split_semi(file_dict.get("CEA_ALBUM_ENSEMBLES", ""))
+    album_ensemble_sorts = _split_semi(file_dict.get("CEA_ALBUM_ENSEMBLES_SORT", ""))
+
+    # --- Per-track conductors and ensembles ---
+    conductor_names = _split_semi(file_dict.get("CEA_CONDUCTORS", ""))
+    conductor_sorts: list[str] = []  # no sort tag for per-track conductors in embedded tags
+    ensemble_names = _split_semi(file_dict.get("CEA_ENSEMBLES", ""))
+    ensemble_sorts = _split_semi(file_dict.get("CEA_ENSEMBLES_SORT", ""))
+
+    # Reconstruct lists (only when currently empty — tags from embedded files always start empty).
+    if not tags.cea_album_conductors_list and album_conductor_names:
+        tags.cea_album_conductors_list = _make_entries(album_conductor_names, album_conductor_sorts, conductor_mbids)
+    if not tags.cea_album_ensembles_list and album_ensemble_names:
+        tags.cea_album_ensembles_list = _make_entries(album_ensemble_names, album_ensemble_sorts, ensemble_mbids)
+    if not tags.cea_conductors_list and conductor_names:
+        tags.cea_conductors_list = _make_entries(conductor_names, conductor_sorts, conductor_mbids)
+    if not tags.cea_ensembles_list and ensemble_names:
+        tags.cea_ensembles_list = _make_entries(ensemble_names, ensemble_sorts, ensemble_mbids)
 
 
 def _resolve_current_lib(journal: TransactionLog) -> dict[Path, str]:
@@ -369,6 +488,13 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
 
         tags = _tags_from_file_dict(file_dict)
 
+        # Reconstruct performer ArtistEntry lists from embedded tags so that build_dest_path
+        # can render canonical entity name-forms (primary-flagged MB alias per STYLEGUIDE
+        # 3.1/NORM-2) in the compact path projection.  The list fields are excluded from
+        # to_file_dict() and therefore absent from the embedded tag dict; without hydration,
+        # build_dest_path falls back to the raw CEA_ENSEMBLE_NAMES / ARTIST string.
+        _hydrate_performer_lists(tags, file_dict)
+
         # Construct minimal stand-in objects for build_dest_path.
         # release is kept for API stability (C-INIT removed the last internal use of
         # release.artist_credit in the classical path).  track.position is used only as the
@@ -494,7 +620,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
 def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
     """Consolidate confirmed split-release files into their canonical destinations.
 
-    Reads the transaction journal, runs the S7 fragmentation-confirmation audit
+    Reads the transaction journal, runs the tag-confirmation fragmentation audit
     (:func:`~music_annotator._pipeline_io._confirm_fragmentation`), and acts on **confirmed
     case-(b) split-release candidates only** — release MBIDs whose tracks are scattered across
     more than one work directory, where at least one backing file's embedded ``MUSICBRAINZ_ALBUMID``
@@ -584,6 +710,10 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
             continue
 
         tags = _tags_from_file_dict(file_dict)
+
+        # Reconstruct performer ArtistEntry lists from embedded tags so that build_dest_path
+        # renders canonical entity name-forms (primary-flagged MB alias per STYLEGUIDE 3.1/NORM-2).
+        _hydrate_performer_lists(tags, file_dict)
 
         stub_release = MBRelease()
         stub_track = MBTrack()
@@ -823,7 +953,7 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
     """Consolidate performer-split and composer-split fragmented releases into their canonical top_dirs.
 
     Scans ``dest_root`` for releases whose tracks are spread across ≥2 distinct top_dirs due to
-    per-track ``CEA_SOLOISTS`` variation (the dominant N1 shape: 29 releases in the 2026-06 audit)
+    per-track ``CEA_SOLOISTS`` variation (the dominant fragmentation shape: 29 releases in the 2026-06 audit)
     or per-track ``CEA_COMPOSER_LASTNAMES`` variation on non-classical compilations (the Benny
     Goodman shape).  For each fragmented release, reads the embedded tags from all its files, runs
     :func:`~music_annotator._tags.build_dest_path` over the full release group to compute the
@@ -959,6 +1089,10 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
 
         for file_path, tags, file_dict in group_tags:
             ext = file_path.suffix.lower()
+            # Reconstruct performer ArtistEntry lists from embedded tags so that build_dest_path
+            # renders canonical entity name-forms (primary-flagged MB alias per STYLEGUIDE
+            # 3.1/NORM-2) in the compact path projection.
+            _hydrate_performer_lists(tags, file_dict)
             new_dest_base = build_dest_path(dest_root, stub_release, stub_track, tags, global_track_idx=0)
             new_dest = new_dest_base.with_suffix(ext)
 

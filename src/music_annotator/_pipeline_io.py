@@ -1238,7 +1238,7 @@ def _read_albumid_tag(path: Path) -> str:
     unsupported extension, or any read error the function returns ``""`` and logs a warning so the
     caller can treat the entry as unconfirmed/stale without crashing.
 
-    Factored into a dedicated helper so S8 (regroup move) can reuse it and the suffix-dispatch is
+    Factored into a dedicated helper so the regroup-move path can reuse it and the suffix-dispatch is
     testable in isolation.
 
     :param path: Path to the audio file to inspect.

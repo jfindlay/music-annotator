@@ -1295,7 +1295,7 @@ class TestMBReleaseCandidate:
 
 
 # ---------------------------------------------------------------------------
-# AnnotationTier vocabulary and classify_annotation_tier (C-TIER, S1 KAT)
+# AnnotationTier vocabulary and classify_annotation_tier (C-TIER KAT)
 # ---------------------------------------------------------------------------
 
 
@@ -1383,7 +1383,7 @@ class TestTierClassifierMapsCensusSignals:
 
 
 # ---------------------------------------------------------------------------
-# AccurateRip provenance models (C-AR KATs — R3b S1)
+# AccurateRip provenance models (C-AR KATs)
 # ---------------------------------------------------------------------------
 
 

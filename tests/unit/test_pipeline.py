@@ -1528,7 +1528,7 @@ class TestRunWritesFreedBYaml:
         # The original disc_id data must be preserved (tier write merges, not replaces).
         freedb_text = freedb_path.read_text(encoding="utf-8")
         assert "disc_id" in freedb_text
-        # The annotation tier must also be present (S3 tier write merges into the freedb sidecar).
+        # The annotation tier must also be present (tier write merges into the freedb sidecar).
         assert "annotation_tier" in freedb_text
 
         # Journal must include a sidecar entry for the yaml.
@@ -3110,7 +3110,7 @@ class TestRunFullPipeline:
         )
 
     def test_composer_unified_across_media(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """KAT S1: composer cross-disc fallback propagation spans all media via C-S0 substrate.
+        """KAT: composer cross-disc fallback propagation spans all media via C-S0 substrate.
 
         A 2-medium release where movements of one top work straddle the disc boundary.
         Disc 1 (the SELECTED/copied medium) has one movement whose work carries ONLY an
@@ -3282,7 +3282,7 @@ class TestRunFullPipeline:
         )
 
     def test_recording_first_release_date_unified_across_media(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """KAT S1: first-release-date [rel YYYY] cross-disc normalisation spans all media.
+        """KAT: first-release-date [rel YYYY] cross-disc normalisation spans all media.
 
         A 2-medium release where no movement anywhere has a session date, so the
         ``recording_first_release_date`` normalisation pass (the [rel YYYY] fallback) is the
@@ -3474,7 +3474,7 @@ class TestRunFullPipeline:
         )
 
     def test_cwp_worktype_genres_top_populated(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """KAT C-S4: cwp_worktype_genres_top carries the top work's type; cwp_worktype_genres carries the bottom.
+        """KAT: cwp_worktype_genres_top carries the top work's type; cwp_worktype_genres carries the bottom.
 
         A concerto-movement hierarchy: the bottom (movement) work has type "" while only the root
         work carries type "Concerto".  build_cwp_tags must set cwp_worktype_genres_top to "Concerto"
@@ -10520,7 +10520,7 @@ class TestRebuildJournal:
         assert result == ""
 
     def test_class_prefixed_path_rebuilt_correctly(self, fs: FakeFilesystem) -> None:
-        """rebuild_journal handles class-prefixed three-level paths (C-CLASS, S1).
+        """rebuild_journal handles class-prefixed three-level paths (C-CLASS).
 
         A library with a class-prefixed path (``dest_root/Classical/Composer/Work/leaf.flac``)
         must be walked correctly: the class directory is detected as a known C-CLASS name and
@@ -10577,7 +10577,7 @@ class TestRebuildJournal:
 
 
 # ---------------------------------------------------------------------------
-# Annotation-tier vocabulary round-trip tests (C-TIER, S1 KAT)
+# Annotation-tier vocabulary round-trip tests (C-TIER KAT)
 # ---------------------------------------------------------------------------
 
 
@@ -10952,7 +10952,7 @@ class TestAppliedCaseIdsMerge:
 
 
 class TestAnnotationTierWritePath:
-    """Tests for the annotation-tier write path wired into the ingest pipeline (S3).
+    """Tests for the annotation-tier write path wired into the ingest pipeline.
 
     Covers:
     - _copy_tag_verify_journal_pass writes annotation_tier to PROVENANCE_FILENAME when no
@@ -11152,7 +11152,7 @@ class TestAnnotationTierWritePath:
 
 
 # ---------------------------------------------------------------------------
-# Single-disc TOC → full-mb-verified KATs (S3 / C-WHIP — R3b S3)
+# Single-disc TOC → full-mb-verified KATs (C-WHIP)
 # ---------------------------------------------------------------------------
 
 #: CD frame offsets for a fictional single-disc release (4 tracks).
@@ -11215,7 +11215,7 @@ def _make_release_with_toc(n_tracks: int = 4, disc_offsets: list[int] | None = N
 
 
 class TestSingleDiscTocPromotion:
-    """KATs for S3: single-disc TOC disc-ID → full-mb-verified when whipper provenance is present.
+    """KATs: single-disc TOC disc-ID → full-mb-verified when whipper provenance is present.
 
     Pins the C-WHIP trust anchor: ``origin_source == "whipper"`` is required for the single-disc
     TOC promotion.  A bare non-whipper single-disc TOC match keeps the conservative
@@ -11343,7 +11343,7 @@ class TestSingleDiscTocPromotion:
 
 
 # ---------------------------------------------------------------------------
-# ISRC-match tier promotion KATs (C-ISRC — S1)
+# ISRC-match tier promotion KATs (C-ISRC)
 # ---------------------------------------------------------------------------
 
 
@@ -11388,7 +11388,7 @@ def _make_release_with_isrcs(isrcs_per_track: list[list[str]]) -> MBRelease:
 
 
 class TestIsrcMatchTierPromotion:
-    """KATs for C-ISRC S1: ISRC-match rung in run()'s signal ladder.
+    """KATs for C-ISRC: ISRC-match rung in run()'s signal ladder.
 
     Covers:
     - All source ISRCs match → CensusSignal.ISRC_MATCH → full-mb-verified, needs_spot_check=False.
@@ -11602,7 +11602,7 @@ class TestIsrcMatchTierPromotion:
 
 
 # ---------------------------------------------------------------------------
-# AccurateRip tag round-trip KAT (C-AR — R3b S1)
+# AccurateRip tag round-trip KAT (C-AR)
 # ---------------------------------------------------------------------------
 
 
@@ -11708,7 +11708,7 @@ class TestAccurateRipTagRoundtrip:
 
 
 # ---------------------------------------------------------------------------
-# parse_whipper_log KATs (C-AR + C-WHIP — R3b S2)
+# parse_whipper_log KATs (C-AR + C-WHIP)
 # ---------------------------------------------------------------------------
 
 # Minimal whipper-log YAML body (without the trailing SHA-256 line).

@@ -1833,12 +1833,12 @@ class TestBuildDestPathEdgeCases:
 
 
 # ---------------------------------------------------------------------------
-# build_dest_path — C-NOSOLO freeze witness (KAT S1)
+# build_dest_path — C-NOSOLO freeze witness (KAT)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildDestPathConcertoNoSoloist:
-    """KAT S1 (C-NOSOLO): build_dest_path never injects a soloist into any path component.
+    """KAT (C-NOSOLO): build_dest_path never injects a soloist into any path component.
 
     STYLEGUIDE 4.5 / SEL-11: the soloist is never a path component, however principal.
     Two assertions freeze C-NOSOLO:
@@ -1887,11 +1887,10 @@ class TestBuildDestPathConcertoNoSoloist:
         )
 
     def test_concerto_soloist_absent_from_all_path_components(self, fs: FakeFilesystem) -> None:
-        """KAT S1a (C-NOSOLO): soloist name is absent from every path component for a Concerto work.
+        """KAT (C-NOSOLO): soloist name is absent from every path component for a Concerto work.
 
         A Concerto recording with soloist "Mutter" must produce a path that contains "Mutter"
         in no component — not the class dir, not the top_dir, not the work_dir, not the filename.
-        This is the inverse of the retired KAT S5 assertion.
 
         :param fs: pyfakefs fixture.
         """
@@ -3672,7 +3671,7 @@ class TestExtractWorkArtistRelsNewTypes:
 
 
 # ---------------------------------------------------------------------------
-# TestAuditTierPass — S2 KATs: tier enumeration audit pass
+# TestAuditTierPass — KATs: tier enumeration audit pass
 # ---------------------------------------------------------------------------
 
 
@@ -3687,7 +3686,7 @@ def _write_journal(dest_root: Path, entries: list[dict[str, str]]) -> None:
 
 
 class TestAuditTierPass:
-    """KAT tests for the tier-enumeration audit pass (S2 deliverable).
+    """KAT tests for the tier-enumeration audit pass.
 
     Covers :func:`music_annotator._audit._audit_tier_pass` directly and via the full
     :func:`music_annotator.audit` integration.  All tests use pyfakefs for filesystem isolation
@@ -3906,11 +3905,11 @@ class TestAuditTierPass:
         assert "audit_tier_provisional" in info_events
 
     # ------------------------------------------------------------------
-    # KAT: test_audit_enumerates_spot_check_population (S5)
+    # KAT: test_audit_enumerates_spot_check_population
     # ------------------------------------------------------------------
 
     def test_audit_enumerates_spot_check_population(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """KAT (S5): _audit_tier_pass enumerates the spot-check population with AR status attached.
+        """KAT: _audit_tier_pass enumerates the spot-check population with AR status attached.
 
         Two fixtures:
         (a) ``mb-search-resolved`` work with a populated ``AccurateRipSummary`` (AR-verified):
@@ -4367,12 +4366,12 @@ class TestAuditTierPass:
 
 
 # ---------------------------------------------------------------------------
-# C-CLASS KATs: _top_level_class routing table (S1, frozen)
+# C-CLASS KATs: _top_level_class routing table
 # ---------------------------------------------------------------------------
 
 
 class TestTopLevelClass:
-    """KATs for :func:`~music_annotator._tags._top_level_class` (C-CLASS, frozen at S1).
+    """KATs for :func:`~music_annotator._tags._top_level_class` (C-CLASS).
 
     Each test exercises one arm of the 6-arm routing table.  The routing table is evaluated in
     order (first match wins); the tests are named after the arm they exercise.
@@ -4487,10 +4486,10 @@ class TestTopLevelClass:
 
 
 class TestBuildDestPathClassPrefix:
-    """KATs for the C-CLASS prefix insertion in :func:`~music_annotator.build_dest_path` (S1, frozen)."""
+    """KATs for the C-CLASS prefix insertion in :func:`~music_annotator.build_dest_path`."""
 
     def test_build_dest_path_nests_composer_under_class(self, fs: FakeFilesystem) -> None:
-        """Classical top_dir is unchanged beneath the 'Classical' class prefix (C-CLASS, S1).
+        """Classical top_dir is unchanged beneath the 'Classical' class prefix (C-CLASS).
 
         The path becomes ``dest_root / Classical / <composer> - <performers> / <work_dir> / …``.
         The classical top_dir shape is unchanged from the pre-C-CLASS layout.
@@ -4635,12 +4634,12 @@ class TestBuildDestPathClassPrefix:
 
 
 # ---------------------------------------------------------------------------
-# C-INIT KATs: _classical_top_dir within-classical initial component (S2, frozen)
+# C-INIT KATs: _classical_top_dir within-classical initial component
 # ---------------------------------------------------------------------------
 
 
 class TestClassicalTopDir:
-    """KATs for :func:`~music_annotator._tags._classical_top_dir` (C-INIT, frozen at S2).
+    """KATs for :func:`~music_annotator._tags._classical_top_dir` (C-INIT).
 
     Each test exercises one branch of the three-case C-INIT rule:
     1. Multi-composer classical compilation → albumartist-based shape.
@@ -4907,7 +4906,7 @@ class TestCanonicalArtistForm:
 
 
 # ---------------------------------------------------------------------------
-# build_dest_path — canonical path performer name-forms (KAT for C-CANON/N2)
+# build_dest_path — canonical path performer name-forms (KAT for C-CANON)
 # ---------------------------------------------------------------------------
 
 

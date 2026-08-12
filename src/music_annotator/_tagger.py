@@ -115,7 +115,7 @@ _MP3_TXXX_MAP: dict[str, str] = {
     "ACOUSTID_ID": "Acoustid Id",
     "AUDIO_HASH": "Audio Hash",
     "CHROMAPRINT_FP": "Chromaprint Fingerprint",
-    # AccurateRip per-track fields (C-AR, R3b S1).  desc == key (own-namespace convention).
+    # AccurateRip per-track fields (C-AR).  desc == key (own-namespace convention).
     "ACCURATERIP_V1_RESULT": "ACCURATERIP_V1_RESULT",
     "ACCURATERIP_V1_CONFIDENCE": "ACCURATERIP_V1_CONFIDENCE",
     "ACCURATERIP_V1_LOCAL_CRC": "ACCURATERIP_V1_LOCAL_CRC",

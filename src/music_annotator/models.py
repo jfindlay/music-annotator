@@ -21,7 +21,7 @@ type JSON = dict[str, JSON] | list[JSON] | str | float | int | bool | None  # py
 
 
 # ---------------------------------------------------------------------------
-# Annotation-tier vocabulary (C-TIER — frozen at S1)
+# Annotation-tier vocabulary (C-TIER)
 # ---------------------------------------------------------------------------
 
 
@@ -128,7 +128,7 @@ def classify_annotation_tier(signal: CensusSignal) -> tuple[AnnotationTier, bool
 
 
 # ---------------------------------------------------------------------------
-# AccurateRip provenance models (C-AR — frozen at R3b S1)
+# AccurateRip provenance models (C-AR)
 # ---------------------------------------------------------------------------
 
 
@@ -150,7 +150,7 @@ class AccurateRipResult(StrEnum):
 
 
 class AccurateRipTrackResult(BaseModel):
-    """One AccurateRip DB generation (v1 or v2) result for a single track (S2 parse product).
+    """One AccurateRip DB generation (v1 or v2) result for a single track.
 
     Carries the verification outcome, confidence counter, and both CRC values as emitted by
     whipper's ``WhipperLogger.trackLog``.  All fields default to empty/zero so a missing DB
@@ -176,10 +176,10 @@ class AccurateRipTrackResult(BaseModel):
 
 
 class AccurateRipTrack(BaseModel):
-    """Per-track AccurateRip container: both DB generations + rip CRCs + status (S2 parse product).
+    """Per-track AccurateRip container: both DB generations + rip CRCs + status.
 
-    Carries the full per-track AccurateRip data from a whipper native log.  S4 projects the
-    structured fields onto the flat ``str`` tag fields on ``TrackTags``/``TransactionEntry``
+    Carries the full per-track AccurateRip data from a whipper native log.  The ingest pipeline
+    projects the structured fields onto the flat ``str`` tag fields on ``TrackTags``/``TransactionEntry``
     (the tag round-trip surface); this model is the typed intermediate.
 
     Important attributes: ``v1``, ``v2``, ``test_crc``, ``copy_crc``, ``status``.
@@ -1488,7 +1488,7 @@ class TrackTags(BaseModel):
     # --- archival identity (extensible: 4th dim slots in here) ---
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
     chromaprint_fp: str = ""  # Chromaprint fingerprint string (populated in F3)
-    # AccurateRip per-track flat fields (C-AR, R3b S1).  Field names == lowercased FLAC/MP3 tag keys.
+    # AccurateRip per-track flat fields (C-AR).  Field names == lowercased FLAC/MP3 tag keys.
     # Tag keys are ACCURATERIP_V1_RESULT etc. (uppercase); desc == key in _MP3_TXXX_MAP.
     # confidence serializes as decimal string, empty string when 0/absent (not "0").
     accuraterip_v1_result: str = ""
@@ -1810,7 +1810,7 @@ class TransactionEntry(BaseModel):
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
     chromaprint_fp: str = ""  # Chromaprint fingerprint string (populated in F3)
     acoustid_id: str = ""  # AcoustID UUID for this track
-    # AccurateRip per-track flat fields (C-AR, R3b S1).  Mirrors TrackTags flat fields exactly.
+    # AccurateRip per-track flat fields (C-AR).  Mirrors TrackTags flat fields exactly.
     accuraterip_v1_result: str = ""
     accuraterip_v1_confidence: str = ""
     accuraterip_v1_local_crc: str = ""
@@ -1847,9 +1847,9 @@ class ProvenanceSidecar(BaseModel):
 
     ``origin_time`` and ``origin_source`` are written once and never overwritten (idempotent).
 
-    ``annotation_tier`` records how completely the release could be annotated (C-TIER contract,
-    frozen at S1).  It defaults to ``""`` (unset), which is a *defect* state — the write path
-    (S3) must always set it; S2's audit flags any empty one.  The field is overwritable **only
+    ``annotation_tier`` records how completely the release could be annotated (C-TIER contract).
+    It defaults to ``""`` (unset), which is a *defect* state — the ingest write path must always
+    set it; the audit pass flags any empty one.  The field is overwritable **only
     monotonically upward**: a re-resolve may raise the tier (e.g. ``source-tags-only`` →
     ``mb-search-resolved`` after a later MB lookup), but may never silently lower it.  Callers
     must compare :func:`annotation_tier_rank` values before writing.
