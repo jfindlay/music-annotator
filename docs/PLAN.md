@@ -309,7 +309,7 @@ locale/primary selection even though N2's first consumer uses only the primary-a
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 @architect | Add artist alias-list and canonical-form resolver | done | e0f7c3a | C-CANON (field + resolver + source mechanism: dedicated fetch_artist_aliases + _ARTIST_CACHE; MBAlias "alias" key remap; resolver call-site hydration is N2 wiring concern) |
-| 2 | Render canonical name-forms in the destination path | pending | | |
+| 2 | Render canonical name-forms in the destination path | done | 575169d | C-CANON compact-path render (performers component; composer unchanged per D-A8; D-A7 surface split preserved) |
 | 3 ◆ | Align the maintenance repath to canonical forms + anneal | pending | | |
 
 ## Action-frame digest
