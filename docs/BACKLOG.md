@@ -305,58 +305,66 @@ confirm:
 #### Hierarchy-depth normalisation (deferred L2 of the leaf-numbering plan)  → ROADMAP R6a
 
 The leaf/intermediate numbering fix (L0/L1 of the now-complete `PLAN-leafnumber.md`) shipped; the
-**depth-uniformity** half (L2) was designed at an Opus-inflection HALT and then **deferred** — the
-user elected not to ship depth normalisation until the library is complete and the full distribution
-of depth shapes is known (designing from a maintenance position rather than the 36-group census).
-Under the north star, "complete" = Act I full inclusion.  The converged design is preserved as two
-durable rules in `docs/NOTES.md` ("Tree-to-path rendering: two durable rules") — ragged depth has two
-opposite-routing sources, and the *uniform-ceiling / ragged-floor* rule (render each leaf at
-`min(own tree depth, group modal depth)`: clamp over-resolution down, never pad under-resolution up).
-When reopened it materialises as an additive pipeline pass writing `cwp_render_levels` as
-model_extra, consumed by `build_dest_path`'s depth branch, falling back to raw `cwp_part_levels` when
-absent.
+**depth-uniformity** half (L2) was designed at an Opus-inflection HALT.  The converged design is
+preserved as two durable rules in `docs/NOTES.md` ("Tree-to-path rendering: two durable rules") —
+ragged depth has two opposite-routing sources, and the *uniform-ceiling / ragged-floor* rule (render
+each leaf at `min(own tree depth, group modal depth)`: clamp over-resolution down, never pad
+under-resolution up).  The depth-clamp render is now implemented: `build_dest_path` accepts a
+`group_modal_depth` parameter; `run()`, `repath()`, and `regroup()` compute the work-group modal
+depth via `work_group_modal_depth()` and pass it.  New ingests render at clamped depth immediately.
+The library-wide depth-repath of existing files is deferred to the offline `repath` engine (ROADMAP
+R6d's one-pass re-derivation under operator review).
 
-Scope when reopened (from the census of 36 non-uniform groups in 6 shapes):
-- **Shape A (20 groups) — out of scope, preserve.**  Overture/sinfonia at PL=1 among PL=2 acts is
-  genuinely top-level (ragged *floor*); the rule must not over-normalise it.
-- **Shapes C/D (3 groups: Handel Water Music, Bach Matthäus-Passion, Haydn Schöpfung) — the target.**
-  A movement has MB sub-parts (IIIa/IIIb; lettered recits) nesting deeper than flat siblings; clamp
-  the over-resolution down.
-- **Shape B (9 groups, mixed flat/split movements)** and **Shape F (2 groups, excerpt discs, depth
-  spread {1,3})** — per-shape call deferred to reopen (likely acceptable as-is / near-arbitrary modal).
+Scope (from the census of 63 non-uniform groups in 6 shapes — see table below):
+- **Shape A (25 groups) — out of scope, preserve.**  Overture/sinfonia at PL=1 among PL=2 acts is
+  genuinely top-level (ragged *floor*); the min-clamp leaves it untouched (min(1,2)=1).
+- **Shapes C/D (10 groups) — the primary target.**  A movement has MB sub-parts nesting deeper than
+  flat siblings (e.g. Handel Water Music IIIa/IIIb → PL=3 among PL=2; Bach Matthäus-Passion lettered
+  recits; Wagner Ring PL=4 among PL=3); the min-clamp removes the over-resolution.
+- **Shape B (20 groups, mixed flat/split movements)** and **Shape F (6 groups, depth-mismatched
+  excerpts or 2-track even splits)** — per-shape call deferred to the library-wide repath (likely
+  acceptable as-is / near-arbitrary modal).
 - Pinned corner cases: modal ties → shallower depth; PL=0 orphans (Shape E) excluded from the modal
   computation (see "PL=0 orphan tracks" in the MB-upstream track).
-- **Reopen criteria:** when the library is complete (Act I done — more depth shapes likely), or
-  sooner if a new shape appears that the uniform-ceiling rule mishandles.
+- **Taxonomy validation (2026-08-12):** the six-shape taxonomy holds against the fresh scan.  No new
+  shape was found that the uniform-ceiling min-clamp mishandles.  The min-clamp is down-only, so
+  ragged-floor nodes (Shapes A/B) are automatically left untouched; over-resolved nodes (Shapes C/D)
+  are clamped; PL=0 orphans (Shape E) are excluded from the modal computation.  Multi-depth-spread
+  groups (Ring Karajan PL={1,2,3,4}; Ring Solti PL={2,3,4}) fall within Shape D — the modal
+  computation and min-clamp handle them correctly.
 
 ##### Non-uniform-depth census (library scan)
 
-Full scan of `~/Remote/hades/Music/Done/` at the time of the L2 design — **3663 FLACs, 0 MP3, 1006
-work-groups** (a work-group = all tracks of one release sharing a `CWP_WORKID_TOP`).  A group is
-*non-uniform* when its tracks carry differing `CWP_PART_LEVELS`.  **36 groups (3.6%)** were
-non-uniform, in six shapes.  Re-run the scan when L2 reopens to refresh against a more complete
-library: `scripts/scan_nonuniform_depth.py` (depends only on `mutagen`; adjust its `ROOT`).
+Census refreshed 2026-08-12.  Full scan of `~/Remote/hades/Music/Done/` — **12,148 FLACs, 0 MP3,
+3,509 work-groups** (a work-group = all tracks of one release sharing a `CWP_WORKID_TOP`).  A group
+is *non-uniform* when its tracks carry differing `CWP_PART_LEVELS`.  **63 groups (1.8%)** were
+non-uniform, in six shapes (taxonomy unchanged from the original 36-group / 3.6% census).
+Re-run `scripts/scan_nonuniform_depth.py` (depends only on `mutagen`; adjust its `ROOT`) to refresh
+against a more complete library; the script exits with a clear error if the library root is not
+mounted, preventing a missing mount from being silently reported as a clean census.
 
-| Shape | n | What it is | Correct? | L2 treatment |
-|-------|---|------------|----------|--------------|
-| **A** | 20 | Overture/sinfonia/epilogue at PL=1 among PL=2 acts/numbers (Die Meistersinger Vorspiel, Così Ouverture, Nutcracker Ouverture ×3, Verdi Requiem Offertory, Missa solemnis Agnus Dei) | **YES — overture genuinely sits at top of the opera** | **Out of scope — preserve. Must not over-normalise.** |
-| **B** | 9 | Mixed flat/split movements: some movements single-track (PL=1), others split into sub-movements (PL=2) (Mozart Missa c-Moll, Requiem K.626, Verdi Requiem, Mendelssohn *Lobgesang*, four Grumiaux violin sonatas, Divertimento K.287) | Arguably correct | Decide at reopen (likely acceptable as-is) |
-| **C** | 1 | Suite with one multi-part movement (Handel Water Music — Suite 1 movt III has sub-parts IIIa/IIIb → PL=3 among PL=2) | **NO — ragged depth** | **Primary target** |
-| **D** | 2 | Oratorio with multi-part numbers (Bach Matthäus-Passion: 14 PL=3 tracks from lettered recits; Haydn *Schöpfung*: Nr.18/19 → XIXa/b) | **NO — ragged depth** | **Primary target** |
-| **E** | 2 | PL=0 orphan: a movement's MB work has no `part of` link → resolved as standalone top work (Mozart Divertimento K.136 "II. Andante"; Litaniae K.243 "X. Miserere") | **NO — different bug** | **Out of scope → MB-upstream track** |
-| **F** | 2 | Highlights disc with depth-mismatched excerpts (Tannhäuser: Overtüre PL=1 vs Bacchanale PL=3; Tristan: Vorspiel PL=2 vs Liebestod PL=3) | Edge case | Defer / decide at reopen |
+| Shape | n | What it is | Correct? | Treatment |
+|-------|---|------------|----------|-----------|
+| **A** | 25 | Overture/sinfonia/epilogue at PL=1 among PL=2 acts/numbers (Die Meistersinger Vorspiel, Così Ouverture, Nutcracker Ouverture ×3, Verdi Requiem Offertory, Missa solemnis Agnus Dei, and many Mozart opera overtures) | **YES — overture genuinely sits at top of the opera** | **Out of scope — preserve. min-clamp leaves untouched (min(1,2)=1).** |
+| **B** | 20 | Mixed flat/split movements: some movements single-track (PL=1), others split into sub-movements (PL=2) (Mozart Missa c-Moll, Requiem K.626 ×3, Verdi Requiem ×2, Mendelssohn *Lobgesang*, four Grumiaux violin sonatas, Divertimento K.287, Handel Royal Fireworks, Strauss Don Quixote ×2, Tchaikovsky Nutcracker suite ×3, Enescu Œdipe, West Side Story) | Arguably correct | Defer to library-wide repath (likely acceptable as-is) |
+| **C** | 2 | Suite with one multi-part movement (Handel Water Music — Suite 1 movt III has sub-parts IIIa/IIIb → PL=3 among PL=2; Tchaikovsky Swan Lake — Pas de trois sub-parts → PL=3 among PL=2) | **NO — ragged depth** | **Primary target — min-clamp removes over-resolution** |
+| **D** | 8 | Oratorio/opera/cycle with over-resolved numbers (Bach Matthäus-Passion ×2: 14–20 PL=3 tracks from lettered recits; Haydn *Schöpfung*: XIXa/b; Debussy Pelléas: scene sub-parts PL=3 majority; Orff Trionfi: PL=3 majority; Wagner Ring ×3: PL=4 Trauermarsch among PL=3 scenes) | **NO — ragged depth** | **Primary target — min-clamp removes over-resolution** |
+| **E** | 2 | PL=0 orphan: a movement's MB work has no `part of` link → resolved as standalone top work (Mozart Divertimento K.136 "II. Andante"; Litaniae K.243 "X. Miserere") | **NO — different bug** | **Out of scope → MB-upstream track. Excluded from modal computation.** |
+| **F** | 6 | Depth-mismatched excerpts or 2-track even splits (Tannhäuser Karajan: Overtüre PL=1 vs Bacchanale PL=3; Tristan Karajan: Vorspiel PL=2 vs Liebestod PL=3; West Side Story Streisand; Die Meistersinger Klemperer; Lohengrin Klemperer; Tannhäuser Klemperer — all 2-track groups) | Edge case | Defer to library-wide repath / decide at that time |
 
-**Extreme case:** Tannhäuser highlights — depth spread of 2 (PL={1,3}) in a 2-track group; the only
-true spread-≥2 case among non-zero depths.
+**Extreme cases:** Tannhäuser Karajan highlights — depth spread of 2 (PL={1,3}) in a 2-track group.
+Wagner Ring Karajan — depth spread of 3 (PL={1,2,3,4}); Ring Solti — spread 2 (PL={2,3,4}).  All
+handled correctly by the min-clamp: modal=3 (or 4), over-resolved tracks clamp down, ragged-floor
+tracks are left untouched.
 
-**The bigger, orthogonal signal — multi-recording-per-bottom-work (16 groups).**  Independently of
-depth, 16 groups had at least one bottom work (`CWP_WORKID_0`) holding >1 recording — the *direct*
-driver of the leaf-collision bug that L0 fixed.  Only **3** of these 16 overlapped the
-non-uniform-depth set (Handel, Così, Die Meistersinger — the last has 12 bottom-works holding >1 rec,
-max 10, the worst leaf-collision in the library).  The other **13 were uniform-depth** (Mahler 9 — 4
-bottom-works ×up to 8 recs; Boccherini *Musica notturna* ×5; Sibelius Symphony 7 ×4; …).  This is why
-L0/L1 (per-group leaf index) was the load-bearing fix — it covers all 16 multi-rec groups regardless
-of depth — and L2 (depth) is the smaller, secondary concern touching only Shapes C/D (3 groups).
+**The bigger, orthogonal signal — multi-recording-per-bottom-work (70 groups).**  Independently of
+depth, 70 groups had at least one bottom work (`CWP_WORKID_0`) holding >1 recording — the *direct*
+driver of the leaf-collision bug that L0 fixed.  Only a small subset overlapped the non-uniform-depth
+set (Handel Water Music, Così fan tutte, Die Meistersinger — the last has 12 bottom-works holding >1
+rec, max 10, the worst leaf-collision in the library).  The majority were uniform-depth (Mahler 9 — 4
+bottom-works ×up to 8 recs; Boccherini *Musica notturna* ×5; Sibelius Symphony 7 ×4; …).  This is
+why L0/L1 (per-group leaf index) was the load-bearing fix — it covers all multi-rec groups regardless
+of depth — and L2 (depth) is the smaller, secondary concern touching only Shapes C/D.
 Do not let L2's intricacy inflate its priority.
 
 #### AcoustID tag naming + semantics — Picard alignment  → ROADMAP R6c

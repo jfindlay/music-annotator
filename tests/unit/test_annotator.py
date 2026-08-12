@@ -5243,8 +5243,9 @@ class TestWorkGroupModalDepth:
         """No-group KAT: build_dest_path with group_modal_depth=None renders the track's own depth.
 
         Backward-compatibility / no-regression proof: callers that do not supply group_modal_depth
-        (e.g. single-file diagnostics, existing call sites before S2 threading) must get the same
-        path as before — the track's own CWP_PART_LEVELS drives the depth unchanged.
+        (e.g. single-file diagnostics, call sites that have not yet been wired to pass the modal
+        depth) must get the same path as before — the track's own CWP_PART_LEVELS drives the depth
+        unchanged.
 
         :param fs: pyfakefs fixture.
         """
@@ -5301,3 +5302,133 @@ class TestWorkGroupModalDepth:
         An empty part_levels_list (no tracks in the group) must return 0 without raising.
         """
         assert work_group_modal_depth([]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Integrative parity KAT — uniform-ceiling / ragged-floor depth rule
+# (STYLEGUIDE 4.5 / C-W3b)
+#
+# Belt-and-suspenders guard over the full work_group_modal_depth + build_dest_path
+# stack.  Asserts that the clamp behaviour holds end-to-end for a representative
+# Shape-C/D fixture: a work-group whose modal depth is 2 but whose one over-resolved
+# movement carries PL=3 (e.g. Handel Water Music Suite 1 movt IIIa/IIIb) renders
+# that movement's path at 2 levels — the over-resolution removed — not 3.
+# ---------------------------------------------------------------------------
+
+
+class TestDepthClampIntegrativeParity:
+    """Integrative parity KAT for the uniform-ceiling / ragged-floor depth rule.
+
+    Guards the full ``work_group_modal_depth`` + ``build_dest_path`` stack end-to-end
+    against a representative Shape-C/D fixture (STYLEGUIDE 4.5 / C-W3b).  The rule:
+    render each leaf at ``min(its own tree depth, the work-group's modal tree depth)``.
+    Clamp over-resolution down; never pad shallow branches up.
+    """
+
+    @staticmethod
+    def _make_rel() -> MBRelease:
+        """Build a minimal release stub.
+
+        :returns: An :class:`~music_annotator.models.MBRelease` instance.
+        """
+        return _rel({"id": "r1", "title": "Water Music", "artist-credit": [], "medium-list": []})
+
+    @staticmethod
+    def _make_trk() -> MBTrack:
+        """Build a minimal track stub.
+
+        :returns: An :class:`~music_annotator.models.MBTrack` instance.
+        """
+        return _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "III. Allegro"}})
+
+    @staticmethod
+    def _make_tags_pl(part_levels: int, extra: dict[str, str] | None = None) -> TrackTags:
+        """Build TrackTags with the given CWP_PART_LEVELS and optional extra fields.
+
+        :param part_levels: The ``CWP_PART_LEVELS`` value to set.
+        :param extra: Optional dict of additional model_extra fields.
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        tags = TrackTags(
+            title="III. Allegro",
+            movementnumber="3",
+            movementtotal="17",
+            cwp_work_top="Water Music, HWV 348-350",
+            cwp_composer_lastnames="Handel",
+            originaldate="1988",
+            cwp_part_levels=str(part_levels),
+            cwp_movt_num="3",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        if extra:
+            for key, val in extra.items():
+                tags.model_extra[key] = val  # type: ignore[index]
+        return tags
+
+    def test_shape_cd_fixture_clamps_to_modal_depth(self, fs: FakeFilesystem) -> None:
+        """Integrative parity KAT: Shape-C/D fixture clamps to the work-group modal depth.
+
+        Simulates the Handel Water Music scenario: a work-group of 17 tracks at PL=2 and
+        3 tracks at PL=3 (Suite 1 movt III sub-parts IIIa/IIIb).  The modal depth is 2.
+        The PL=3 over-resolved movement must render at 2 levels (the over-resolution
+        removed), not 3.  The PL=2 majority tracks must render unchanged.
+
+        This test guards the full ``work_group_modal_depth`` + ``build_dest_path`` stack:
+        - ``work_group_modal_depth([2]*17 + [3]*3)`` must return 2 (modal = 2).
+        - ``build_dest_path(..., group_modal_depth=2)`` with a PL=3 track must produce a
+          shallower path than the same call with ``group_modal_depth=None``.
+        - ``build_dest_path(..., group_modal_depth=2)`` with a PL=2 track must produce the
+          same path as ``group_modal_depth=None`` (no-op clamp: min(2,2)=2).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Compute the modal depth from the work-group's part_levels distribution.
+        # 17 tracks at PL=2, 3 tracks at PL=3 → modal = 2.
+        part_levels_list = [2] * 17 + [3] * 3
+        modal = work_group_modal_depth(part_levels_list)
+        assert modal == 2, f"Modal depth must be 2 for a {part_levels_list!r} group, got {modal}"
+
+        # PL=3 over-resolved track (Suite 1 movt IIIa sub-part).
+        tags_pl3 = self._make_tags_pl(
+            3,
+            extra={
+                "cwp_part_0": "IIIa",
+                "cwp_part_1": "Suite 1, movt III",
+                "cwp_ordering_key_1": "3",
+                "cwp_part_2": "Suite 1",
+                "cwp_ordering_key_2": "1",
+            },
+        )
+
+        # PL=2 majority track (a flat Suite 1 movement).
+        tags_pl2 = self._make_tags_pl(
+            2,
+            extra={
+                "cwp_part_0": "I. Allegro",
+                "cwp_part_1": "Suite 1",
+                "cwp_ordering_key_1": "1",
+            },
+        )
+
+        rel = self._make_rel()
+        trk = self._make_trk()
+
+        # PL=3 track: clamped path must be shallower than unclamped path.
+        path_pl3_clamped = build_dest_path(dest_root, rel, trk, tags_pl3, group_modal_depth=modal)
+        path_pl3_unclamped = build_dest_path(dest_root, rel, trk, tags_pl3, group_modal_depth=None)
+        assert len(path_pl3_clamped.parts) < len(path_pl3_unclamped.parts), (
+            "Clamped PL=3 path must be shallower than unclamped PL=3 path "
+            f"(clamped={path_pl3_clamped}, unclamped={path_pl3_unclamped})"
+        )
+
+        # PL=2 majority track: clamped path must equal unclamped path (no-op clamp).
+        path_pl2_clamped = build_dest_path(dest_root, rel, trk, tags_pl2, group_modal_depth=modal)
+        path_pl2_unclamped = build_dest_path(dest_root, rel, trk, tags_pl2, group_modal_depth=None)
+        assert path_pl2_clamped == path_pl2_unclamped, (
+            "Clamped PL=2 path must equal unclamped PL=2 path — min(2,2)=2 is a no-op "
+            f"(clamped={path_pl2_clamped}, unclamped={path_pl2_unclamped})"
+        )
