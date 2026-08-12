@@ -1619,7 +1619,7 @@ class TestBuildDestPathEdgeCases:
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        conductor = ArtistEntry(name="Karajan", sort="Karajan, H", mbid="k1")
+        conductor = ArtistEntry(name="Karajan", sort="Karajan, H", mbid="")
         tags = TrackTags(
             title="T",
             movementnumber="1",
@@ -1651,8 +1651,8 @@ class TestBuildDestPathEdgeCases:
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        album_conductor = ArtistEntry(name="Marriner", sort="Marriner, N", mbid="m1")
-        track_only_conductor = ArtistEntry(name="TrackOnly", sort="TrackOnly, X", mbid="t0")
+        album_conductor = ArtistEntry(name="Marriner", sort="Marriner, N", mbid="")
+        track_only_conductor = ArtistEntry(name="TrackOnly", sort="TrackOnly, X", mbid="")
         tags = TrackTags(
             title="I. Allegro",
             movementnumber="1",
@@ -1684,8 +1684,8 @@ class TestBuildDestPathEdgeCases:
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        album_ensemble = ArtistEntry(name="ASMiF", sort="ASMiF", mbid="e1")
-        track_only_ensemble = ArtistEntry(name="ASMiF Chamber Ensemble", sort="ASMiF Chamber Ensemble", mbid="e2")
+        album_ensemble = ArtistEntry(name="ASMiF", sort="ASMiF", mbid="")
+        track_only_ensemble = ArtistEntry(name="ASMiF Chamber Ensemble", sort="ASMiF Chamber Ensemble", mbid="")
         tags = TrackTags(
             title="I. Allegro",
             movementnumber="1",
@@ -1719,7 +1719,7 @@ class TestBuildDestPathEdgeCases:
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        conductor = ArtistEntry(name="Gardiner", sort="Gardiner, J", mbid="g1")
+        conductor = ArtistEntry(name="Gardiner", sort="Gardiner, J", mbid="")
         tags = TrackTags(
             title="Kyrie",
             movementnumber="1",
@@ -1748,8 +1748,8 @@ class TestBuildDestPathEdgeCases:
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        conductor = ArtistEntry(name="Karajan", sort="Karajan, H", mbid="k1")
-        ensemble = ArtistEntry(name="BPO", sort="BPO", mbid="b1")
+        conductor = ArtistEntry(name="Karajan", sort="Karajan, H", mbid="")
+        ensemble = ArtistEntry(name="BPO", sort="BPO", mbid="")
         tags = TrackTags(
             title="I. Allegro",
             movementnumber="1",
@@ -1868,7 +1868,7 @@ class TestBuildDestPathConcertoNoSoloist:
         :param cwp_movt_num: Movement number string (used as the leaf ``nn`` prefix).
         :returns: A populated :class:`~music_annotator.models.TrackTags` instance.
         """
-        conductor = ArtistEntry(name=conductor_name, sort=f"{conductor_name}, X", mbid="k1")
+        conductor = ArtistEntry(name=conductor_name, sort=f"{conductor_name}, X", mbid="")
         return TrackTags(
             title="I. Allegro",
             movementnumber=cwp_movt_num,
@@ -4499,7 +4499,7 @@ class TestBuildDestPathClassPrefix:
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        conductor = ArtistEntry(name="Karajan", sort="Karajan, H", mbid="k1")
+        conductor = ArtistEntry(name="Karajan", sort="Karajan, H", mbid="")
         tags = TrackTags(
             title="I. Allegro",
             movementnumber="1",
@@ -4904,3 +4904,141 @@ class TestCanonicalArtistForm:
             }
         )
         assert canonical_artist_form(artist) == "Primary Alias"
+
+
+# ---------------------------------------------------------------------------
+# build_dest_path — canonical path performer name-forms (KAT for C-CANON/N2)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDestPathCanonicalPerformerForms:
+    """KAT (C-CANON): build_dest_path renders canonical entity name-forms in the performers component.
+
+    The compact path projection uses the primary-flagged MB alias (per STYLEGUIDE 3.1/NORM-2) for
+    each conductor and ensemble, not the as-credited display name.  Preserved tag surfaces
+    (``ARTIST``, ``ALBUMARTIST``) are unaffected — they remain as-credited (D-A7 surface split).
+
+    Two behavioural witnesses:
+
+    1. **Alias-present**: an ensemble whose hydrated ``MBArtist`` has a primary native-Latin alias
+       — the path performers component carries the alias form, not the anglicised display name.
+    2. **Alias-absent (no-regression)**: an ensemble with no aliases — the path carries the
+       as-credited display name unchanged, proving the resolver does not corrupt the no-alias case.
+
+    Both witnesses also assert that ``ARTIST`` / ``ALBUMARTIST`` in the tags are unchanged,
+    freezing the D-A7 surface split.
+    """
+
+    def _make_classical_tags(
+        self,
+        *,
+        ensemble_entry: ArtistEntry,
+        artist: str = "Vienna Philharmonic",
+        albumartist: str = "Vienna Philharmonic",
+    ) -> TrackTags:
+        """Build a minimal classical TrackTags with one album-level ensemble.
+
+        :param ensemble_entry: The :class:`~music_annotator.models.ArtistEntry` for the ensemble.
+        :param artist: Value for the ``ARTIST`` tag (preserved surface).
+        :param albumartist: Value for the ``ALBUMARTIST`` tag (preserved surface).
+        :returns: A populated :class:`~music_annotator.models.TrackTags` instance.
+        """
+        return TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony No. 9",
+            cwp_workid_top="w1",
+            cwp_composer_lastnames="Beethoven",
+            cwp_worktype_genres_top="Classical",
+            artist=artist,
+            albumartist=albumartist,
+            cea_conductors_list=[],
+            cea_ensembles_list=[ensemble_entry],
+            cea_album_conductors_list=[],
+            cea_album_ensembles_list=[ensemble_entry],
+        )
+
+    def test_path_carries_alias_form_when_primary_alias_present(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Path performers component carries the primary-flagged MB alias, not the display name.
+
+        KAT (alias-present): the ensemble "Vienna Philharmonic" has a primary native-Latin alias
+        "Wiener Philharmoniker".  After hydration via ``fetch_artist_aliases``, the resolver selects
+        the alias.  The path must contain "Wiener Philharmoniker", not "Vienna Philharmonic".
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        hydrated = MBArtist.model_validate(
+            {
+                "id": "vp-1",
+                "name": "Vienna Philharmonic",
+                "alias-list": [
+                    {"alias": "Wiener Philharmoniker", "type": "Artist name", "primary": "primary", "locale": "de"},
+                ],
+            }
+        )
+        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=hydrated)
+
+        ensemble_entry = ArtistEntry(name="Vienna Philharmonic", sort="Vienna Philharmonic", mbid="vp-1")
+        tags = self._make_classical_tags(
+            ensemble_entry=ensemble_entry,
+            artist="Vienna Philharmonic",
+            albumartist="Vienna Philharmonic",
+        )
+        result = music_annotator.build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
+            tags,
+        )
+        path_str = str(result)
+        # Path performers component must carry the canonical alias form.
+        assert "Wiener Philharmoniker" in path_str, f"Expected canonical alias 'Wiener Philharmoniker' in path '{path_str}'"
+        # The anglicised display name must not appear in the path.
+        assert "Vienna Philharmonic" not in path_str, (
+            f"Display name 'Vienna Philharmonic' must not appear in path '{path_str}' (alias should replace it)"
+        )
+        # Preserved tag surfaces are unchanged — ARTIST and ALBUMARTIST stay as-credited (D-A7).
+        assert tags.artist == "Vienna Philharmonic", "ARTIST tag must remain as-credited"
+        assert tags.albumartist == "Vienna Philharmonic", "ALBUMARTIST tag must remain as-credited"
+
+    def test_path_unchanged_when_no_primary_alias(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Path performers component is unchanged when the ensemble has no primary alias.
+
+        KAT (alias-absent, no-regression): the ensemble "Berlin Philharmonic" has no primary alias.
+        The resolver falls back to ``MBArtist.name``.  The path must carry "Berlin Philharmonic"
+        unchanged, proving the canonical-form wiring does not corrupt the no-alias case.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        hydrated = MBArtist.model_validate({"id": "bp-1", "name": "Berlin Philharmonic"})
+        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=hydrated)
+
+        ensemble_entry = ArtistEntry(name="Berlin Philharmonic", sort="Berlin Philharmonic", mbid="bp-1")
+        tags = self._make_classical_tags(
+            ensemble_entry=ensemble_entry,
+            artist="Berlin Philharmonic",
+            albumartist="Berlin Philharmonic",
+        )
+        result = music_annotator.build_dest_path(
+            dest_root,
+            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
+            tags,
+        )
+        path_str = str(result)
+        # No alias → resolver falls back to MBArtist.name → path unchanged from as-credited form.
+        assert "Berlin Philharmonic" in path_str, (
+            f"Expected as-credited name 'Berlin Philharmonic' in path '{path_str}' (no-alias fallback)"
+        )
+        # Preserved tag surfaces are unchanged — ARTIST and ALBUMARTIST stay as-credited (D-A7).
+        assert tags.artist == "Berlin Philharmonic", "ARTIST tag must remain as-credited"
+        assert tags.albumartist == "Berlin Philharmonic", "ALBUMARTIST tag must remain as-credited"

@@ -94,6 +94,7 @@ from music_annotator.models import (
     CopyPlanEntry,
     CoverArt,
     CoverImage,
+    MBArtist,
     MBMedium,
     MBRecording,
     MBRelease,
@@ -1887,6 +1888,10 @@ class TestRunFullPipeline:
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch(
+            "music_annotator._tags.fetch_artist_aliases",
+            side_effect=lambda artist_id, **_: MBArtist.model_validate({"id": artist_id, "name": artist_id}),
+        )
 
         music_annotator.run(
             release_id="rel-1",
@@ -2051,6 +2056,10 @@ class TestRunFullPipeline:
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch(
+            "music_annotator._tags.fetch_artist_aliases",
+            side_effect=lambda artist_id, **_: MBArtist.model_validate({"id": artist_id, "name": artist_id}),
+        )
 
         captured_dests: list[Path] = []
         real_build = music_annotator._tags.build_dest_path  # pylint: disable=protected-access
@@ -3017,6 +3026,10 @@ class TestRunFullPipeline:
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch(
+            "music_annotator._tags.fetch_artist_aliases",
+            side_effect=lambda artist_id, **_: MBArtist.model_validate({"id": artist_id, "name": artist_id}),
+        )
 
         music_annotator.run(
             release_id="rel-multi",
@@ -12412,6 +12425,10 @@ class TestAppliedCaseIdsInSidecar:
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch(
+            "music_annotator._tags.fetch_artist_aliases",
+            side_effect=lambda artist_id, **_: MBArtist.model_validate({"id": artist_id, "name": artist_id}),
+        )
 
     def _make_classical_work(self, work_id: str, title: str, composer_id: str, composer_name: str) -> MBWork:
         """Build a minimal classical work with a composer relation.

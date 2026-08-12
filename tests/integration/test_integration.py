@@ -37,6 +37,7 @@ from music_annotator.models import (
     AnnotationTier,
     CoverArt,
     CoverImage,
+    MBArtist,
     MBMedium,
     MBRecording,
     MBRelease,
@@ -250,6 +251,45 @@ def _patch_mb(mocker: MockerFixture, release: MBRelease) -> None:
     mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_rec_detail)
     mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
     mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+    # Stub the per-MBID artist alias fetch so build_dest_path does not make network calls.
+    # Returns an MBArtist with alias_list == [] so the canonical-form resolver falls back to
+    # the as-credited display name — preserving the pre-canonicalisation path shape for these
+    # integration tests, which test pipeline mechanics rather than canonical name-form rendering.
+    _artist_names: dict[str, str] = {
+        "k1": "Herbert von Karajan",
+        "bp1": "Berliner Philharmoniker",
+        "r1": "Ottorino Respighi",
+    }
+
+    def _fetch_artist_aliases(artist_id: str, *, no_cache: bool = False) -> MBArtist:  # pylint: disable=unused-argument
+        return MBArtist.model_validate({"id": artist_id, "name": _artist_names.get(artist_id, artist_id)})
+
+    mocker.patch("music_annotator._tags.fetch_artist_aliases", side_effect=_fetch_artist_aliases)
+
+
+# ---------------------------------------------------------------------------
+# Shared stub for fetch_artist_aliases
+# ---------------------------------------------------------------------------
+
+#: Known artist MBID → display name mapping for integration test stubs.
+_INTEGRATION_ARTIST_NAMES: dict[str, str] = {
+    "k1": "Herbert von Karajan",
+    "bp1": "Berliner Philharmoniker",
+    "r1": "Ottorino Respighi",
+}
+
+
+def _fetch_artist_aliases_stub(artist_id: str, *, no_cache: bool = False) -> MBArtist:  # pylint: disable=unused-argument
+    """Return a stub MBArtist with alias_list == [] for integration tests.
+
+    Prevents build_dest_path from making network calls during integration tests.  The resolver
+    falls back to MBArtist.name (no primary alias), preserving the as-credited path shape.
+
+    :param artist_id: The MusicBrainz artist MBID.
+    :param no_cache: Ignored in this stub.
+    :returns: An :class:`~music_annotator.models.MBArtist` with no aliases.
+    """
+    return MBArtist.model_validate({"id": artist_id, "name": _INTEGRATION_ARTIST_NAMES.get(artist_id, artist_id)})
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +699,13 @@ class TestRunWorkHierarchy:
         # build_work_hierarchy calls fetch_work_detail via _works's binding to fetch the parent
         mocker.patch("music_annotator._works.fetch_work_detail", return_value=_make_parent_work())
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        _artist_names_beet: dict[str, str] = {"k1": "Herbert von Karajan"}
+        mocker.patch(
+            "music_annotator._tags.fetch_artist_aliases",
+            side_effect=lambda artist_id, **_: MBArtist.model_validate(
+                {"id": artist_id, "name": _artist_names_beet.get(artist_id, artist_id)}
+            ),
+        )
 
         music_annotator.run(
             release_id="rel-beethoven",
@@ -1311,6 +1358,7 @@ class TestRunCoverArtFlac:
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._tags.fetch_artist_aliases", side_effect=_fetch_artist_aliases_stub)
 
         music_annotator.run(
             release_id="rel-1",
@@ -1370,6 +1418,7 @@ class TestRunCoverArtMp3:
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._tags.fetch_artist_aliases", side_effect=_fetch_artist_aliases_stub)
 
         music_annotator.run(
             release_id="rel-1",
@@ -2581,6 +2630,7 @@ class TestOtherDownloadIsrcIntegration:
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
         mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._tags.fetch_artist_aliases", side_effect=_fetch_artist_aliases_stub)
 
         # search_releases_by_dir is called by discover(); return the download release as a candidate.
         candidate = MBReleaseCandidate(release_id="rel-download", score=95, title="Download Test Album", artist="Test Artist")
@@ -2769,6 +2819,7 @@ class TestRunMismatchOverrideIntegration:
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_rec_detail)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        mocker.patch("music_annotator._tags.fetch_artist_aliases", side_effect=_fetch_artist_aliases_stub)
 
         # Stub UI: always accepts the mismatch override
         class _MismatchUI:
