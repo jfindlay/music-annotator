@@ -223,10 +223,51 @@ new scholarly romanisation.  The resolver is total (never raises; always returns
 populated `MBArtist`).  Deterministic: the same artist resolves to the same form regardless of release
 (3.1 "selected once, not per release").
 
-**Alias source mechanism (frozen at N1 inflection).**  *To be frozen at N1* — either the `"aliases"` include
-on the existing artist fetches (if verified to attach to nested artist entities) or a dedicated
-`fetch_artist_aliases(mbid)` under the two-layer defensive-download pattern with a per-MBID cache.  The N1
-`@architect` inflection rules this against the raw `mb.get_*` dict, not the REST JSON.
+**Alias source mechanism (FROZEN at N1 inflection — dedicated `fetch_artist_aliases`).**  The mechanism is a
+**dedicated `fetch_artist_aliases(mbid) -> MBArtist`** (artist as direct query target), *not* the `"aliases"`
+include on the release/recording fetch.  Signature and wiring:
+
+- `_mb_api.py`: `_get_artist_by_id(artist_id) -> dict[str, JSON]` wrapping `mb.get_artist_by_id(artist_id,
+  includes=["aliases"])`, and `fetch_artist_aliases(artist_id, no_cache=False) -> MBArtist` routing through
+  `retrieve(..., NetPolicy(classify=_mb_data_classify, event="mb_artist", ...))` — the **same two-layer
+  defensive-download path** as `fetch_recording_detail`/`fetch_work_detail` (4xx-permanent via `_mb_data_classify`
+  NO_DATA/FATAL, 5xx/OSError transient RETRY).  Returns `MBArtist.model_validate(result.get("artist", {}))`;
+  an authoritative 404 yields an empty `MBArtist` (`alias_list == []`) — the resolver then falls back to `name`.
+- **Cache:** a module-level `_ARTIST_CACHE: dict[str, MBArtist]` mirroring `_WORK_CACHE` (L1 in-process, keyed by
+  artist MBID).  On-disk L2 (`artist/<mbid>.json`) is **optional per implementer judgment** — the L1 cache is the
+  mandated floor (dedup within a run); L2 parity with the work cache is the recommended default but not a freeze.
+
+**Why dedicated, not the include (the inflection ruling).**  Confirmed from the vendored library source:
+`mbxml.parse_artist` *does* carry `"alias-list": parse_alias_list` (so the parser can decode nested-artist
+aliases), and `"aliases"` *is* a valid `inc` for `release`/`recording`.  But the MB **webservice** does not
+reliably emit `<alias-list>` for artists nested in `artist-credit`/relations on a release/recording query —
+sub-entity aliases attach only when the sub-entity is the **direct** query target (the documented
+library-vs-REST gap, AGENTS.md; PLAN D-1).  The include path is therefore an unsound foundation for a durable
+resolver that must see the **complete, `primary`/`locale`-flagged** alias set to make the NORM-2 selection
+deterministically "once, not per release".  The dedicated per-MBID fetch *is* the direct-query-target case and
+gets the full authoritative alias-list.  **Load-bearing assumption (not live-verified — this environment has no
+network/interpreter):** that the webservice does not propagate sub-entity aliases.  The dedicated-fetch ruling
+is robust **either way** — if propagation were partial it would still be unreliable/incomplete for the resolver,
+so the dedicated fetch is correct even in the favourable case.  Tradeoff: one extra MB round-trip per distinct
+artist MBID (mitigated by `_ARTIST_CACHE` + the existing 1 req/s polite delay); worse on network economy than a
+zero-round-trip include, accepted as the price of a sound authority-complete substrate.
+
+**`MBAlias` raw-key correction (FROZEN at N1 — required for the field to populate).**  The raw musicbrainzngs
+alias dict stores the display text under key **`"alias"`** (`mbxml.parse_alias`: `result["alias"] = alias.text`),
+**not** `"name"`.  `MBAlias.name` currently has no mapping for `"alias"`, so `MBArtist.alias_list` would parse to
+empty `name` fields straight from `mb.get_*`.  N1 **must** make `MBAlias` accept the real key — either a
+`model_validator(mode="before")` remapping `"alias"` → `name` (preferred: preserves the existing `MBAlias().name`
+default-test and the `_work_aliases` `.name` reads unchanged), or an `AliasChoices("name", "alias")` on the field.
+The `test_mb_helpers.py` fetch KAT **must** feed a dict with the `"alias"` key (the real `mb.get_*` shape), not
+`"name"` — this is exactly the AGENTS.md "verify against actual `mb.get_*` key names, not REST JSON" caveat, and
+the existing work-alias tests do **not** cover it (they use `"name"`), so it is currently latent/untested.
+
+**Resolver call-site freeze (for N2 to consume).**  `canonical_artist_form(artist: MBArtist) -> str` reads
+`artist.alias_list` — so N2/N3 must ensure the `MBArtist` reaching the resolver has been **hydrated via
+`fetch_artist_aliases`** (the artist-credit/relation `MBArtist` off a release fetch will have `alias_list == []`).
+N1 freezes the resolver signature over a populated `MBArtist`; the hydration call-site (where N2 resolves each
+path-performer artist MBID through `fetch_artist_aliases` before rendering) is an **N2 wiring concern**, flagged
+here so N2 does not call the resolver on an unhydrated credit artist and silently get the `name` fallback.
 
 **Surface scope (frozen at N1/N2).**  C-CANON applies to the **compact path projection only** (4.5) —
 performers component, and composer only if N1 extends the resolver there.  It **never** applies to preserved
@@ -267,22 +308,30 @@ locale/primary selection even though N2's first consumer uses only the primary-a
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 @architect | Add artist alias-list and canonical-form resolver | pending | | |
+| 1 @architect | Add artist alias-list and canonical-form resolver | done | e0f7c3a | C-CANON (field + resolver + source mechanism: dedicated fetch_artist_aliases + _ARTIST_CACHE; MBAlias "alias" key remap; resolver call-site hydration is N2 wiring concern) |
 | 2 | Render canonical name-forms in the destination path | pending | | |
 | 3 ◆ | Align the maintenance repath to canonical forms + anneal | pending | | |
 
 ## Action-frame digest
 
-*(none yet)*
+### N1 — 2026-08-11
+Discovery/flex: Inflection design confirmed dedicated fetch_artist_aliases; surfaced two subtleties frozen into C-CANON: (i) MBAlias raw key is "alias" not "name" (model_validator added); (ii) resolver hydration is N2 wiring concern (credit artists off release fetch have alias_list == []).
+Affected: C-CANON (alias source mechanism, MBAlias key correction, resolver call-site note — all frozen)
+Deferred: no — both subtleties resolved in N1 implementation; N2 must hydrate via fetch_artist_aliases before calling resolver.
+Texture: __init__.py was an extra file (allowed — AGENTS.md requires __all__ kept up to date). design-confident verdict; self-continued.
 
 ## Discoveries & risks
 
-- **D-1 (N1 alias-attachment mechanism — the inflection judgment; OPEN until N1).**  musicbrainzngs may not
-  attach `aliases` to nested artist entities on a release fetch even with the include (a known library-vs-REST
-  gap, AGENTS.md).  N1 must verify against the raw `mb.get_*` dict and freeze either the include path or a
-  dedicated `fetch_artist_aliases`.  If a dedicated fetch is needed, N1 grows toward the top of its band (the
-  defensive-download wiring + cache).  *Additive-reshard* only if the dedicated fetch proves large enough to
-  warrant its own row — surface at the N1 boundary; do not silently absorb.
+- **D-1 (N1 alias-attachment mechanism — the inflection judgment; RESOLVED at N1 inflection design).**  Ruled:
+  **dedicated `fetch_artist_aliases(mbid)`**, not the `"aliases"` include (the webservice does not reliably emit
+  sub-entity aliases on a release/recording query; the include path is unsound for a complete-alias-set resolver).
+  Two subtleties surfaced and frozen into C-CANON: (i) the raw musicbrainzngs alias key is **`"alias"`**, not
+  `"name"` — `MBAlias` must remap it (latent/untested in the existing work-alias code); (ii) resolver hydration is
+  an **N2 wiring concern** — credit/relation artists off a release fetch carry `alias_list == []`, so N2 must
+  hydrate via `fetch_artist_aliases` before calling the resolver.  N1 grows toward the top of its band (the
+  defensive-download wiring + `_ARTIST_CACHE`).  Sized within band (one wrapper + one fetch + one cache dict,
+  mirroring `fetch_work_detail`); **no additive-reshard warranted** — the dedicated fetch is a bounded
+  same-pattern addition, not a new row's worth of work.
 - **D-2 (composer path name-form — scope decision at N1/N2).**  The path composer is `last_name(sort_name)`
   (an MB-asserted, stable surname).  Default: N2 leaves it unchanged (already MB-sourced and recognisable per
   D-A8).  If N2 finds the composer surname violates NORM-2 for some entity (e.g. non-Latin composer rendered
