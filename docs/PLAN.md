@@ -298,13 +298,17 @@ though S2 is the first consumer over a 3-group population.
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 @architect | Add work-group modal-depth clamp to build_dest_path | pending | | |
+| 1 @architect | Add work-group modal-depth clamp to build_dest_path | done | 4fe4025 | C-W3b-INT (work_group_modal_depth helper + build_dest_path group_modal_depth param; corner pins: tie→shallower, PL=0 excluded; all-orphan→0; min() clamp down-only) |
 | 2 | Thread work-group modal depth through the render callers | pending | | |
 | 3 ◆ | Refresh the depth census + anneal | pending | | |
 
 ## Action-frame digest
 
-*(none yet)*
+### S1 — 2026-08-12
+Discovery/flex: Inflection design-confident; D-1 tag-data-sufficiency dissolved (min() asymmetry moots gap-vs-faithful discrimination; no MB call needed). Shape F (2-track even-split tie) flagged as aggressive-but-rule-licensed; pre-classified "acceptable" in BACKLOG. All-orphan edge pinned (returns 0).
+Affected: C-W3b-INT (frozen as designed; no contract flex)
+Deferred: no — all three advisory notes (Shape F, determinism phrasing, all-orphan edge) resolved in S1 implementation. S2 must reuse scanner grouping and include repath-vs-run parity KAT.
+Texture: design-confident verdict; self-continued. Extra file __init__.py not needed (work_group_modal_depth is internal, not added to __all__).
 
 ## Discoveries & risks
 
