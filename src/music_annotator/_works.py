@@ -402,6 +402,48 @@ def parse_year(date_str: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def work_group_modal_depth(part_levels_list: list[int]) -> int:
+    """Return the modal ``CWP_PART_LEVELS`` value over a work-group's tracks.
+
+    Implements the uniform-ceiling/ragged-floor depth rule (STYLEGUIDE 4.5 / C-W3b): the modal
+    depth is the most common ``CWP_PART_LEVELS`` value across the non-orphan tracks in a work-group.
+    Callers pass this value to :func:`~music_annotator._tags.build_dest_path` as
+    ``group_modal_depth`` so that over-resolved branches clamp down to the group ceiling while
+    genuinely shallow branches are left untouched (never padded up).
+
+    Corner pins (frozen at C-W3b-INT):
+
+    * **PL=0 orphans excluded** — tracks with ``CWP_PART_LEVELS == 0`` (Shape E: no work hierarchy
+      link) are excluded from the modal computation.  They are not representative of the group's
+      structural depth and would bias the modal toward 0.
+    * **Modal tie → shallower** — when two or more depth values share the highest frequency, the
+      smallest (shallowest) value is chosen.  This is the conservative choice: it clamps more
+      aggressively rather than leaving over-resolved branches standing.
+    * **All-orphan edge** — if ``part_levels_list`` is empty or contains only PL=0 values, returns
+      ``0`` (the totality pin: the function never raises and always returns a non-negative int).
+
+    This is a pure function with no I/O.
+
+    :param part_levels_list: List of ``CWP_PART_LEVELS`` integer values, one per track in the
+        work-group.  May be empty or contain only zeros.
+    :returns: The modal depth as a non-negative integer.  Returns ``0`` when all tracks are
+        PL=0 orphans or the list is empty.
+    """
+    non_orphans = [pl for pl in part_levels_list if pl != 0]
+    if not non_orphans:
+        return 0
+
+    # Count occurrences of each depth value.
+    counts: dict[int, int] = {}
+    for pl in non_orphans:
+        counts[pl] = counts.get(pl, 0) + 1
+
+    # Find the maximum frequency; on a tie, prefer the shallower (smaller) depth.
+    max_count = max(counts.values())
+    modal = min(pl for pl, cnt in counts.items() if cnt == max_count)
+    return modal
+
+
 def collect_work_tags_and_key(work: MBWork) -> tuple[list[str], str]:
     """Return the folksonomy tag list and key signature from a work.
 

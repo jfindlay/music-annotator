@@ -1087,7 +1087,12 @@ def collect_applied_case_ids(tags: TrackTags) -> list[str]:
 
 
 def build_dest_path(  # pylint: disable=unused-argument  # release kept for API stability; C-INIT removed the last internal use
-    dest_root: Path, release: MBRelease, track: MBTrack, tags: TrackTags, global_track_idx: int = 0
+    dest_root: Path,
+    release: MBRelease,
+    track: MBTrack,
+    tags: TrackTags,
+    global_track_idx: int = 0,
+    group_modal_depth: int | None = None,
 ) -> Path:
     """Compute the destination path (without extension) for one annotated track.
 
@@ -1197,6 +1202,13 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
         Used as the penultimate leaf ``nn`` fallback when ``CWP_MOVT_NUM`` is absent.  Defaults to
         ``0``, which causes the function to fall back to ``track.position`` (the legacy behaviour used
         when the caller does not supply this argument).
+    :param group_modal_depth: The work-group's modal ``CWP_PART_LEVELS`` value as returned by
+        :func:`~music_annotator._works.work_group_modal_depth`.  When supplied, clamps the effective
+        level count to ``min(own_part_levels, group_modal_depth)`` per the uniform-ceiling/ragged-floor
+        rule (STYLEGUIDE 4.5 / C-W3b): over-resolved branches clamp down to the group ceiling;
+        genuinely shallow branches are never padded up (the clamp is down-only, structurally enforced
+        by ``min()``).  When ``None``, the track's own ``CWP_PART_LEVELS`` is used unchanged
+        (backward-compatible behaviour for callers without group context, e.g. single-file diagnostics).
     :returns: A :class:`~pathlib.Path` for the destination file *without* extension (callers append ``.flac``, ``.mp3``,
         etc.).
     """
@@ -1330,7 +1342,13 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
         work_dir = f"{work_dir} [rel {rel_year}]"
 
     # Hierarchy depth: CWP_PART_LEVELS = n_levels - 1, so >=2 means 3+ levels total.
+    # When group_modal_depth is supplied, clamp down to the work-group modal depth per the
+    # uniform-ceiling/ragged-floor rule (STYLEGUIDE 4.5 / C-W3b).  The clamp is down-only:
+    # min() ensures over-resolved branches shrink to the ceiling while genuinely shallow branches
+    # (own depth < modal) are left untouched.  When group_modal_depth is None, own depth is used.
     part_levels = int(file_dict.get("CWP_PART_LEVELS") or "0")
+    if group_modal_depth is not None:
+        part_levels = min(part_levels, group_modal_depth)
 
     # Movement number prefix width (leaf level, scoped to work or nearest parent)
     movt_tot = int(file_dict.get("MOVEMENTTOTAL") or "1")

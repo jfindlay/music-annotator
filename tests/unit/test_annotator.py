@@ -39,7 +39,7 @@ from music_annotator._audit import _audit_tier_pass, _make_audit_counts
 from music_annotator._mb_api import _extract_session_date
 from music_annotator._pipeline_io import _write_provenance_fields
 from music_annotator._tags import _NAME_MAX, _classical_top_dir, _proposed_short, _top_level_class, _work_aliases
-from music_annotator._works import _date_range, _score_top_work, select_primary_performance_work
+from music_annotator._works import _date_range, _score_top_work, select_primary_performance_work, work_group_modal_depth
 from music_annotator.models import (
     JSON,
     AccurateRipSummary,
@@ -51,6 +51,7 @@ from music_annotator.models import (
     MBLabelRelation,
     MBPlaceRelation,
     MBRelease,
+    MBTrack,
     MBUrlRelation,
     MBWork,
     MBWorkRelation,
@@ -5041,3 +5042,262 @@ class TestBuildDestPathCanonicalPerformerForms:
         # Preserved tag surfaces are unchanged — ARTIST and ALBUMARTIST stay as-credited (D-A7).
         assert tags.artist == "Berlin Philharmonic", "ARTIST tag must remain as-credited"
         assert tags.albumartist == "Berlin Philharmonic", "ALBUMARTIST tag must remain as-credited"
+
+
+# ---------------------------------------------------------------------------
+# work_group_modal_depth + build_dest_path group_modal_depth clamp
+# KAT for C-W3b-INT: uniform-ceiling / ragged-floor depth rule (STYLEGUIDE 4.5)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkGroupModalDepth:
+    """Tests for work_group_modal_depth and the build_dest_path group_modal_depth clamp.
+
+    Covers the frozen corner pins of the uniform-ceiling/ragged-floor depth rule
+    (STYLEGUIDE 4.5 / C-W3b): modal ties resolve to the shallower depth; PL=0 orphans
+    (Shape E) are excluded from the modal computation; the clamp is down-only (never pads up);
+    and the function is total (never raises, always returns a non-negative int).
+    """
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_rel() -> MBRelease:
+        """Build a minimal release stub.
+
+        :returns: An :class:`~music_annotator.models.MBRelease` instance.
+        """
+        return _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []})
+
+    @staticmethod
+    def _make_trk() -> MBTrack:
+        """Build a minimal track stub.
+
+        :returns: An :class:`~music_annotator.models.MBTrack` instance.
+        """
+        return _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Movement"}})
+
+    @staticmethod
+    def _make_tags_with_levels(part_levels: int, extra_parts: dict[str, str] | None = None) -> TrackTags:
+        """Build TrackTags with the given CWP_PART_LEVELS and optional extra per-level fields.
+
+        :param part_levels: The ``CWP_PART_LEVELS`` value to set.
+        :param extra_parts: Optional dict of additional model_extra fields (e.g. cwp_part_1, cwp_ordering_key_1).
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        tags = TrackTags(
+            title="Movement",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Water Music",
+            cwp_composer_lastnames="Handel",
+            originaldate="1978",
+            cwp_part_levels=str(part_levels),
+            cwp_movt_num="1",
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+        if extra_parts:
+            for key, val in extra_parts.items():
+                tags.model_extra[key] = val  # type: ignore[index]
+        return tags
+
+    # ------------------------------------------------------------------
+    # (a) clamp-down: over-resolved PL=3 movement clamps to modal depth 2
+    # ------------------------------------------------------------------
+
+    def test_clamp_down_over_resolved_movement(self, fs: FakeFilesystem) -> None:
+        """Clamp-down KAT: a PL=3 over-resolved movement renders at 2 levels when modal depth is 2.
+
+        A work-group whose modal depth is 2 but whose one movement carries PL=3 (e.g. Handel
+        Water Music movement IIIa/IIIb sub-parts) must render that movement's path at 2 levels
+        (the over-resolution removed), not 3.  This is the Shapes C/D case the rule targets.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # PL=3 track: 4-level hierarchy (root → act → scene → leaf).
+        tags = self._make_tags_with_levels(
+            3,
+            extra_parts={
+                "cwp_part_0": "IIIa",
+                "cwp_part_1": "Scene I",
+                "cwp_ordering_key_1": "1",
+                "cwp_part_2": "Act I",
+                "cwp_ordering_key_2": "1",
+            },
+        )
+
+        # Without clamp: 3 intermediate dirs + leaf = 4 levels below work_dir.
+        result_unclamped = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            self._make_trk(),
+            tags,
+            group_modal_depth=None,
+        )
+        # With clamp to modal depth 2: should render at 2 levels (1 intermediate + leaf).
+        result_clamped = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            self._make_trk(),
+            tags,
+            group_modal_depth=2,
+        )
+
+        # Unclamped path has more components than clamped path (over-resolution present).
+        assert len(result_unclamped.parts) > len(result_clamped.parts), (
+            "Unclamped PL=3 path must be deeper than clamped-to-2 path"
+        )
+        # Clamped path: part_levels becomes min(3, 2)=2, so the >=2 branch fires with 1 intermediate dir.
+        # Depth below work_dir: 1 intermediate + 1 leaf = 2 components.
+        # Verify the deepest sub-part (Act I level 2) is NOT present in the clamped path.
+        assert "Act I" not in str(result_clamped), (
+            "Clamped path must not contain the over-resolved Act I intermediate directory"
+        )
+
+    # ------------------------------------------------------------------
+    # (b) ragged-floor preserved: PL=1 shallow node never padded up
+    # ------------------------------------------------------------------
+
+    def test_ragged_floor_preserved_shallow_node(self, fs: FakeFilesystem) -> None:
+        """Ragged-floor KAT: a genuinely shallow PL=1 node renders unchanged at 1 level.
+
+        A work-group with modal depth 2 and one PL=1 node (e.g. a Shape A overture among acts)
+        must render the shallow node at 1 level — never padded up to 2.  The clamp is down-only;
+        min(1, 2) = 1, so the shallow node is untouched.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # PL=1 track: 2-level hierarchy (root → leaf), no intermediate dirs.
+        tags = self._make_tags_with_levels(1)
+
+        result_no_clamp = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            self._make_trk(),
+            tags,
+            group_modal_depth=None,
+        )
+        result_clamped = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            self._make_trk(),
+            tags,
+            group_modal_depth=2,
+        )
+
+        # min(1, 2) = 1: clamped path must equal unclamped path (no padding).
+        assert result_clamped == result_no_clamp, (
+            "Shallow PL=1 node must render identically with or without a modal-depth-2 clamp"
+        )
+
+    # ------------------------------------------------------------------
+    # (c) modal-tie → shallower: {2,2,3,3} resolves to 2
+    # ------------------------------------------------------------------
+
+    def test_modal_tie_resolves_to_shallower(self) -> None:
+        """Modal-tie KAT: a group split evenly between depths 2 and 3 resolves to the shallower (2).
+
+        Corner pin: on a tie, choose the shallower depth.  This is the conservative choice —
+        it clamps more aggressively rather than leaving over-resolved branches standing.
+        """
+        result = work_group_modal_depth([2, 2, 3, 3])
+        assert result == 2, f"Expected modal depth 2 (tie → shallower), got {result}"
+
+    # ------------------------------------------------------------------
+    # (d) PL=0 orphan excluded from modal computation
+    # ------------------------------------------------------------------
+
+    def test_pl0_orphan_excluded_from_modal(self) -> None:
+        """PL=0 orphan KAT: Shape E orphan tracks are excluded from the modal computation.
+
+        A group with one PL=0 orphan and three PL=2 tracks must compute the modal over the
+        non-orphan tracks only, yielding 2 — not 0 (which would result if the orphan were included
+        and happened to be the plurality).
+        """
+        result = work_group_modal_depth([0, 2, 2, 2])
+        assert result == 2, f"Expected modal depth 2 (PL=0 excluded), got {result}"
+
+    def test_pl0_orphan_excluded_mixed_depths(self) -> None:
+        """PL=0 orphan exclusion with mixed non-orphan depths.
+
+        A group with PL=0 orphans and non-orphan tracks at depths 1 and 2 (2 each) must resolve
+        the tie among the non-orphans to the shallower depth (1), not be biased by the orphans.
+        """
+        result = work_group_modal_depth([0, 0, 1, 1, 2, 2])
+        assert result == 1, f"Expected modal depth 1 (tie among non-orphans → shallower), got {result}"
+
+    # ------------------------------------------------------------------
+    # (e) no-group / parameter-absent: backward compatibility
+    # ------------------------------------------------------------------
+
+    def test_no_group_parameter_absent_renders_own_depth(self, fs: FakeFilesystem) -> None:
+        """No-group KAT: build_dest_path with group_modal_depth=None renders the track's own depth.
+
+        Backward-compatibility / no-regression proof: callers that do not supply group_modal_depth
+        (e.g. single-file diagnostics, existing call sites before S2 threading) must get the same
+        path as before — the track's own CWP_PART_LEVELS drives the depth unchanged.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # PL=2 track: 3-level hierarchy with one intermediate dir.
+        tags = self._make_tags_with_levels(
+            2,
+            extra_parts={
+                "cwp_part_0": "Aria",
+                "cwp_part_1": "Act I",
+                "cwp_ordering_key_1": "1",
+            },
+        )
+
+        result_default = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            self._make_trk(),
+            tags,
+        )
+        result_explicit_none = build_dest_path(
+            dest_root,
+            self._make_rel(),
+            self._make_trk(),
+            tags,
+            group_modal_depth=None,
+        )
+
+        # Both calls must produce the same path (default=None is the no-group posture).
+        assert result_default == result_explicit_none, (
+            "group_modal_depth=None (default) must produce the same path as explicit None"
+        )
+        # The intermediate directory must be present (own depth PL=2 is used, not clamped).
+        assert "Act I" in str(result_default), "Own-depth PL=2 path must contain the intermediate Act I directory"
+
+    # ------------------------------------------------------------------
+    # (f) all-orphan edge: work_group_modal_depth([0, 0]) returns 0
+    # ------------------------------------------------------------------
+
+    def test_all_orphan_edge_returns_zero(self) -> None:
+        """All-orphan edge KAT: work_group_modal_depth([0, 0]) returns 0 (totality pin).
+
+        When all tracks in a group are PL=0 orphans (Shape E), the non-orphan list is empty.
+        The function must return 0 without raising — the totality pin guarantees a non-negative
+        int in all cases.
+        """
+        assert work_group_modal_depth([0, 0]) == 0
+
+    def test_empty_list_returns_zero(self) -> None:
+        """Empty-list edge: work_group_modal_depth([]) returns 0 (totality pin).
+
+        An empty part_levels_list (no tracks in the group) must return 0 without raising.
+        """
+        assert work_group_modal_depth([]) == 0
