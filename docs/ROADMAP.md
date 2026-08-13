@@ -275,18 +275,31 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   (1.8%)** — supersedes the stale "36-group / 3.6%" figure; the six-shape taxonomy held (the reopen
   trigger did not fire); new Shape-D groups Wagner Ring Karajan {1,2,3,4} and Ring Solti {2,3,4}
   are both handled correctly by the min-clamp.
-- **R6b** Catalogue-colon part-label retro-fix — **IN PROGRESS** (sharded 2026-08-12,
-  `docs/PLAN.md`).  **Not a paths-only repath:** the corruption is in embedded `CWP_PART_*` /
-  `CWP_GROUPHEADING` **tag content**, which `build_dest_path` renders verbatim (`_tags.py:1414`) —
-  so `repath` alone re-renders the corrupt `NN - 31` label.  The shard builds + freezes **new
-  offline tag-content-repatch machinery** (detect a bare-catalogue `CWP_PART`; re-derive offline via
-  `strip_common_prefix(CWP_WORK_i, CWP_WORK_{i+1})` — **no MB call**; rewrite the tags + rebuild
-  `CWP_GROUPHEADING`, modelled on the `enrich` re-tag→verify→journal provenance chain), proven on
-  fixtures via the src/tests gate.  **Code-only: the destructive library-wide repatch rides R6d's
-  one J3-gated pass (D-A5 precedent)** — and this machinery *closes the R6d tag-content gap* (below):
-  R6d gains a tag-content-repatch capability its paths-only engine currently lacks.
-- **R6c** AcoustID tag naming + semantics — Picard alignment (persisted-tag migration; decide the two
-  sub-questions at PLAN time).
+- **R6b** Catalogue-colon part-label retro-fix — **DONE 2026-08-13** (`docs/PLAN.md` 3/3 rows;
+  commits `1f5d76a` detect+re-derive substrate / `317bf46` offline repatch pass / `16d31db`
+  scan+census+anneal, ledger `bc497af`; ◆ `still-on-intent`).  **Not a paths-only repath:** the
+  corruption is in embedded `CWP_PART_*` / `CWP_GROUPHEADING` **tag content**, which `build_dest_path`
+  renders verbatim (`_tags.py:1414`) — so `repath` alone re-renders the corrupt `NN - 31` label.  The
+  shard built + froze **new offline tag-content-repatch machinery** (detect a bare-catalogue
+  `CWP_PART`; re-derive offline via `strip_common_prefix(CWP_WORK_i, CWP_WORK_{i+1})` — **no MB
+  call**; rewrite the tags + rebuild `CWP_GROUPHEADING`, modelled on the `enrich`
+  re-tag→verify→journal provenance chain), proven on fixtures via the src/tests gate.  **Froze
+  C-CAT-INT** (`rederive_part_label` + `is_catalogue_colon_corrupt` + the `CANNOT_RECOMPUTE` sentinel
+  in `_works.py`; the self-certifying catalogue-colon signature `_old_bare_colon_split`).  **Code-only:
+  the destructive library-wide repatch rides R6d's one J3-gated pass (D-A5 precedent)** — and this
+  machinery *closes the R6d tag-content gap* (below) for the catalogue-colon case: R6d gains a
+  tag-content-repatch capability its paths-only engine currently lacks.
+- **R6c** AcoustID tag naming + semantics — Picard alignment — **IN PROGRESS** (sharded 2026-08-13,
+  `docs/PLAN.md`).  Two persisted-tag migrations, both **code-only** (destructive library-wide repatch
+  rides R6d, D-A5).  **The two sub-questions were decided at PLAN derivation** against the live
+  substrate (survey 2026-08-13): (1) **`ACOUSTID_ID` value source unified on the fingerprint
+  `/v2/lookup` cluster UUID everywhere** (Picard-exact) — the survey corrected BACKLOG's premise:
+  `fetch_acoustid_id`'s `list_by_mbid` value is *already* a cluster UUID (its own docstring,
+  `_mb_api.py:1084`), and fpcalc + the `/v2/lookup` call already run at ingest (`_pipeline.py:1217,1226`,
+  the cluster UUID currently *discarded*), so the switch adds **no new fpcalc dependency**; the S1
+  inflection rules the no-api-key/no-fingerprint fallback (empty at ingest, not `list_by_mbid`
+  retain).  (2) **`CHROMAPRINT_FP` → `ACOUSTID_FINGERPRINT` rename** with a dual-read transition (read
+  both keys; R6d migrates existing files).  Freezes **C-ACID**.
 - **R6d** Full-library repath under the frozen heuristics — the "more like itself" pass.  Gated by
   **J3**.  J2 folded in (2026-07-30): the III-b rg-multi-release regroup (live hades scan
   prerequisite — R4b census) and the styleguide A-shards that reshape persisted tags/paths
@@ -311,12 +324,14 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   a bulk re-`apply`/`search` — an explicit R6d PLAN-derivation scope decision, not covered by the
   existing repath engine.  (This is why the path-shaping code-only shards — canonical-name-forms,
   R6a depth — can land ahead of R6d: `repath` already re-derives their path output on demand.)
-  **R6d tag-content gap — partially closed by R6b (2026-08-12):** the catalogue-colon case is the
-  first tag-content corruption with a *fully offline* re-derivation (`strip_common_prefix` over the
-  embedded `CWP_WORK` pair, no MB call); R6b builds the repatch pass (`CWP_PART_*` / `CWP_GROUPHEADING`
-  rewrite on the `enrich` provenance chain) and R6d drives it destructively under J3.  Other
-  tag-content re-derivation (`CEA_*`, billing order) still needs the explicit R6d scope decision
-  above — R6b closes the gap only for `CWP_PART_*` / `CWP_GROUPHEADING`.
+  **R6d tag-content gap — closing incrementally:** (a) **R6b (DONE 2026-08-13)** closed the
+  catalogue-colon case — the first tag-content corruption with a *fully offline* re-derivation
+  (`strip_common_prefix` over the embedded `CWP_WORK` pair, no MB call); the repatch pass
+  (`repatch_catalogue_colon`, `CWP_PART_*` / `CWP_GROUPHEADING` rewrite on the `enrich` provenance
+  chain) is built and R6d drives it destructively under J3.  (b) **R6c (IN PROGRESS)** adds an AcoustID
+  tag-content repatch (`ACOUSTID_ID` re-source + `ACOUSTID_FINGERPRINT` key migration) on the same
+  chain — another R6d-driven destructive pass.  Other tag-content re-derivation (`CEA_*`, billing
+  order) still needs the explicit R6d scope decision above.
 - **R6e** Conventions-spec finalisation (integrative writeup; consistently under-scheduled — allocate
   a full session minimum).
 
@@ -569,10 +584,21 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   (the Furtwängler-style partial-ingest scenario — some discs already in `Done/` — means the documentary count
   is a floor, not the truth).  Not an in-arc contract change (D-4); an R6d-planning input.  No destructive-HALT.
 
+- **R6b ◆ boundary (2026-08-13) — catalogue-colon retro-fix machinery landed; live-population re-check
+  still owed (R6d-planning input).**  R6b froze C-CAT-INT and built the offline `repatch_catalogue_colon`
+  pass, code-only (destructive run rides R6d).  Static-frame fact for R6d planning: the **live-population
+  re-check is still owned by the operator** — the "1 release fired / ~16 latent" figure is stale by
+  construction (BACKLOG:255), and R6b's S3 scan runs against a mounted library the operator must supply
+  before R6d's destructive pass.  The detect-by-disagreement predicate is self-certifying (fires exactly
+  where the old bare-`":"` split fired), so a census signature where a *correct* label disagrees with its
+  recomputation remains the forward-fix reopen trigger — carried to R6d, not re-opened in-arc.  No frozen
+  contract invalidated; no destructive-HALT.
+
 - **Styleguide-arc node-A tail (2026-08-12) — no shardable styleguide sub-track remains.**  With
   `path-canonical-name-forms` done (C-CANON), the styleguide arc's node A has exhausted its three enumerated
   application shards (editorial-notes field / composite-tag grammar / normalisation — done or discharged); its
   other post-v1 nodes are operator/trigger-paced (P = R6e here; C = CEv3, own future roadmap; L = perpetual
   loop).  Consequence: the sole live agent-shardable frontier is this arc's **R6** (Act III-a), and R6b/R6c
-  are runnable now on `Done/` (operator-confirmed 2026-08-12) — only R6d is J3-gated.  R6a (depth normalisation)
-  is **done** (2026-08-12); **R6b (catalogue-colon retro-fix) is sharded next** (`docs/PLAN.md`, 2026-08-12).
+  are runnable now on `Done/` (operator-confirmed 2026-08-12) — only R6d is J3-gated.  R6a (depth
+  normalisation) is **done** (2026-08-12); R6b (catalogue-colon retro-fix) is **done** (2026-08-13);
+  **R6c (AcoustID Picard alignment) is sharded next** (`docs/PLAN.md`, 2026-08-13).
