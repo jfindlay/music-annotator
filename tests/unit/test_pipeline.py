@@ -9266,14 +9266,14 @@ class TestIngestChromaprintFp:
             fetch_rels=True,
         )
 
-        # (a) Verify the journal entry carries the chromaprint_fp field.
+        # (a) Verify the journal entry carries the acoustid_fingerprint field.
         journal_path = dest / JOURNAL_FILENAME
         assert journal_path.exists(), "Journal file was not written"
         data = json.loads(journal_path.read_text(encoding="utf-8"))
         tagged_entries = [e for e in data if e.get("action") == "tagged"]
         assert len(tagged_entries) == 1, f"Expected 1 tagged journal entry, found {len(tagged_entries)}"
-        journal_fp = tagged_entries[0].get("chromaprint_fp", "")
-        assert journal_fp == expected_fp, f"Journal chromaprint_fp {journal_fp!r} does not match expected {expected_fp!r}"
+        journal_fp = tagged_entries[0].get("acoustid_fingerprint", "")
+        assert journal_fp == expected_fp, f"Journal acoustid_fingerprint {journal_fp!r} does not match expected {expected_fp!r}"
 
         # (b) Verify the TrackTags passed to apply_tags_flac carries the fingerprint.
         tags_used: TrackTags = mock_tag.call_args[0][1]
@@ -9313,9 +9313,9 @@ class TestIngestChromaprintFp:
         data = json.loads(journal_path.read_text(encoding="utf-8"))
         tagged_entries = [e for e in data if e.get("action") == "tagged"]
         assert len(tagged_entries) == 1
-        # chromaprint_fp should be "" (empty string, the default) when fpcalc is unavailable.
-        journal_fp = tagged_entries[0].get("chromaprint_fp", "NOT_PRESENT")
-        assert journal_fp == "", f"Expected empty chromaprint_fp, got {journal_fp!r}"
+        # acoustid_fingerprint should be "" (empty string, the default) when fpcalc is unavailable.
+        journal_fp = tagged_entries[0].get("acoustid_fingerprint", "NOT_PRESENT")
+        assert journal_fp == "", f"Expected empty acoustid_fingerprint, got {journal_fp!r}"
 
 
 # ---------------------------------------------------------------------------

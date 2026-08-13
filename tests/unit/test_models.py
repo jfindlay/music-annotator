@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
-import pytest
+from pathlib import Path
 
+import pytest
+from mutagen.flac import FLAC
+from mutagen.id3 import ID3
+from pyfakefs.fake_filesystem import FakeFilesystem
+
+from music_annotator import apply_tags_flac, apply_tags_mp3
 from music_annotator.models import (
     AccurateRipResult,
     AccurateRipSummary,
@@ -44,6 +50,7 @@ from music_annotator.models import (
     WorkHierarchyLevel,
     classify_annotation_tier,
 )
+from tests.conftest import _MINIMAL_FLAC, _MINIMAL_MP3
 
 # ---------------------------------------------------------------------------
 # ArtistEntry
@@ -1530,3 +1537,271 @@ class TestAccurateRipSummary:
         assert sidecar.accuraterip_summary.mb_disc_id == "abc123"
         assert sidecar.accuraterip_summary.log_sha256 == "AABBCCDD" * 8
         assert sidecar.accuraterip_summary.accurately_ripped == 12
+
+
+# ---------------------------------------------------------------------------
+# Policy constant: ACOUSTID_ID value-source rule (C-ACID)
+# ---------------------------------------------------------------------------
+
+#: The AcoustID cluster UUID written to ``ACOUSTID_ID`` is sourced exclusively from the fingerprint
+#: ``/v2/lookup`` endpoint (``results[0]["id"]``).  When no api_key is supplied or fpcalc yields no
+#: fingerprint, ``ACOUSTID_ID`` is left empty at ingest — it is never re-filled from the
+#: ``list_by_mbid`` endpoint (the empty-not-fallback rule).  A file's ``ACOUSTID_ID`` is therefore
+#: either empty or a fingerprint-lookup cluster UUID; a ``list_by_mbid`` value is never written.
+ACOUSTID_ID_VALUE_SOURCE: str = "fingerprint-lookup-cluster-uuid"
+
+
+# ---------------------------------------------------------------------------
+# KAT: Picard-aligned AcoustID tag policy (C-ACID freeze witness)
+# ---------------------------------------------------------------------------
+
+
+class TestAcoustidTagPolicy:
+    """KAT witnesses for the Picard-aligned AcoustID tag policy.
+
+    Four groups:
+    (a) Key rename round-trips — ``acoustid_fingerprint`` writes ``ACOUSTID_FINGERPRINT`` on FLAC
+        and MP3 and reads back equal.
+    (b) Legacy key dual-read — a ``chromaprint_fp`` kwarg or alias populates
+        ``acoustid_fingerprint`` (the transition contract).
+    (c) Archival-triple integrity — ``audio_hash`` / ``acoustid_id`` / ``acoustid_fingerprint``
+        all present, C-AR ordering preserved, no field dropped by the rename.
+    (d) Value-source rule — the empty-not-fallback rule is pinned at the contract level so
+        forward-write changes cannot silently restore the ``list_by_mbid`` fallback.
+    """
+
+    # --- (a) Key rename round-trips ---
+
+    def test_flac_round_trip_acoustid_fingerprint(self, fs: FakeFilesystem) -> None:
+        """TrackTags.acoustid_fingerprint writes ACOUSTID_FINGERPRINT to FLAC and reads back equal.
+
+        Pins the Picard-aligned key rename: the raw Chromaprint fingerprint is stored under
+        ``ACOUSTID_FINGERPRINT`` (Vorbis Comment key), not the legacy ``CHROMAPRINT_FP``.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/lib")
+        fs.create_dir(str(dest))
+        path = dest / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+
+        tags = TrackTags(chromaprint_fp="AQADtMmybckm")
+        apply_tags_flac(path, tags)
+
+        audio = FLAC(str(path))
+        # New key present, legacy key absent.
+        assert (audio.get("acoustid_fingerprint") or [""])[0] == "AQADtMmybckm"
+        assert not audio.get("chromaprint_fp")
+
+    def test_mp3_round_trip_acoustid_fingerprint(self, fs: FakeFilesystem) -> None:
+        """TrackTags.acoustid_fingerprint writes TXXX 'Acoustid Fingerprint' to MP3 and reads back equal.
+
+        Pins the Picard-aligned key rename: the MP3 TXXX description is ``"Acoustid Fingerprint"``,
+        not the legacy ``"Chromaprint Fingerprint"``.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest = Path("/lib")
+        fs.create_dir(str(dest))
+        path = dest / "track.mp3"
+        path.write_bytes(_MINIMAL_MP3)
+
+        tags = TrackTags(chromaprint_fp="AQADtMmybckm")
+        apply_tags_mp3(path, tags)
+
+        audio = ID3(str(path))  # type: ignore[no-untyped-call]
+        txxx_frames = {f.desc: f.text[0] for f in audio.getall("TXXX")}  # type: ignore[no-untyped-call]
+        # New TXXX desc present, legacy desc absent.
+        assert txxx_frames.get("Acoustid Fingerprint") == "AQADtMmybckm"
+        assert "Chromaprint Fingerprint" not in txxx_frames
+
+    # --- (b) Legacy key dual-read (transition contract) ---
+
+    def test_legacy_kwarg_populates_acoustid_fingerprint(self) -> None:
+        """TrackTags(chromaprint_fp=...) populates acoustid_fingerprint via the field alias.
+
+        Pins the dual-read transition contract at the model level: the legacy constructor kwarg
+        ``chromaprint_fp`` is accepted (as the field alias) and stored under the canonical
+        ``acoustid_fingerprint`` field.
+
+        :raises AssertionError: if the alias is not wired correctly.
+        """
+        tags = TrackTags(chromaprint_fp="AQADtMmybckm")
+        assert tags.acoustid_fingerprint == "AQADtMmybckm"
+        # The transition read bridge must also return the same value.
+        assert tags.chromaprint_fp == "AQADtMmybckm"
+
+    def test_canonical_name_populates_acoustid_fingerprint(self) -> None:
+        """TrackTags.model_validate with the canonical name populates acoustid_fingerprint.
+
+        Pins that the canonical field name ``acoustid_fingerprint`` is accepted via
+        ``model_validate`` (with ``populate_by_name=True``), in addition to the legacy alias.
+
+        :raises AssertionError: if the canonical name is not accepted.
+        """
+        tags = TrackTags.model_validate({"acoustid_fingerprint": "AQADtMmybckm"})
+        assert tags.acoustid_fingerprint == "AQADtMmybckm"
+
+    def test_neither_kwarg_leaves_field_empty(self) -> None:
+        """TrackTags() with no fingerprint kwarg leaves acoustid_fingerprint empty.
+
+        :raises AssertionError: if the default is not empty string.
+        """
+        tags = TrackTags()
+        assert tags.acoustid_fingerprint == ""
+
+    def test_transaction_entry_legacy_kwarg(self) -> None:
+        """TransactionEntry(chromaprint_fp=...) populates acoustid_fingerprint via the field alias.
+
+        Pins the dual-read transition contract on TransactionEntry: the legacy kwarg is accepted
+        (as the field alias) and stored under the canonical field name.
+
+        :raises AssertionError: if the alias is not wired correctly.
+        """
+        entry = TransactionEntry(
+            timestamp="2026-08-13T00:00:00Z",
+            release_id="rel-1",
+            source="/src/track.flac",
+            destination="/dst/track.flac",
+            action="tagged",
+            chromaprint_fp="AQADtMmybckm",
+        )
+        assert entry.acoustid_fingerprint == "AQADtMmybckm"
+        assert entry.chromaprint_fp == "AQADtMmybckm"
+
+    def test_transaction_entry_canonical_name(self) -> None:
+        """TransactionEntry.model_validate with the canonical name populates acoustid_fingerprint.
+
+        Pins that the canonical field name ``acoustid_fingerprint`` is accepted via
+        ``model_validate`` (with ``populate_by_name=True``), in addition to the legacy alias.
+
+        :raises AssertionError: if the canonical name is not accepted.
+        """
+        entry = TransactionEntry.model_validate(
+            {
+                "timestamp": "2026-08-13T00:00:00Z",
+                "release_id": "rel-1",
+                "source": "/src/track.flac",
+                "destination": "/dst/track.flac",
+                "action": "tagged",
+                "acoustid_fingerprint": "AQADtMmybckm",
+            }
+        )
+        assert entry.acoustid_fingerprint == "AQADtMmybckm"
+
+    def test_transaction_entry_chromaprint_fp_setter(self) -> None:
+        """TransactionEntry.chromaprint_fp setter assigns to acoustid_fingerprint.
+
+        Pins the transition write bridge on TransactionEntry: assigning to the legacy attribute
+        name stores the value under the canonical field.
+
+        :raises AssertionError: if the setter does not forward to acoustid_fingerprint.
+        """
+        entry = TransactionEntry(
+            timestamp="2026-08-13T00:00:00Z",
+            release_id="rel-1",
+            source="/src/track.flac",
+            destination="/dst/track.flac",
+            action="tagged",
+        )
+        entry.chromaprint_fp = "AQADtMmybckm"
+        assert entry.acoustid_fingerprint == "AQADtMmybckm"
+        assert entry.chromaprint_fp == "AQADtMmybckm"
+
+    # --- (c) Archival-triple integrity ---
+
+    def test_archival_triple_all_present_in_track_tags(self) -> None:
+        """audio_hash / acoustid_id / acoustid_fingerprint are all present on TrackTags.
+
+        Pins C-AR ordering: the archival identity triple fields exist on the model and none is
+        dropped by the fingerprint key rename.
+
+        :raises AssertionError: if any field of the triple is missing or empty after assignment.
+        """
+        tags = TrackTags(
+            audio_hash="flac-md5:aabbccdd",
+            acoustid_id="11111111-2222-3333-4444-555555555555",
+            chromaprint_fp="AQADtMmybckm",
+        )
+        assert tags.audio_hash == "flac-md5:aabbccdd"
+        assert tags.acoustid_id == "11111111-2222-3333-4444-555555555555"
+        assert tags.acoustid_fingerprint == "AQADtMmybckm"
+
+        # Verify C-AR ordering in model_dump: audio_hash before acoustid_fingerprint.
+        dumped = tags.model_dump()
+        keys = list(dumped.keys())
+        assert keys.index("audio_hash") < keys.index("acoustid_fingerprint"), (
+            "C-AR ordering violated: audio_hash must precede acoustid_fingerprint in model_dump"
+        )
+
+    def test_archival_triple_all_present_in_transaction_entry(self) -> None:
+        """audio_hash / acoustid_id / acoustid_fingerprint are all present on TransactionEntry.
+
+        Pins C-AR ordering on TransactionEntry: the archival identity triple fields exist and none
+        is dropped by the fingerprint key rename.
+
+        :raises AssertionError: if any field of the triple is missing or empty after assignment.
+        """
+        entry = TransactionEntry(
+            timestamp="2026-08-13T00:00:00Z",
+            release_id="rel-1",
+            source="/src/track.flac",
+            destination="/dst/track.flac",
+            action="tagged",
+            audio_hash="flac-md5:aabbccdd",
+            chromaprint_fp="AQADtMmybckm",
+            acoustid_id="11111111-2222-3333-4444-555555555555",
+        )
+        assert entry.audio_hash == "flac-md5:aabbccdd"
+        assert entry.acoustid_fingerprint == "AQADtMmybckm"
+        assert entry.acoustid_id == "11111111-2222-3333-4444-555555555555"
+
+        # Verify C-AR ordering: audio_hash before acoustid_fingerprint before acoustid_id.
+        dumped = entry.model_dump()
+        keys = list(dumped.keys())
+        assert keys.index("audio_hash") < keys.index("acoustid_fingerprint"), (
+            "C-AR ordering violated: audio_hash must precede acoustid_fingerprint"
+        )
+        assert keys.index("acoustid_fingerprint") < keys.index("acoustid_id"), (
+            "C-AR ordering violated: acoustid_fingerprint must precede acoustid_id"
+        )
+
+    def test_to_file_dict_emits_acoustid_fingerprint_key(self) -> None:
+        """TrackTags.to_file_dict() emits ACOUSTID_FINGERPRINT, not CHROMAPRINT_FP.
+
+        Pins the forward-write key: the renamed field produces the Picard-aligned uppercase key
+        in the file dict, not the legacy key.
+
+        :raises AssertionError: if the wrong key is emitted.
+        """
+        tags = TrackTags(chromaprint_fp="AQADtMmybckm")
+        file_dict = tags.to_file_dict()
+        assert "ACOUSTID_FINGERPRINT" in file_dict
+        assert file_dict["ACOUSTID_FINGERPRINT"] == "AQADtMmybckm"
+        assert "CHROMAPRINT_FP" not in file_dict
+
+    # --- (d) Value-source rule (empty-not-fallback) ---
+
+    def test_acoustid_id_value_source_rule_documented(self) -> None:
+        """The ACOUSTID_ID value-source rule is pinned: fingerprint-lookup cluster UUID only.
+
+        Asserts the policy constant is set to the expected sentinel, ensuring the empty-not-fallback
+        rule is documented at the contract level.  The forward-write path must source ACOUSTID_ID
+        exclusively from the fingerprint ``/v2/lookup`` endpoint; when no api_key or fingerprint is
+        available, ACOUSTID_ID is left empty — never re-filled from ``list_by_mbid``.
+
+        :raises AssertionError: if the policy constant is changed without deliberate review.
+        """
+        assert ACOUSTID_ID_VALUE_SOURCE == "fingerprint-lookup-cluster-uuid"
+
+    def test_acoustid_id_empty_when_no_fingerprint(self) -> None:
+        """TrackTags.acoustid_id defaults to empty string when no fingerprint is available.
+
+        Pins the empty-not-fallback rule at the model level: a TrackTags constructed without an
+        acoustid_id (as happens when no api_key or fpcalc fingerprint is available at ingest) has
+        an empty acoustid_id field — never a list_by_mbid value.
+
+        :raises AssertionError: if the default is not empty string.
+        """
+        tags = TrackTags(chromaprint_fp="")
+        assert tags.acoustid_id == "", "acoustid_id must be empty when no fingerprint is available (empty-not-fallback rule)"

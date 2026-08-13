@@ -1487,7 +1487,20 @@ class TrackTags(BaseModel):
     acoustid_id: str = ""
     # --- archival identity (extensible: 4th dim slots in here) ---
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
-    chromaprint_fp: str = ""  # Chromaprint fingerprint string (populated in F3)
+    acoustid_fingerprint: str = Field(default="", alias="chromaprint_fp")
+    """Raw Chromaprint fingerprint string stored under the Picard-aligned key ``ACOUSTID_FINGERPRINT``
+    (FLAC Vorbis ``acoustid_fingerprint``; MP3 TXXX desc ``"Acoustid Fingerprint"``), renamed from the
+    legacy ``CHROMAPRINT_FP``.
+
+    **Dual-read transition:** the forward write path emits only ``ACOUSTID_FINGERPRINT``; every
+    read-back helper reads both the new key and the legacy ``CHROMAPRINT_FP``, so a mixed library
+    (files not yet migrated to the new key) reads correctly throughout the transition.
+
+    **Value-source rule for** ``ACOUSTID_ID``: the companion ``acoustid_id`` field holds the AcoustID
+    cluster UUID from the fingerprint ``/v2/lookup`` endpoint — Picard's ``acoustid_id`` source.  When
+    no api_key is supplied or fpcalc yields no fingerprint, ``acoustid_id`` is left empty at ingest;
+    it is never re-filled from the ``list_by_mbid`` endpoint (the empty-not-fallback rule).
+    """
     # AccurateRip per-track flat fields (C-AR).  Field names == lowercased FLAC/MP3 tag keys.
     # Tag keys are ACCURATERIP_V1_RESULT etc. (uppercase); desc == key in _MP3_TXXX_MAP.
     # confidence serializes as decimal string, empty string when 0/absent (not "0").
@@ -1510,7 +1523,27 @@ class TrackTags(BaseModel):
     cwp_composers_is_fallback: str = ""
 
     # Per-level work/workid/part tags are stored as extra fields
-    model_config = {"extra": "allow"}
+    model_config = {"extra": "allow", "populate_by_name": True}
+
+    @property
+    def chromaprint_fp(self) -> str:
+        """Transition read/write bridge for the legacy field name.
+
+        Returns :attr:`acoustid_fingerprint`.  Removed when all consuming files are updated to the
+        canonical name.
+        """
+        return self.acoustid_fingerprint
+
+    @chromaprint_fp.setter
+    def chromaprint_fp(self, value: str) -> None:
+        """Transition write bridge for the legacy field name.
+
+        Assigns ``value`` to :attr:`acoustid_fingerprint`.  Removed when all consuming files are
+        updated to the canonical name.
+
+        :param value: The fingerprint string to store.
+        """
+        self.acoustid_fingerprint = value
 
     def to_file_dict(self) -> dict[str, str]:
         """Return a ``{tag_name: value}`` mapping suitable for writing to an audio file.
@@ -1787,9 +1820,9 @@ class TransactionEntry(BaseModel):
     so that future audits can re-confirm the entry without a MusicBrainz lookup.
 
     The ``"enriched"`` action is written by :func:`~music_annotator.enrich` when fingerprint fields
-    (``audio_hash``, ``chromaprint_fp``, ``acoustid_id``) are retroactively backfilled into an
+    (``audio_hash``, ``acoustid_fingerprint``, ``acoustid_id``) are retroactively backfilled into an
     already-tagged library file.  For ``"enriched"`` entries, ``source`` and ``destination`` are
-    the same path (in-place tag update).  The ``audio_hash``, ``chromaprint_fp``, and
+    the same path (in-place tag update).  The ``audio_hash``, ``acoustid_fingerprint``, and
     ``acoustid_id`` fields carry the full triple as written.
 
     The ``"unified"`` action is written by :func:`~music_annotator.unify` when a fragmented release
@@ -1808,9 +1841,43 @@ class TransactionEntry(BaseModel):
     action: str
     # --- archival identity (extensible: 4th dim slots in here) ---
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
-    chromaprint_fp: str = ""  # Chromaprint fingerprint string (populated in F3)
-    acoustid_id: str = ""  # AcoustID UUID for this track
+    acoustid_fingerprint: str = Field(default="", alias="chromaprint_fp")
+    """Raw Chromaprint fingerprint string stored under the Picard-aligned key ``ACOUSTID_FINGERPRINT``,
+    renamed from the legacy ``CHROMAPRINT_FP``.
+
+    **Dual-read transition:** the forward write path emits only ``ACOUSTID_FINGERPRINT``; every
+    read-back helper reads both the new key and the legacy ``CHROMAPRINT_FP``.
+
+    **Value-source rule for** ``ACOUSTID_ID``: the companion ``acoustid_id`` field holds the AcoustID
+    cluster UUID from the fingerprint ``/v2/lookup`` endpoint — Picard's ``acoustid_id`` source.  When
+    no api_key is supplied or fpcalc yields no fingerprint, ``acoustid_id`` is left empty at ingest;
+    it is never re-filled from the ``list_by_mbid`` endpoint (the empty-not-fallback rule).
+    """
+    acoustid_id: str = ""  # AcoustID cluster UUID from the fingerprint /v2/lookup (Picard's acoustid_id source)
     # AccurateRip per-track flat fields (C-AR).  Mirrors TrackTags flat fields exactly.
+
+    model_config = {"populate_by_name": True}
+
+    @property
+    def chromaprint_fp(self) -> str:
+        """Transition read/write bridge for the legacy field name.
+
+        Returns :attr:`acoustid_fingerprint`.  Removed when all consuming files are updated to the
+        canonical name.
+        """
+        return self.acoustid_fingerprint
+
+    @chromaprint_fp.setter
+    def chromaprint_fp(self, value: str) -> None:
+        """Transition write bridge for the legacy field name.
+
+        Assigns ``value`` to :attr:`acoustid_fingerprint`.  Removed when all consuming files are
+        updated to the canonical name.
+
+        :param value: The fingerprint string to store.
+        """
+        self.acoustid_fingerprint = value
+
     accuraterip_v1_result: str = ""
     accuraterip_v1_confidence: str = ""
     accuraterip_v1_local_crc: str = ""

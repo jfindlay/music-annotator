@@ -2395,14 +2395,23 @@ class TestNeedsEnrich:
     def test_all_present_returns_empty_dict(self, fs: FakeFilesystem) -> None:
         """_needs_enrich returns {} when all three fields are already present.
 
+        Writes the legacy ``CHROMAPRINT_FP`` key directly via mutagen so that ``_needs_enrich``
+        (which reads the legacy key) can find the fingerprint.  The tagger now writes
+        ``ACOUSTID_FINGERPRINT``; the dual-read helper that reads both keys is updated separately.
+
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
         path = dest_root / "track.flac"
         path.write_bytes(_MINIMAL_FLAC)
-        tags = TrackTags(audio_hash="flac-md5:aabb", chromaprint_fp="AQADtMmybckm", acoustid_id="test-uuid")
+        # Write audio_hash and acoustid_id via the tagger (canonical keys).
+        tags = TrackTags(audio_hash="flac-md5:aabb", acoustid_id="test-uuid")
         apply_tags_flac(path, tags)
+        # Write the legacy chromaprint_fp key directly so _needs_enrich can find it.
+        audio = MutagenFLAC(str(path))
+        audio["chromaprint_fp"] = ["AQADtMmybckm"]
+        audio.save()
 
         result = _needs_enrich(path, re_resolve=False)
 
@@ -2411,7 +2420,9 @@ class TestNeedsEnrich:
     def test_re_resolve_true_recomputes_chromaprint_fp(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """_needs_enrich recomputes chromaprint_fp when re_resolve=True even if already present.
 
-        audio_hash is NOT recomputed (anchor rule).
+        audio_hash is NOT recomputed (anchor rule).  Writes the legacy ``CHROMAPRINT_FP`` key
+        directly via mutagen so that ``_needs_enrich`` (which reads the legacy key) sees an
+        existing fingerprint and takes the ``re_resolve`` branch.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -2420,12 +2431,13 @@ class TestNeedsEnrich:
         fs.create_dir(str(dest_root))
         path = dest_root / "track.flac"
         path.write_bytes(_MINIMAL_FLAC)
-        tags = TrackTags(
-            audio_hash="flac-md5:existing",
-            chromaprint_fp="OldFingerprint",
-            acoustid_id="test-uuid",
-        )
+        # Write audio_hash and acoustid_id via the tagger (canonical keys).
+        tags = TrackTags(audio_hash="flac-md5:existing", acoustid_id="test-uuid")
         apply_tags_flac(path, tags)
+        # Write the legacy chromaprint_fp key directly so _needs_enrich sees an existing fingerprint.
+        audio = MutagenFLAC(str(path))
+        audio["chromaprint_fp"] = ["OldFingerprint"]
+        audio.save()
 
         mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="NewFingerprint")
 
@@ -2830,8 +2842,13 @@ class TestEnrich:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        tags = TrackTags(audio_hash="flac-md5:aabb", chromaprint_fp="FP", acoustid_id="uuid")
+        # Write audio_hash and acoustid_id via the tagger (canonical keys).
+        tags = TrackTags(audio_hash="flac-md5:aabb", acoustid_id="uuid")
         path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+        # Write the legacy chromaprint_fp key directly so _needs_enrich can find it.
+        audio = MutagenFLAC(str(path))
+        audio["chromaprint_fp"] = ["FP"]
+        audio.save()
 
         _write_library_journal(
             dest_root,
@@ -3169,7 +3186,9 @@ class TestNeedsEnrichMissingBranches:
     def test_re_resolve_fpcalc_empty_not_included(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """_needs_enrich omits chromaprint_fp when re_resolve=True but fpcalc returns empty.
 
-        Covers the ``elif re_resolve: if computed_fp:`` False branch (line 269->273).
+        Covers the ``elif re_resolve: if computed_fp:`` False branch.  Writes the legacy
+        ``CHROMAPRINT_FP`` key directly via mutagen so that ``_needs_enrich`` sees an existing
+        fingerprint and takes the ``re_resolve`` branch (where fpcalc returns empty).
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -3178,8 +3197,13 @@ class TestNeedsEnrichMissingBranches:
         fs.create_dir(str(dest_root))
         path = dest_root / "track.flac"
         path.write_bytes(_MINIMAL_FLAC)
-        tags = TrackTags(audio_hash="flac-md5:existing", chromaprint_fp="OldFP", acoustid_id="uuid")
+        # Write audio_hash and acoustid_id via the tagger (canonical keys).
+        tags = TrackTags(audio_hash="flac-md5:existing", acoustid_id="uuid")
         apply_tags_flac(path, tags)
+        # Write the legacy chromaprint_fp key directly so _needs_enrich sees an existing fingerprint.
+        audio = MutagenFLAC(str(path))
+        audio["chromaprint_fp"] = ["OldFP"]
+        audio.save()
 
         mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="")
 

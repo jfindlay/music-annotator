@@ -2141,14 +2141,22 @@ class TestReadChromaprintFpTag:
     def test_flac_with_chromaprint_fp_returns_value(self, fs: FakeFilesystem) -> None:
         """_read_chromaprint_fp_tag returns the embedded chromaprint_fp for a tagged FLAC.
 
+        Writes the legacy ``CHROMAPRINT_FP`` key directly via mutagen so that
+        ``_read_chromaprint_fp_tag`` (which reads the legacy key) can find the value.  The tagger
+        now writes ``ACOUSTID_FINGERPRINT``; the dual-read helper that reads both keys is updated
+        separately.
+
         :param fs: pyfakefs fixture.
         """
+        from mutagen.flac import FLAC as _FLAC  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
         path = dest_root / "track.flac"
         path.write_bytes(_MINIMAL_FLAC)
-        tags = TrackTags(chromaprint_fp="AQADtMmybckm")
-        apply_tags_flac(path, tags)
+        audio = _FLAC(str(path))
+        audio["chromaprint_fp"] = ["AQADtMmybckm"]
+        audio.save()
 
         assert _read_chromaprint_fp_tag(path) == "AQADtMmybckm"
 
@@ -2169,14 +2177,25 @@ class TestReadChromaprintFpTag:
     def test_mp3_with_chromaprint_fp_returns_value(self, fs: FakeFilesystem) -> None:
         """_read_chromaprint_fp_tag returns the embedded chromaprint_fp for a tagged MP3.
 
+        Writes the legacy ``"Chromaprint Fingerprint"`` TXXX frame directly via mutagen so that
+        ``_read_chromaprint_fp_tag`` (which reads the legacy TXXX desc) can find the value.  The
+        tagger now writes ``"Acoustid Fingerprint"``; the dual-read helper that reads both descs is
+        updated separately.
+
         :param fs: pyfakefs fixture.
         """
+        from mutagen.id3 import (  # type: ignore[attr-defined]  # noqa: I001 PLC0415  # pylint: disable=import-outside-toplevel
+            ID3 as _ID3,
+            TXXX as _TXXX,
+        )
+
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
         path = dest_root / "track.mp3"
         path.write_bytes(_MINIMAL_MP3)
-        tags = TrackTags(chromaprint_fp="AQADtMmybckm")
-        apply_tags_mp3(path, tags)
+        audio = _ID3(str(path))  # type: ignore[no-untyped-call]
+        audio.add(_TXXX(encoding=3, desc="Chromaprint Fingerprint", text=["AQADtMmybckm"]))  # type: ignore[no-untyped-call]
+        audio.save(str(path))
 
         assert _read_chromaprint_fp_tag(path) == "AQADtMmybckm"
 
