@@ -488,7 +488,7 @@ population.
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 @architect | Detect corrupt catalogue-colon CWP_PART labels and re-derive them offline | done | 1f5d76a | C-CAT-INT (frozen) |
-| 2 | Rewrite corrupt CWP_PART_*/CWP_GROUPHEADING in an offline repatch pass | pending | | |
+| 2 | Rewrite corrupt CWP_PART_*/CWP_GROUPHEADING in an offline repatch pass | done | 317bf46 | |
 | 3 ◆ | Scan the library for corrupt catalogue-colon labels + census + anneal | pending | | |
 
 ## Action-frame digest
