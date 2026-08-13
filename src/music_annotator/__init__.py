@@ -147,13 +147,16 @@ from music_annotator._tags import (
     safe_name,
 )
 from music_annotator._works import (
+    CANNOT_RECOMPUTE,
     build_work_hierarchy,
     collect_work_dates,
     collect_work_tags_and_key,
     collect_work_urls,
     extract_work_artist_rels,
+    is_catalogue_colon_corrupt,
     parse_year,
     period_for_year,
+    rederive_part_label,
     strip_common_prefix,
 )
 
@@ -176,6 +179,9 @@ __all__ = [
     "last_name",
     "build_work_hierarchy",
     "strip_common_prefix",
+    "rederive_part_label",
+    "is_catalogue_colon_corrupt",
+    "CANNOT_RECOMPUTE",
     "period_for_year",
     "extract_work_artist_rels",
     "collect_work_dates",

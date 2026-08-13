@@ -6,7 +6,9 @@ chain and extracting composed/published/premiered dates, key signatures, and fol
 
 from __future__ import annotations
 
+import enum
 import re
+from typing import Final
 
 import structlog
 
@@ -215,6 +217,91 @@ def strip_common_prefix(child: str, parent: str) -> str:
         after_colon = child[sep_idx + 2 :].strip()
         return after_colon if after_colon else child
     return child
+
+
+class _Rederivation(enum.Enum):
+    """Sentinel domain for :func:`rederive_part_label` when the label cannot be recomputed."""
+
+    CANNOT_RECOMPUTE = enum.auto()
+
+
+#: Returned by :func:`rederive_part_label` when the embedded ``CWP_WORK`` pair is incomplete, so no
+#: offline recomputation is possible (the safe branch — the caller must leave the stored label
+#: untouched, never fabricate one).
+CANNOT_RECOMPUTE: Final = _Rederivation.CANNOT_RECOMPUTE
+
+
+def rederive_part_label(child_title: str, parent_title: str) -> str | _Rederivation:
+    """Recompute the correct level-i part label offline from the embedded CWP_WORK pair.
+
+    Recomputes the label as ``strip_common_prefix(child_title, parent_title)`` — the exact call
+    ``build_cwp_tags`` makes at build time — so the result is identical to what a fresh ingest under
+    the shipped ``": "`` rule (NORM-9 / STYLEGUIDE 4.x) would produce.  Pure, total, no I/O, no MB
+    network call: the source titles are already embedded in the file as ``CWP_WORK_{i}`` /
+    ``CWP_WORK_{i+1}`` alongside the (possibly corrupt) ``CWP_PART_{i}``.
+
+    When ``child_title`` is empty there is nothing to recompute; the caller must leave the stored
+    tag untouched rather than fabricate a label.  An empty ``parent_title`` is not a failure — it
+    is the root/top level, where ``strip_common_prefix(child, "")`` returns ``child`` unchanged, a
+    valid recomputation.
+
+    :param child_title: The level-i work title (embedded ``CWP_WORK_{i}``).
+    :param parent_title: The level-(i+1) parent work title (embedded ``CWP_WORK_{i+1}``); ``""`` at
+        the root, where no parent exists within the hierarchy.
+    :returns: The recomputed part label string, or :data:`CANNOT_RECOMPUTE` when ``child_title`` is
+        empty (nothing to recompute) — never a fabricated label.
+    """
+    if not child_title:
+        return CANNOT_RECOMPUTE
+    return strip_common_prefix(child_title, parent_title)
+
+
+def _old_bare_colon_split(label: str) -> str:
+    """Reproduce the pre-fix bare-``":"`` split output for signature detection only.
+
+    Returns the fragment the retired bare-colon fallback in ``strip_common_prefix`` produced:
+    everything after the first bare ``":"``, stripped.  This exists solely to recognise a label the
+    pre-``": "`` split corrupted (by comparing this reproduction to the stored label); it is NOT the
+    forward path and must not be used to derive any written label.  Corrects nothing — it only
+    witnesses the old corruption.
+
+    :param label: The recomputed (correct) part label to run the old split against.
+    :returns: The fragment after the first bare ``":"``, stripped; or ``label`` unchanged when no
+        bare colon is present or the split would yield an empty string.
+    """
+    idx = label.find(":")
+    if idx != -1:
+        after = label[idx + 1 :].strip()
+        return after if after else label
+    return label
+
+
+def is_catalogue_colon_corrupt(stored_label: str, child_title: str, parent_title: str) -> bool:
+    """Return True iff a stored CWP_PART label was corrupted by the pre-fix bare-``":"`` split.
+
+    Fires iff BOTH hold: (1) the stored label disagrees with the offline recomputation
+    ``rederive_part_label(child_title, parent_title)`` under the shipped ``": "`` rule, AND (2) the
+    disagreement carries the catalogue-colon signature — the stored label is exactly what the *old*
+    bare-``":"`` split would have produced from the recomputed label (i.e. the split truncated at a
+    catalogue colon such as Hoboken ``"Hob. III:31"``).  The signature bound is load-bearing: it
+    scopes the pass to the catalogue-colon bug and keeps it from becoming a general
+    "re-derive every label" pass (that is deferred).
+
+    A correct label recomputes to itself → clause (1) is False → cannot false-positive on a
+    legitimately-short movement title.  When recomputation is impossible (:data:`CANNOT_RECOMPUTE`)
+    the predicate returns False (the safe branch — the caller leaves the tag untouched).
+
+    :param stored_label: The embedded ``CWP_PART_{i}`` value read back from the file.
+    :param child_title: The embedded ``CWP_WORK_{i}`` value.
+    :param parent_title: The embedded ``CWP_WORK_{i+1}`` value (``""`` at the root).
+    :returns: True iff the stored label is a catalogue-colon-corrupt label to be re-derived.
+    """
+    recomputed = rederive_part_label(child_title, parent_title)
+    if recomputed is CANNOT_RECOMPUTE:
+        return False
+    if stored_label == recomputed:
+        return False
+    return _old_bare_colon_split(recomputed) == stored_label
 
 
 def period_for_year(year: int | None) -> str:

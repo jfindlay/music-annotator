@@ -12,6 +12,7 @@ from pytest_mock import MockerFixture
 
 import music_annotator
 from music_annotator import (
+    CANNOT_RECOMPUTE,
     JOURNAL_FILENAME,
     PROVENANCE_FILENAME,
     artist_credit_phrase,
@@ -26,12 +27,14 @@ from music_annotator import (
     collect_work_tags_and_key,
     configure_color,
     extract_work_artist_rels,
+    is_catalogue_colon_corrupt,
     is_choir,
     is_ensemble,
     is_orchestra,
     last_name,
     parse_year,
     period_for_year,
+    rederive_part_label,
     safe_name,
     strip_common_prefix,
 )
@@ -39,7 +42,13 @@ from music_annotator._audit import _audit_tier_pass, _make_audit_counts
 from music_annotator._mb_api import _extract_session_date
 from music_annotator._pipeline_io import _write_provenance_fields
 from music_annotator._tags import _NAME_MAX, _classical_top_dir, _proposed_short, _top_level_class, _work_aliases
-from music_annotator._works import _date_range, _score_top_work, select_primary_performance_work, work_group_modal_depth
+from music_annotator._works import (
+    _date_range,
+    _old_bare_colon_split,
+    _score_top_work,
+    select_primary_performance_work,
+    work_group_modal_depth,
+)
 from music_annotator.models import (
     JSON,
     AccurateRipSummary,
@@ -5432,3 +5441,245 @@ class TestDepthClampIntegrativeParity:
             "Clamped PL=2 path must equal unclamped PL=2 path — min(2,2)=2 is a no-op "
             f"(clamped={path_pl2_clamped}, unclamped={path_pl2_unclamped})"
         )
+
+
+# ---------------------------------------------------------------------------
+# _old_bare_colon_split — private helper unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestOldBareColonSplit:
+    """Tests for _old_bare_colon_split — the retired bare-':' split reproducer.
+
+    This helper exists solely to recognise labels the pre-'': "'' split corrupted; it is NOT
+    the forward path.  These tests cover all three branches of the helper.
+    """
+
+    def test_bare_colon_present_returns_fragment(self) -> None:
+        """When a bare colon is present, returns the stripped fragment after it."""
+        # Haydn Hoboken: the recomputed label contains a catalogue colon.
+        label = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+        result = _old_bare_colon_split(label)
+        assert result == "31"
+
+    def test_no_colon_returns_label_unchanged(self) -> None:
+        """When no colon is present, returns the label unchanged."""
+        label = "Gigue"
+        assert _old_bare_colon_split(label) == "Gigue"
+
+    def test_colon_at_end_empty_after_returns_label(self) -> None:
+        """When the colon is at the end and the fragment is empty, returns the label unchanged."""
+        label = "Allegro:"
+        assert _old_bare_colon_split(label) == "Allegro:"
+
+    def test_colon_space_separator_also_splits(self) -> None:
+        """A colon-space separator is also a bare colon — the helper splits on the first ':'.
+
+        This confirms the helper models the *retired* bare-':' behaviour, not the current '': "'' rule.
+        """
+        label = "Symphony No. 1: I. Allegro"
+        result = _old_bare_colon_split(label)
+        assert result == "I. Allegro"
+
+
+# ---------------------------------------------------------------------------
+# rederive_part_label — KATs for the offline re-derivation helper
+# ---------------------------------------------------------------------------
+
+
+class TestRederivePartLabel:
+    """Tests for rederive_part_label — offline re-derivation from the embedded CWP_WORK pair.
+
+    Covers the cannot-recompute trigger (empty child_title), the root-level case (empty
+    parent_title), and the normal re-derivation path.
+    """
+
+    def test_empty_child_returns_cannot_recompute(self) -> None:
+        """Empty child_title → CANNOT_RECOMPUTE (the sole cannot-recompute trigger)."""
+        result = rederive_part_label("", "String Quartets, Op. 20")
+        assert result is CANNOT_RECOMPUTE
+
+    def test_empty_parent_returns_child_unchanged(self) -> None:
+        """Empty parent_title (root level) → child_title returned unchanged.
+
+        An absent parent is not a failure — strip_common_prefix(child, '') returns child.
+        """
+        child = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+        result = rederive_part_label(child, "")
+        assert result == child
+
+    def test_haydn_hoboken_recomputes_full_title(self) -> None:
+        """Haydn Hoboken: recomputed label is the full child title (no split on catalogue colon).
+
+        The shipped '': "'' rule does not split on a bare catalogue colon, so the recomputed label
+        is the full child title when the parent prefix does not match and no '': "'' separator exists.
+        """
+        child = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+        parent = "String Quartets, Op. 20"
+        result = rederive_part_label(child, parent)
+        assert result == child
+
+    def test_colon_space_separator_strips_correctly(self) -> None:
+        """A genuine '': "'' separator strips to the movement label."""
+        result = rederive_part_label("Symphony No. 1: I. Allegro", "Symphony No. 1")
+        assert result == "I. Allegro"
+
+    def test_prefix_match_strips_correctly(self) -> None:
+        """Parent prefix match strips the prefix and leading punctuation."""
+        result = rederive_part_label("Fontane di Roma: I. Valle Giulia all'alba", "Fontane di Roma")
+        assert result == "I. Valle Giulia all'alba"
+
+
+# ---------------------------------------------------------------------------
+# is_catalogue_colon_corrupt — KATs (a)–(e) + supporting cases
+# ---------------------------------------------------------------------------
+
+
+class TestIsCatalogueColonCorrupt:
+    """KATs for is_catalogue_colon_corrupt — the catalogue-colon corruption detection predicate.
+
+    Covers all three branches of the predicate (cannot-recompute, no-disagreement, signature)
+    and the five behavioural witnesses required by the C-CAT-INT contract.
+    """
+
+    # ------------------------------------------------------------------
+    # KAT (a): Haydn Hoboken bug fires
+    # ------------------------------------------------------------------
+
+    def test_haydn_hoboken_corrupt_label_fires(self) -> None:
+        """KAT (a): Haydn Hoboken corrupt CWP_PART label is detected as corrupt.
+
+        A file with CWP_WORK_1 = 'String Quartet in E major, Op. 20 No. 4, Hob. III:31',
+        CWP_WORK_2 = 'String Quartets, Op. 20', and corrupt CWP_PART_1 = '31' must fire the
+        predicate.  The recomputed label is the full child title (the shipped '': "'' rule does not
+        split on the catalogue colon), and the old bare-':' split of that recomputed label yields
+        '31' — matching the stored corrupt label.
+        """
+        child = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+        parent = "String Quartets, Op. 20"
+        stored = "31"
+        assert is_catalogue_colon_corrupt(stored, child, parent) is True
+
+    def test_haydn_hoboken_rederive_gives_full_title(self) -> None:
+        """KAT (a): rederive_part_label returns the full corrected label, not '31'.
+
+        The corrected label is the full child title — the shipped '': "'' rule does not split on
+        the catalogue colon, so strip_common_prefix returns the child unchanged.
+        """
+        child = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+        parent = "String Quartets, Op. 20"
+        result = rederive_part_label(child, parent)
+        assert result == child
+        assert result != "31"
+
+    # ------------------------------------------------------------------
+    # KAT (b): legitimately-short label preserved (no false-positive)
+    # ------------------------------------------------------------------
+
+    def test_legitimately_short_label_not_corrupt(self) -> None:
+        """KAT (b): a genuinely one-word correct label does not fire the predicate.
+
+        A file with CWP_WORK_1 = 'Suite in G major: Gigue', CWP_WORK_2 = 'Suite in G major',
+        and correct CWP_PART_1 = 'Gigue' must not fire.  The recomputed label is 'Gigue'
+        (strip_common_prefix splits on '': "''), which equals the stored label — no disagreement.
+        """
+        child = "Suite in G major: Gigue"
+        parent = "Suite in G major"
+        stored = "Gigue"
+        assert is_catalogue_colon_corrupt(stored, child, parent) is False
+
+    def test_legitimately_short_label_rederives_to_itself(self) -> None:
+        """KAT (b): rederive_part_label returns 'Gigue' (the correct label, not a longer form)."""
+        child = "Suite in G major: Gigue"
+        parent = "Suite in G major"
+        result = rederive_part_label(child, parent)
+        assert result == "Gigue"
+
+    # ------------------------------------------------------------------
+    # KAT (c): colon-space label preserved
+    # ------------------------------------------------------------------
+
+    def test_colon_space_label_not_corrupt(self) -> None:
+        """KAT (c): a correct '': "'' label does not fire the predicate.
+
+        CWP_WORK_1 = 'Symphony No. 1: I. Allegro', CWP_WORK_2 = 'Symphony No. 1',
+        stored CWP_PART_1 = 'I. Allegro' → recomputed = 'I. Allegro' = stored → no fire.
+        """
+        child = "Symphony No. 1: I. Allegro"
+        parent = "Symphony No. 1"
+        stored = "I. Allegro"
+        assert is_catalogue_colon_corrupt(stored, child, parent) is False
+
+    def test_colon_space_label_rederives_to_itself(self) -> None:
+        """KAT (c): rederive_part_label returns 'I. Allegro' for a correct colon-space label."""
+        child = "Symphony No. 1: I. Allegro"
+        parent = "Symphony No. 1"
+        result = rederive_part_label(child, parent)
+        assert result == "I. Allegro"
+
+    # ------------------------------------------------------------------
+    # KAT (d): CWP_WORK pair absent (child empty) → cannot-recompute, predicate False
+    # ------------------------------------------------------------------
+
+    def test_empty_child_title_cannot_recompute(self) -> None:
+        """KAT (d): empty child_title → rederive_part_label returns CANNOT_RECOMPUTE."""
+        result = rederive_part_label("", "String Quartets, Op. 20")
+        assert result is CANNOT_RECOMPUTE
+
+    def test_empty_child_title_predicate_false(self) -> None:
+        """KAT (d): empty child_title → is_catalogue_colon_corrupt returns False (safe branch)."""
+        assert is_catalogue_colon_corrupt("31", "", "String Quartets, Op. 20") is False
+
+    def test_empty_child_title_any_parent_predicate_false(self) -> None:
+        """KAT (d): empty child_title with any parent → predicate always False."""
+        assert is_catalogue_colon_corrupt("anything", "", "") is False
+        assert is_catalogue_colon_corrupt("anything", "", "Some Parent") is False
+
+    # ------------------------------------------------------------------
+    # KAT (e): CWP_GROUPHEADING segment re-derivation
+    # ------------------------------------------------------------------
+
+    def test_groupheading_segment_corrupt_fires(self) -> None:
+        """KAT (e): the corrupt CWP_GROUPHEADING segment is detectable at the segment level.
+
+        CWP_GROUPHEADING is ' :: '.join([work_top, part_1, part_0]).  When CWP_PART_1 = '31'
+        is corrupt, the matching ' :: ' segment in CWP_GROUPHEADING is also '31'.  Applying
+        is_catalogue_colon_corrupt at the segment level (same call as KAT (a)) fires.
+        """
+        # The corrupt segment is the same as the corrupt CWP_PART_1 value.
+        child = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+        parent = "String Quartets, Op. 20"
+        corrupt_segment = "31"
+        assert is_catalogue_colon_corrupt(corrupt_segment, child, parent) is True
+
+    def test_groupheading_segment_rederives_to_full_title(self) -> None:
+        """KAT (e): rederive_part_label gives the corrected segment label for the groupheading.
+
+        The corrected segment is the full child title — the same value that would replace
+        the corrupt '31' in the rebuilt CWP_GROUPHEADING.
+        """
+        child = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+        parent = "String Quartets, Op. 20"
+        result = rederive_part_label(child, parent)
+        assert result == child
+
+    # ------------------------------------------------------------------
+    # Additional branch coverage: disagreement without catalogue-colon signature
+    # ------------------------------------------------------------------
+
+    def test_disagreement_without_catalogue_colon_signature_not_corrupt(self) -> None:
+        """A stored label that disagrees with the recomputed label but lacks the catalogue-colon
+        signature does not fire the predicate.
+
+        The predicate is bounded to the catalogue-colon signature: it fires only when the stored
+        label is exactly what the old bare-':' split would have produced from the recomputed label.
+        A label that disagrees for a different reason (e.g. manually edited) is not flagged.
+        """
+        # Recomputed = "I. Allegro" (from "Symphony No. 1: I. Allegro" with parent "Symphony No. 1").
+        # Stored = "Allegro" — disagrees, but _old_bare_colon_split("I. Allegro") = "Allegro" only
+        # if there is a colon in "I. Allegro", which there is not.  So the signature does not match.
+        child = "Symphony No. 1: I. Allegro"
+        parent = "Symphony No. 1"
+        stored = "Allegro"  # disagrees with "I. Allegro" but no catalogue-colon signature
+        # _old_bare_colon_split("I. Allegro") = "I. Allegro" (no colon) → stored != recomputed → False
+        assert is_catalogue_colon_corrupt(stored, child, parent) is False
