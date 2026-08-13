@@ -489,7 +489,7 @@ population.
 |---|---------|--------|--------|-------|
 | 1 @architect | Detect corrupt catalogue-colon CWP_PART labels and re-derive them offline | done | 1f5d76a | C-CAT-INT (frozen) |
 | 2 | Rewrite corrupt CWP_PART_*/CWP_GROUPHEADING in an offline repatch pass | done | 317bf46 | |
-| 3 ◆ | Scan the library for corrupt catalogue-colon labels + census + anneal | pending | | |
+| 3 ◆ | Scan the library for corrupt catalogue-colon labels + census + anneal | done | 16d31db | sub-track complete; ◆ still-on-intent |
 
 ## Action-frame digest
 
@@ -502,6 +502,12 @@ population.
   design time against the Haydn Hoboken fixture (fires) and the colon-space / legitimately-short /
   non-catalogue-disagreement negatives (all no-fire).  D-1 confirmed-resolved; no reopen trigger
   found.  Load-bearing assumption: the embedded `CWP_WORK` titles are intact (D-5, survey-confirmed).
+
+### S3 ◆ — 2026-08-13
+Discovery/flex: Boundary-transform fork returned `still-on-intent`; all three sessions realized the design intent and frozen contracts exactly.
+Affected: none
+Deferred: no — live-population re-check (D-2 reopen trigger) still owned by the operator-run scan before R6d's destructive pass.
+Texture: Anneal fix applied opportunistically to a pre-existing roadmap coordinate in `_tags.py:252` (translated to standalone prose); all sub-track durable files clean of plan coordinates.
 
 ## Discoveries & risks
 
