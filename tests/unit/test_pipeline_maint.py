@@ -7422,3 +7422,71 @@ class TestRepatchCatalogueColon:
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
         new_repatched = [e for e in journal.entries if e.action == "repatched" and e.timestamp != "2024-01-01T00:01:00+00:00"]
         assert len(new_repatched) == 0, f"Already-correct file must not gain a new repatched entry, got {new_repatched}"
+
+
+# ---------------------------------------------------------------------------
+# No-regression parity pin: detect + repatch behaviour on the Haydn Hoboken fixture
+# ---------------------------------------------------------------------------
+
+
+class TestRepatchCatalogueColonParity:
+    """No-regression parity pin for the catalogue-colon detect + repatch behaviour.
+
+    Asserts that the detect predicate fires on the representative Haydn Hoboken fixture and
+    that ``repatch_catalogue_colon`` corrects both ``CWP_PART_1`` and ``CWP_GROUPHEADING``.
+    This is a behavioural pin — it must remain green as long as the detect predicate and the
+    repatch pass are in service, confirming the two components agree on what is corrupt and
+    what the corrected value should be.
+    """
+
+    _CORRUPT_REL = "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]/01 - 31/01 - I. Allegro moderato.flac"
+
+    def test_parity_haydn_hoboken_detect_and_repatch(self, fs: FakeFilesystem) -> None:
+        """Parity pin: corrupt Haydn Hoboken fixture is detected and corrected end-to-end.
+
+        Creates a FLAC file with the Haydn Hoboken corrupt tags (``CWP_PART_1 = "31"`` from
+        the pre-fix bare-``":"`` split on ``"String Quartet in E major, Op. 20 No. 4, Hob. III:31"``),
+        runs ``repatch_catalogue_colon``, and asserts:
+
+        (a) ``CWP_PART_1`` reads back as the full quartet title (not the bare fragment ``"31"``).
+        (b) ``CWP_GROUPHEADING`` contains the corrected part label.
+
+        This pin confirms the detect predicate and the repatch pass remain in agreement on the
+        representative catalogue-colon corruption case.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = _make_haydn_corrupt_tags()
+        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-parity-rel",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        audio = MutagenFLAC(str(path))
+        part1_vals = audio.get("cwp_part_1") or []
+        gh_vals = audio.get("cwp_groupheading") or []
+
+        # (a) CWP_PART_1 must be the full quartet title, not the bare catalogue fragment.
+        assert part1_vals and part1_vals[0] == "String Quartet in E major, Op. 20 No. 4, Hob. III:31", (
+            f"CWP_PART_1 should be corrected to full title, got {part1_vals}"
+        )
+
+        # (b) CWP_GROUPHEADING must contain the corrected part label.
+        assert gh_vals and "String Quartet in E major, Op. 20 No. 4, Hob. III:31" in gh_vals[0], (
+            f"CWP_GROUPHEADING should contain corrected part label, got {gh_vals}"
+        )

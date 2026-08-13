@@ -248,8 +248,8 @@ def _top_level_class(tags: TrackTags) -> str:
     stubs) reconstruct the correct class from embedded tags alone.
 
     **Forward-path-only posture:** this function changes only newly-computed destination paths.
-    Already-annotated two-level releases are not retro-migrated by R4a; the whole-library
-    re-derivation is deferred to R6b/R6d.
+    Already-annotated two-level releases are not retro-migrated here; the whole-library
+    re-derivation is deferred to the one-pass library-wide maintenance run.
 
     :param tags: The :class:`~music_annotator.models.TrackTags` instance for this track.
     :returns: A single path-component string from the closed C-CLASS vocabulary.

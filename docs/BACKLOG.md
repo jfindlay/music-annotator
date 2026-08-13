@@ -245,16 +245,25 @@ non-space characters.  This is *more* general than the old code, not more convol
 handles Hoboken/BWV/HWV without any catalogue table.  Tests added in `test_annotator.py`
 (`TestStripCommonPrefix`): catalogue-colon-no-split, colon-space-still-splits, first-`": "`-wins.
 
-**Deferred: retro-fix of already-processed releases.**  The forward fix stops *new* `NN - NN`
-directories during ongoing annotation but does **not** touch releases already on disk.  A `repath`
-pass (re-derive all paths + re-patch `CWP_PART_*` / `CWP_GROUPHEADING` tags under the final
-heuristic) belongs to this phase — do not disrupt an in-progress library with piecemeal renames.
+**Retro-fix machinery enacted.**  The offline tag-content-repatch pass is implemented in
+`repatch_catalogue_colon` (`_pipeline_maint.py`).  It detects corrupt ``CWP_PART_{i}`` tags by
+re-deriving the label offline from the embedded ``CWP_WORK`` pair (no MB network call) and rewrites
+``CWP_PART_*`` + ``CWP_GROUPHEADING`` via the ``enrich`` re-tag → ``_verify_copy`` → journal
+provenance chain.  The detect predicate (`is_catalogue_colon_corrupt`) and re-derivation helper
+(`rederive_part_label`) are in `_works.py` alongside `strip_common_prefix`.
 
-**Scope when reopened**: survey the full library for `NN - NN` intermediate dirs and for any
-`CWP_PART_*` value that is a bare catalogue fragment; `repath` the affected releases; re-patch tags.
-Survey at fix time found the bug had *fired* on 1 release, but the latent catalogue-colon pattern is
-present in ~16 Haydn releases and in Bach/Handel titles — the census must be re-run against the
-then-current library, not assumed to be the single Angeles release.
+**Census refresh pending (scan not yet run).**  A standalone scanner `scripts/scan_catalogue_colon.py`
+exists and applies the same detection predicate to every FLAC/MP3 in the library, also reporting
+``NN - NN`` intermediate directories (the path-level symptom).  The operator must mount the library
+and run the scanner to refresh the stale "1 release fired / ~16 Haydn + Bach/Handel latent" figure.
+The scanner distinguishes scan-not-run (unmounted root) from no-findings so a missing mount cannot
+be silently reported as a clean census.
+
+**Destructive library-wide repatch deferred.**  The repatch machinery is proven on fixtures; the
+destructive library-wide pass rides the one-pass library-revision reconciliation (ROADMAP R6d) under
+operator confirmation — do not run `repatch_catalogue_colon` destructively until that pass executes.
+Once the repatch runs, a subsequent `repath` pass renders the corrected directory names (the path
+fix follows the tag fix automatically, since `build_dest_path` reads ``CWP_PART_*`` verbatim).
 
 #### Hierarchy-depth normalisation — W3b (deferred from PLAN-naming.md)  → ROADMAP R6a
 
