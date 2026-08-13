@@ -277,16 +277,168 @@ green, ledger complete.  **Planning-register anneal:**
 
 ## Cross-session contracts
 
-### C-CAT-INT — the catalogue-colon detect + offline re-derivation interface *(to be frozen at S1)*
+### C-CAT-INT — the catalogue-colon detect + offline re-derivation interface *(FROZEN at S1 — inflection design)*
 
-**Detect predicate + offline re-derivation (to be frozen at S1).**  A `CWP_PART_{i}` is corrupt iff it
+**Detect predicate + offline re-derivation (frozen at S1).**  A `CWP_PART_{i}` is corrupt iff it
 differs from `strip_common_prefix(CWP_WORK_i, CWP_WORK_{i+1})` recomputed under the shipped `": "`
-rule **and** the difference has the catalogue-colon signature (stored label is a bare fragment of the
-recomputed one).  The re-derivation is a **pure function of embedded `CWP_WORK` titles — no MB network
-call**; when the `CWP_WORK` pair is absent it returns a "cannot recompute" sentinel and the predicate
-does not fire (the safe branch — never fabricate a label).  **Invariant:** a *correct* label recomputes
-to itself, so the predicate cannot false-positive on a legitimately-short movement title (the S1
+rule **and** the difference has the catalogue-colon signature (stored label is what the *old
+bare-`":"` split* would have produced from the recomputed label).  The re-derivation is a **pure
+function of the embedded `CWP_WORK` title pair — no MB network call**; when the level-`i` `CWP_WORK`
+title itself is absent it returns a "cannot recompute" sentinel and the predicate does not fire (the
+safe branch — never fabricate a label).  Note an *absent parent* (`CWP_WORK_{i+1}`) is not a
+failure — it is the root/top level, where `strip_common_prefix(child, "")` returns `child` unchanged,
+a valid recomputation.  **Invariant:** a *correct* label recomputes to itself, so the
+predicate cannot false-positive on a legitimately-short movement title (the S1
 correctness-criticality judgment).  Deterministic and total.
+
+#### Resolved interface (frozen — implement exactly; no further design decisions)
+
+**Module.**  Both symbols live in **`src/music_annotator/_works.py`**, immediately after
+`strip_common_prefix` (their only dependency; keeps the wrapper colocated with the shipped forward
+fix and adds no new cross-module import — `_tags.py` and `_pipeline_maint.py` already import from
+`_works.py`).
+
+**Typed sentinel.**  A module-level `enum.Enum` singleton — the idiomatic typed sentinel that
+narrows cleanly under mypy-strict `is`/`match` checks:
+
+```python
+import enum
+from typing import Final
+
+class _Rederivation(enum.Enum):
+    """Sentinel domain for :func:`rederive_part_label` when the label cannot be recomputed."""
+
+    CANNOT_RECOMPUTE = enum.auto()
+
+#: Returned by :func:`rederive_part_label` when the embedded ``CWP_WORK`` pair is incomplete, so no
+#: offline recomputation is possible (the safe branch — the caller must leave the stored label
+#: untouched, never fabricate one).
+CANNOT_RECOMPUTE: Final = _Rederivation.CANNOT_RECOMPUTE
+```
+
+Export `CANNOT_RECOMPUTE` (and both functions below) from `__init__.py` `__all__` if the S1 KATs
+import them at package level (they may instead import from `music_annotator._works` — either is
+acceptable; match the surrounding test-import convention in `test_annotator.py`, which imports pure
+helpers from both the package root and `music_annotator._works`).
+
+**Re-derivation helper.**
+
+```python
+def rederive_part_label(child_title: str, parent_title: str) -> str | _Rederivation:
+    """Recompute the correct level-i part label offline from the embedded CWP_WORK pair.
+
+    Recomputes the label as ``strip_common_prefix(child_title, parent_title)`` — the exact call
+    ``build_cwp_tags`` makes at build time — so the result is identical to what a fresh ingest under
+    the shipped ``": "`` rule (NORM-9 / STYLEGUIDE 4.x) would produce.  Pure, total, no I/O, no MB
+    network call: the source titles are already embedded in the file as ``CWP_WORK_{i}`` /
+    ``CWP_WORK_{i+1}`` alongside the (possibly corrupt) ``CWP_PART_{i}``.
+
+    :param child_title: The level-i work title (embedded ``CWP_WORK_{i}``).
+    :param parent_title: The level-(i+1) parent work title (embedded ``CWP_WORK_{i+1}``); ``""`` at
+        the root, where no parent exists within the hierarchy.
+    :returns: The recomputed part label string, or :data:`CANNOT_RECOMPUTE` when ``child_title`` is
+        empty (nothing to recompute) — never a fabricated label.
+    """
+```
+
+Contract detail (frozen):
+
+- **`child_title == ""` → `CANNOT_RECOMPUTE`.**  With no level-i title embedded there is nothing to
+  recompute; the caller leaves the stored tag untouched (D-5 safe branch).  This is the sole
+  cannot-recompute trigger.
+- **`parent_title == ""` is NOT cannot-recompute.**  A root/top level legitimately has no parent;
+  `strip_common_prefix(child, "")` returns `child` unchanged (its `not parent` guard) — a valid
+  recomputation, not a failure.  This matches `build_cwp_tags`'s own `parent_name = ""` at the top
+  level (`_tags.py:525`).
+- The helper is a thin, faithful wrapper over `strip_common_prefix` — it does **not** re-implement
+  or re-open the split rule (frozen upstream: NORM-9).
+
+**Detection predicate.**
+
+```python
+def is_catalogue_colon_corrupt(stored_label: str, child_title: str, parent_title: str) -> bool:
+    """Return True iff a stored CWP_PART label was corrupted by the pre-fix bare-":" split.
+
+    Fires iff BOTH hold: (1) the stored label disagrees with the offline recomputation
+    ``rederive_part_label(child_title, parent_title)`` under the shipped ``": "`` rule, AND (2) the
+    disagreement carries the catalogue-colon signature — the stored label is exactly what the *old*
+    bare-``":"`` split would have produced from the recomputed label (i.e. the split truncated at a
+    catalogue colon such as Hoboken ``"Hob. III:31"``).  The signature bound is load-bearing: it
+    scopes the pass to the catalogue-colon bug and keeps it from becoming a general
+    "re-derive every label" pass (that is deferred).
+
+    A correct label recomputes to itself → clause (1) is False → cannot false-positive on a
+    legitimately-short movement title.  When recomputation is impossible (:data:`CANNOT_RECOMPUTE`)
+    the predicate returns False (the safe branch — the caller leaves the tag untouched).
+
+    :param stored_label: The embedded ``CWP_PART_{i}`` value read back from the file.
+    :param child_title: The embedded ``CWP_WORK_{i}`` value.
+    :param parent_title: The embedded ``CWP_WORK_{i+1}`` value (``""`` at the root).
+    :returns: True iff the stored label is a catalogue-colon-corrupt label to be re-derived.
+    """
+```
+
+Predicate algorithm (frozen — three branches, each explicitly test-covered per the 100%-branch gate):
+
+1. `recomputed = rederive_part_label(child_title, parent_title)`.
+2. **cannot-recompute branch:** `if recomputed is CANNOT_RECOMPUTE: return False` (D-5 safe branch;
+   narrow the `str | _Rederivation` union via `is`).
+3. **no-disagreement branch:** `if stored_label == recomputed: return False` (correct labels
+   recompute to themselves → no false-positive).
+4. **signature branch:** `return _old_bare_colon_split(recomputed) == stored_label` — fires iff
+   re-running the *old* bare-``":"`` split on the recomputed label reproduces the stored corrupt
+   label.  This is the self-certifying catalogue-colon signature: it fires exactly where the old bug
+   fired and nowhere else (verified at design time against the Haydn Hoboken fixture and the
+   colon-space / legitimately-short / non-catalogue-disagreement negatives).
+
+**Private helper (the old-bug reproducer, the signature core).**
+
+```python
+def _old_bare_colon_split(label: str) -> str:
+    """Reproduce the pre-fix bare-":" split output for signature detection only.
+
+    Returns the fragment the retired bare-colon fallback in ``strip_common_prefix`` produced:
+    everything after the first bare ``":"``, stripped.  This exists solely to recognise a label the
+    pre-``": "`` split corrupted (by comparing this reproduction to the stored label); it is NOT the
+    forward path and must not be used to derive any written label.  Corrects nothing — it only
+    witnesses the old corruption.
+
+    :param label: The recomputed (correct) part label to run the old split against.
+    :returns: The fragment after the first bare ``":"``, stripped; or ``label`` unchanged when no
+        bare colon is present or the split would yield an empty string.
+    """
+    idx = label.find(":")
+    if idx != -1:
+        after = label[idx + 1 :].strip()
+        return after if after else label
+    return label
+```
+
+Note: this reproducer keys on a **bare `":"`** (`label.find(":")`), deliberately *not* `": "` — it
+models the *retired* behaviour, and reproducing that old behaviour is the whole point of the
+signature.  It does not re-open NORM-9; the forward path (`rederive_part_label` →
+`strip_common_prefix`) still uses only `": "`.
+
+**Groupheading segment re-derivation (KAT (e)) — no new symbol.**  `CWP_GROUPHEADING` is
+`" :: ".join(...)` over the top-work title and the per-level part labels (`_tags.py:561`–`571`).  A
+groupheading segment is corrupt exactly when its underlying `CWP_PART_{i}` is corrupt — so KAT (e)
+is proven by applying `is_catalogue_colon_corrupt` at the *segment/label level*, not by a new
+groupheading-specific detector.  S1 proves the segment-level re-derivation (a corrupt `CWP_PART_{i}`
+implies the matching `" :: "` segment is corrupt and re-derives to the corrected label); S2 rebuilds
+the full `CWP_GROUPHEADING` string via the existing `build_cwp_tags` grammar.  **No second
+groupheading assembler at S1.**
+
+**Inputs are the embedded string tags, not `MBWork` objects.**  Both functions take plain `str`
+titles read from the file's tag dict (uppercase `CWP_WORK_{i}` / `CWP_PART_{i}` keys via
+`_read_flac_tags` / `_read_mp3_tags` → `file_dict: dict[str, str]`).  They take a single level's
+title pair (not a whole dict) so they are per-level, total, and directly unit-testable at the
+segment granularity KAT (e) needs; the dict-walk that pairs `CWP_WORK_{i}` with `CWP_WORK_{i+1}`
+across all levels of a file is **S2's** concern (the repatch pass), not S1's.  **Over-specified per
+Category-A:** the general disagreement recomputation and the `CWP_WORK`-pair signature are carried
+now though S2 is the first consumer.
+
+**Type aliases.**  None required beyond the `_Rederivation` enum sentinel above; the public return
+type is the inline union `str | _Rederivation`.
 
 **Posture (to be frozen at S1).**  Detect by **disagreement with the recomputed label**, not by a
 catalogue-fragment regex (the forward fix is the authority on the correct label).  Re-derive **offline
@@ -341,17 +493,29 @@ population.
 
 ## Action-frame digest
 
-*(none yet)*
+- **S1 inflection design (juncture adjudicator, `design-confident`).**  C-CAT-INT frozen with the
+  concrete interface: `rederive_part_label(child_title, parent_title) -> str | _Rederivation` and
+  `is_catalogue_colon_corrupt(stored_label, child_title, parent_title) -> bool` in `_works.py`, with
+  the `CANNOT_RECOMPUTE` enum sentinel and the `_old_bare_colon_split` signature helper.  Key design
+  ruling: the catalogue-colon signature is **self-certifying** — the predicate fires iff re-running
+  the *retired* bare-`":"` split on the recomputed label reproduces the stored label.  Verified at
+  design time against the Haydn Hoboken fixture (fires) and the colon-space / legitimately-short /
+  non-catalogue-disagreement negatives (all no-fire).  D-1 confirmed-resolved; no reopen trigger
+  found.  Load-bearing assumption: the embedded `CWP_WORK` titles are intact (D-5, survey-confirmed).
 
 ## Discoveries & risks
 
-- **D-1 (S1 false-positive detection — the inflection judgment; provisionally resolved at PLAN
-  derivation).**  The predicate must fire on the bug's output and only on it.  Resolution to
-  confirm-and-freeze at S1: detect by **disagreement with the recomputed label** (the shipped
-  `strip_common_prefix` is the authority), so a correct label recomputes to itself and cannot
-  false-positive.  *internal-continue* unless a census signature is found where a *correct* label
-  disagrees with its recomputation — that is a **destructive-HALT / forward-fix-reopen** signal (the
-  split rule, not just this interface, would be wrong).
+- **D-1 (S1 false-positive detection — the inflection judgment; CONFIRMED-RESOLVED at S1 inflection
+  design).**  The predicate must fire on the bug's output and only on it.  Resolution frozen at S1:
+  detect by **disagreement with the recomputed label** (the shipped `strip_common_prefix` is the
+  authority), so a correct label recomputes to itself and cannot false-positive; the disagreement is
+  qualified by the **self-certifying catalogue-colon signature** (`_old_bare_colon_split(recomputed)
+  == stored_label`) so the pass fires exactly where the old bug fired and nowhere else — a general
+  hand-edit disagreement does **not** fire (scope-bounded per posture 2).  Verified at design time
+  against the census signatures (Hoboken; colon-space and legitimately-short negatives).  No shape
+  was found where a *correct* label disagrees with its recomputation.  *internal-continue* — the
+  reopen trigger remains a census signature where a correct label disagrees (a **destructive-HALT /
+  forward-fix-reopen** signal), to be re-checked against the live population at the S3 scan.
 - **D-2 (fresh-scan population — additive-reshard signal).**  BACKLOG:255: the "1 release fired / ~16
   latent" figure is stale by construction and "must be re-run, not assumed to be the single Angeles
   release."  If the fresh S3 scan surfaces a **new corruption signature** the disagreement predicate
