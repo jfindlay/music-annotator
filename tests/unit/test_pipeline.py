@@ -1506,7 +1506,7 @@ class TestRunWritesFreedBYaml:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -1568,7 +1568,7 @@ class TestCoverArtSidecarTagDedup:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=cover)
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", return_value=MBRecording())
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -1691,7 +1691,7 @@ class TestRunFullPipeline:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -1885,7 +1885,7 @@ class TestRunFullPipeline:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -1948,7 +1948,7 @@ class TestRunFullPipeline:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -1988,7 +1988,7 @@ class TestRunFullPipeline:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -2053,7 +2053,7 @@ class TestRunFullPipeline:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -2170,7 +2170,7 @@ class TestRunFullPipeline:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -2263,7 +2263,7 @@ class TestRunFullPipeline:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -2587,7 +2587,7 @@ class TestRunFullPipeline:
         # Patch in both locations: _mb_api (used by _get_bottom_work) and _works (used by build_work_hierarchy)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
         mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -2706,7 +2706,7 @@ class TestRunFullPipeline:
         # Patch in both locations: _mb_api (used by _get_bottom_work) and _works (used by build_work_hierarchy)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
         mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -2845,7 +2845,7 @@ class TestRunFullPipeline:
         # Patch in both locations: _mb_api (used by _get_bottom_work) and _works (used by build_work_hierarchy)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
         mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -3037,7 +3037,7 @@ class TestRunFullPipeline:
         mock_fetch_rec = mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
         mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -3263,7 +3263,7 @@ class TestRunFullPipeline:
         mock_fetch_rec = mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
         mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -3455,7 +3455,7 @@ class TestRunFullPipeline:
         mock_fetch_rec = mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
         mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -3564,7 +3564,7 @@ class TestRunFullPipeline:
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
         mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -3611,7 +3611,7 @@ class TestIntermediateSiblingIndexSubstrate:
         mocker.patch("music_annotator._mb_api.mb.set_useragent")
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -4447,7 +4447,7 @@ class TestRunWithWorkHierarchy:
             ),
         )
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
@@ -4492,7 +4492,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
@@ -4538,7 +4538,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
@@ -4598,7 +4598,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
@@ -4650,7 +4650,7 @@ class TestRunWithWorkHierarchy:
             return_value=_w({"id": "w1", "title": "The Work", "work-relation-list": [], "artist-relation-list": []}),
         )
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
@@ -4746,7 +4746,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
         mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
@@ -4799,7 +4799,7 @@ class TestRunWithWorkHierarchy:
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mock_work = mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
@@ -4851,7 +4851,6 @@ def _setup_single_track_run(mocker: MockerFixture, fs: FakeFilesystem, src: Path
 
     mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
     mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-    mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
     mocker.patch("music_annotator._pipeline.apply_tags_flac")
     mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
     mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -5259,7 +5258,7 @@ class TestRunCollisionAndJournal:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -5992,7 +5991,7 @@ class TestRunMultiDisc:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -6122,7 +6121,7 @@ class TestRunDiscOverride:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -6706,7 +6705,7 @@ class TestRunTitleMediumSelection:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -6854,7 +6853,7 @@ class TestRunCountMismatch:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_make_rec_detail)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -6871,7 +6870,7 @@ class TestRunCountMismatch:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_make_rec_detail)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -7201,7 +7200,7 @@ class TestRunCountMismatch:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_make_rec_detail)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -8219,7 +8218,7 @@ class TestRunNameTooLong:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
@@ -8505,7 +8504,7 @@ class TestRunTocMediumSelection:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -8873,7 +8872,7 @@ class TestRunDurationPreflight:
             return_value=_rec({"id": "rec-1", "title": "Track", "artist-credit": [], "work-relation-list": []}),
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -9127,7 +9126,7 @@ class TestIngestAudioHash:
             ),
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
     def test_ingest_writes_audio_hash_tag_and_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -9187,12 +9186,12 @@ class TestIngestAudioHash:
 
 
 # ---------------------------------------------------------------------------
-# F3: chromaprint_fp written to tag and journal
+# F3: acoustid_fingerprint written to tag and journal
 # ---------------------------------------------------------------------------
 
 
-class TestIngestChromaprintFp:
-    """Tests for F3: chromaprint_fp computed from source and stored in the journal entry.
+class TestIngestAcoustidFingerprint:
+    """Tests for F3: acoustid_fingerprint computed from source and stored in the journal entry.
 
     Uses the real apply_tags_flac and _verify_copy (not mocked) so the full write-and-read-back
     path executes.  _run_fpcalc is mocked because fpcalc is not available in the test environment.
@@ -9223,16 +9222,15 @@ class TestIngestChromaprintFp:
             ),
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
-    def test_ingest_writes_chromaprint_fp_to_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """After run(), the journal entry carries the chromaprint_fp field from _run_fpcalc.
+    def test_ingest_writes_acoustid_fingerprint_to_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """After run(), the journal entry carries the acoustid_fingerprint field from _run_fpcalc.
 
         Verifies the F3 contract:
 
-        (a) The ``action="tagged"`` journal entry has a ``chromaprint_fp`` field that matches
+        (a) The ``action="tagged"`` journal entry has an ``acoustid_fingerprint`` field that matches
             the value returned by ``_run_fpcalc``.
-        (b) The ``chromaprint_fp`` field on the ``TrackTags`` passed to ``apply_tags_flac``
+        (b) The ``acoustid_fingerprint`` field on the ``TrackTags`` passed to ``apply_tags_flac``
             matches the mocked fingerprint value.
 
         :param mocker: pytest-mock fixture.
@@ -9277,12 +9275,12 @@ class TestIngestChromaprintFp:
 
         # (b) Verify the TrackTags passed to apply_tags_flac carries the fingerprint.
         tags_used: TrackTags = mock_tag.call_args[0][1]
-        assert tags_used.chromaprint_fp == expected_fp, (
-            f"TrackTags.chromaprint_fp {tags_used.chromaprint_fp!r} does not match expected {expected_fp!r}"
+        assert tags_used.acoustid_fingerprint == expected_fp, (
+            f"TrackTags.acoustid_fingerprint {tags_used.acoustid_fingerprint!r} does not match expected {expected_fp!r}"
         )
 
     def test_ingest_empty_fp_when_fpcalc_unavailable(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """When _run_fpcalc returns '' (fpcalc unavailable), chromaprint_fp is '' in journal.
+        """When _run_fpcalc returns '' (fpcalc unavailable), acoustid_fingerprint is '' in journal.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs filesystem fixture.
@@ -9503,7 +9501,7 @@ class TestRunAcoustidIdentityConfirm:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="test-fingerprint")
 
@@ -9608,8 +9606,8 @@ class TestRunAcoustidIdentityConfirm:
         )
         mock_lookup.assert_not_called()
 
-    def test_noop_when_chromaprint_fp_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """_fetch_acoustid_lookup_raw is not called when chromaprint_fp == '' (fpcalc unavailable).
+    def test_noop_when_acoustid_fingerprint_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_fetch_acoustid_lookup_raw is not called when acoustid_fingerprint == '' (fpcalc unavailable).
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -10990,7 +10988,7 @@ class TestAnnotationTierWritePath:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", return_value=MBRecording())
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -11248,7 +11246,7 @@ class TestSingleDiscTocPromotion:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", return_value=MBRecording())
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -11423,7 +11421,7 @@ class TestIsrcMatchTierPromotion:
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", return_value=MBRecording())
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -12436,7 +12434,7 @@ class TestAppliedCaseIdsInSidecar:
         mocker.patch("music_annotator._mb_api.mb.set_useragent")
         mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
         mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline.apply_tags_flac")
         mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
@@ -12766,7 +12764,6 @@ class TestRunWorkGroupModalDepth:
 
         mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=MBWork())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         # Inject pre-built tags: build_track_tags is called once per track in all_media_pairs
         # order (global index 0, 1, 2, …).  We supply tags keyed by 1-based position.

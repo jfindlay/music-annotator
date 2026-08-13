@@ -34,7 +34,6 @@ from music_annotator._console import _console
 from music_annotator._mb_api import (
     _fetch_acoustid_lookup_raw,
     _get_bottom_work,
-    fetch_acoustid_id,
     fetch_cover_art,
     fetch_recording_detail,
     fetch_release,
@@ -1087,7 +1086,7 @@ def _copy_tag_verify_journal_pass(
     1. Capture source SHA-256 and timestamps.
     2. ``shutil.copy2`` the file to the destination.
     3. Verify destination SHA-256 equals source SHA-256 — raise :exc:`RuntimeError` on mismatch.
-    4. Compute ``audio_hash`` and ``chromaprint_fp`` from the source.
+    4. Compute ``audio_hash`` and ``acoustid_fingerprint`` from the source.
     5. Optionally confirm the AcoustID identity (read-only diagnostic; never raises).
     6. Set cover-art sidecar reference tags on ``final_tags``.
     7. Apply AccurateRip flat fields to ``final_tags`` from ``ar_tracks`` (when provided).
@@ -1214,16 +1213,20 @@ def _copy_tag_verify_journal_pass(
         # Compute the Chromaprint fingerprint from the source file before tagging.  Returns ""
         # when fpcalc is not available; the empty string is stored as-is (no special-casing).
         # Mirrors the F1 pattern for audio_hash: computed on the source before apply_tags_*.
-        final_tags.chromaprint_fp = _run_fpcalc(src_file)
+        final_tags.acoustid_fingerprint = _run_fpcalc(src_file)
 
         # AcoustID identity-confirm: when an API key is supplied and a fingerprint is available,
         # look up the recording MBIDs for this file and check whether the selected recording MBID
-        # is among them.  This is a read-only diagnostic step — it never alters the copy/tag/verify
-        # path, but may raise on cannot-determine failures (5xx exhaustion, malformed JSON); the
-        # per-release error boundary in discover() catches and logs such failures.
-        if acoustid_key and final_tags.chromaprint_fp:
+        # is among them.  The cluster UUID from this lookup is the AcoustID cluster UUID — Picard's
+        # acoustid_id source — and is written to final_tags.acoustid_id.  When no api_key is
+        # supplied or fpcalc yields no fingerprint, acoustid_id is left empty (empty-not-fallback
+        # rule: never re-filled from list_by_mbid).
+        if acoustid_key and final_tags.acoustid_fingerprint:
             _confirm_dur_s = _read_duration_ms(src_file) // 1000
-            _confirm_mbids, _ = _fetch_acoustid_lookup_raw(final_tags.chromaprint_fp, _confirm_dur_s, acoustid_key)
+            _confirm_mbids, _acoustid_cluster_uuid = _fetch_acoustid_lookup_raw(
+                final_tags.acoustid_fingerprint, _confirm_dur_s, acoustid_key
+            )
+            final_tags.acoustid_id = _acoustid_cluster_uuid
             _selected_rec_id = final_tags.musicbrainz_recordingid
             if _confirm_mbids and _selected_rec_id:
                 if _selected_rec_id in _confirm_mbids:
@@ -1385,7 +1388,8 @@ def _copy_tag_verify_journal_pass(
                 destination=str(dest_file),
                 action="tagged",
                 audio_hash=final_tags.audio_hash,
-                chromaprint_fp=final_tags.chromaprint_fp,
+                acoustid_fingerprint=final_tags.acoustid_fingerprint,
+                acoustid_id=final_tags.acoustid_id,
                 accuraterip_v1_result=final_tags.accuraterip_v1_result,
                 accuraterip_v1_confidence=final_tags.accuraterip_v1_confidence,
                 accuraterip_v1_local_crc=final_tags.accuraterip_v1_local_crc,
@@ -1474,9 +1478,10 @@ def run(
         1-based disc position.  Applies to both single-medium and multi-medium releases.  The downstream track-count
         validation still runs, so a mismatch between source file count and the selected medium's track count raises
         :exc:`RuntimeError`.
-    :param acoustid_key: AcoustID application API key.  When set, performs a keyed fingerprint lookup for each source
-        file after the per-track :func:`fetch_acoustid_id` loop and logs whether the selected recording MBID is
-        confirmed or contradicted by the AcoustID results.  Never alters the copy/tag/verify path.
+    :param acoustid_key: AcoustID application API key.  When set, performs a keyed fingerprint ``/v2/lookup`` for each
+        source file, captures the AcoustID cluster UUID (Picard's ``acoustid_id`` source) into the journal entry, and
+        logs whether the selected recording MBID is confirmed or contradicted by the AcoustID results.  When absent or
+        when fpcalc yields no fingerprint, ``acoustid_id`` is left empty (empty-not-fallback rule).
     :param origin_source: Provenance source identifier for this ingest.  When set to ``"whipper"`` and a TOC disc-ID
         match is found for a single-disc release, the annotation tier is promoted to ``full-mb-verified``
         (``CensusSignal.EMBEDDED_MBID``) rather than the conservative ``mb-search-resolved`` default.  This is the
@@ -1710,7 +1715,6 @@ def run(
                 work_hierarchy = build_work_hierarchy(primary_work)
 
             tags_map[global_idx] = build_track_tags(release, track, _med_pos, rec_detail, work_hierarchy)
-            tags_map[global_idx].acoustid_id = fetch_acoustid_id(rec_id, no_cache=no_cache)
 
         # Compute movement numbers grouped by top work MBID.
         # Iterates the full tags_map (all media) so movements of one work that straddle a disc

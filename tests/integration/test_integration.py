@@ -458,7 +458,6 @@ class TestRunFullNonDryRunFlac:
 
         release = _make_release()
         _patch_mb(mocker, release)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -514,7 +513,6 @@ class TestRunFullNonDryRunMp3:
 
         release = _make_release()
         _patch_mb(mocker, release)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -692,7 +690,6 @@ class TestRunWorkHierarchy:
             "music_annotator._pipeline.fetch_recording_detail",
             return_value=_make_recording_with_movement("rec-b1", "I. Allegro con brio"),
         )
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         # _get_bottom_work calls fetch_work_detail via _mb_api's binding (the embedded work is a stub)
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_movement_work())
@@ -822,7 +819,6 @@ class TestDiscoverEndToEnd:
         mocker.patch("music_annotator._mb_api.mb.set_useragent")
         mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[self._make_candidate()])
         _patch_mb(mocker, _make_release())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         class _AutoSelectUI:
             """Stub DiscoverUI: always picks the first candidate and never deletes."""
@@ -878,7 +874,6 @@ class TestDiscoverEndToEnd:
         mocker.patch("music_annotator._mb_api.mb.set_useragent")
         mocker.patch("music_annotator._discover.search_releases_by_dir", return_value=[self._make_candidate()])
         _patch_mb(mocker, _make_release())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         class _DeleteUI:
             """Stub DiscoverUI: always picks the first candidate and always confirms deletion."""
@@ -1049,7 +1044,6 @@ class TestRunCollisionPolicySkip:
 
         release = _make_release()
         _patch_mb(mocker, release)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         # First run — copies both files and creates the journal.
         music_annotator.run(
@@ -1115,7 +1109,6 @@ class TestRunCollisionPolicyOverwrite:
 
         release = _make_release()
         _patch_mb(mocker, release)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         # First run.
         music_annotator.run(
@@ -1175,7 +1168,6 @@ class TestRunCollisionPolicyAbort:
 
         release = _make_release()
         _patch_mb(mocker, release)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         # First run — establishes the destination files.
         music_annotator.run(
@@ -1356,7 +1348,7 @@ class TestRunCoverArtFlac:
             ),
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
         mocker.patch("music_annotator._tags.fetch_artist_aliases", side_effect=_fetch_artist_aliases_stub)
 
@@ -1416,7 +1408,7 @@ class TestRunCoverArtMp3:
             ),
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
         mocker.patch("music_annotator._tags.fetch_artist_aliases", side_effect=_fetch_artist_aliases_stub)
 
@@ -1466,7 +1458,6 @@ class TestJournalMerge:
 
         release = _make_release()
         _patch_mb(mocker, release)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -1595,7 +1586,6 @@ class TestDiscoverSearchError:
 
         mocker.patch("music_annotator._discover.search_releases_by_dir", side_effect=_search_side_effect)
         _patch_mb(mocker, _make_release())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         class _AutoSelectUI:
             """Stub DiscoverUI: always picks the first candidate and never deletes."""
@@ -2026,7 +2016,6 @@ class TestIngestPersistsAnnotationTier:
         audio.save()
 
         _patch_mb(mocker, single_track_release)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -2276,7 +2265,7 @@ class TestWhipperIntegration:
             return_value=_make_recording_detail("rec-w1", "Whipper Track 1"),
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
         # search_releases_by_dir is called by discover(); return the whipper release as a candidate.
         candidate = MBReleaseCandidate(release_id="rel-whipper", score=100, title="Whipper Test Album", artist="Test Artist")
@@ -2628,7 +2617,7 @@ class TestOtherDownloadIsrcIntegration:
             ),
         )
         mocker.patch("music_annotator._mb_api.fetch_work_detail", return_value=_make_work_detail())
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
+
         mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
         mocker.patch("music_annotator._tags.fetch_artist_aliases", side_effect=_fetch_artist_aliases_stub)
 
@@ -3018,7 +3007,6 @@ class TestCClassIntegration:
 
         release = _make_release()
         _patch_mb(mocker, release)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -3064,7 +3052,6 @@ class TestCClassIntegration:
 
         release = _make_release()
         _patch_mb(mocker, release)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         music_annotator.run(
             release_id="rel-1",
@@ -3108,7 +3095,6 @@ class TestCClassIntegration:
 
         release = _make_audiobook_release()
         _patch_mb_audiobook(mocker, release)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         music_annotator.run(
             release_id="ab-rel-1",
@@ -3330,7 +3316,6 @@ class TestCInitIntegration:
 
         release = _make_recital_release()
         _patch_mb_recital(mocker, release)
-        mocker.patch("music_annotator._pipeline.fetch_acoustid_id", return_value="")
 
         music_annotator.run(
             release_id="recital-rel-1",

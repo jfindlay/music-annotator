@@ -46,7 +46,7 @@ log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 #: ``timestamp`` is excluded because mtime drifts on filesystem operations and is not an authority
 #: field.  ``action`` is excluded because rebuild always emits ``"tagged"`` or ``"sidecar"``
 #: regardless of the original action.
-_DIFF_FIELDS: tuple[str, ...] = ("release_id", "audio_hash", "chromaprint_fp", "acoustid_id", "origin_time")
+_DIFF_FIELDS: tuple[str, ...] = ("release_id", "audio_hash", "acoustid_fingerprint", "acoustid_id", "origin_time")
 
 #: Keys used in the :func:`_make_audit_counts` counter dict, one per finding category.
 _AUDIT_COUNT_KEYS: tuple[str, ...] = (

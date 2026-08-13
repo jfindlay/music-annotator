@@ -25,8 +25,8 @@ from music_annotator.__main__ import (
     main,
 )
 from music_annotator._pipeline_io import (
+    _read_acoustid_fingerprint_tag,
     _read_audio_hash_tag,
-    _read_chromaprint_fp_tag,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator.models import TrackTags
@@ -2127,24 +2127,43 @@ class TestReadAudioHashTag:
 
 
 # ---------------------------------------------------------------------------
-# _read_chromaprint_fp_tag
+# _read_acoustid_fingerprint_tag
 # ---------------------------------------------------------------------------
 
 
-class TestReadChromaprintFpTag:
-    """Unit tests for :func:`music_annotator._pipeline_io._read_chromaprint_fp_tag`.
+class TestReadAcoustidFingerprintTag:
+    """Unit tests for :func:`music_annotator._pipeline_io._read_acoustid_fingerprint_tag`.
 
-    Exercises the FLAC present, FLAC absent, MP3 present, MP3 absent, unsupported-suffix, and
-    read-error arms.
+    Exercises the dual-read logic: new Picard-aligned key first, legacy key second, and neither.
+    Covers FLAC and MP3 for each branch, plus unsupported-suffix and read-error arms.
     """
 
-    def test_flac_with_chromaprint_fp_returns_value(self, fs: FakeFilesystem) -> None:
-        """_read_chromaprint_fp_tag returns the embedded chromaprint_fp for a tagged FLAC.
+    # --- FLAC: new key (ACOUSTID_FINGERPRINT) ---
 
-        Writes the legacy ``CHROMAPRINT_FP`` key directly via mutagen so that
-        ``_read_chromaprint_fp_tag`` (which reads the legacy key) can find the value.  The tagger
-        now writes ``ACOUSTID_FINGERPRINT``; the dual-read helper that reads both keys is updated
-        separately.
+    def test_flac_new_key_returns_value(self, fs: FakeFilesystem) -> None:
+        """_read_acoustid_fingerprint_tag returns the fingerprint from the new ACOUSTID_FINGERPRINT key.
+
+        Writes the new Picard-aligned key via apply_tags_flac (which writes ACOUSTID_FINGERPRINT).
+        Verifies the dual-read helper finds the value under the new key.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+        tags = TrackTags(acoustid_fingerprint="AQADtMmybckm")
+        apply_tags_flac(path, tags)
+
+        assert _read_acoustid_fingerprint_tag(path) == "AQADtMmybckm"
+
+    # --- FLAC: legacy key (CHROMAPRINT_FP) ---
+
+    def test_flac_legacy_key_returns_value(self, fs: FakeFilesystem) -> None:
+        """_read_acoustid_fingerprint_tag returns the fingerprint from the legacy CHROMAPRINT_FP key.
+
+        Writes the legacy key directly via mutagen (simulating a file not yet migrated to the new
+        key).  The dual-read helper must fall back to the legacy key when the new key is absent.
 
         :param fs: pyfakefs fixture.
         """
@@ -2158,10 +2177,12 @@ class TestReadChromaprintFpTag:
         audio["chromaprint_fp"] = ["AQADtMmybckm"]
         audio.save()
 
-        assert _read_chromaprint_fp_tag(path) == "AQADtMmybckm"
+        assert _read_acoustid_fingerprint_tag(path) == "AQADtMmybckm"
 
-    def test_flac_without_chromaprint_fp_returns_empty(self, fs: FakeFilesystem) -> None:
-        """_read_chromaprint_fp_tag returns "" when the FLAC has no chromaprint_fp tag.
+    # --- FLAC: neither key ---
+
+    def test_flac_neither_key_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_acoustid_fingerprint_tag returns "" when the FLAC has no fingerprint tag.
 
         :param fs: pyfakefs fixture.
         """
@@ -2172,15 +2193,34 @@ class TestReadChromaprintFpTag:
         tags = TrackTags(title="No FP")
         apply_tags_flac(path, tags)
 
-        assert _read_chromaprint_fp_tag(path) == ""
+        assert _read_acoustid_fingerprint_tag(path) == ""
 
-    def test_mp3_with_chromaprint_fp_returns_value(self, fs: FakeFilesystem) -> None:
-        """_read_chromaprint_fp_tag returns the embedded chromaprint_fp for a tagged MP3.
+    # --- MP3: new key (Acoustid Fingerprint TXXX) ---
 
-        Writes the legacy ``"Chromaprint Fingerprint"`` TXXX frame directly via mutagen so that
-        ``_read_chromaprint_fp_tag`` (which reads the legacy TXXX desc) can find the value.  The
-        tagger now writes ``"Acoustid Fingerprint"``; the dual-read helper that reads both descs is
-        updated separately.
+    def test_mp3_new_key_returns_value(self, fs: FakeFilesystem) -> None:
+        """_read_acoustid_fingerprint_tag returns the fingerprint from the new TXXX 'Acoustid Fingerprint'.
+
+        Writes the new Picard-aligned TXXX frame via apply_tags_mp3.  The dual-read helper must
+        find the value under the new TXXX description.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        path = dest_root / "track.mp3"
+        path.write_bytes(_MINIMAL_MP3)
+        tags = TrackTags(acoustid_fingerprint="AQADtMmybckm")
+        apply_tags_mp3(path, tags)
+
+        assert _read_acoustid_fingerprint_tag(path) == "AQADtMmybckm"
+
+    # --- MP3: legacy key (Chromaprint Fingerprint TXXX) ---
+
+    def test_mp3_legacy_key_returns_value(self, fs: FakeFilesystem) -> None:
+        """_read_acoustid_fingerprint_tag returns the fingerprint from the legacy TXXX 'Chromaprint Fingerprint'.
+
+        Writes the legacy TXXX frame directly via mutagen (simulating a file not yet migrated).
+        The dual-read helper must fall back to the legacy TXXX description when the new one is absent.
 
         :param fs: pyfakefs fixture.
         """
@@ -2197,10 +2237,12 @@ class TestReadChromaprintFpTag:
         audio.add(_TXXX(encoding=3, desc="Chromaprint Fingerprint", text=["AQADtMmybckm"]))  # type: ignore[no-untyped-call]
         audio.save(str(path))
 
-        assert _read_chromaprint_fp_tag(path) == "AQADtMmybckm"
+        assert _read_acoustid_fingerprint_tag(path) == "AQADtMmybckm"
 
-    def test_mp3_without_chromaprint_fp_returns_empty(self, fs: FakeFilesystem) -> None:
-        """_read_chromaprint_fp_tag returns "" when the MP3 has no chromaprint_fp TXXX frame.
+    # --- MP3: neither key ---
+
+    def test_mp3_neither_key_returns_empty(self, fs: FakeFilesystem) -> None:
+        """_read_acoustid_fingerprint_tag returns "" when the MP3 has no fingerprint TXXX frame.
 
         :param fs: pyfakefs fixture.
         """
@@ -2211,21 +2253,21 @@ class TestReadChromaprintFpTag:
         tags = TrackTags(title="No FP")
         apply_tags_mp3(path, tags)
 
-        assert _read_chromaprint_fp_tag(path) == ""
+        assert _read_acoustid_fingerprint_tag(path) == ""
 
     def test_unsupported_suffix_returns_empty(self, fs: FakeFilesystem) -> None:
-        """_read_chromaprint_fp_tag returns "" for a file with an unsupported extension.
+        """_read_acoustid_fingerprint_tag returns "" for a file with an unsupported extension.
 
         :param fs: pyfakefs fixture.
         """
         path = Path("/lib/track.ogg")
         fs.create_file(str(path), contents="dummy")
 
-        assert _read_chromaprint_fp_tag(path) == ""
+        assert _read_acoustid_fingerprint_tag(path) == ""
 
     # pylint: disable-next=unused-argument
     def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """_read_chromaprint_fp_tag returns "" when the file read raises an exception.
+        """_read_acoustid_fingerprint_tag returns "" when the file read raises an exception.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -2233,7 +2275,7 @@ class TestReadChromaprintFpTag:
         path = Path("/lib/broken.flac")
         mocker.patch("music_annotator._pipeline_io.FLAC", side_effect=OSError("corrupt"))
 
-        assert _read_chromaprint_fp_tag(path) == ""
+        assert _read_acoustid_fingerprint_tag(path) == ""
 
 
 # ---------------------------------------------------------------------------

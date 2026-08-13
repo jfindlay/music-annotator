@@ -1487,7 +1487,7 @@ class TrackTags(BaseModel):
     acoustid_id: str = ""
     # --- archival identity (extensible: 4th dim slots in here) ---
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
-    acoustid_fingerprint: str = Field(default="", alias="chromaprint_fp")
+    acoustid_fingerprint: str = ""
     """Raw Chromaprint fingerprint string stored under the Picard-aligned key ``ACOUSTID_FINGERPRINT``
     (FLAC Vorbis ``acoustid_fingerprint``; MP3 TXXX desc ``"Acoustid Fingerprint"``), renamed from the
     legacy ``CHROMAPRINT_FP``.
@@ -1524,26 +1524,6 @@ class TrackTags(BaseModel):
 
     # Per-level work/workid/part tags are stored as extra fields
     model_config = {"extra": "allow", "populate_by_name": True}
-
-    @property
-    def chromaprint_fp(self) -> str:
-        """Transition read/write bridge for the legacy field name.
-
-        Returns :attr:`acoustid_fingerprint`.  Removed when all consuming files are updated to the
-        canonical name.
-        """
-        return self.acoustid_fingerprint
-
-    @chromaprint_fp.setter
-    def chromaprint_fp(self, value: str) -> None:
-        """Transition write bridge for the legacy field name.
-
-        Assigns ``value`` to :attr:`acoustid_fingerprint`.  Removed when all consuming files are
-        updated to the canonical name.
-
-        :param value: The fingerprint string to store.
-        """
-        self.acoustid_fingerprint = value
 
     def to_file_dict(self) -> dict[str, str]:
         """Return a ``{tag_name: value}`` mapping suitable for writing to an audio file.
@@ -1841,7 +1821,7 @@ class TransactionEntry(BaseModel):
     action: str
     # --- archival identity (extensible: 4th dim slots in here) ---
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
-    acoustid_fingerprint: str = Field(default="", alias="chromaprint_fp")
+    acoustid_fingerprint: str = ""
     """Raw Chromaprint fingerprint string stored under the Picard-aligned key ``ACOUSTID_FINGERPRINT``,
     renamed from the legacy ``CHROMAPRINT_FP``.
 
@@ -1857,26 +1837,6 @@ class TransactionEntry(BaseModel):
     # AccurateRip per-track flat fields (C-AR).  Mirrors TrackTags flat fields exactly.
 
     model_config = {"populate_by_name": True}
-
-    @property
-    def chromaprint_fp(self) -> str:
-        """Transition read/write bridge for the legacy field name.
-
-        Returns :attr:`acoustid_fingerprint`.  Removed when all consuming files are updated to the
-        canonical name.
-        """
-        return self.acoustid_fingerprint
-
-    @chromaprint_fp.setter
-    def chromaprint_fp(self, value: str) -> None:
-        """Transition write bridge for the legacy field name.
-
-        Assigns ``value`` to :attr:`acoustid_fingerprint`.  Removed when all consuming files are
-        updated to the canonical name.
-
-        :param value: The fingerprint string to store.
-        """
-        self.acoustid_fingerprint = value
 
     accuraterip_v1_result: str = ""
     accuraterip_v1_confidence: str = ""

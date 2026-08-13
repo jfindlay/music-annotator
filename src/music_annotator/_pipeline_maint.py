@@ -1260,7 +1260,7 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
 
 
 def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, acoustid_key: str = "") -> None:
-    """Retroactively backfill fingerprint fields (``audio_hash``, ``chromaprint_fp``, ``acoustid_id``) into library files.
+    """Retroactively backfill fingerprint fields (``audio_hash``, ``acoustid_fingerprint``, ``acoustid_id``) into library files.
 
     Reads the transaction journal at ``dest_root``, resolves the current on-disk path for each
     library file (following the ``"tagged"`` → ``"repathed"`` → ``"regrouped"`` → ``"enriched"``
@@ -1275,18 +1275,18 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
     **Anchor rule (P-FP1):** ``audio_hash`` is never overwritten, even under ``re_resolve=True``.
 
     When ``re_resolve=True`` and ``acoustid_key`` is non-empty, calls
-    :func:`~music_annotator._mb_api._fetch_acoustid_lookup_raw` after recomputing ``chromaprint_fp``
+    :func:`~music_annotator._mb_api._fetch_acoustid_lookup_raw` after recomputing ``acoustid_fingerprint``
     to obtain the top AcoustID cluster UUID and backfill ``acoustid_id``.  When the lookup returns
     no results, ``acoustid_id`` is left unchanged (inconclusive).
 
     :param dest_root: Root of the annotated music library (contains
         ``music_annotator_journal.json``).
-    :param re_resolve: When ``True``, recompute ``chromaprint_fp`` even when already present in
-        the file's tags.  ``audio_hash`` is never recomputed regardless of this flag.
+    :param re_resolve: When ``True``, recompute ``acoustid_fingerprint`` even when already present
+        in the file's tags.  ``audio_hash`` is never recomputed regardless of this flag.
     :param dry_run: When ``True``, log planned backfills without writing any tags or journal
         entries.
     :param acoustid_key: AcoustID application API key.  When set together with ``re_resolve=True``,
-        performs a keyed fingerprint lookup after recomputing ``chromaprint_fp`` and backfills
+        performs a keyed fingerprint lookup after recomputing ``acoustid_fingerprint`` and backfills
         ``acoustid_id`` with the top AcoustID cluster UUID.  Has no effect when ``re_resolve`` is
         ``False``.
     """
@@ -1319,17 +1319,17 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
         fields = _needs_enrich(current_path, re_resolve)
 
         # Determine which fields actually need a tag write (acoustid_id is copy-only, not a write)
-        write_fields = {k: v for k, v in fields.items() if k in {"audio_hash", "chromaprint_fp"}}
+        write_fields = {k: v for k, v in fields.items() if k in {"audio_hash", "acoustid_fingerprint"}}
 
         # When re-resolving with an AcoustID key, perform a keyed fingerprint lookup to backfill
         # acoustid_id.  This rides the same re-tag → _verify_copy → journal provenance chain as
-        # audio_hash and chromaprint_fp.  Only attempted when chromaprint_fp was (re)computed
-        # (i.e. it is present in write_fields), so that the lookup uses a fresh fingerprint.
-        # When the lookup returns no results, acoustid_id is left unchanged (inconclusive).
-        # Cannot-determine failures (5xx exhaustion, malformed JSON) are logged and skipped so
-        # that a transient AcoustID outage does not abort the entire enrich run.
-        if re_resolve and acoustid_key and "chromaprint_fp" in write_fields:
-            _enrich_fp = write_fields["chromaprint_fp"]
+        # audio_hash and acoustid_fingerprint.  Only attempted when acoustid_fingerprint was
+        # (re)computed (i.e. it is present in write_fields), so that the lookup uses a fresh
+        # fingerprint.  When the lookup returns no results, acoustid_id is left unchanged
+        # (inconclusive).  Cannot-determine failures (5xx exhaustion, malformed JSON) are logged
+        # and skipped so that a transient AcoustID outage does not abort the entire enrich run.
+        if re_resolve and acoustid_key and "acoustid_fingerprint" in write_fields:
+            _enrich_fp = write_fields["acoustid_fingerprint"]
             _enrich_dur_s = _read_duration_ms(current_path) // 1000
             try:
                 _, _enrich_top_uuid = _fetch_acoustid_lookup_raw(_enrich_fp, _enrich_dur_s, acoustid_key)
@@ -1398,9 +1398,14 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
         _verify_copy(current_path, current_path, tags, None, post_mtime)
 
         # Build the full triple for the journal entry; prefer newly-computed values, fall back to
-        # what was already in the file dict before the write.
+        # what was already in the file dict before the write.  The fingerprint fallback reads the
+        # new Picard-aligned key first, then the legacy key (dual-read transition support).
         final_audio_hash = fields.get("audio_hash", "") or file_dict.get("AUDIO_HASH", "")
-        final_chromaprint_fp = fields.get("chromaprint_fp", "") or file_dict.get("CHROMAPRINT_FP", "")
+        final_acoustid_fingerprint = (
+            fields.get("acoustid_fingerprint", "")
+            or file_dict.get("ACOUSTID_FINGERPRINT", "")
+            or file_dict.get("CHROMAPRINT_FP", "")
+        )
         final_acoustid_id = fields.get("acoustid_id", "") or file_dict.get("ACOUSTID_ID", "")
 
         entry = TransactionEntry(
@@ -1410,7 +1415,7 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
             destination=str(current_path),
             action="enriched",
             audio_hash=final_audio_hash,
-            chromaprint_fp=final_chromaprint_fp,
+            acoustid_fingerprint=final_acoustid_fingerprint,
             acoustid_id=final_acoustid_id,
         )
         write_transaction_log(journal_path, [entry])

@@ -209,12 +209,19 @@ def _read_audio_hash_tag(path: Path) -> str:
         return ""
 
 
-def _read_chromaprint_fp_tag(path: Path) -> str:
-    """Read the ``chromaprint_fp`` tag from a FLAC or MP3 file, returning ``""`` on any failure.
+def _read_acoustid_fingerprint_tag(path: Path) -> str:
+    """Read the AcoustID fingerprint tag from a FLAC or MP3 file, returning ``""`` on any failure.
 
-    For FLAC files the Vorbis Comment key ``"chromaprint_fp"`` is looked up (case-insensitive).
-    For MP3 files the TXXX frame with description ``"Chromaprint Fingerprint"`` is looked up (from
-    :data:`~music_annotator._tagger._MP3_TXXX_MAP`: ``"CHROMAPRINT_FP": "Chromaprint Fingerprint"``).
+    Implements dual-read: the new Picard-aligned key is tried first, then the legacy key, so a
+    mixed library (files not yet migrated to the new key) reads correctly throughout the transition.
+
+    For FLAC files the Vorbis Comment keys ``"acoustid_fingerprint"`` / ``"ACOUSTID_FINGERPRINT"``
+    are tried first (the Picard-aligned key written by the current forward path), then the legacy
+    ``"chromaprint_fp"`` / ``"CHROMAPRINT_FP"``.
+
+    For MP3 files the TXXX frame with description ``"Acoustid Fingerprint"`` is tried first (from
+    :data:`~music_annotator._tagger._MP3_TXXX_MAP`: ``"ACOUSTID_FINGERPRINT": "Acoustid Fingerprint"``),
+    then the legacy ``"Chromaprint Fingerprint"``.
 
     :param path: Path to the audio file to inspect.
     :returns: The Chromaprint fingerprint string, or ``""`` if absent or unreadable.
@@ -223,10 +230,19 @@ def _read_chromaprint_fp_tag(path: Path) -> str:
         match path.suffix.lower():
             case ".flac":
                 audio = FLAC(str(path))
-                values = audio.get("chromaprint_fp") or audio.get("CHROMAPRINT_FP") or []
+                values = (
+                    audio.get("acoustid_fingerprint")
+                    or audio.get("ACOUSTID_FINGERPRINT")
+                    or audio.get("chromaprint_fp")
+                    or audio.get("CHROMAPRINT_FP")
+                    or []
+                )
                 return values[0] if values else ""
             case ".mp3":
                 id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+                for frame in id3.getall("TXXX"):  # type: ignore[no-untyped-call]
+                    if frame.desc == "Acoustid Fingerprint" and frame.text:
+                        return str(frame.text[0])
                 for frame in id3.getall("TXXX"):  # type: ignore[no-untyped-call]
                     if frame.desc == "Chromaprint Fingerprint" and frame.text:
                         return str(frame.text[0])
@@ -241,12 +257,12 @@ def _needs_enrich(path: Path, re_resolve: bool) -> dict[str, str]:
     """Determine which fingerprint fields need to be written to ``path``.
 
     Reads the current on-disk tag values and computes which of the three archival-identity fields
-    (``audio_hash``, ``chromaprint_fp``, ``acoustid_id``) require a write.  Returns a mapping of
-    field name → new value for every field that should be updated.
+    (``audio_hash``, ``acoustid_fingerprint``, ``acoustid_id``) require a write.  Returns a mapping
+    of field name → new value for every field that should be updated.
 
     **Idempotency contract:** a second call on the same file (after the first call's writes have
     been applied) returns an empty dict — no field is written twice unless ``re_resolve=True``
-    explicitly requests a re-derivation of ``chromaprint_fp``.
+    explicitly requests a re-derivation of ``acoustid_fingerprint``.
 
     **Anchor rule (P-FP1):** ``audio_hash`` is the tagging-invariant anchor.  Once written it is
     NEVER overwritten, even under ``re_resolve=True``.  This preserves the ability to detect
@@ -256,15 +272,16 @@ def _needs_enrich(path: Path, re_resolve: bool) -> dict[str, str]:
 
     * ``"audio_hash"``: if the tag is empty, compute :func:`_audio_hash` and include the result
       when non-empty.  If the tag is already present, skip unconditionally (anchor rule).
-    * ``"chromaprint_fp"``: if the tag is empty, compute :func:`_run_fpcalc` and include when
-      non-empty.  If the tag is present and ``re_resolve=True``, recompute and include (overwrite).
-      If the tag is present and ``re_resolve=False``, skip.
+    * ``"acoustid_fingerprint"``: if the tag is empty (dual-read: new key first, legacy second),
+      compute :func:`_run_fpcalc` and include when non-empty.  If the tag is present and
+      ``re_resolve=True``, recompute and include (overwrite).  If the tag is present and
+      ``re_resolve=False``, skip.
     * ``"acoustid_id"``: if the tag is present, copy the tag value into the result dict (so the
       journal entry carries the current AcoustID).  If the tag is absent, skip (no network call
       in F4 — logged once as inconclusive).
 
     :param path: Path to the FLAC or MP3 file to inspect.
-    :param re_resolve: When ``True``, recompute ``chromaprint_fp`` even when already present.
+    :param re_resolve: When ``True``, recompute ``acoustid_fingerprint`` even when already present.
     :returns: A ``{field_name: new_value}`` dict of fields that need writing, or ``{}`` when the
         file is already fully enriched.
     """
@@ -277,16 +294,17 @@ def _needs_enrich(path: Path, re_resolve: bool) -> dict[str, str]:
         if computed_hash:
             result["audio_hash"] = computed_hash
 
-    # --- chromaprint_fp: compute when absent; re-compute when re_resolve=True ---
-    existing_fp = _read_chromaprint_fp_tag(path)
+    # --- acoustid_fingerprint: compute when absent; re-compute when re_resolve=True ---
+    # Dual-read: new Picard-aligned key first, legacy key second (transition support).
+    existing_fp = _read_acoustid_fingerprint_tag(path)
     if not existing_fp:
         computed_fp = _run_fpcalc(path)
         if computed_fp:
-            result["chromaprint_fp"] = computed_fp
+            result["acoustid_fingerprint"] = computed_fp
     elif re_resolve:
         computed_fp = _run_fpcalc(path)
         if computed_fp:
-            result["chromaprint_fp"] = computed_fp
+            result["acoustid_fingerprint"] = computed_fp
 
     # --- acoustid_id: copy tag→result when present; skip when absent ---
     existing_acoustid = _read_acoustid_tag(path)
@@ -1744,9 +1762,10 @@ def _read_origin_time_for_dir(work_top_dir: Path) -> str:
 def _rebuild_audio_entry(path: Path, dest_root: Path, origin_time: str) -> TransactionEntry:
     """Reconstruct a ``TransactionEntry`` for a single audio file during ``rebuild_journal``.
 
-    Reads the file's embedded tags to obtain ``release_id``, ``chromaprint_fp``, and
+    Reads the file's embedded tags to obtain ``release_id``, ``acoustid_fingerprint``, and
     ``acoustid_id``; recomputes ``audio_hash`` from the decoded audio content; and derives
-    ``timestamp`` from the file's mtime.
+    ``timestamp`` from the file's mtime.  The fingerprint is read via dual-read (new Picard-aligned
+    key first, legacy key second) so files not yet migrated to the new key are handled correctly.
 
     :param path: Absolute path to the FLAC or MP3 file.
     :param dest_root: Root of the annotated music library (used only for log messages).
@@ -1755,7 +1774,7 @@ def _rebuild_audio_entry(path: Path, dest_root: Path, origin_time: str) -> Trans
     :returns: A :class:`~music_annotator.models.TransactionEntry` with ``action="tagged"``.
     """
     release_id = _read_albumid_from_tags(path)
-    chromaprint_fp = _read_chromaprint_fp_tag(path)
+    acoustid_fingerprint = _read_acoustid_fingerprint_tag(path)
     acoustid_id = _read_acoustid_tag(path)
     audio_hash = _audio_hash(path)
     try:
@@ -1771,7 +1790,7 @@ def _rebuild_audio_entry(path: Path, dest_root: Path, origin_time: str) -> Trans
         destination=str(path),
         action="tagged",
         audio_hash=audio_hash,
-        chromaprint_fp=chromaprint_fp,
+        acoustid_fingerprint=acoustid_fingerprint,
         acoustid_id=acoustid_id,
         origin_time=origin_time,
     )
@@ -1816,7 +1835,8 @@ def rebuild_journal(dest_root: Path, *, dry_run: bool = True) -> TransactionLog:
     * ``destination`` — the file's current absolute path.
     * ``release_id`` — from the ``MUSICBRAINZ_ALBUMID`` tag (audio files only).
     * ``audio_hash`` — recomputed from decoded audio content (audio files only).
-    * ``chromaprint_fp`` — read from the ``CHROMAPRINT_FP`` tag (audio files only).
+    * ``acoustid_fingerprint`` — read from the ``ACOUSTID_FINGERPRINT`` tag (new key) or the legacy
+      ``CHROMAPRINT_FP`` tag (dual-read; audio files only).
     * ``acoustid_id`` — read from the ``ACOUSTID_ID`` tag (audio files only).
     * ``timestamp`` — annotation time from the file's mtime, ISO-8601 UTC.
     * ``origin_time`` — from the ``freedb_disc_N.yaml`` or ``music_annotator_provenance.yaml``

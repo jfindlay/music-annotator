@@ -13,7 +13,7 @@ Configures structlog for human-friendly console output and exposes eleven subcom
   (acts on case-(b) fragmentation detected by ``audit``).
 * ``audit``       — read the journal and report release-fragmentation anomalies (no network calls,
   no filesystem writes).  Read-only.
-* ``enrich``      — retroactively backfill fingerprint fields (audio_hash, chromaprint_fp,
+* ``enrich``      — retroactively backfill fingerprint fields (audio_hash, acoustid_fingerprint,
   acoustid_id) into library files that are missing them.  Idempotent.
 * ``diff``        — diff the on-disk journal against a freshly-rebuilt in-memory cache and report
   matches, stale, and leaked entries.
@@ -562,11 +562,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Retroactively backfill fingerprint fields into library files that are missing them.",
         formatter_class=_Formatter,
         epilog=textwrap.dedent("""\
-            Retroactively backfills fingerprint fields (audio_hash, chromaprint_fp, acoustid_id)
+            Retroactively backfills fingerprint fields (audio_hash, acoustid_fingerprint, acoustid_id)
             into library files that are missing them.  Idempotent: re-running on an already-enriched
             library is a no-op.
 
-            Use --re-resolve to recompute chromaprint_fp even when already present.
+            Use --re-resolve to recompute acoustid_fingerprint even when already present.
             audio_hash is never recomputed (anchor rule).
 
             Use --acoustid-key to enable keyed AcoustID fingerprint lookup (rung 5).
@@ -588,7 +588,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--re-resolve",
         action="store_true",
         dest="re_resolve",
-        help=("Recompute chromaprint_fp even when already present.  audio_hash is never recomputed (anchor rule)."),
+        help=("Recompute acoustid_fingerprint even when already present.  audio_hash is never recomputed (anchor rule)."),
     )
     enrich_parser.add_argument(
         "--dry-run",

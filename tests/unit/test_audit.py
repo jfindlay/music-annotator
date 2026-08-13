@@ -1801,7 +1801,7 @@ class TestDiffJournal:
                         "destination": str(flac_path),
                         "action": "tagged",
                         "audio_hash": "",
-                        "chromaprint_fp": "",
+                        "acoustid_fingerprint": "",
                         "acoustid_id": "",
                         "origin_time": "",
                     }
@@ -1846,7 +1846,7 @@ class TestDiffJournal:
                         "destination": str(old_flac_path),
                         "action": "tagged",
                         "audio_hash": "",
-                        "chromaprint_fp": "",
+                        "acoustid_fingerprint": "",
                         "acoustid_id": "",
                         "origin_time": "",
                     }
@@ -1890,7 +1890,7 @@ class TestDiffJournal:
                         "destination": str(flac_path),
                         "action": "tagged",
                         "audio_hash": "",
-                        "chromaprint_fp": "",
+                        "acoustid_fingerprint": "",
                         "acoustid_id": "",
                         "origin_time": "",
                     }
@@ -1956,7 +1956,7 @@ class TestDiffJournal:
                         "destination": str(cover_path),
                         "action": "sidecar",
                         "audio_hash": "",
-                        "chromaprint_fp": "",
+                        "acoustid_fingerprint": "",
                         "acoustid_id": "",
                         "origin_time": "",
                     }

@@ -2362,12 +2362,12 @@ class TestRegroup:
 class TestNeedsEnrich:
     """Unit tests for :func:`music_annotator._pipeline_io._needs_enrich`.
 
-    Exercises all combinations of empty/present audio_hash, chromaprint_fp, and acoustid_id,
+    Exercises all combinations of empty/present audio_hash, acoustid_fingerprint, and acoustid_id,
     plus the re_resolve=True path.
     """
 
     def test_all_empty_returns_all_fields(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """_needs_enrich returns audio_hash and chromaprint_fp when both are absent.
+        """_needs_enrich returns audio_hash and acoustid_fingerprint when both are absent.
 
         acoustid_id is absent so it is not included; the inconclusive log is emitted.
 
@@ -2388,7 +2388,7 @@ class TestNeedsEnrich:
 
         assert "audio_hash" in result
         assert result["audio_hash"].startswith("flac-md5:")
-        assert result["chromaprint_fp"] == "AQADtMmybckm"
+        assert result["acoustid_fingerprint"] == "AQADtMmybckm"
         assert "acoustid_id" not in result
         mock_log.info.assert_called_once_with("enrich_acoustid_inconclusive", path=str(path))
 
@@ -2417,11 +2417,11 @@ class TestNeedsEnrich:
 
         assert result == {"acoustid_id": "test-uuid"}
 
-    def test_re_resolve_true_recomputes_chromaprint_fp(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """_needs_enrich recomputes chromaprint_fp when re_resolve=True even if already present.
+    def test_re_resolve_true_recomputes_acoustid_fingerprint(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_needs_enrich recomputes acoustid_fingerprint when re_resolve=True even if already present.
 
         audio_hash is NOT recomputed (anchor rule).  Writes the legacy ``CHROMAPRINT_FP`` key
-        directly via mutagen so that ``_needs_enrich`` (which reads the legacy key) sees an
+        directly via mutagen so that ``_needs_enrich`` (which dual-reads both keys) sees an
         existing fingerprint and takes the ``re_resolve`` branch.
 
         :param mocker: pytest-mock fixture.
@@ -2434,7 +2434,8 @@ class TestNeedsEnrich:
         # Write audio_hash and acoustid_id via the tagger (canonical keys).
         tags = TrackTags(audio_hash="flac-md5:existing", acoustid_id="test-uuid")
         apply_tags_flac(path, tags)
-        # Write the legacy chromaprint_fp key directly so _needs_enrich sees an existing fingerprint.
+        # Write the legacy chromaprint_fp key directly so _needs_enrich sees an existing fingerprint
+        # via the dual-read (new key first, legacy key second).
         audio = MutagenFLAC(str(path))
         audio["chromaprint_fp"] = ["OldFingerprint"]
         audio.save()
@@ -2445,8 +2446,8 @@ class TestNeedsEnrich:
 
         # audio_hash is present → anchor rule: not recomputed
         assert "audio_hash" not in result
-        # chromaprint_fp is recomputed under re_resolve=True
-        assert result["chromaprint_fp"] == "NewFingerprint"
+        # acoustid_fingerprint is recomputed under re_resolve=True
+        assert result["acoustid_fingerprint"] == "NewFingerprint"
         # acoustid_id is copied from tag
         assert result["acoustid_id"] == "test-uuid"
 
@@ -2468,10 +2469,10 @@ class TestNeedsEnrich:
         result = _needs_enrich(path, re_resolve=False)
 
         assert "audio_hash" not in result
-        assert result["chromaprint_fp"] == "FP"
+        assert result["acoustid_fingerprint"] == "FP"
 
     def test_fpcalc_returns_empty_not_included(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """_needs_enrich omits chromaprint_fp when fpcalc returns empty string.
+        """_needs_enrich omits acoustid_fingerprint when fpcalc returns empty string.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -2488,7 +2489,7 @@ class TestNeedsEnrich:
 
         result = _needs_enrich(path, re_resolve=False)
 
-        assert "chromaprint_fp" not in result
+        assert "acoustid_fingerprint" not in result
 
     def test_acoustid_present_copied_to_result(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """_needs_enrich copies acoustid_id from tag into result when present.
@@ -2558,9 +2559,9 @@ class TestEnrich:
     # ------------------------------------------------------------------
 
     def test_enrich_backfills_triple_idempotently(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """enrich() backfills audio_hash + chromaprint_fp and is idempotent on a second run.
+        """enrich() backfills audio_hash + acoustid_fingerprint and is idempotent on a second run.
 
-        Run 1: file has acoustid_id but no audio_hash or chromaprint_fp.  enrich() writes both
+        Run 1: file has acoustid_id but no audio_hash or acoustid_fingerprint.  enrich() writes both
         missing fields and appends an "enriched" journal entry.
 
         Run 2: file is now fully enriched.  enrich() is a no-op: no new journal entry is written
@@ -2595,7 +2596,7 @@ class TestEnrich:
 
         audio = MutagenFLAC(str(path))
         hash_vals = audio.get("audio_hash") or []
-        fp_vals = audio.get("chromaprint_fp") or []
+        fp_vals = audio.get("acoustid_fingerprint") or []
         acoustid_vals = audio.get("acoustid_id") or []
 
         assert hash_vals and hash_vals[0].startswith("flac-md5:")
@@ -2606,7 +2607,7 @@ class TestEnrich:
         enriched = [e for e in journal.entries if e.action == "enriched"]
         assert len(enriched) == 1
         assert enriched[0].audio_hash.startswith("flac-md5:")
-        assert enriched[0].chromaprint_fp == "AQADtMmybckm"
+        assert enriched[0].acoustid_fingerprint == "AQADtMmybckm"
         assert enriched[0].acoustid_id == "test-acoustid-id"
         assert enriched[0].source == str(path)
         assert enriched[0].destination == str(path)
@@ -2620,7 +2621,7 @@ class TestEnrich:
 
         audio2 = MutagenFLAC(str(path))
         assert (audio2.get("audio_hash") or []) == hash_vals
-        assert (audio2.get("chromaprint_fp") or []) == fp_vals
+        assert (audio2.get("acoustid_fingerprint") or []) == fp_vals
 
     # ------------------------------------------------------------------
     # dry_run: no tags written, no journal entry
@@ -2659,7 +2660,7 @@ class TestEnrich:
         # No tags written
         audio = MutagenFLAC(str(path))
         assert not (audio.get("audio_hash") or [])
-        assert not (audio.get("chromaprint_fp") or [])
+        assert not (audio.get("acoustid_fingerprint") or [])
 
         # No journal entry
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
@@ -2671,11 +2672,11 @@ class TestEnrich:
         assert len(dry_run_calls) == 1
 
     # ------------------------------------------------------------------
-    # re_resolve: recomputes chromaprint_fp; audio_hash NOT overwritten
+    # re_resolve: recomputes acoustid_fingerprint; audio_hash NOT overwritten
     # ------------------------------------------------------------------
 
     def test_enrich_re_resolve_recomputes_fp_not_hash(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """enrich(re_resolve=True) recomputes chromaprint_fp but never overwrites audio_hash.
+        """enrich(re_resolve=True) recomputes acoustid_fingerprint but never overwrites audio_hash.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -2685,7 +2686,7 @@ class TestEnrich:
 
         tags = TrackTags(
             audio_hash="flac-md5:original",
-            chromaprint_fp="OldFingerprint",
+            acoustid_fingerprint="OldFingerprint",
             acoustid_id="test-acoustid-id",
         )
         path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
@@ -2709,17 +2710,17 @@ class TestEnrich:
 
         audio = MutagenFLAC(str(path))
         hash_vals = audio.get("audio_hash") or []
-        fp_vals = audio.get("chromaprint_fp") or []
+        fp_vals = audio.get("acoustid_fingerprint") or []
 
         # audio_hash must not be overwritten
         assert hash_vals and hash_vals[0] == "flac-md5:original"
-        # chromaprint_fp must be updated
+        # acoustid_fingerprint must be updated
         assert fp_vals and fp_vals[0] == "NewFingerprint"
 
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
         enriched = [e for e in journal.entries if e.action == "enriched"]
         assert len(enriched) == 1
-        assert enriched[0].chromaprint_fp == "NewFingerprint"
+        assert enriched[0].acoustid_fingerprint == "NewFingerprint"
 
     # ------------------------------------------------------------------
     # empty journal → nothing to enrich
@@ -2845,7 +2846,7 @@ class TestEnrich:
         # Write audio_hash and acoustid_id via the tagger (canonical keys).
         tags = TrackTags(audio_hash="flac-md5:aabb", acoustid_id="uuid")
         path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
-        # Write the legacy chromaprint_fp key directly so _needs_enrich can find it.
+        # Write the legacy chromaprint_fp key directly so _needs_enrich can find it via dual-read.
         audio = MutagenFLAC(str(path))
         audio["chromaprint_fp"] = ["FP"]
         audio.save()
@@ -2867,7 +2868,7 @@ class TestEnrich:
                     "destination": str(path),
                     "action": "enriched",
                     "audio_hash": "flac-md5:aabb",
-                    "chromaprint_fp": "FP",
+                    "acoustid_fingerprint": "FP",
                     "acoustid_id": "uuid",
                 },
             ],
@@ -2959,7 +2960,7 @@ class TestEnrich:
         enriched = [e for e in journal.entries if e.action == "enriched"]
         assert len(enriched) == 1
         assert enriched[0].audio_hash.startswith("mp3-stream-sha256:")
-        assert enriched[0].chromaprint_fp == "AQADtMmybckm"
+        assert enriched[0].acoustid_fingerprint == "AQADtMmybckm"
         assert enriched[0].acoustid_id == "mp3-acoustid-id"
 
     # ------------------------------------------------------------------
@@ -3184,11 +3185,11 @@ class TestNeedsEnrichMissingBranches:
         assert "audio_hash" not in result
 
     def test_re_resolve_fpcalc_empty_not_included(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """_needs_enrich omits chromaprint_fp when re_resolve=True but fpcalc returns empty.
+        """_needs_enrich omits acoustid_fingerprint when re_resolve=True but fpcalc returns empty.
 
         Covers the ``elif re_resolve: if computed_fp:`` False branch.  Writes the legacy
         ``CHROMAPRINT_FP`` key directly via mutagen so that ``_needs_enrich`` sees an existing
-        fingerprint and takes the ``re_resolve`` branch (where fpcalc returns empty).
+        fingerprint via dual-read and takes the ``re_resolve`` branch (where fpcalc returns empty).
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -3200,7 +3201,8 @@ class TestNeedsEnrichMissingBranches:
         # Write audio_hash and acoustid_id via the tagger (canonical keys).
         tags = TrackTags(audio_hash="flac-md5:existing", acoustid_id="uuid")
         apply_tags_flac(path, tags)
-        # Write the legacy chromaprint_fp key directly so _needs_enrich sees an existing fingerprint.
+        # Write the legacy chromaprint_fp key directly so _needs_enrich sees an existing fingerprint
+        # via the dual-read (new key first, legacy key second).
         audio = MutagenFLAC(str(path))
         audio["chromaprint_fp"] = ["OldFP"]
         audio.save()
@@ -3209,7 +3211,7 @@ class TestNeedsEnrichMissingBranches:
 
         result = _needs_enrich(path, re_resolve=True)
 
-        assert "chromaprint_fp" not in result
+        assert "acoustid_fingerprint" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -3320,7 +3322,7 @@ class TestRegroupEnrichedLineage:
                     "destination": str(old_path),
                     "action": "enriched",
                     "audio_hash": "flac-md5:aabb",
-                    "chromaprint_fp": "FP",
+                    "acoustid_fingerprint": "FP",
                     "acoustid_id": "uuid",
                 },
                 {
@@ -3419,7 +3421,7 @@ class TestRegroupEnrichedLineage:
                     "destination": str(other_path),
                     "action": "enriched",
                     "audio_hash": "flac-md5:aabb",
-                    "chromaprint_fp": "FP",
+                    "acoustid_fingerprint": "FP",
                     "acoustid_id": "uuid",
                 },
             ],
@@ -3475,10 +3477,10 @@ class TestEnrichTagWriteError:
 
 # ---------------------------------------------------------------------------
 class TestEnrichAcoustidReResolve:
-    """Tests for the C-F6d acoustid_id re-resolve in enrich().
+    """Tests for the acoustid_id re-resolve in enrich().
 
     When re_resolve=True and acoustid_key is non-empty, enrich() calls
-    _fetch_acoustid_lookup_raw after recomputing chromaprint_fp and backfills
+    _fetch_acoustid_lookup_raw after recomputing acoustid_fingerprint and backfills
     acoustid_id with the top AcoustID cluster UUID.
     """
 
@@ -3491,10 +3493,10 @@ class TestEnrichAcoustidReResolve:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        # File has an old acoustid_id and an existing chromaprint_fp (will be re-resolved)
+        # File has an old acoustid_id and an existing acoustid_fingerprint (will be re-resolved)
         tags = TrackTags(
             audio_hash="flac-md5:existing",
-            chromaprint_fp="OldFingerprint",
+            acoustid_fingerprint="OldFingerprint",
             acoustid_id="old-acoustid-uuid",
         )
         path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
@@ -3530,8 +3532,8 @@ class TestEnrichAcoustidReResolve:
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
         enriched = [e for e in journal.entries if e.action == "enriched"]
         assert len(enriched) == 1
-        # The chromaprint_fp was re-resolved
-        assert enriched[0].chromaprint_fp == "NewFingerprint"
+        # The acoustid_fingerprint was re-resolved
+        assert enriched[0].acoustid_fingerprint == "NewFingerprint"
 
     def test_re_resolve_without_acoustid_key_does_not_call_lookup(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """--re-resolve without acoustid_key does NOT call _fetch_acoustid_lookup_raw (F4 behaviour preserved).
@@ -3544,7 +3546,7 @@ class TestEnrichAcoustidReResolve:
 
         tags = TrackTags(
             audio_hash="flac-md5:existing",
-            chromaprint_fp="OldFingerprint",
+            acoustid_fingerprint="OldFingerprint",
             acoustid_id="old-acoustid-uuid",
         )
         path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
@@ -3582,7 +3584,7 @@ class TestEnrichAcoustidReResolve:
 
         tags = TrackTags(
             audio_hash="flac-md5:existing",
-            chromaprint_fp="OldFingerprint",
+            acoustid_fingerprint="OldFingerprint",
             acoustid_id="old-acoustid-uuid",
         )
         path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
@@ -3628,7 +3630,7 @@ class TestEnrichAcoustidReResolve:
 
         tags = TrackTags(
             audio_hash="flac-md5:existing",
-            chromaprint_fp="OldFingerprint",
+            acoustid_fingerprint="OldFingerprint",
             acoustid_id="old-acoustid-uuid",
         )
         path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
