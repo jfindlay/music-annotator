@@ -367,12 +367,56 @@ path writes only `ACOUSTID_FINGERPRINT`; every read-back helper reads **both** t
 is retired per-file by the S3 repatch pass; the dual-read is retained until the library is fully
 migrated (R6d) and its removal is a later, explicit decision — not part of this sub-track.
 
-**Resolved interface (to be frozen at S1 — the juncture fork writes the concrete field/key names +
-the read-helper signatures into this subsection at execution time).**  *Not yet frozen — to be frozen
-at S1.*  Expected surface: `TrackTags.acoustid_fingerprint` / `TransactionEntry.acoustid_fingerprint`;
-`_MP3_TXXX_MAP["ACOUSTID_FINGERPRINT"] = "Acoustid Fingerprint"`; a dual-read fingerprint helper
-(renamed from `_read_chromaprint_fp_tag`) that returns the new-key value else the legacy-key value; the
-`_pipeline.py` capture of the `/v2/lookup` `[1]` UUID; the `_audit.py` `_DIFF_FIELDS` rename.
+**Resolved interface (frozen).**  The concrete field/key names, the read-helper signature, and the
+value-source capture point, split by which session mutates each.  **Transition mechanism (load-bearing):**
+the legacy name `chromaprint_fp` is referenced as a Pydantic constructor kwarg *and* as attribute access
+outside S1's 3-file scope (`_pipeline.py:1388`, `_pipeline_io.py:280–289/1758/1774`,
+`_pipeline_maint.py:1322/1331–1335/1403/1413`, `_audit.py:49`, and ~82 test sites); `TransactionEntry`
+has no `extra: "allow"`, so an unknown kwarg is a hard validation error.  A hard field rename at S1 is
+therefore impossible inside a green `tox -m analyze` at 3-file scope — so the canonical name is introduced
+at S1 *behind an alias + read bridge* and the destructive rename propagates at S2.
+
+1. **Model fields.**  Canonical `acoustid_fingerprint: str = ""` on `TrackTags` (at its archival-triple
+   slot, after `audio_hash`) and `TransactionEntry` (between `audio_hash` and `acoustid_id`), each with
+   `Field(validation_alias=AliasChoices("acoustid_fingerprint", "chromaprint_fp"))`; both models'
+   `model_config` gains `"populate_by_name": True` (`TrackTags` keeps `"extra": "allow"`).  Each model
+   carries a transition-only read bridge `@property def chromaprint_fp(self) -> str: return
+   self.acoustid_fingerprint`.  This keeps every existing `chromaprint_fp=` kwarg and `.chromaprint_fp`
+   read green at S1's 3-file scope; S2 removes the alias + property when it propagates the rename to the
+   consuming files.  C-AR: the field keeps its per-model position and the `# extensible: 4th dim slots in
+   here` comment; only the name + inline comment change.
+2. **`_MP3_TXXX_MAP` entry.**  `"ACOUSTID_FINGERPRINT": "Acoustid Fingerprint"` replaces
+   `"CHROMAPRINT_FP": "Chromaprint Fingerprint"` (`_tagger.py:117`), positioned immediately after
+   `"AUDIO_HASH": "Audio Hash"` and before the AccurateRip block.  `"ACOUSTID_ID": "Acoustid Id"`
+   (line 115) is unchanged.
+3. **FLAC Vorbis Comment key.**  `acoustid_fingerprint` (lowercase; `to_file_dict` uppercases field names
+   to the on-disk key `ACOUSTID_FINGERPRINT`, and Vorbis keys are case-insensitive on read).  Legacy
+   on-disk key: `chromaprint_fp` / `CHROMAPRINT_FP`.
+4. **Read helper.**  `_read_acoustid_fingerprint_tag(path: Path) -> str` replaces `_read_chromaprint_fp_tag`
+   (`_pipeline_io.py:212`); signature unchanged (one `Path`, returns `str`, `""` on failure).  Renamed at
+   S2 (lives outside S1's scope) — named here as the concrete S2 target.
+5. **Dual-read logic.**  New key first, legacy second — FLAC:
+   `audio.get("acoustid_fingerprint") or audio.get("ACOUSTID_FINGERPRINT") or audio.get("chromaprint_fp")
+   or audio.get("CHROMAPRINT_FP") or []`, take `[0]`; MP3: match TXXX `frame.desc == "Acoustid
+   Fingerprint"` then `"Chromaprint Fingerprint"`.  Three coverage branches (new-key / legacy-key /
+   neither) each need an explicit test.  Landed at S2.
+6. **`ACOUSTID_ID` value source.**  The cluster UUID from the fingerprint `/v2/lookup` (`results[0]["id"]`
+   — the `[1]` element of `_fetch_acoustid_lookup_raw`'s return), the single source on every writer path.
+   On no api_key OR empty fpcalc fingerprint, `ACOUSTID_ID` is left empty at ingest, NEVER re-filled from
+   `fetch_acoustid_id` / `list_by_mbid` (the empty-not-fallback rule).  Invariant: a file's `ACOUSTID_ID`
+   is empty or a fingerprint-lookup cluster UUID — never a `list_by_mbid` value.
+7. **Audit `_DIFF_FIELDS`.**  The element `"chromaprint_fp"` (`_audit.py:49`) becomes
+   `"acoustid_fingerprint"`, order preserved:
+   `("release_id", "audio_hash", "acoustid_fingerprint", "acoustid_id", "origin_time")`.  S2 consumer;
+   named here as the concrete target.
+8. **`_pipeline.py` capture point.**  `_pipeline.py:1226` already makes the `/v2/lookup` call
+   (`_confirm_mbids, _ = _fetch_acoustid_lookup_raw(...)`); S2 captures the discarded `[1]` cluster UUID
+   into `final_tags.acoustid_id` and removes the separate `fetch_acoustid_id(rec_id)` write at
+   `_pipeline.py:1713`.  No new network call.  S2 consumer; named here.
+
+**S1 lands items 1–2** (the model + key-map surface, `test_models.py` KATs) within its 3-file green-gate
+scope via the alias + property transition bridge; **items 4–5, 7–8 are S2's** forward-write propagation;
+**item 6's rule is frozen here** and enforced by the S2 KATs.
 
 **Flavour:** compiler-enforced (the renamed model fields + key-map + read-helper signatures; mypy
 strict) + test-enforced (the S1 key-round-trip / dual-read / archival-triple / value-source KATs; the
