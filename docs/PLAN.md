@@ -459,14 +459,18 @@ transition contract and the value-source rule though S2 is the first consumer.
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 @architect | Freeze the Picard-aligned AcoustID tag policy (value source + key rename + dual-read) | pending | | |
+| 1 @architect | Freeze the Picard-aligned AcoustID tag policy (value source + key rename + dual-read) | done | a30ed93 | C-ACID |
 | 2 | Align the AcoustID forward-write path to the frozen policy | pending | | |
 | 3 | Migrate existing files in an offline AcoustID repatch pass | pending | | |
 | 4 ◆ | Scan the library for legacy AcoustID tag state + census + anneal | pending | | |
 
 ## Action-frame digest
 
-*(none yet)*
+### S1 — 2026-08-13
+Discovery/flex: Juncture fork identified that a hard field rename at S1 would break ~82 test sites outside the 3-file scope; designed a transition bridge (Field alias + @property) instead of AliasChoices — same semantic result, mypy-compatible.
+Affected: C-ACID (interface item 1 — model fields)
+Deferred: no
+Texture: S2 must remove the alias + property bridge as it propagates the rename; the bridge is transition-only code weight. Three extra test files (test_main.py, test_pipeline.py, test_pipeline_maint.py) updated to write legacy key directly via mutagen after _MP3_TXXX_MAP rename — allowed extras, noted in ledger.
 
 ## Discoveries & risks
 
