@@ -263,10 +263,28 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
 
 ### R6 — Act III-a one-pass re-derivation  (gated on R5 exit + J2; ~5-8 sessions)
 
-- **R6a** Hierarchy-depth normalisation (W3b/L2 uniform-ceiling clamp; re-run
-  `scripts/scan_nonuniform_depth.py` against the complete library first — the 36-group census is
-  stale by construction).
-- **R6b** Catalogue-colon retro-fix (re-survey for `NN - NN` dirs and corrupt `CWP_PART_*`; repath).
+- **R6a** Hierarchy-depth normalisation (W3b/L2 uniform-ceiling clamp).  **DONE 2026-08-12**
+  (`docs/PLAN.md` 3/3 rows; commits `4fe4025` clamp + `4de8c70` caller-threading + `73e11ba`
+  census/anneal, ledger `fbb3c72`).  Froze **C-W3b-INT** (the `build_dest_path` depth-clamp
+  interface: `work_group_modal_depth()` helper + a `group_modal_depth` parameter; corner pins
+  tie→shallower / PL=0-orphans-excluded / all-orphan→0; the `min()` clamp is down-only, so no
+  gap-vs-faithful discrimination and **no MB call** at render).  New ingests render clamped now;
+  `run`/`repath`/`regroup` all compute and pass the modal depth (ingest/maintenance parity KAT).
+  The destructive library-wide depth-repath rides R6d's one J3-gated pass (D-A5 precedent).  ◆
+  `still-on-intent`.  **Fresh scan folded up:** 12,148 FLACs / 3,509 groups / **63 non-uniform
+  (1.8%)** — supersedes the stale "36-group / 3.6%" figure; the six-shape taxonomy held (the reopen
+  trigger did not fire); new Shape-D groups Wagner Ring Karajan {1,2,3,4} and Ring Solti {2,3,4}
+  are both handled correctly by the min-clamp.
+- **R6b** Catalogue-colon part-label retro-fix — **IN PROGRESS** (sharded 2026-08-12,
+  `docs/PLAN.md`).  **Not a paths-only repath:** the corruption is in embedded `CWP_PART_*` /
+  `CWP_GROUPHEADING` **tag content**, which `build_dest_path` renders verbatim (`_tags.py:1414`) —
+  so `repath` alone re-renders the corrupt `NN - 31` label.  The shard builds + freezes **new
+  offline tag-content-repatch machinery** (detect a bare-catalogue `CWP_PART`; re-derive offline via
+  `strip_common_prefix(CWP_WORK_i, CWP_WORK_{i+1})` — **no MB call**; rewrite the tags + rebuild
+  `CWP_GROUPHEADING`, modelled on the `enrich` re-tag→verify→journal provenance chain), proven on
+  fixtures via the src/tests gate.  **Code-only: the destructive library-wide repatch rides R6d's
+  one J3-gated pass (D-A5 precedent)** — and this machinery *closes the R6d tag-content gap* (below):
+  R6d gains a tag-content-repatch capability its paths-only engine currently lacks.
 - **R6c** AcoustID tag naming + semantics — Picard alignment (persisted-tag migration; decide the two
   sub-questions at PLAN time).
 - **R6d** Full-library repath under the frozen heuristics — the "more like itself" pass.  Gated by
@@ -293,6 +311,12 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   a bulk re-`apply`/`search` — an explicit R6d PLAN-derivation scope decision, not covered by the
   existing repath engine.  (This is why the path-shaping code-only shards — canonical-name-forms,
   R6a depth — can land ahead of R6d: `repath` already re-derives their path output on demand.)
+  **R6d tag-content gap — partially closed by R6b (2026-08-12):** the catalogue-colon case is the
+  first tag-content corruption with a *fully offline* re-derivation (`strip_common_prefix` over the
+  embedded `CWP_WORK` pair, no MB call); R6b builds the repatch pass (`CWP_PART_*` / `CWP_GROUPHEADING`
+  rewrite on the `enrich` provenance chain) and R6d drives it destructively under J3.  Other
+  tag-content re-derivation (`CEA_*`, billing order) still needs the explicit R6d scope decision
+  above — R6b closes the gap only for `CWP_PART_*` / `CWP_GROUPHEADING`.
 - **R6e** Conventions-spec finalisation (integrative writeup; consistently under-scheduled — allocate
   a full session minimum).
 
@@ -549,6 +573,6 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   `path-canonical-name-forms` done (C-CANON), the styleguide arc's node A has exhausted its three enumerated
   application shards (editorial-notes field / composite-tag grammar / normalisation — done or discharged); its
   other post-v1 nodes are operator/trigger-paced (P = R6e here; C = CEv3, own future roadmap; L = perpetual
-  loop).  Consequence: the sole live agent-shardable frontier is this arc's **R6** (Act III-a), and R6a/R6b/R6c
+  loop).  Consequence: the sole live agent-shardable frontier is this arc's **R6** (Act III-a), and R6b/R6c
   are runnable now on `Done/` (operator-confirmed 2026-08-12) — only R6d is J3-gated.  R6a (depth normalisation)
-  is sharded first (`docs/PLAN.md`, 2026-08-12).
+  is **done** (2026-08-12); **R6b (catalogue-colon retro-fix) is sharded next** (`docs/PLAN.md`, 2026-08-12).

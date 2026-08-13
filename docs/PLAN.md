@@ -1,389 +1,433 @@
 <!-- juncture-tier: opus -->
-<!-- sub-track: R6a (hierarchy-depth normalisation) — library-completion arc (docs/ROADMAP.md), Act III-a.  Render the
-     frozen uniform-ceiling/ragged-floor depth rule (STYLEGUIDE 4.5; NOTES "two durable rules"; C-W3b, graduated from
-     provisional at J2) in build_dest_path so a work-group's over-resolved branches clamp to the group's modal depth.
-     CODE-ONLY: new ingests render clamped; the destructive library-wide repath rides R6d's one J3-gated pass (D-A5/D-A7
-     precedent).  This IS a /plan-run target: build_dest_path + caller-threading + tests, verifiable by the src/tests
-     gate; the fresh scan_nonuniform_depth.py run is the substrate-session gating step (operator mounts the library). -->
+<!-- sub-track: R6b (catalogue-colon part-label retro-fix) — library-completion arc (docs/ROADMAP.md), Act
+     III-a.  Build the offline tag-content-repatch machinery that detects a bare-catalogue CWP_PART label
+     (the pre-fix ": " bug output) and re-derives it offline from the embedded CWP_WORK pair via
+     strip_common_prefix (the shipped forward fix), rewriting CWP_PART_* + CWP_GROUPHEADING.  CODE-ONLY:
+     the destructive library-wide repatch rides R6d's one J3-gated pass (D-A5 precedent); this shard closes
+     the ROADMAP R6d tag-content gap for the catalogue-colon case.  This IS a /plan-run target: the detect+
+     re-derive contract + the offline repatch pass + tests, verifiable by the src/tests gate; the fresh
+     NN-NN / bare-catalogue-CWP_PART scan is the S3 gating step (operator mounts the library). -->
 
-# PLAN — R6a: uniform-ceiling / ragged-floor hierarchy-depth normalisation in the destination path
+# PLAN — R6b: catalogue-colon part-label retro-fix (offline tag-content repatch)
 
 ## Purpose (design intent)
 
 *(Re-read at every ◆ boundary — anti-defocus anchor.)*
 
-STYLEGUIDE 4.5 and the NOTES "two durable rules" fix the path-depth policy: **uniform ceiling, ragged floor** —
-render each leaf at `min(its own tree depth, the work-group's modal tree depth)`.  Over-resolved branches **clamp
-down** (removing structure the path does not need — faithful); shallow branches are **never padded up** (inventing
-structure that is not there — unfaithful).  J2 (2026-07-30) graduated **C-W3b** from provisional: the rule, the
-two-sub-shape routing, and the corner pins (modal ties → shallower; PL=0 orphans excluded) are frozen.  J2
-explicitly left the **`build_dest_path` interface mechanics (the `depth_clamp` posture) and the tag-data-sufficiency
-question** to "R6a PLAN derivation" — this shard.
+The colon-fallback in `strip_common_prefix` once split on the *first bare* `":"` to separate a
+`Title: Movement` label.  MusicBrainz work titles embed a colon *inside* catalogue numbers — Haydn
+Hoboken (`"…, Hob. III:31"`), Bach/Handel subtitles — so a title reaching the fallback with only a
+catalogue colon produced a **bare catalogue fragment** as the part label (`CWP_PART_1 = "31"`), which
+minted intermediate dirs `01 - 31`, `02 - 32`, … and the same corruption in `CWP_GROUPHEADING`
+(`"String Quartets, op. 20 :: 31 :: I. Allegro moderato"`).  **The forward fix has shipped**
+(`_works.py:208` keys on `": "` — colon-followed-by-space — so new ingests are correct; NORM-9,
+ratified in STYLEGUIDE 4.x).  This shard is the **deferred retro-fix of releases already on disk**
+(BACKLOG "Catalogue-colon part-label retro-fix").
 
-A code audit (survey 2026-08-12) confirmed **no depth-clamp machinery exists**: `build_dest_path` (`_tags.py:1089`)
-reads `CWP_PART_LEVELS` per-track (`:1333`) and emits one intermediate directory per level when `part_levels >= 2`
-(`:1387–1417`), with **no group context and no clamp**.  Depth is set upstream in `build_cwp_tags`
-(`cwp.part_levels = len(work_hierarchy) - 1`, `_tags.py:498`).  So a work-group whose modal depth is 2 but whose
-Handel "Water Music" movement III carries sub-parts IIIa/IIIb renders that one movement at PL=3 — the exact "ragged
-depth" the rule targets (Shapes C/D of the census).
+**The structural fact that shapes this shard (survey 2026-08-12).**  R6b is **not** a paths-only
+repath the way R6a was.  R6a changed only *rendering*: `build_dest_path` re-derives depth from
+still-correct `CWP_PART_LEVELS` tags, so R6d's paths-only `repath` renders the fix for free.  Here the
+**embedded tag content itself is corrupt**, and `build_dest_path` reads `CWP_PART_{i}` **verbatim**
+(`_tags.py:1414`) — so `repath` alone re-renders `01 - 31` from the corrupt tag.  The survey confirmed
+**no existing offline pass rewrites `CWP_PART_*` / `CWP_GROUPHEADING` tag content**: `repath` /
+`regroup` / `unify` are paths-only (they consume those tags read-only); `enrich` writes only
+fingerprint fields.  So R6b's core deliverable is **new offline tag-content-repatch machinery**.
 
-**Scope is narrow and the census small (Shapes C/D = 3 groups at L2-design time).**  This is not a large migration;
-it is a permanent-policy interface decision over a small population (BACKLOG:279–281: "changes the path output for
-~3% of the library and becomes the permanent policy for all future `run()`").
+**The enabling fact (mirrors R6a's no-MB-call resolution).**  The corrected label is re-derivable
+**offline, with no MB network call**, from data already embedded in the file: `build_cwp_tags` derives
+each label as `strip_common_prefix(CWP_WORK_i, CWP_WORK_{i+1})` (`_tags.py:526`), and both work-title
+levels are present in the file as `CWP_WORK_{i}` tags alongside the corrupt `CWP_PART_{i}`.  Applying
+the *shipped* `strip_common_prefix` to that embedded pair reproduces the correct label.  This is the
+S1 inflection: the detection predicate and the offline re-derivation are the load-bearing judgment.
 
 **Interface posture (resolved at this PLAN derivation — the S1 inflection judgments):**
 
-1. **Direct parameter, not `model_extra`.**  `build_dest_path` receives the work-group's modal depth as an explicit
-   typed parameter; callers (`run`/`repath`/`regroup`) compute it from the group and pass it.  Chosen over the
-   BACKLOG:315 `cwp_render_levels`-as-`model_extra` sketch because `model_extra` access is loosely typed (tension
-   with the repo's strict-mypy / no-`Any` rule) and couples the depth decision into the tag-model lifecycle; a
-   direct parameter keeps the data flow explicit and unit-testable, and matches the BACKLOG:302 "callers pass the
-   group context" clause.  **Tradeoff:** every caller must now assemble the work-group and compute the modal depth
-   (more caller-side wiring) — worse on caller simplicity than a self-contained `model_extra` read, accepted as the
-   price of typed, explicit depth flow.
-2. **Default already-modal (clamp on by default), not default-`None`.**  Since new-ingest rendering *is* the
-   deliverable, the clamp is **on** for `run()` immediately.  BACKLOG:300's "default `None` until repath completes"
-   was written pre-J2 when repath and ingest were coupled; with the D-A5 code-only split, new ingests render clamped
-   now and the existing library re-derives when `repath` runs (R6d's one J3-gated pass).  **Matches the
-   canonical-name-forms precedent** (new ingests render canonical now; repath rides R6d).  **Tradeoff:** existing
-   `Done/` dirs are temporarily non-conformant for the Shapes-C/D groups until R6d — the accepted D-A4-style
-   inconsistency — worse on immediate library uniformity than an in-shard repath, accepted to keep this shard off
-   the J3 gate and inside the fast src/tests inner loop.
+1. **Re-derive offline from embedded `CWP_WORK` tags, not from MB.**  The repatch recomputes the label
+   as `strip_common_prefix(CWP_WORK_i, CWP_WORK_{i+1})` over the embedded work titles — the same call
+   the forward fix uses at build time — so the repatch is deterministic, offline, and network-free.
+   Chosen over a re-fetch-from-MB pass because the corrected label is a pure function of data already
+   in the file; a network pass would be slower, fallible, and would re-open identity questions this
+   fix does not touch.  **Tradeoff:** relies on the embedded `CWP_WORK_{i}` titles being intact (they
+   are — only the *derived* `CWP_PART` was corrupted, never the source `CWP_WORK`); if a file somehow
+   lacks the `CWP_WORK` pair the repatch cannot recompute and must leave the tag untouched + flag it —
+   worse on completeness than an MB re-fetch, accepted because the survey shows the `CWP_WORK` levels
+   are always written alongside `CWP_PART` (`_tags.py:1015–1022`).
+2. **Detect by re-derivation disagreement, not by a catalogue-fragment regex.**  A `CWP_PART_{i}` is
+   corrupt iff it differs from `strip_common_prefix(CWP_WORK_i, CWP_WORK_{i+1})` recomputed under the
+   fixed rule.  Chosen over "looks like a bare number / matches a Hob./BWV/HWV pattern" because the
+   forward fix is already the authority on what the label *should* be — detecting by disagreement
+   makes the predicate structural (it fires exactly where the old bug fired) and needs no
+   per-composer catalogue table.  **Tradeoff:** the predicate rewrites *any* label that disagrees
+   with the current rule, not only catalogue-colon cases — so a future unrelated rule change would
+   make it repatch more broadly.  Accepted and bounded: scope this pass to the catalogue-colon
+   signature (a disagreement where the *old* label is a prefix-free fragment of the recomputed one),
+   and let R6d's one-pass own any broader re-derivation.
+3. **Code-only; destructive library-wide repatch rides R6d (D-A5 precedent).**  This shard builds and
+   freezes the machinery and proves it on fixtures via the src/tests gate; it does **not** run the
+   repatch destructively on the live library.  R6d runs it under J3, as one part of its one-pass —
+   and this machinery *closes the R6d tag-content gap* for the catalogue-colon case.  **Matches R6a /
+   the canonical-name-forms precedent.**  **Tradeoff:** the ~16 latent Haydn/Bach/Handel releases stay
+   corrupt on disk until R6d — the accepted D-A4/D-A6-style temporary inconsistency — worse on
+   immediate library uniformity than an in-shard repatch, accepted to keep this shard off J3 and
+   inside the fast src/tests inner loop.
 
-**Sequencing (D-A5/D-A7 precedent).**  Code-only: `build_dest_path` renders clamped depth for new ingests, verified
-by the src/tests gate.  The destructive library-wide depth-repath is the existing offline `repath` engine
-(`_pipeline_maint.py:405` — recomputes every path from `build_dest_path`, no network), run once under R6d's J3
-gate.  This shard lands the render; R6d runs the repath.  No destructive library operation in R6a.
+**Sequencing (D-A5/D-A7 precedent).**  Code-only: the repatch pass is built and unit-proven; the
+destructive library-wide repatch is R6d's one J3-gated pass.  No destructive library operation in R6b.
 
 The three sessions, in landing order:
 
-1. **S1 @architect — Modal-depth substrate + clamped `build_dest_path` interface.**  Add a work-group modal-depth
-   helper (frozen corner pins: modal ties → shallower; PL=0 orphans excluded) and the group-modal-depth parameter
-   on `build_dest_path`, clamping `part_levels` to `min(own, modal)` at the depth branch.  Freezes **C-W3b-INT**.
-2. **S2 — Thread the modal depth through the render callers.**  Compute the work-group modal depth in `run`,
-   `repath`, `regroup` and pass it to `build_dest_path` so ingest and maintenance render identically.  Consumes
-   C-W3b-INT.
-3. **S3 ◆ — Fresh scan gate + census refresh + register anneal.**  Re-run `scan_nonuniform_depth.py` against the
-   complete library (the gating step; distinguish scan-not-run from no-findings), validate the six-shape taxonomy
-   against the fresh scan (a new mishandled shape = J2 reopen trigger), refresh the stale 36-group census; close
-   the sub-track; anneal the planning register.
+1. **S1 @architect — Detect + offline re-derivation substrate.**  Add the corruption-detection
+   predicate (disagreement with the recomputed label; catalogue-colon signature) and the offline
+   re-derivation helper (`strip_common_prefix` over the embedded `CWP_WORK` pair, no MB call).
+   Freezes **C-CAT-INT**.
+2. **S2 — Offline repatch pass (write-back + `CWP_GROUPHEADING` rebuild).**  Add the maintenance pass
+   that applies the S1 re-derivation to embedded tags — rewrite `CWP_PART_*`, rebuild `CWP_GROUPHEADING`
+   from the corrected labels (`_tags.py:561` grammar), write via `apply_tags_*` on the `enrich`
+   re-tag→`_verify_copy`→journal provenance chain — with `dry_run` and idempotency.  Consumes
+   C-CAT-INT.  Not run destructively.
+3. **S3 ◆ — Fresh scan gate + census refresh + register anneal.**  New scanner for `NN - NN`
+   intermediate dirs / bare-catalogue `CWP_PART_*`; refresh the stale "1 release fired / ~16 latent"
+   census against the current library (distinguish scan-not-run from no-findings); validate the
+   repatch against a representative fixture; close the sub-track; anneal the planning register.
 
 ## Verify gate
 
-Discovered from `pyproject.toml` (tox envs); do not assume `make`.  Both **binding** — this is a code sub-track.
-(Confirm green at shard time before S1.)
+Discovered from `pyproject.toml` (tox envs); do not assume `make`.  Both **binding** — this is a code
+sub-track.  (Confirm green at shard time before S1.)
 
-- **VERIFY_TEST**: `~/.local/bin/tox -e test` (`pytest tests/`; **100% branch coverage enforced**, `fail_under = 100`).
+- **VERIFY_TEST**: `~/.local/bin/tox -e test` (`pytest tests/`; **100% branch coverage enforced**,
+  `fail_under = 100`).
 - **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` (`mypy src/ tests/`, strict).
-- Full gate before any row is declared done: `~/.local/bin/tox -m analyze` (build + test + check_type + check_format
-  + check_lint 10.00/10 + check_upgrade).  The AGENTS.md "never skip `tox -m analyze`" rule applies to every row.
-- **S3 scan step is not gate-covered:** `scripts/scan_nonuniform_depth.py` lives outside `src/`+`tests/` (like
-  `scan_fragmentation.py` / `census_original.py`); it runs clean under `venv/bin/python -m py_compile` and
-  best-effort `venv/bin/mypy scripts/` but is not `tox`-enforced.  Its gating role is producing a fresh scan the S3
-  ◆ review consumes, not passing the gate.
+- Full gate before any row is declared done: `~/.local/bin/tox -m analyze` (build + test + check_type +
+  check_format + check_lint 10.00/10 + check_upgrade).  The AGENTS.md "never skip `tox -m analyze`" rule
+  applies to every row.  Import order via `~/.local/bin/tox -m edit`, never hand-edited.
+- **S3 scan step is not gate-covered:** the new scanner lives outside `src/`+`tests/` (like
+  `scan_nonuniform_depth.py` / `scan_fragmentation.py` / `census_original.py`); it runs clean under
+  `venv/bin/python -m py_compile` and best-effort `venv/bin/mypy scripts/` but is not `tox`-enforced.
+  Its gating role is producing a fresh scan the S3 ◆ review consumes, not passing the gate.
 
 ## Session list
 
 | # | Session | Cat | Tier | Consumes | Expected files |
 |---|---------|-----|------|----------|----------------|
-| 1 @architect | Add work-group modal-depth clamp to build_dest_path | A | Opus | C-W3b (rule + corner pins), STYLEGUIDE 4.5, NOTES two-rules | `src/music_annotator/_tags.py`, `src/music_annotator/_works.py`, `tests/unit/test_annotator.py` |
-| 2 | Thread work-group modal depth through the render callers | B | Sonnet | **C-W3b-INT** | `src/music_annotator/_pipeline.py`, `src/music_annotator/_pipeline_maint.py`, `tests/unit/test_pipeline.py`, `tests/unit/test_pipeline_maint.py` |
-| 3 ◆ | Refresh the depth census + anneal | I | Sonnet | **C-W3b-INT**, `scan_nonuniform_depth.py` | `scripts/scan_nonuniform_depth.py`, `docs/BACKLOG.md`, `tests/unit/test_annotator.py` |
+| 1 @architect | Detect corrupt catalogue-colon CWP_PART labels and re-derive them offline | A | Opus | `strip_common_prefix` (NORM-9 forward fix), STYLEGUIDE 4.x | `src/music_annotator/_works.py`, `src/music_annotator/_tags.py`, `tests/unit/test_annotator.py` |
+| 2 | Rewrite corrupt CWP_PART_*/CWP_GROUPHEADING in an offline repatch pass | B | Sonnet | **C-CAT-INT** | `src/music_annotator/_pipeline_maint.py`, `src/music_annotator/_tags.py`, `tests/unit/test_pipeline_maint.py` |
+| 3 ◆ | Scan the library for corrupt catalogue-colon labels + census + anneal | I | Sonnet | **C-CAT-INT**, `scan_catalogue_colon.py` | `scripts/scan_catalogue_colon.py`, `docs/BACKLOG.md`, `tests/unit/test_pipeline_maint.py` |
 
-`Cat`: **S1 is A (substrate)** — freezes **C-W3b-INT**, the modal-depth helper + `build_dest_path` clamp interface
-that S2's caller-threading and every future clamped render consume; over-specify (carry the group-context parameter
-and the corner-pin logic even though S2 is the first consumer).  **S2 is B** — mechanical threading of the frozen
-interface through the three callers; self-contained once C-W3b-INT exists.  **S3 is I (integrative)** — the
-fresh-scan gate + taxonomy validation + census refresh give the contract its operator-visible/durable form (the
-fresh scan is what R6d's repath will re-derive against), close the ◆, carry the anneal.
+`Cat`: **S1 is A (substrate)** — freezes **C-CAT-INT**, the detect-predicate + offline re-derivation
+that S2's repatch pass and every future consumer read; over-specify (carry the general
+"disagreement with the recomputed label" predicate and the `CWP_WORK`-pair re-derivation even though
+S2 is the first consumer).  **S2 is B** — the tag-content write-back mechanics over the frozen
+predicate, modelled on the existing `enrich` provenance chain.  **S3 is I (integrative)** — the
+fresh-scan gate + census refresh give the contract its operator-visible/durable form (the scan is what
+R6d's repatch will run against), close the ◆, carry the anneal.
 
-`Tier`: **S1 is Opus + `@architect` inflection.**  BACKLOG:279 names it "an architectural boundary decision …
-permanent policy for all future `run()`"; the interface posture (resolved above) and the **tag-data-sufficiency
-question** — can `CWP_PART_LEVELS` + the group modal depth distinguish faithful-over-resolution (clamp) from a
-data-gap shallowness (preserve) *without* a MB network call — is the S1 judgment tests alone cannot catch (lever 3:
-design-error cost).  **S2, S3 are Sonnet** — mechanical over a frozen interface with a strong inner loop (lever 5:
-100% branch coverage + strict mypy).  `juncture-tier: opus` — kept (arc default; C-W3b-INT is durable permanent path
-policy).
+`Tier`: **S1 is Opus + `@architect` inflection.**  The detection predicate is permanent policy over
+the whole library and must not false-positive on a legitimately-short label (a real one-word movement
+title vs a bare catalogue fragment) — the disagreement-based predicate and the "no MB call, re-derive
+from the embedded `CWP_WORK` pair" ruling are the S1 judgments tests alone cannot catch (lever 3:
+design-error cost; lever 4: correctness-criticality — a false-positive rewrites a *correct* label).
+**S2, S3 are Sonnet** — mechanical over a frozen predicate with a strong inner loop and an existing
+write-pass precedent (`enrich`) to model (lever 5: 100% branch coverage + strict mypy).
+`juncture-tier: opus` — kept (arc default).
 
 **Sizing (levers named).**  Default band ~150–400 LOC / 2–4 files.
 
-- **S1 ≈ 150–250 LOC, 3 files** (modal-depth helper + corner-pin logic + `build_dest_path` parameter + clamp +
-  tests).  Within band.  **Irreducible unit (lever 2, floor):** the modal-depth computation, the corner pins, and
-  the clamp interface are one contract — a modal helper with no interface to consume it is dead code; the interface
-  with no modal source is a no-op.  Kept whole.  **Lever 3 (design-error cost ↑):** high cost-of-wrong is *why* S1
-  is Opus+inflection, not why it fractures.  One-line title: "Add work-group modal-depth clamp to build_dest_path"
-  — passes.
-- **S2 ≈ 80–150 LOC, 4 files** (compute modal depth in `run`/`repath`/`regroup` + pass it + tests).  **Separate
-  session by the one-line-commit-title corollary** — "thread the modal depth through the callers" is distinct from
-  "define the clamp"; split legitimately at the contract-sharp C-W3b-INT boundary (S1 freezes the interface S2
-  consumes).  **Lever 1 (ambient complexity):** the three-caller threading (each caller assembles the work-group)
-  is the real work; not fractured below the floor.
-- **S3 ≈ 40–100 LOC + scan run, 3 files** (scan-run gate + taxonomy-validation note + census refresh + a
-  no-regression parity test + anneal).  Under band; **separate by the corollary** — the fresh-scan/census/anneal is
-  one integrative unit; merging into S2 yields an "and"-joined title.  Not fractured below the floor (the scan
-  *validates* the taxonomy the anneal reports).
+- **S1 ≈ 120–200 LOC, 2–3 files** (detect predicate + offline re-derivation helper + KATs).  Within
+  band.  **Irreducible unit (lever 2, floor):** the predicate and the re-derivation are one contract —
+  a predicate that says "corrupt" without a correct value to compare against is undefined; the
+  re-derivation with no predicate to trigger it is dead code.  Kept whole.  **Lever 3/4:** high
+  cost-of-wrong / correctness-crit is *why* S1 is Opus+inflection, not why it fractures.  One-line
+  title: "Detect corrupt catalogue-colon CWP_PART labels and re-derive them offline" — passes.
+- **S2 ≈ 150–250 LOC, 3 files** (the offline repatch pass: apply re-derivation, rewrite `CWP_PART_*`,
+  rebuild `CWP_GROUPHEADING`, write-back on the `enrich` provenance chain, `dry_run`/idempotency +
+  tests).  Within band.  **Separate session by the one-line-commit-title corollary** — "run the
+  repatch" is distinct from "define what's corrupt and what's correct"; split legitimately at the
+  contract-sharp C-CAT-INT boundary (S1 freezes the predicate S2 consumes).  **Lever 1 (ambient
+  complexity):** the first tag-content-mutation maintenance pass — but `enrich` is a direct precedent
+  (offline re-tag→`_verify_copy`→journal), so this is not greenfield; not fractured below the floor.
+- **S3 ≈ 60–120 LOC + scan run, 2–3 files** (new scanner + census refresh + a no-regression repatch
+  parity test + anneal).  Under band; **separate by the corollary** — the scan/census/anneal is one
+  integrative unit; merging into S2 yields an "and"-joined title.  Not fractured below the floor (the
+  scan validates the population the census reports).
 
 ## Session detail
 
-### S1 @architect — Add work-group modal-depth clamp to build_dest_path — freezes C-W3b-INT
+### S1 @architect — Detect corrupt catalogue-colon CWP_PART labels and re-derive them offline — freezes C-CAT-INT
 
-**Deliverable.**  `build_dest_path` clamps per-track depth to the work-group modal depth:
-- `_works.py` (or `_tags.py` near `build_cwp_tags`): add `work_group_modal_depth(part_levels_list: list[int]) ->
-  int` — the modal `CWP_PART_LEVELS` over a work-group's tracks, with the **frozen corner pins**: on a modal tie,
-  choose the **shallower** depth; **exclude PL=0 orphans** (Shape E) from the modal computation.  Total, pure, no
-  I/O.
-- `_tags.py`: `build_dest_path` gains a typed parameter carrying the work-group modal depth (name at implementer
-  discretion, e.g. `group_modal_depth: int | None = None`).  At the depth branch (`:1333`, `:1387`), the effective
-  level count becomes `min(part_levels, group_modal_depth)` when the parameter is supplied.  **Posture: default
-  already-modal** for `run()` — but the *parameter default* is `None` = "no group context, render own depth" (so a
-  caller that genuinely has no group, e.g. a single-file diagnostic, still works); the clamp engages whenever a
-  caller passes the modal depth, which S2 makes `run()`/`repath()`/`regroup()` always do.  (This reconciles "default
-  already-modal" behaviour with a safe parameter default: the *pipeline* default is modal because the callers always
-  pass it; the *function* tolerates absence.)
-- Update the `build_dest_path` and helper docstrings to state the property (uniform-ceiling/ragged-floor clamp to
-  the work-group modal depth), never the plan coordinate.
+**Deliverable.**  A pure, offline detect-and-re-derive substrate:
+- **Re-derivation helper** (`_works.py` near `strip_common_prefix`, or `_tags.py` near
+  `build_cwp_tags`): given a file's embedded `CWP_WORK_{i}` / `CWP_WORK_{i+1}` titles, recompute the
+  correct level-`i` part label as `strip_common_prefix(CWP_WORK_i, CWP_WORK_{i+1})` — the exact call
+  `build_cwp_tags` makes at `_tags.py:526`.  Total, pure, no I/O, no MB call.  When the `CWP_WORK`
+  pair is absent, return a sentinel "cannot recompute" (do not fabricate).
+- **Detection predicate:** a `CWP_PART_{i}` is corrupt iff it differs from the recomputed label **and**
+  the difference has the catalogue-colon signature (the stored label is a bare fragment of what the
+  recomputed label yields — i.e. the old bare-`":"` split truncated it).  Bound the predicate to the
+  catalogue-colon signature so it does not become a general "re-derive every label" pass (that is
+  R6d's one-pass scope, not this shard's).
+- Docstrings state the property (detect a label the pre-`": "` split corrupted; re-derive offline from
+  the embedded `CWP_WORK` pair), never the plan coordinate.
 
-**KAT (the freeze witness for C-W3b-INT).**  In `test_annotator.py`, over `build_dest_path` + the modal helper:
-(a) **clamp-down** — a work-group with modal depth 2 and one PL=3 over-resolved movement (Handel Water Music
-IIIa/IIIb shape) renders that movement's path at **2 levels** (the over-resolution removed), not 3;
-(b) **ragged-floor preserved** — a work-group with modal depth 2 and one genuinely-shallow PL=1 node (Shape A
-overture-among-acts) renders the shallow node **unchanged at 1 level** (never padded up);
-(c) **modal-tie → shallower** — a group split evenly (e.g. {2,2,3,3}) resolves the tie to the **shallower** modal;
-(d) **PL=0 orphan excluded** — a group with a PL=0 orphan (Shape E) computes the modal over the non-orphan tracks;
-(e) **no-group / parameter-absent** — `build_dest_path(..., group_modal_depth=None)` renders own depth (backward
-compatibility / no-regression proof).
-
-**Subtleties.**
-- **The tag-data-sufficiency inflection (the `@architect` judgment).**  J2 left open whether `CWP_PART_LEVELS` + the
-  group modal depth can distinguish **faithful over-resolution** (clamp) from a **data-quality-gap shallowness**
-  (preserve + surface upstream) *without a MB network call*.  Ruling to make and freeze at S1: the clamp is **purely
-  a down-projection** — it only ever *reduces* a leaf's depth to the modal, and **never pads up**, so the data-gap
-  case (a node shallower than modal) is **automatically left untouched** by a `min()` clamp.  Therefore the
-  min-clamp needs **no** gap-vs-faithful discrimination and **no** network call: the asymmetry of the rule (clamp
-  down only) makes the distinction moot for *rendering*.  (The upstream data-gap *surfacing* — flagging the missing
-  `part-of` link — is a separate MB-upstream concern, Shape E, explicitly out of scope here.)  Confirm this
-  reasoning against the census shapes before freezing; if a shape is found where min-clamp mis-renders, that is the
-  reopen trigger J2 named.
-- **Over-specify per Category-A.**  Carry the corner-pin logic (tie → shallower, PL=0 exclusion) and the group
-  parameter now even though S2 is the first consumer and the census population is 3 groups — a future
-  full-projection/audit consumer or a new shape will want them, and adding them later is costlier (compiler-contract
-  rigidity).
-- **100%-branch-coverage gate.**  The clamp branch, the parameter-absent branch, the modal-tie branch, and the
-  PL=0-exclusion branch each need an explicit test; any `match/case` over shape needs a `case _: # pragma: no cover`
-  arm if the union is exhaustive.
-- **"Path is a handle, not a manifest."**  The clamp changes *depth* (how many nested dirs), never *which* entities
-  the path carries — the handle stays a handle.
-
-**Deferrals.**  No caller threading (S2); no fresh scan / census refresh (S3); no destructive repath (R6d).
-
-### S2 — Thread work-group modal depth through the render callers
-
-*(Lower-fidelity sketch — correct for a post-substrate row; crisply specified after C-W3b-INT freezes at S1.)*
-
-**Deliverable.**  Compute the work-group modal depth at each `build_dest_path` caller and pass it, so ingest and
-maintenance render identically:
-- `_pipeline.py` `run()` (the work-group loop): assemble each work-group's `CWP_PART_LEVELS` set, compute the modal
-  via the S1 helper, pass it to `build_dest_path`.
-- `_pipeline_maint.py` `repath()` (`:405`) and `regroup()` (`:620`): same, from the embedded-tag work-group each
-  builds offline.  This is the site R6d's one-pass repath drives — after S2, `repath` re-derives existing paths at
-  clamped depth.
-- Freeze at S1 detail whether the modal depth is computed once per work-group and shared (preferred — one
-  computation per group) or per-track (redundant); prefer per-group.
-
-**KAT (behavioural witness).**  A `run()`-level (or `repath()`-level) test over a work-group with a Shape-C/D
-over-resolved movement asserts the emitted path clamps to the modal depth; a uniform-depth group asserts the path
-is **unchanged** from pre-S2 (no-regression).  A `repath`-vs-`run` parity assertion (same group → byte-identical
-path) guards ingest/maintenance identity.
+**KAT (the freeze witness for C-CAT-INT).**  In `test_annotator.py`:
+(a) **Haydn Hoboken clamp-down of the bug** — a file with `CWP_WORK_1 = "String Quartet …, Hob. III:31"`,
+`CWP_WORK_2 = "String Quartets, op. 20"`, corrupt `CWP_PART_1 = "31"` → predicate fires; re-derivation
+yields the full corrected label (the shipped `strip_common_prefix` output), not `"31"`;
+(b) **legitimately-short label preserved** — a file with a genuinely one-word correct label that equals
+its own recomputed value → predicate does **not** fire (no false-positive rewrite);
+(c) **colon-space label preserved** — a correct `Title: Movement` label (`": "`) recomputes to itself →
+no fire;
+(d) **`CWP_WORK` pair absent** — the helper returns "cannot recompute"; the predicate does not fire and
+the tag is left untouched (the safe branch);
+(e) **`CWP_GROUPHEADING` corruption detectable** — the same disagreement is visible in the groupheading
+segments (S2 rebuilds it; S1 proves the segment-level re-derivation).
 
 **Subtleties.**
-- **Ingest/maintenance parity is the point.**  `run` and `repath`/`regroup` must compute the modal depth the same
-  way or the library repath (R6d) would diverge from new ingests.  A parity test guards it.
-- **Group assembly off embedded tags.**  `repath`/`regroup` have no `MBRelease` (they call `build_dest_path` with
-  empty `MBRelease()`); the work-group must be assembled from `CWP_WORKID_TOP` on the embedded tags exactly as
-  `scan_nonuniform_depth.py` groups.  Reuse that grouping definition; do not mint a second one.
-- **match/case coverage.**  Cover both clamp-engaged and clamp-noop caller outcomes.
+- **The false-positive inflection (the `@architect` judgment).**  The predicate must fire on the
+  bug's output and **only** on it — a real short movement title (e.g. `"Gigue"`, `"Coda"`) must not be
+  rewritten.  Ruling to make and freeze at S1: detect by **disagreement with the recomputed label**,
+  not by "looks like a number / matches a catalogue pattern".  Because the recomputed label *is* the
+  authority (the shipped forward fix), a correct label recomputes to itself and cannot false-positive;
+  a corrupt label recomputes to the full title and fires.  Confirm this against the census signatures
+  (Hob./BWV/HWV) before freezing; a shape where a *correct* label disagrees with its recomputation is
+  the reopen trigger (the forward fix, not just this interface, would be suspect).
+- **Offline, no MB call.**  The re-derivation is a pure function of embedded `CWP_WORK` titles —
+  mirror R6a's "the rule's structure moots the network question" resolution: here the source data is
+  in the file, so no fetch is needed.
+- **Over-specify per Category-A.**  Carry the general disagreement predicate and the `CWP_WORK`-pair
+  re-derivation now even though S2 is the first consumer over a ~16-release population — a future
+  full-re-derivation consumer (R6d) or a new signature will want them.
+- **100%-branch-coverage gate.**  The fire branch, the no-fire branch, the cannot-recompute branch,
+  and any `match/case` over signature need explicit tests (`case _: # pragma: no cover` if exhaustive).
 
-**Deferrals.**  No fresh scan / census (S3); no destructive repath (R6d).
+**Deferrals.**  No write-back / repatch pass (S2); no fresh scan / census (S3); no destructive repatch
+(R6d).
 
-### S3 ◆ — Refresh the depth census + register anneal
+### S2 — Rewrite corrupt CWP_PART_*/CWP_GROUPHEADING in an offline repatch pass
+
+*(Lower-fidelity sketch — correct for a post-substrate row; crisply specified after C-CAT-INT freezes at S1.)*
+
+**Deliverable.**  A new offline maintenance pass (in `_pipeline_maint.py`, modelled on `enrich`) that:
+- Resolves current on-disk paths via the journal lineage (`_resolve_current_lib`), reads each FLAC/MP3's
+  embedded tags, applies the S1 predicate; for each corrupt `CWP_PART_{i}`, rewrites it to the
+  re-derived label and **rebuilds `CWP_GROUPHEADING`** from the corrected part labels using the
+  `build_cwp_tags` grammar (`_tags.py:561`, `" :: ".join(...)`) — reuse that grammar, do not mint a
+  second groupheading assembler.
+- Writes via `apply_tags_flac` / `apply_tags_mp3` on the **`enrich` provenance chain**: re-tag →
+  `_verify_copy` (tag round-trip) → append a journal entry only after verification (a new `action`,
+  e.g. `"repatched"`).  Idempotent (a second run on a corrected library is a no-op) and `dry_run`-aware
+  (log planned repatches, write nothing).
+- **Not run destructively on the live library** — the pass is proven on fixtures; R6d drives it under J3.
+
+**KAT (behavioural witness).**  A fixture FLAC/MP3 with the corrupt Haydn tags → after the pass,
+`CWP_PART_1` and `CWP_GROUPHEADING` read back corrected; `build_dest_path` on the corrected tags now
+renders `NN - <full label>` (the path fix follows the tag fix); a `dry_run` run writes nothing; a
+second run is a no-op (idempotency); a file with no corruption is untouched (no-regression).
+
+**Subtleties.**
+- **Model on `enrich`, don't invent.**  `enrich` is the existing offline tag-content write pass
+  (P-FP3/P-FP4: idempotent, `dry_run`, re-tag→`_verify_copy`→journal).  Reuse that shape — this
+  de-risks the "first tag-content-mutation pass" concern (lever 1): there is a precedent.
+- **The path fix is a consequence, not a separate step.**  Once the embedded `CWP_PART_*` is
+  corrected, `build_dest_path` renders the right label automatically (it reads the tag verbatim), so a
+  subsequent `repath` (R6d) produces the corrected directory.  S2 need not repath — it fixes the tags;
+  R6d repaths.
+- **Provenance chain is load-bearing.**  Do not append the `"repatched"` journal entry before
+  `_verify_copy` confirms the round-trip — the same confirmation-provenance invariant `enrich` obeys.
+- **match/case coverage.**  Cover repatch-applied, dry-run, no-corruption, and cannot-recompute
+  outcomes.
+
+**Deferrals.**  No fresh scan / census (S3); no destructive library run (R6d).
+
+### S3 ◆ — Scan the library for corrupt catalogue-colon labels + census + anneal
 
 *(Lower-fidelity sketch — post-substrate integrative row.)*
 
-**Deliverable.**  Validate the frozen taxonomy against a fresh scan and refresh the stale census:
-- Re-run `scripts/scan_nonuniform_depth.py` against the **complete library** (operator mounts it — confirmed
-  2026-08-12).  **Distinguish scan-not-run (unmounted/empty root → never report clean) from no-findings** (the R4b
-  D-1 hazard); if the library is unmounted at execution, S3 records the scan as *not run* and the ◆ review notes the
-  census refresh as pending, rather than asserting the taxonomy holds.
-- **Validate the six-shape taxonomy** (A/B/C/D/E/F, BACKLOG:340–347) against the fresh scan.  A new shape the
-  uniform-ceiling min-clamp mishandles is the **J2 reopen trigger** (surface as a discovery; do not silently
-  absorb).  If the taxonomy holds, refresh the "36-group / 3.6%" figures in `docs/BACKLOG.md` to the current
-  library.
-- Optionally have the scanner emit a small machine-readable artifact (JSON) if that eases the R6d prerequisite;
-  implementer judgment, not a freeze.
+**Deliverable.**  Validate the fix's population and refresh the stale census:
+- New `scripts/scan_catalogue_colon.py` (standalone, `scan_nonuniform_depth.py` precedent): scan the
+  **complete library** for `NN - NN` intermediate dirs and for any embedded `CWP_PART_*` the S1
+  predicate flags as corrupt.  **Distinguish scan-not-run** (unmounted/empty root → never report clean)
+  **from no-findings** (the R4b D-1 / R6a D-3 hazard); if unmounted at execution, record the census as
+  *not run* and note the refresh pending.
+- Refresh the stale BACKLOG figure ("bug fired on 1 release; ~16 Haydn + Bach/Handel latent") to the
+  current library — BACKLOG:255 is explicit that the census "must be re-run, not assumed to be the
+  single Angeles release."  A signature the S1 predicate mis-detects (a correct label flagged, or a
+  corrupt one missed) is the reopen trigger — surface as a discovery; do not silently absorb.
 
-**KAT.**  A no-regression parity test asserting the S1/S2 clamp behaviour still holds against a representative
-Shape-C/D fixture (belt-and-suspenders over the S1/S2 KATs; the integrative session's behavioural pin).
+**KAT.**  A no-regression parity test asserting the S1/S2 detect+repatch behaviour still holds against a
+representative Haydn Hoboken fixture (the integrative session's behavioural pin).
 
-**Subtleties.**  No `src/` change in S3 unless a scanner helper is promoted (it should not be — keep the scanner
-standalone per the `scan_fragmentation.py`/`census_original.py` precedent).  Purely a render-validation + census +
-anneal row; **no destructive library operation** (R6d runs the repath under J3).
+**Subtleties.**  No `src/` change in S3 unless a scanner helper is promoted (it should not be — keep the
+scanner standalone per the `scan_fragmentation.py` precedent).  Purely a scan-validation + census +
+anneal row; **no destructive library operation** (R6d runs the repatch under J3).
 
-**◆ boundary (register anneal).**  Re-read Purpose.  Confirm all three sessions enacted, `tox -m analyze` green,
-ledger complete.  **Planning-register anneal** (the integrative session is where the contract gets its public form —
-the anneal is the same act):
-- Durable files (`_tags.py`, `_works.py`, `_pipeline.py`, `_pipeline_maint.py`, `scan_nonuniform_depth.py`
-  docstrings/comments) carry **no plan coordinates** — no "S1/S2/S3", no "R6a", no "path-depth-normalisation
-  sub-track", no `/plan-run` vocabulary.  State the property/reason/invariant (e.g. "clamp leaf depth to the
-  work-group modal depth per the uniform-ceiling/ragged-floor rule, STYLEGUIDE 4.5 / C-W3b"), never the plan
-  coordinate.
-- Grep the durable files against the **anneal denylist** (Notes for executors); translate any leaked coordinate into
-  standalone prose.
-- Report to the library-completion roadmap: the depth-clamp render is enacted; C-W3b-INT frozen.  **R6d coordination
-  noted** — the clamp render is aligned in `repath`/`regroup`; R6d runs the destructive library-wide depth-repath
-  under J3 (this sub-track lands the render, not the repath), as one part of its paths-only one-pass (see the
-  ROADMAP R6d tag-content-scope caveat).
+**◆ boundary (register anneal).**  Re-read Purpose.  Confirm all three sessions enacted, `tox -m analyze`
+green, ledger complete.  **Planning-register anneal:**
+- Durable files (`_works.py`, `_tags.py`, `_pipeline_maint.py`, `scan_catalogue_colon.py`
+  docstrings/comments) carry **no plan coordinates** — no "S1/S2/S3", no "R6b", no "catalogue-colon
+  sub-track", no `/plan-run` vocabulary.  State the property/reason/invariant (e.g. "re-derive the part
+  label offline from the embedded CWP_WORK pair per the `": "` split, NORM-9 / STYLEGUIDE 4.x"), never
+  the plan coordinate.
+- Grep the durable files against the **anneal denylist** (Notes for executors); translate any leaked
+  coordinate into standalone prose.
+- Report to the library-completion roadmap: the offline tag-content-repatch machinery is enacted;
+  C-CAT-INT frozen.  **R6d coordination noted** — the machinery closes the R6d tag-content gap for the
+  catalogue-colon case; R6d runs the destructive library-wide repatch under J3 (this sub-track lands
+  the machinery, not the destructive run).
 
 ## Cross-session contracts
 
-### C-W3b-INT — the build_dest_path depth-clamp interface *(FROZEN at S1)*
+### C-CAT-INT — the catalogue-colon detect + offline re-derivation interface *(to be frozen at S1)*
 
-**Modal-depth helper + clamp interface (frozen at S1).**  `work_group_modal_depth(part_levels_list) -> int` returns
-the work-group's modal `CWP_PART_LEVELS` with the frozen corner pins (modal tie → shallower; PL=0 orphans excluded).
-`build_dest_path` gains a typed group-modal-depth parameter; the effective per-leaf level count is `min(own
-part_levels, group_modal_depth)` when supplied, else own depth (parameter default `None` = own depth).  **Rule
-invariant (C-W3b, J2-frozen): clamp down only, never pad up** — the `min()` makes this structural, so no
-gap-vs-faithful discrimination and **no MB network call** is needed at render (the tag-data-sufficiency question,
-resolved: the rule's asymmetry moots it for rendering; upstream data-gap surfacing is a separate MB-upstream concern,
-out of scope).  The helper is total (never raises; returns a non-negative int).  Deterministic: the same work-group
-resolves to the same modal depth regardless of release.
+**Detect predicate + offline re-derivation (to be frozen at S1).**  A `CWP_PART_{i}` is corrupt iff it
+differs from `strip_common_prefix(CWP_WORK_i, CWP_WORK_{i+1})` recomputed under the shipped `": "`
+rule **and** the difference has the catalogue-colon signature (stored label is a bare fragment of the
+recomputed one).  The re-derivation is a **pure function of embedded `CWP_WORK` titles — no MB network
+call**; when the `CWP_WORK` pair is absent it returns a "cannot recompute" sentinel and the predicate
+does not fire (the safe branch — never fabricate a label).  **Invariant:** a *correct* label recomputes
+to itself, so the predicate cannot false-positive on a legitimately-short movement title (the S1
+correctness-criticality judgment).  Deterministic and total.
 
-**Posture (frozen at S1).**  *Default already-modal* at the pipeline level (callers always pass the modal depth, so
-new ingests clamp immediately) reconciled with a *safe function default* (`None` → own depth, so a group-less caller
-still renders).  Chosen carrier: **direct typed parameter**, not `cwp_render_levels` `model_extra`
-(strict-mypy/no-`Any` house rule; explicit data flow).  The existing library re-derives via the offline `repath`
-engine (`_pipeline_maint.py:405`) — R6d's one J3-gated pass; temporary Shapes-C/D non-conformance until then
-(D-A4-style, accepted).
+**Posture (to be frozen at S1).**  Detect by **disagreement with the recomputed label**, not by a
+catalogue-fragment regex (the forward fix is the authority on the correct label).  Re-derive **offline
+from embedded tags**, not from MB (the source data is in the file).  Bound to the catalogue-colon
+signature (broader re-derivation is R6d's one-pass scope).  The existing library re-derives via the S2
+repatch pass driven by R6d's one J3-gated pass; temporary corruption on disk until then (D-A4/D-A6-style,
+accepted).
 
-**Flavour:** compiler-enforced (the `build_dest_path` parameter + the helper signature; mypy strict) **+
-test-enforced** (the S1 KATs: clamp-down, ragged-floor-preserved, modal-tie, PL=0-exclusion, parameter-absent; the
-S2 parity/no-regression KATs) **+ prose-enforced** (the uniform-ceiling/ragged-floor rule and clamp-down-only
-invariant, cited to STYLEGUIDE 4.5 / NOTES two-rules / C-W3b).  **Defined-in:** S1.  **Consumed-by:** S2 (caller
-threading), S3 (validation), R6d (the one-pass `repath` renders clamped via the S2-aligned callers), any future
-audit/full-projection depth consumer.  Over-specified per Category-A: carries the corner pins and group parameter
-though S2 is the first consumer over a 3-group population.
+**Flavour:** compiler-enforced (the re-derivation helper + predicate signatures; mypy strict) +
+test-enforced (the S1 KATs: bug-fires, short-label-preserved, colon-space-preserved,
+cannot-recompute, groupheading-segment; the S2 repatch/dry-run/idempotency/no-regression KATs) +
+prose-enforced (the disagreement-not-regex rule and the no-false-positive invariant, cited to NORM-9 /
+STYLEGUIDE 4.x / the forward fix in `strip_common_prefix`).  **Defined-in:** S1.  **Consumed-by:** S2
+(the repatch pass), S3 (scan validation), R6d (the one-pass drives the S2 pass destructively), any
+future full-re-derivation consumer.  Over-specified per Category-A: carries the general disagreement
+predicate and the `CWP_WORK`-pair re-derivation though S2 is the first consumer over a ~16-release
+population.
 
 ### Consumed (frozen upstream — invalidation is out of scope for this sub-track)
 
-- **C-W3b (J2-graduated)** — the uniform-ceiling/ragged-floor *rule* + two-sub-shape routing + corner pins.  R6a
-  freezes its *interface* (C-W3b-INT); it does **not** re-open the rule.  A shape the min-clamp mishandles is a
-  finding for the arc boundary (J2 reopen trigger), not an in-arc rule change.
-- **C-CLASS / C-INIT (J2-ratified)** — the top-level class scheme and within-classical first component.  The clamp
-  changes depth *below* `work_dir`, never the class/top_dir structure.  Validate-only.
-- **C-L0 / C-L1** — leaf/intermediate numbering.  The clamp changes *how many* intermediate dirs render, never their
-  numbering grammar.  Validate-only.
-- **C-PROV / C-MOVE** — move/verify/journal provenance.  The `repath`/`regroup` threading (S2) preserves the journal
-  provenance chain unchanged (the clamp only changes the computed destination, not the copy/verify/journal
-  ordering).  Validate-only.
-- **"Path is a handle, not a manifest"** — the clamp changes name *depth*, not path *identity*; the handle stays a
-  handle.
+- **NORM-9 / `strip_common_prefix` `": "` rule (STYLEGUIDE-ratified)** — the forward fix.  R6b builds
+  the *retro-fix* over it; it does **not** re-open the split rule.  A shape where a correct label
+  disagrees with its recomputation is a finding for the arc boundary (forward-fix reopen trigger), not
+  an in-arc rule change.
+- **C-W3b-INT (R6a)** — the depth clamp.  R6b changes part-label *content*, never depth; the two are
+  orthogonal (depth = how many levels render; label = the string per level).  Validate-only.
+- **C-CLASS / C-INIT** — class scheme + within-classical component.  The repatch changes labels *below*
+  `work_dir`, never the class/top_dir structure.  Validate-only.
+- **C-L0 / C-L1** — leaf/intermediate numbering.  The repatch changes the *label* after the `NN - `
+  prefix, never the numbering grammar.  Validate-only.
+- **C-PROV / C-MOVE + confirmation-provenance** — move/verify/journal provenance.  S2's write-back
+  rides the `enrich` re-tag→`_verify_copy`→journal chain unchanged; the `"repatched"` entry is
+  appended only after verification.  Validate-only — preserve the chain exactly.
+- **"Path is a handle, not a manifest"** — the repatch corrects the label the path carries, not the
+  path's identity role.
 
 ### Produced
 
-- **C-W3b-INT** — the depth-clamp interface at S1; caller threading at S2; census validation at S3.  **Coordinates
-  with R6d** (the destructive library-wide depth-repath): the render is landed here; R6d runs the `repath` one-pass
-  under J3.  Distinct from the canonical-name-forms shard's R6d coupling only in the surface it aligns (depth vs.
-  name-form) — both ride the same R6d `repath` pass.
+- **C-CAT-INT** — the detect + offline re-derivation interface at S1; the repatch pass at S2; scan
+  validation at S3.  **Coordinates with R6d** (the destructive library-wide repatch): the machinery is
+  landed here; R6d runs the S2 pass destructively under J3 — and this **closes the ROADMAP R6d
+  tag-content gap** for the catalogue-colon case (R6d's paths-only engine gains a tag-content-repatch
+  capability).
 
 ## Progress ledger
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 @architect | Add work-group modal-depth clamp to build_dest_path | done | 4fe4025 | C-W3b-INT (work_group_modal_depth helper + build_dest_path group_modal_depth param; corner pins: tie→shallower, PL=0 excluded; all-orphan→0; min() clamp down-only) |
-| 2 | Thread work-group modal depth through the render callers | done | 4de8c70 | C-W3b-INT caller threading (run/repath/regroup all compute and pass group modal depth; ingest/maintenance parity KAT) |
-| 3 ◆ | Refresh the depth census + anneal | done | 73e11ba | C-W3b-INT census validation (taxonomy holds; no new mishandled shape; 63 groups / 1.8%; boundary still-on-intent) |
+| 1 @architect | Detect corrupt catalogue-colon CWP_PART labels and re-derive them offline | pending | | |
+| 2 | Rewrite corrupt CWP_PART_*/CWP_GROUPHEADING in an offline repatch pass | pending | | |
+| 3 ◆ | Scan the library for corrupt catalogue-colon labels + census + anneal | pending | | |
 
 ## Action-frame digest
 
-### S1 — 2026-08-12
-Discovery/flex: Inflection design-confident; D-1 tag-data-sufficiency dissolved (min() asymmetry moots gap-vs-faithful discrimination; no MB call needed). Shape F (2-track even-split tie) flagged as aggressive-but-rule-licensed; pre-classified "acceptable" in BACKLOG. All-orphan edge pinned (returns 0).
-Affected: C-W3b-INT (frozen as designed; no contract flex)
-Deferred: no — all three advisory notes (Shape F, determinism phrasing, all-orphan edge) resolved in S1 implementation. S2 must reuse scanner grouping and include repath-vs-run parity KAT.
-Texture: design-confident verdict; self-continued. Extra file __init__.py not needed (work_group_modal_depth is internal, not added to __all__).
-
-### S3 ◆ — 2026-08-12
-Discovery/flex: Fresh scan (12,148 FLACs, 3,509 groups, 63 non-uniform / 1.8%): six-shape taxonomy holds; D-2 reopen trigger did not fire. Notable new groups: Wagner Ring Karajan {1,2,3,4} and Ring Solti {2,3,4} — both Shape D, handled correctly by min-clamp. Boundary fork: still-on-intent.
-Affected: none — taxonomy validation confirmed C-W3b-INT as designed; no contract flex.
-Deferred: no — boundary fork reconciled one deviation (run() grouping key uses cwp_workid_top-or-musicbrainz_workid fallback; repath/regroup use cwp_workid_top alone — not a parity break since embedded tags always have cwp_workid_top populated). R6d coordination noted: render surface landed; repath rides R6d.
-Texture: D-3 scan-not-run hazard handled structurally (scanner exits with clear error if root not mounted). Anneal clean.
+*(none yet)*
 
 ## Discoveries & risks
 
-- **D-1 (S1 tag-data-sufficiency — the inflection judgment; provisionally resolved at PLAN derivation).**  J2 left
-  open whether the clamp can distinguish faithful-over-resolution from a data-gap without a MB call.  Resolution to
-  confirm-and-freeze at S1: the rule is **clamp-down-only**, so a `min()` to the modal depth **automatically** leaves
-  data-gap-shallow nodes untouched and needs no discrimination and no network call.  *internal-continue* unless a
-  census shape is found where min-clamp mis-renders — that is a **destructive-HALT / J2-reopen** signal (the rule,
-  not just the interface, would be wrong).
-- **D-2 (fresh-scan population — additive-reshard signal).**  The 36-group / 3.6% census is stale by construction
-  (BACKLOG:337).  If the fresh S3 scan surfaces a **new shape** the uniform-ceiling rule mishandles, or a much
-  larger/varied population, that is J2's named reopen trigger — surface it; do **not** absorb it in-track.
-  *additive-reshard* (a new-shape handling row) or *destructive-HALT* (rule wrong), decided live at the S3 scan.
-- **D-3 (host-path silent-no-op hazard — carried from R4b D-1 / scan_nonuniform_depth ROOT).**  The scanner's `ROOT`
-  is machine-specific (`scan_nonuniform_depth.py:25`, `~/Remote/hades/Music/Done`).  S3 **must** distinguish
-  scan-not-run (unmounted/empty root → never "clean") from no-findings.  Operator mounts the library before
-  `/plan-run` (confirmed 2026-08-12); if unmounted at execution, the census refresh is recorded pending, not
-  asserted.  *internal-continue* (S3 handles it structurally).
-- **D-4 (R6d coupling — sequencing constraint, not a risk).**  This shard changes computed paths for *new* ingests
-  only; the destructive library-wide depth-repath is R6d's one J3-gated `repath` pass (D-A5/D-A7).  The S2
-  `repath`/`regroup` threading is the surface R6d drives.  No destructive op in this sub-track.  *internal-continue.*
-- **D-5 (R6d is paths-only — carried up to ROADMAP R6d node 2026-08-12).**  `repath`/`regroup`/`unify` re-derive
-  paths only, offline from embedded tags — they do **not** regenerate tag *content* from MB.  R6d's "one-pass
-  re-derivation" scope (paths-only vs. also tag-content) is an R6d-planning decision, folded into the ROADMAP R6d
-  node.  Noted so `/plan-run` does not treat it as an in-track R6a discovery.  *internal-continue.*
-- **D-6 (temporary library inconsistency — accepted, D-A4-style).**  Until R6d's repath, the on-disk library mixes
-  over-resolved (old Shapes-C/D dirs) and clamped (new ingests) depth.  Accepted by the operator (posture 1); not a
-  defect to remediate in-track.  Noted so `/plan-run` does not treat it as an in-track discovery.
+- **D-1 (S1 false-positive detection — the inflection judgment; provisionally resolved at PLAN
+  derivation).**  The predicate must fire on the bug's output and only on it.  Resolution to
+  confirm-and-freeze at S1: detect by **disagreement with the recomputed label** (the shipped
+  `strip_common_prefix` is the authority), so a correct label recomputes to itself and cannot
+  false-positive.  *internal-continue* unless a census signature is found where a *correct* label
+  disagrees with its recomputation — that is a **destructive-HALT / forward-fix-reopen** signal (the
+  split rule, not just this interface, would be wrong).
+- **D-2 (fresh-scan population — additive-reshard signal).**  BACKLOG:255: the "1 release fired / ~16
+  latent" figure is stale by construction and "must be re-run, not assumed to be the single Angeles
+  release."  If the fresh S3 scan surfaces a **new corruption signature** the disagreement predicate
+  mis-handles, or a much larger population, that is a reopen trigger — surface it; do **not** absorb
+  it in-track.  *additive-reshard* (a new-signature row) or *destructive-HALT* (predicate wrong),
+  decided live at the S3 scan.
+- **D-3 (host-path silent-no-op hazard — carried from R6a D-3 / R4b D-1).**  The new scanner's `ROOT`
+  is machine-specific (`~/Remote/hades/Music/Done`, the `scan_nonuniform_depth.py` pattern).  S3
+  **must** distinguish scan-not-run (unmounted/empty root → never "clean") from no-findings.  Operator
+  mounts the library before `/plan-run`; if unmounted at execution, the census refresh is recorded
+  pending, not asserted.  *internal-continue* (S3 handles it structurally).
+- **D-4 (R6d coupling — sequencing constraint, not a risk).**  This shard builds the machinery;
+  the destructive library-wide repatch is R6d's one J3-gated pass (D-A5/D-A7).  The S2 pass is the
+  machinery R6d drives — and it **closes the R6d tag-content gap** for the catalogue-colon case.  No
+  destructive op in this sub-track.  *internal-continue.*
+- **D-5 (`CWP_WORK`-pair dependency — accepted).**  The offline re-derivation relies on the embedded
+  `CWP_WORK_{i}` titles being intact.  The survey confirms they are always written alongside `CWP_PART`
+  (`_tags.py:1015–1022`) and only the *derived* `CWP_PART` was ever corrupted — never the source
+  `CWP_WORK`.  If a file lacks the pair the repatch leaves the tag untouched + does not fire (the safe
+  branch).  Noted so `/plan-run` does not treat the cannot-recompute branch as a defect.
+  *internal-continue.*
+- **D-6 (temporary library inconsistency — accepted, D-A4/D-A6-style).**  Until R6d's repatch, the
+  on-disk library mixes corrected (new ingests) and corrupt (the ~16 latent releases) part labels.
+  Accepted by the operator (posture 3); not a defect to remediate in-track.  Noted so `/plan-run` does
+  not treat it as an in-track discovery.
 
 ## Notes for executors
 
-- **Tier routing.**  S1 is **Opus + `@architect` inflection** (the C-W3b-INT interface + tag-data-sufficiency design
-  judgment; permanent path-depth policy).  S2, S3 are **Sonnet** (mechanical threading + scan/census/anneal over the
-  frozen interface).  `juncture-tier: opus` — kept.
-- **Register: render the rule, don't re-open it.**  C-W3b (the rule) is J2-frozen; R6a freezes only its interface.
-  If a row seems to *need* a rule change (a new shape mis-clamps), that is a **discovery / J2-reopen** (surface it),
-  not a licence to re-adjudicate the rule in-track.
-- **Clamp-down-only is load-bearing.**  The `min()` to the modal depth **never pads up**.  Every render-site change
-  must carry a test asserting a genuinely-shallow (ragged-floor) node is left unchanged — never padded.
-- **Ingest/maintenance parity is load-bearing.**  `run` and `repath`/`regroup` must compute the work-group modal
-  depth identically (reuse the `scan_nonuniform_depth.py` `CWP_WORKID_TOP` grouping; do not mint a second grouping).
-  A parity test guards it — R6d's repath must render byte-identically to new ingests.
-- **REGISTER rule (durable-file discipline).**  In source/tests, state the *property/reason/invariant* — never the
-  plan coordinate.  "clamp leaf depth to the work-group modal depth per the uniform-ceiling/ragged-floor rule
-  (STYLEGUIDE 4.5 / C-W3b)" is right; "the S1 depth-clamp" is not.  Plan vocabulary (S1/S2/S3, R6a, sub-track names,
-  `/plan-run`) lives only in `PLAN.md` / `ROADMAP*.md` / the ledger / commit messages.  See the repo `AGENTS.md`
-  "Register rule" block.
-- **Anneal denylist (◆ gate greps durable files for these).**  Seeded from the `/plan-run` default, tuned for this
-  project's vocabulary:
-  - `\bS[1-9]\b` (this sub-track's plan session coordinates) **and** `\bN[1-9]\b` (prior sub-tracks') — **but** allow
-    the STYLEGUIDE-rule-section forms (`\b[1-5]\.[0-9]\b` like "4.5", "3.1" are register/rule cites, not plan
-    coordinates — do **not** flag).
-  - `\bR6[a-e]\b`, `\bR[0-9]\b` (roadmap node coordinates) — flag in durable source/tests; legitimate only in
-    PLAN/ROADMAP/ledger/commit messages.
+- **Tier routing.**  S1 is **Opus + `@architect` inflection** (the C-CAT-INT detect-predicate +
+  offline re-derivation judgment; permanent library-wide policy; correctness-crit — a false-positive
+  rewrites a correct label).  S2, S3 are **Sonnet** (mechanical over the frozen predicate, modelled on
+  `enrich`).  `juncture-tier: opus` — kept.
+- **Register: retro-fix over the forward fix, don't re-open it.**  NORM-9 / the `": "` split is
+  ratified; R6b builds the *retro-fix* of already-corrupt tags.  If a row seems to *need* a split-rule
+  change (a correct label disagrees with its recomputation), that is a **discovery / forward-fix
+  reopen** (surface it), not a licence to re-adjudicate the split in-track.
+- **Detect-by-disagreement is load-bearing.**  The predicate rewrites only labels that disagree with
+  the recomputed value under the shipped rule — a correct label recomputes to itself.  Every repatch
+  test must carry a legitimately-short-label case asserting no false-positive rewrite.
+- **Offline, no MB call.**  The re-derivation is a pure function of embedded `CWP_WORK` titles.  A
+  version that fetches from MB violates the posture (and re-opens identity questions this fix does not
+  touch).
+- **Model S2 on `enrich`, not fresh.**  `enrich` (`_pipeline_maint.py:1254`) is the existing offline
+  tag-content write pass: idempotent, `dry_run`, re-tag→`_verify_copy`→journal (P-FP3/P-FP4).  Reuse
+  that shape (a new `action="repatched"` entry appended only after verification).  Do not mint a second
+  groupheading assembler — reuse the `build_cwp_tags` `" :: ".join(...)` grammar (`_tags.py:561`).
+- **REGISTER rule (durable-file discipline).**  In source/tests, state the *property/reason/invariant*
+  — never the plan coordinate.  "re-derive the part label offline from the embedded CWP_WORK pair per
+  the `": "` split (NORM-9 / STYLEGUIDE 4.x)" is right; "the S1 detect predicate" is not.  Plan
+  vocabulary (S1/S2/S3, R6b, sub-track names, `/plan-run`) lives only in `PLAN.md` / `ROADMAP*.md` /
+  the ledger / commit messages.  See the repo `AGENTS.md` "Register rule" block.
+- **Anneal denylist (◆ gate greps durable files for these).**  Seeded from the `/plan-run` default,
+  tuned for this project's vocabulary:
+  - `\bS[1-9]\b` (this sub-track's plan session coordinates) — **but** allow STYLEGUIDE-rule-section
+    forms (`\b[1-5]\.[0-9]\b` like "4.5", "3.1" are register/rule cites, not plan coordinates — do
+    **not** flag).
+  - `\bR6[a-e]\b`, `\bR[0-9]\b` (roadmap node coordinates) — flag in durable source/tests; legitimate
+    only in PLAN/ROADMAP/ledger/commit messages.
   - `sub-track`, `plan-run`, `plan-shard`, `halt-at-boundaries`, `run-to-boundary`
-  - `C-W3b-INT` **only outside docstrings that legitimately name the contract** — contract names in docstrings are
-    the intended durable form; flag bare "S1 freeze"-style prose, not the contract name itself.
+  - `C-CAT-INT` **only outside docstrings that legitimately name the contract** — contract names in
+    docstrings are the intended durable form; flag bare "S1 freeze"-style prose, not the contract name.
   - `juncture`, `inflection`, `action-frame`, `◆`
-  - Do **not** add `depth`, `modal`, `part_levels`, `CWP_PART_LEVELS`, `clamp`, `uniform-ceiling`, `ragged-floor`,
-    `C-W3b`, or `W3b` to the denylist — these are legitimate domain/rule vocabulary this sub-track deliberately
-    renders and cites.  (`C-W3b` names the frozen rule; `W3b` appears in NOTES/BACKLOG as durable rule vocabulary.)
-- **Invariants to preserve:** the clamp-down-only rule (C-W3b); ingest/maintenance parity; C-CLASS/C-INIT (class and
-  top_dir structure unchanged — clamp acts below `work_dir`); C-L0/C-L1 (numbering grammar unchanged); the
-  C-PROV/C-MOVE provenance and confirmation-provenance/copy-verify invariants (untouched — R6a is not in the
-  copy/verify network path; `repath` threading only changes the computed destination, not the move/journal ordering);
-  "path is a handle, not a manifest" (change depth, not identity).
-- **Every row runs `~/.local/bin/tox -m analyze` before ledger-done** (build + test at 100% branch coverage + strict
-  mypy + ruff + pylint 10.00/10 + pyupgrade).  Import order via `~/.local/bin/tox -m edit`, never hand-edited.
-- **Suggested first `/plan-run` invocation:** `halt-at-boundaries` — the C-W3b-INT interface (posture + carrier + the
-  D-1 tag-data-sufficiency ruling) is the first unproven substrate judgment in this shard; stop after S1 for an
-  operator check that the freeze (especially the clamp-down-only / no-network reasoning and the corner pins) is right
+  - Do **not** add `catalogue`, `CWP_PART`, `CWP_GROUPHEADING`, `CWP_WORK`, `strip_common_prefix`,
+    `Hoboken`, `NORM-9`, `repatch`, `": "` to the denylist — these are legitimate domain/rule
+    vocabulary this sub-track deliberately renders and cites.
+- **Invariants to preserve:** the detect-by-disagreement / no-false-positive rule (C-CAT-INT); the
+  offline / no-MB-call re-derivation; the `enrich` re-tag→`_verify_copy`→journal
+  confirmation-provenance chain (S2 rides it unchanged — the `"repatched"` entry appended only after
+  verification); C-CLASS/C-INIT (class/top_dir unchanged — repatch acts below `work_dir`); C-L0/C-L1
+  (numbering grammar unchanged); C-W3b-INT (depth unchanged — orthogonal to label content); "path is a
+  handle, not a manifest".
+- **Every row runs `~/.local/bin/tox -m analyze` before ledger-done** (build + test at 100% branch
+  coverage + strict mypy + ruff + pylint 10.00/10 + pyupgrade).  Import order via
+  `~/.local/bin/tox -m edit`, never hand-edited.
+- **Suggested first `/plan-run` invocation:** `halt-at-boundaries` — the C-CAT-INT detect predicate
+  (the disagreement-not-regex ruling + the no-false-positive invariant + the offline re-derivation) is
+  the first unproven substrate judgment in this shard; stop after S1 for an operator check that the
+  freeze (especially that a legitimately-short label cannot be false-positive-rewritten) is right
   before S2 consumes it.  Once S1 confirms, `run-to-boundary` through the S3 ◆.
