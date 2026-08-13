@@ -1,12 +1,15 @@
 """Library maintenance operations for music-annotator.
 
-Provides the four maintenance-mode commands that operate on an already-annotated library
+Provides the five maintenance-mode commands that operate on an already-annotated library
 without making MusicBrainz network calls:
 
-* :func:`repath`  — re-path all verified library files to their corrected destinations.
-* :func:`regroup` — consolidate confirmed split-release files into their canonical destinations.
-* :func:`unify`   — consolidate performer-split and composer-split fragmented releases.
-* :func:`enrich`  — retroactively backfill fingerprint fields into library files.
+* :func:`repath`                  — re-path all verified library files to their corrected destinations.
+* :func:`regroup`                 — consolidate confirmed split-release files into their canonical destinations.
+* :func:`unify`                   — consolidate performer-split and composer-split fragmented releases.
+* :func:`enrich`                  — retroactively backfill fingerprint fields into library files.
+* :func:`repatch_catalogue_colon` — rewrite ``CWP_PART_*`` / ``CWP_GROUPHEADING`` tags corrupted by the
+  pre-fix bare-``":"`` split (catalogue-colon labels such as Hoboken ``"Hob. III:31"``), re-deriving each
+  label offline from the embedded ``CWP_WORK`` pair per the shipped ``": "`` rule (NORM-9 / STYLEGUIDE 4.x).
 
 Also provides the shared primitives consumed by all four commands:
 
@@ -60,7 +63,12 @@ from music_annotator._pipeline_io import (
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import build_dest_path
-from music_annotator._works import work_group_modal_depth
+from music_annotator._works import (
+    _Rederivation,
+    is_catalogue_colon_corrupt,
+    rederive_part_label,
+    work_group_modal_depth,
+)
 from music_annotator.models import (
     ArtistEntry,
     CopyPlanEntry,
@@ -248,8 +256,8 @@ def _resolve_current_lib(journal: TransactionLog) -> dict[Path, str]:
     * ``"tagged"`` entries seed the map (destination → release_id).
     * ``"repathed"`` and ``"regrouped"`` entries update the map: the old path is removed and the
       new path is registered with the same release_id.
-    * ``"enriched"`` entries are in-place updates (source == destination); they re-register the
-      path to keep the release_id current.
+    * ``"enriched"`` and ``"repatched"`` entries are in-place updates (source == destination);
+      they re-register the path to keep the release_id current.
 
     Multi-hop chains (a file that was repathed and then regrouped) resolve correctly because
     entries are processed in chronological order: each move pops the old path and registers the
@@ -268,7 +276,7 @@ def _resolve_current_lib(journal: TransactionLog) -> dict[Path, str]:
             old_path = Path(entry.source)
             release_id_for_path = current_lib.pop(old_path, entry.release_id)
             current_lib[dest_path] = release_id_for_path
-        elif entry.action == "enriched":
+        elif entry.action in {"enriched", "repatched"}:
             # In-place update: source == destination, path unchanged.
             # Re-register to keep release_id current.
             current_lib[dest_path] = entry.release_id
@@ -1420,4 +1428,192 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
         noop=count_noop,
         dry_run=count_dry_run,
         inconclusive_acoustid=count_inconclusive_acoustid,
+    )
+
+
+def repatch_catalogue_colon(dest_root: Path, *, dry_run: bool = False) -> None:
+    """Rewrite ``CWP_PART_*`` / ``CWP_GROUPHEADING`` tags corrupted by the pre-fix bare-``":"`` split.
+
+    Scans each FLAC and MP3 file in the annotated library (resolved via the journal lineage) for
+    ``CWP_PART_{i}`` values that were produced by the retired bare-``":"`` fallback in
+    ``strip_common_prefix`` — a colon inside a catalogue number (e.g. Hoboken ``"Hob. III:31"``)
+    caused the old split to truncate the label to a bare fragment (``"31"``).  The forward fix
+    (NORM-9 / STYLEGUIDE 4.x) keys on ``": "`` (colon-followed-by-space) so new ingests are
+    correct; this pass re-derives the corrected label offline from the ``CWP_WORK_{i}`` /
+    ``CWP_WORK_{i+1}`` pair already embedded in the file — no MusicBrainz network call is needed.
+
+    For each file the pass:
+
+    1. Iterates levels ``i = 1, 2, 3, …`` (stopping when ``CWP_WORK_{i}`` is absent), applying
+       :func:`~music_annotator._works.is_catalogue_colon_corrupt` to each ``CWP_PART_{i}``.
+    2. For each corrupt level, re-derives the corrected label via
+       :func:`~music_annotator._works.rederive_part_label`.  When
+       :data:`~music_annotator._works.CANNOT_RECOMPUTE` is returned (the ``CWP_WORK_{i}`` title
+       is absent), the level is left untouched.
+    3. When any level was corrected, rebuilds ``CWP_GROUPHEADING`` from the corrected part labels
+       using the ``build_cwp_tags`` grammar: ``" :: ".join([work_top, *inter_parts, bottom_part])``
+       (NORM-9 / STYLEGUIDE 4.x).
+    4. Writes the corrected tags via :func:`~music_annotator._tagger.apply_tags_flac` /
+       :func:`~music_annotator._tagger.apply_tags_mp3`, then confirms the round-trip via
+       :func:`~music_annotator._pipeline_io._verify_copy`, and **only then** appends a journal
+       entry with ``action="repatched"`` (the confirmation-provenance invariant: a journal entry
+       is never written before verification succeeds).
+
+    The pass is idempotent: a second run on a library where all labels are already correct is a
+    no-op (no writes, no journal entries).  When ``dry_run=True``, planned repatches are logged
+    but no tags are written and no journal entries are appended.
+
+    :param dest_root: Root of the annotated music library (contains
+        ``music_annotator_journal.json``).
+    :param dry_run: When ``True``, log planned repatches without writing any tags or journal
+        entries.
+    """
+    journal_path = dest_root / JOURNAL_FILENAME
+    journal = read_journal(journal_path)
+
+    # Resolve current on-disk path for each logical library file.
+    # _resolve_current_lib walks entries in chronological order; "tagged" seeds the map;
+    # "repathed"/"regrouped" update it; "enriched"/"repatched" re-register the path in-place.
+    current_lib = _resolve_current_lib(journal)
+
+    # Filter to files that actually exist on disk and are FLAC or MP3
+    existing_files: list[tuple[Path, str]] = [
+        (p, rid) for p, rid in current_lib.items() if p.exists() and p.suffix.lower() in {".flac", ".mp3"}
+    ]
+
+    if not existing_files:
+        log.info("repatch_catalogue_colon_nothing_to_repatch", dest_root=str(dest_root))
+        return
+
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    count_repatched = 0
+    count_noop = 0
+    count_dry_run = 0
+
+    for current_path, release_id in existing_files:
+        ext = current_path.suffix.lower()
+
+        # Read current tags from the file
+        try:
+            match ext:
+                case ".flac":
+                    file_dict = _read_tags_flac(current_path)
+                case ".mp3":
+                    file_dict = _read_tags_mp3(current_path)
+                case _:  # pragma: no cover — filtered to .flac/.mp3 above
+                    log.warning("repatch_catalogue_colon_unsupported_format", path=str(current_path), ext=ext)
+                    continue
+        except Exception as exc:  # noqa: BLE001 — tag read failure: log and skip
+            log.warning("repatch_catalogue_colon_tag_read_error", path=str(current_path), error=str(exc))
+            continue
+
+        # Scan levels i = 1, 2, 3, … for corrupt CWP_PART_{i} labels.
+        # Level 0 is the leaf movement title; the catalogue-colon bug affects intermediate levels
+        # where the work title embeds a catalogue colon (e.g. Hoboken "Hob. III:31").
+        # The loop terminates when rederive_part_label returns CANNOT_RECOMPUTE (CWP_WORK_{i}
+        # absent), which signals no more levels exist in the hierarchy.
+        corrected_parts: dict[int, str] = {}
+        i = 1
+        while True:
+            child_title = file_dict.get(f"CWP_WORK_{i}", "")
+            parent_title = file_dict.get(f"CWP_WORK_{i + 1}", "")
+            stored_label = file_dict.get(f"CWP_PART_{i}", "")
+
+            recomputed = rederive_part_label(child_title, parent_title)
+            match recomputed:
+                case _Rederivation.CANNOT_RECOMPUTE:
+                    # CWP_WORK_{i} is absent — no more levels in the hierarchy; stop scanning.
+                    break
+                case str() as label:
+                    # Recomputation succeeded; check whether the stored label carries the
+                    # catalogue-colon corruption signature.  A correct label recomputes to
+                    # itself and is_catalogue_colon_corrupt returns False — no-op.
+                    if is_catalogue_colon_corrupt(stored_label, child_title, parent_title):
+                        corrected_parts[i] = label
+                case _:  # pragma: no cover — rederive_part_label returns str | _Rederivation only
+                    pass
+            i += 1
+
+        if not corrected_parts:
+            # No corrupt levels found — file is already correct (idempotency: no-op).
+            log.debug("repatch_catalogue_colon_noop", path=str(current_path.relative_to(dest_root)))
+            count_noop += 1
+            continue
+
+        # Rebuild CWP_GROUPHEADING from the corrected part labels using the build_cwp_tags grammar:
+        #   " :: ".join([work_top, *intermediate_parts_top_down, bottom_part])
+        # where intermediate parts run from level n_levels-2 down to level 1, and bottom_part is
+        # CWP_PART_0.  This replicates _tags.py:561-570 exactly — no second assembler is minted.
+        work_top = file_dict.get("CWP_WORK_TOP", "")
+        # CWP_PART_LEVELS = n_levels - 1 (the number of part-label levels, excluding the root).
+        # The total level count is part_levels + 1; the grammar loop runs from level part_levels-1
+        # down to level 1 (intermediate levels), then appends level 0 (leaf).
+        part_levels = int(file_dict.get("CWP_PART_LEVELS", "0") or "0")
+        n_levels = part_levels + 1
+
+        gh_parts: list[str] = [work_top] if work_top else []
+        for j in range(n_levels - 2, 0, -1):
+            inter_part = corrected_parts.get(j, file_dict.get(f"CWP_PART_{j}", file_dict.get(f"CWP_WORK_{j}", "")))
+            if inter_part:
+                gh_parts.append(inter_part)
+        bottom_part = file_dict.get("CWP_PART_0", "")
+        if bottom_part:
+            gh_parts.append(bottom_part)
+        new_groupheading = " :: ".join(gh_parts)
+
+        if dry_run:
+            log.info(
+                "repatch_catalogue_colon_dry_run",
+                path=str(current_path.relative_to(dest_root)),
+                levels=list(corrected_parts.keys()),
+                new_groupheading=new_groupheading,
+            )
+            count_dry_run += 1
+            continue
+
+        # Apply corrected labels and rebuilt groupheading to the tag dict, then write back.
+        for level_idx, corrected_label in corrected_parts.items():
+            file_dict[f"CWP_PART_{level_idx}"] = corrected_label
+        if new_groupheading:
+            file_dict["CWP_GROUPHEADING"] = new_groupheading
+
+        tags = _tags_from_file_dict(file_dict)
+
+        try:
+            match ext:
+                case ".flac":
+                    apply_tags_flac(current_path, tags)
+                case ".mp3":
+                    apply_tags_mp3(current_path, tags)
+                case _:  # pragma: no cover
+                    pass
+        except MutagenError as exc:
+            raise RuntimeError(f"repatch_catalogue_colon tag write failure for '{current_path.name}': {exc}") from exc
+
+        # Confirm the tag round-trip before journalling (confirmation-provenance invariant).
+        # The journal entry is appended only after _verify_copy confirms the write succeeded.
+        post_mtime = current_path.stat().st_mtime
+        _verify_copy(current_path, current_path, tags, None, post_mtime)
+
+        entry = TransactionEntry(
+            timestamp=now,
+            release_id=release_id,
+            source=str(current_path),
+            destination=str(current_path),
+            action="repatched",
+        )
+        write_transaction_log(journal_path, [entry])
+        log.info(
+            "repatch_catalogue_colon_written",
+            path=str(current_path.relative_to(dest_root)),
+            levels=list(corrected_parts.keys()),
+        )
+        count_repatched += 1
+
+    log.info(
+        "repatch_catalogue_colon_complete",
+        dest_root=str(dest_root),
+        repatched=count_repatched,
+        noop=count_noop,
+        dry_run=count_dry_run,
     )

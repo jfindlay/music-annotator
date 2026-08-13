@@ -132,6 +132,7 @@ from music_annotator._pipeline_io import (
 from music_annotator._pipeline_maint import (
     enrich,
     regroup,
+    repatch_catalogue_colon,
     repath,
     unify,
 )
@@ -200,6 +201,7 @@ __all__ = [
     "SelectionMethod",
     "enrich",
     "regroup",
+    "repatch_catalogue_colon",
     "repath",
     "run",
     "unify",

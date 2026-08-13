@@ -43,6 +43,7 @@ from music_annotator._pipeline_maint import (
     _hydrate_performer_lists,
     _move_verify_journal,
     _resolve_current_lib,
+    _tags_from_file_dict,
     _unify_classical_composer_groups,
 )
 from music_annotator._tags import _work_top_dir
@@ -6716,3 +6717,708 @@ class TestRegroupWorkGroupModalDepth:
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
         regrouped = [e for e in journal.entries if e.action == "regrouped"]
         assert not regrouped, f"Expected no regrouped entries for uniform group, got {regrouped}"
+
+
+# ---------------------------------------------------------------------------
+# Haydn Hoboken catalogue-colon repatch pass
+# ---------------------------------------------------------------------------
+
+
+def _make_haydn_corrupt_tags() -> TrackTags:
+    """Build a TrackTags fixture with a corrupt Haydn Hoboken CWP_PART_1 label.
+
+    Simulates a file tagged before the ``": "`` forward fix (NORM-9 / STYLEGUIDE 4.x): the old
+    bare-``":"`` split truncated ``"String Quartet in E major, Op. 20 No. 4, Hob. III:31"`` to
+    ``"31"`` when deriving ``CWP_PART_1``.  The ``CWP_GROUPHEADING`` is correspondingly corrupt.
+
+    The hierarchy has 3 levels (``CWP_PART_LEVELS = "2"``):
+    - Level 0 (leaf): ``CWP_WORK_0`` = ``"I. Allegro moderato"``
+    - Level 1 (child): ``CWP_WORK_1`` = ``"String Quartet in E major, Op. 20 No. 4, Hob. III:31"``
+    - Level 2 (top):   ``CWP_WORK_2`` = ``"String Quartets, Op. 20"``
+
+    :returns: A :class:`TrackTags` instance with corrupt ``CWP_PART_1`` and ``CWP_GROUPHEADING``.
+    """
+    tags = TrackTags(
+        cwp_work_top="String Quartets, Op. 20",
+        cwp_groupheading="String Quartets, Op. 20 :: 31 :: I. Allegro moderato",
+        cwp_part="I. Allegro moderato",
+        cwp_part_levels="2",
+        cwp_work_part_levels="2",
+        cwp_movt_num="1",
+        movementtotal="4",
+        title="I. Allegro moderato",
+        artist="Angeles Quartet",
+        cwp_composer_lastnames="Haydn",
+        recording_date="1980",
+    )
+    if tags.model_extra is not None:
+        tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
+        tags.model_extra["cwp_part_0"] = "I. Allegro moderato"
+        tags.model_extra["cwp_work_1"] = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+        tags.model_extra["cwp_part_1"] = "31"
+        tags.model_extra["cwp_work_2"] = "String Quartets, Op. 20"
+        tags.model_extra["cwp_part_2"] = ""
+    return tags
+
+
+def _make_haydn_correct_tags() -> TrackTags:
+    """Build a TrackTags fixture with correct Haydn Hoboken CWP_PART_1 label.
+
+    Simulates a file tagged after the ``": "`` forward fix (NORM-9 / STYLEGUIDE 4.x): the
+    ``CWP_PART_1`` label is the full quartet title, not the bare catalogue fragment.
+
+    :returns: A :class:`TrackTags` instance with correct ``CWP_PART_1`` and ``CWP_GROUPHEADING``.
+    """
+    corrected_part1 = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+    tags = TrackTags(
+        cwp_work_top="String Quartets, Op. 20",
+        cwp_groupheading=(
+            "String Quartets, Op. 20 :: String Quartet in E major, Op. 20 No. 4, Hob. III:31 :: I. Allegro moderato"
+        ),
+        cwp_part="I. Allegro moderato",
+        cwp_part_levels="2",
+        cwp_work_part_levels="2",
+        cwp_movt_num="1",
+        movementtotal="4",
+        title="I. Allegro moderato",
+        artist="Angeles Quartet",
+        cwp_composer_lastnames="Haydn",
+        recording_date="1980",
+    )
+    if tags.model_extra is not None:
+        tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
+        tags.model_extra["cwp_part_0"] = "I. Allegro moderato"
+        tags.model_extra["cwp_work_1"] = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+        tags.model_extra["cwp_part_1"] = corrected_part1
+        tags.model_extra["cwp_work_2"] = "String Quartets, Op. 20"
+        tags.model_extra["cwp_part_2"] = ""
+    return tags
+
+
+class TestRepatchCatalogueColon:
+    """Tests for :func:`music_annotator.repatch_catalogue_colon`.
+
+    Exercises the full re-tag → ``_verify_copy`` → journal provenance chain without mocking
+    ``apply_tags_flac``, ``_verify_copy``, or ``_read_tags_flac`` (real round-trip, only the
+    filesystem is fake via pyfakefs).
+
+    KATs:
+    (a) Corrupt Haydn fixture → corrected after pass.
+    (b) ``build_dest_path`` renders correct path after repatch.
+    (c) ``dry_run=True`` writes nothing.
+    (d) Second run is a no-op (idempotency).
+    (e) File with no corruption is untouched.
+    """
+
+    _CORRUPT_REL = "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]/01 - 31/01 - I. Allegro moderato.flac"
+
+    def test_repatch_corrects_corrupt_haydn_flac(self, fs: FakeFilesystem) -> None:
+        """(a) Corrupt Haydn fixture → CWP_PART_1 and CWP_GROUPHEADING corrected after pass.
+
+        A FLAC file with ``CWP_PART_1 = "31"`` (the bare catalogue fragment produced by the
+        pre-fix bare-``":"`` split) is corrected by ``repatch_catalogue_colon``.  After the pass:
+        - ``CWP_PART_1`` reads back as the full quartet title.
+        - ``CWP_GROUPHEADING`` reads back as the correctly assembled heading.
+        - A ``"repatched"`` journal entry is appended.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = _make_haydn_corrupt_tags()
+        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        audio = MutagenFLAC(str(path))
+        part1_vals = audio.get("cwp_part_1") or []
+        gh_vals = audio.get("cwp_groupheading") or []
+
+        assert part1_vals and part1_vals[0] == "String Quartet in E major, Op. 20 No. 4, Hob. III:31", (
+            f"CWP_PART_1 should be corrected, got {part1_vals}"
+        )
+        assert gh_vals and "String Quartet in E major, Op. 20 No. 4, Hob. III:31" in gh_vals[0], (
+            f"CWP_GROUPHEADING should contain corrected part label, got {gh_vals}"
+        )
+        assert gh_vals[0].startswith("String Quartets, Op. 20 :: "), (
+            f"CWP_GROUPHEADING should start with top work, got {gh_vals[0]}"
+        )
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched = [e for e in journal.entries if e.action == "repatched"]
+        assert len(repatched) == 1
+        assert repatched[0].source == str(path)
+        assert repatched[0].destination == str(path)
+        assert repatched[0].release_id == "haydn-rel-1"
+
+    def test_repatch_build_dest_path_correct_after_repatch(self, fs: FakeFilesystem) -> None:
+        """(b) build_dest_path renders correct path after repatch (path fix follows tag fix).
+
+        After ``repatch_catalogue_colon`` corrects ``CWP_PART_1``, calling ``build_dest_path``
+        on the corrected tags renders ``NN - <full label>`` (not ``NN - 31``).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = _make_haydn_corrupt_tags()
+        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        # Read back the corrected tags and verify build_dest_path renders the full label.
+        file_dict = _read_tags_flac(path)
+        corrected_tags = _tags_from_file_dict(file_dict)
+
+        dest_path = build_dest_path(dest_root, MBRelease(), MBTrack(), corrected_tags, global_track_idx=1)
+        path_str = str(dest_path)
+
+        # The intermediate directory must contain the full quartet title, not the bare "31" fragment.
+        assert "31" not in dest_path.parent.name or "Hob" in dest_path.parent.name, (
+            f"Intermediate dir should not be bare '31': {dest_path.parent.name}"
+        )
+        assert "String Quartet in E major" in path_str, (
+            f"build_dest_path should render full quartet title after repatch, got {path_str}"
+        )
+
+    def test_repatch_dry_run_writes_nothing(self, fs: FakeFilesystem) -> None:
+        """(c) dry_run=True logs planned repatches but writes no tags and no journal entry.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = _make_haydn_corrupt_tags()
+        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root, dry_run=True)
+
+        # Tags must be unchanged (still corrupt)
+        audio = MutagenFLAC(str(path))
+        part1_vals = audio.get("cwp_part_1") or []
+        assert part1_vals and part1_vals[0] == "31", f"dry_run must not write tags, got {part1_vals}"
+
+        # No journal entry appended
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched = [e for e in journal.entries if e.action == "repatched"]
+        assert len(repatched) == 0, f"dry_run must not append journal entries, got {repatched}"
+
+    def test_repatch_idempotent_second_run_is_noop(self, fs: FakeFilesystem) -> None:
+        """(d) Second run on a corrected library is a no-op (idempotency).
+
+        Run 1: corrupt fixture → corrected, one ``"repatched"`` journal entry appended.
+        Run 2: already-correct file → no writes, no new journal entry.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = _make_haydn_corrupt_tags()
+        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        # Run 1: corrects the corrupt file
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        journal1 = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched1 = [e for e in journal1.entries if e.action == "repatched"]
+        assert len(repatched1) == 1, "Run 1 must append exactly one repatched entry"
+
+        # Run 2: file is already correct — must be a no-op
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        journal2 = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched2 = [e for e in journal2.entries if e.action == "repatched"]
+        assert len(repatched2) == 1, "Run 2 must not append a new repatched entry (idempotency)"
+
+    def test_repatch_correct_file_is_untouched(self, fs: FakeFilesystem) -> None:
+        """(e) File with correct tags is untouched (no write, no journal entry).
+
+        A file whose ``CWP_PART_1`` already equals the recomputed label is not rewritten.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = _make_haydn_correct_tags()
+        correct_rel = (
+            "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]"
+            "/01 - String Quartet in E major, Op. 20 No. 4, Hob. III:31/01 - I. Allegro moderato.flac"
+        )
+        path = _make_library_flac(dest_root, correct_rel, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        # No journal entry appended
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched = [e for e in journal.entries if e.action == "repatched"]
+        assert len(repatched) == 0, f"Correct file must not be repatched, got {repatched}"
+
+        # Tags unchanged
+        audio = MutagenFLAC(str(path))
+        part1_vals = audio.get("cwp_part_1") or []
+        assert part1_vals and part1_vals[0] == "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+
+    def test_repatch_cannot_recompute_level_left_untouched(self, fs: FakeFilesystem) -> None:
+        """cannot-recompute branch: a level with empty CWP_WORK_{i} is left untouched.
+
+        When ``CWP_WORK_{i}`` is empty (the ``rederive_part_label`` CANNOT_RECOMPUTE branch),
+        the stored ``CWP_PART_{i}`` is not rewritten even if it looks corrupt.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Build a file where CWP_WORK_1 is absent but CWP_PART_1 looks like a bare fragment.
+        # rederive_part_label("", ...) returns CANNOT_RECOMPUTE → no rewrite.
+        tags = TrackTags(
+            cwp_work_top="String Quartets, Op. 20",
+            cwp_groupheading="String Quartets, Op. 20 :: 31 :: I. Allegro moderato",
+            cwp_part="I. Allegro moderato",
+            cwp_part_levels="2",
+            cwp_work_part_levels="2",
+            cwp_movt_num="1",
+            movementtotal="4",
+            title="I. Allegro moderato",
+            artist="Angeles Quartet",
+            cwp_composer_lastnames="Haydn",
+            recording_date="1980",
+        )
+        if tags.model_extra is not None:
+            tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
+            tags.model_extra["cwp_part_0"] = "I. Allegro moderato"
+            # CWP_WORK_1 intentionally absent (empty string → not written to file)
+            tags.model_extra["cwp_part_1"] = "31"
+            # CWP_WORK_2 also absent
+
+        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        # No journal entry: the CANNOT_RECOMPUTE branch leaves the file untouched.
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched = [e for e in journal.entries if e.action == "repatched"]
+        assert len(repatched) == 0, f"CANNOT_RECOMPUTE level must not be repatched, got {repatched}"
+
+    def test_repatch_empty_journal_is_noop(self, fs: FakeFilesystem) -> None:
+        """repatch_catalogue_colon() is a no-op when the journal has no entries.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        _write_library_journal(dest_root, [])
+
+        # Should not raise; nothing to process.
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+    def test_repatch_mutagen_error_on_write_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """repatch_catalogue_colon() raises RuntimeError when apply_tags_flac raises MutagenError.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = _make_haydn_corrupt_tags()
+        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_maint.apply_tags_flac", side_effect=MutagenError("write failed"))
+
+        with pytest.raises(RuntimeError, match="repatch_catalogue_colon tag write failure"):
+            music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+    def test_repatch_tag_read_error_skips_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Tag read error is logged and the file is skipped (no crash, no journal entry).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = _make_haydn_corrupt_tags()
+        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=OSError("read failed"))
+
+        # Should not raise; the file is skipped.
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched = [e for e in journal.entries if e.action == "repatched"]
+        assert len(repatched) == 0, f"Tag read error must not produce a journal entry, got {repatched}"
+
+    def test_repatch_mp3_corrupt_via_mock(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """MP3 write branch: mock _read_tags_mp3 to return corrupt tags → write branch covered.
+
+        The dynamic CWP_WORK_* / CWP_PART_* tags are not stored in MP3 files by apply_tags_mp3
+        (they are not in _MP3_TXXX_MAP).  This test mocks _read_tags_mp3 to return a corrupt tag
+        dict so that the .mp3 write branch in repatch_catalogue_colon is exercised.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Create a minimal MP3 file (tags don't matter — we mock the read).
+        mp3_rel = "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]/01 - 31/01 - I. Allegro moderato.mp3"
+        path = dest_root / mp3_rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_MINIMAL_MP3)
+        apply_tags_mp3(path, TrackTags(title="I. Allegro moderato"))
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": "/src/01.mp3",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        # Mock _read_tags_mp3 to return a corrupt tag dict with CWP_WORK_1 / CWP_PART_1.
+        corrupt_dict = {
+            "TITLE": "I. Allegro moderato",
+            "CWP_WORK_TOP": "String Quartets, Op. 20",
+            "CWP_GROUPHEADING": "String Quartets, Op. 20 :: 31 :: I. Allegro moderato",
+            "CWP_PART_LEVELS": "2",
+            "CWP_WORK_0": "I. Allegro moderato",
+            "CWP_PART_0": "I. Allegro moderato",
+            "CWP_WORK_1": "String Quartet in E major, Op. 20 No. 4, Hob. III:31",
+            "CWP_PART_1": "31",
+            "CWP_WORK_2": "String Quartets, Op. 20",
+        }
+        mocker.patch("music_annotator._pipeline_maint._read_tags_mp3", return_value=corrupt_dict)
+
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched = [e for e in journal.entries if e.action == "repatched"]
+        assert len(repatched) == 1, f"Mocked corrupt MP3 must be repatched, got {repatched}"
+
+    def test_repatch_groupheading_empty_when_no_work_top_or_parts(self, fs: FakeFilesystem) -> None:
+        """Groupheading rebuild: empty work_top + empty bottom_part → new_groupheading is empty.
+
+        Covers the False branches of ``if bottom_part:`` and ``if new_groupheading:`` in the
+        groupheading rebuild.  A corrupt file with no ``CWP_WORK_TOP`` and no ``CWP_PART_0``
+        still gets its ``CWP_PART_1`` corrected; ``CWP_GROUPHEADING`` is left unchanged (empty
+        new_groupheading → no update).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Minimal corrupt fixture: CWP_WORK_TOP absent, CWP_PART_0 absent, CWP_PART_LEVELS=1.
+        # The corrupt CWP_PART_1 = "104" is derived from "Symphony No. 5, Hob. I:104".
+        tags = TrackTags(
+            cwp_part_levels="1",
+            cwp_work_part_levels="1",
+            cwp_movt_num="1",
+            title="I. Allegro",
+            artist="Karajan",
+            cwp_composer_lastnames="Haydn",
+            recording_date="1963",
+        )
+        if tags.model_extra is not None:
+            tags.model_extra["cwp_work_1"] = "Symphony No. 5, Hob. I:104"
+            tags.model_extra["cwp_part_1"] = "104"
+            # CWP_WORK_TOP absent (empty → not written); CWP_PART_0 absent
+
+        path = _make_library_flac(dest_root, "Classical/Haydn - Karajan/01 - 104/01 - I. Allegro.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-2",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        # CWP_PART_1 must be corrected even though groupheading is empty.
+        audio = MutagenFLAC(str(path))
+        part1_vals = audio.get("cwp_part_1") or []
+        assert part1_vals and part1_vals[0] == "Symphony No. 5, Hob. I:104", (
+            f"CWP_PART_1 should be corrected to full title, got {part1_vals}"
+        )
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched = [e for e in journal.entries if e.action == "repatched"]
+        assert len(repatched) == 1, f"Corrupt file must be repatched, got {repatched}"
+
+    def test_repatch_groupheading_inter_part_empty_skipped(self, fs: FakeFilesystem) -> None:
+        """Groupheading rebuild: empty intermediate part is skipped (False branch of ``if inter_part:``).
+
+        A 4-level hierarchy where level 2 has no work title (absent from the file) produces an
+        empty ``inter_part`` at ``j=2`` in the groupheading rebuild loop.  The empty part is
+        skipped (not appended to ``gh_parts``).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # 4-level hierarchy: CWP_PART_LEVELS=3, n_levels=4.
+        # Level 1 is corrupt; level 2 work title is absent (scanning loop breaks at i=2).
+        # Groupheading rebuild: j=2 → inter_part="" (absent) → skipped; j=1 → corrected label.
+        tags = TrackTags(
+            cwp_work_top="Haydn Complete Works",
+            cwp_groupheading="Haydn Complete Works :: 31 :: I. Allegro moderato",
+            cwp_part="I. Allegro moderato",
+            cwp_part_levels="3",
+            cwp_work_part_levels="3",
+            cwp_movt_num="1",
+            movementtotal="4",
+            title="I. Allegro moderato",
+            artist="Angeles Quartet",
+            cwp_composer_lastnames="Haydn",
+            recording_date="1980",
+        )
+        if tags.model_extra is not None:
+            tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
+            tags.model_extra["cwp_part_0"] = "I. Allegro moderato"
+            tags.model_extra["cwp_work_1"] = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+            tags.model_extra["cwp_part_1"] = "31"
+            # CWP_WORK_2 intentionally absent (empty → not written) → scanning loop breaks at i=2
+            # CWP_WORK_3 = "Haydn Complete Works" (= CWP_WORK_TOP)
+            tags.model_extra["cwp_work_3"] = "Haydn Complete Works"
+
+        path = _make_library_flac(
+            dest_root,
+            "Classical/Haydn - Angeles Quartet/Haydn Complete Works [rec 1980]/01 - 31/01 - I. Allegro moderato.flac",
+            tags,
+        )
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-3",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        audio = MutagenFLAC(str(path))
+        part1_vals = audio.get("cwp_part_1") or []
+        assert part1_vals and part1_vals[0] == "String Quartet in E major, Op. 20 No. 4, Hob. III:31", (
+            f"CWP_PART_1 should be corrected, got {part1_vals}"
+        )
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched = [e for e in journal.entries if e.action == "repatched"]
+        assert len(repatched) == 1, f"Corrupt file must be repatched, got {repatched}"
+
+    def test_repatch_case_str_noop_arm_covered(self, fs: FakeFilesystem) -> None:
+        """match/case ``case str():`` arm: correct label at an intermediate level is left untouched.
+
+        A file with a correct ``CWP_PART_1`` (recomputes to itself) exercises the ``case str():``
+        no-op arm of the per-level scan loop.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File with correct CWP_PART_1 — the loop hits case str(): (no-op) at i=1.
+        tags = _make_haydn_correct_tags()
+        correct_rel = (
+            "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]"
+            "/01 - String Quartet in E major, Op. 20 No. 4, Hob. III:31/01 - I. Allegro moderato.flac"
+        )
+        path = _make_library_flac(dest_root, correct_rel, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        # No repatched entry: correct label → no-op.
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched = [e for e in journal.entries if e.action == "repatched"]
+        assert len(repatched) == 0, f"Correct label must not be repatched, got {repatched}"
+
+    def test_repatch_repatched_lineage_entry_resolves_correctly(self, fs: FakeFilesystem) -> None:
+        """_resolve_current_lib handles "repatched" in-place entries correctly.
+
+        A file that was "tagged" then "repatched" (in-place, same path) is still resolved
+        correctly by _resolve_current_lib so that a second repatch_catalogue_colon run can
+        find it.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = _make_haydn_correct_tags()
+        correct_rel = (
+            "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]"
+            "/01 - String Quartet in E major, Op. 20 No. 4, Hob. III:31/01 - I. Allegro moderato.flac"
+        )
+        path = _make_library_flac(dest_root, correct_rel, tags)
+
+        # Journal has a "tagged" entry followed by a "repatched" entry (in-place).
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "haydn-rel-1",
+                    "source": str(path),
+                    "destination": str(path),
+                    "action": "repatched",
+                },
+            ],
+        )
+
+        # File is already correct — second run must be a no-op.
+        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        new_repatched = [e for e in journal.entries if e.action == "repatched" and e.timestamp != "2024-01-01T00:01:00+00:00"]
+        assert len(new_repatched) == 0, f"Already-correct file must not gain a new repatched entry, got {new_repatched}"
