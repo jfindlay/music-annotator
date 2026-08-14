@@ -303,12 +303,16 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   retain).  (2) **`CHROMAPRINT_FP` → `ACOUSTID_FINGERPRINT` rename** with a dual-read transition (read
   both keys; R6d migrates existing files).  Freezes **C-ACID**.
 - **R6d** Full-library repath under the frozen heuristics — the "more like itself" pass.  Gated by
-  **J3**.  **J3-preflight IN PROGRESS (sharded 2026-08-13, `docs/PLAN.md`):** a consolidated dry-run
-  harness over the deferred passes (`repath`/`regroup`/`unify` + the R6b/R6c tag-content repatches)
-  produces the three J3 evidence categories (dry-run change-set, journal capacity, `Reference/`
-  retention support) without touching the live library — the go/no-go input J3 waits on (R5 exit is
-  the other precondition, operator-paced).  Freezes **C-PREFLIGHT** (the typed dry-run-plan return
-  shape).  J2 folded in (2026-07-30): the III-b rg-multi-release regroup (live hades scan
+  **J3**.  **J3-preflight DONE 2026-08-14** (`docs/PLAN.md` 4/4 rows; commits `ac9ddb7` DryRunPlan
+  model + pass widenings / `d80cd38` composition harness / `9233438` CLI wiring / `05192f1` live run
+  + J3 evidence artifact, ledger `df871f7`; ◆ `still-on-intent`).  **Froze C-PREFLIGHT.**  Live
+  evidence (2026-08-14): 9,009 `unify` moves planned; `repath`/`regroup`/`enrich`/`repatch` all 0;
+  no cross-pass overlaps; journal 47,559 → 56,568 entries projected; `Reference/` present at ~399 GiB.
+  J3 is now decidable — the go/no-go input is produced; R5 exit (Original/ drained, operator-paced)
+  is the remaining precondition.  A consolidated dry-run harness over the deferred passes
+  (`repath`/`regroup`/`unify` + the R6b/R6c tag-content repatches) produces the three J3 evidence
+  categories (dry-run change-set, journal capacity, `Reference/` retention support) without touching
+  the live library.  Freezes **C-PREFLIGHT** (the typed dry-run-plan return shape).  J2 folded in (2026-07-30): the III-b rg-multi-release regroup (live hades scan
   prerequisite — R4b census) and the styleguide A-shards that reshape persisted tags/paths
   (concerto-gate deletion, REND-14 reorder + naming realignment, chorusmaster-into-`CONDUCTOR`,
   `IS_CLASSICAL` conditionalisation) land before or with this pass so the library re-derives once.

@@ -471,7 +471,7 @@ destructive-run consumer though only the harness consumes it now.
 | 1 @architect | Return a typed dry-run plan from every deferred maintenance pass | done | ac9ddb7 | C-PREFLIGHT (DryRunPlan/DryRunEntry models + six per-pass return widenings) |
 | 2 | Compose the deferred-pass plans into a consolidated dry-run preflight report | done | d80cd38 | |
 | 3 | Wire the catalogue-colon repatch and preflight composite CLI subcommands | done | 9233438 | (extra: __init__.py — plainly part of the unit, exposing compose_preflight_report in __all__) |
-| 4 ◆ | Run the preflight harness for J3 evidence + census + anneal | pending | | |
+| 4 ◆ | Run the preflight harness for J3 evidence + census + anneal | done | 05192f1 | sub-track complete; still-on-intent |
 
 ## Action-frame digest
 
@@ -480,6 +480,12 @@ Discovery/flex: Inflection design confirmed two draft-framing corrections: tag-c
 Affected: C-PREFLIGHT
 Deferred: no
 Texture: D-1 reopen trigger evaluated and does not fire; Option A (typed return) stands; KATs witness all four witnesses for all six passes; 1816 tests green, 100% branch coverage.
+
+### S4 ◆ — 2026-08-14
+Discovery/flex: Live run revealed preflight subcommand and standalone script needed init_mb() before compose_preflight_report() — unify makes live MB API calls for artist-alias resolution. Fixed within S4 fix-loop; C-PREFLIGHT interface unchanged.
+Affected: none (wiring-only fix; no contract seam moved)
+Deferred: no
+Texture: Live evidence: 9,009 unify moves; repath/repatch all 0; no cross-pass overlaps; journal 47,559→56,568 entries; Reference/ ~399 GiB. Boundary fork: still-on-intent. Anneal gate: clean for this sub-track's durable files.
 
 ## Discoveries & risks
 
