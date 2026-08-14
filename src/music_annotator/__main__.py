@@ -1,31 +1,37 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes twelve subcommands:
+Configures structlog for human-friendly console output and exposes fourteen subcommands:
 
-* ``apply``            — copy and tag a directory of tracks for a known MusicBrainz release MBID.
-* ``search``           — search MusicBrainz for a release matching a source directory, prompt for
+* ``apply``                    — copy and tag a directory of tracks for a known MusicBrainz release MBID.
+* ``search``                   — search MusicBrainz for a release matching a source directory, prompt for
   confirmation, then apply tags.
-* ``prune``            — read the journal, verify source and destination file presence, and prompt to
+* ``prune``                    — read the journal, verify source and destination file presence, and prompt to
   delete the source directory.
-* ``repath``           — re-path all verified library files to their corrected destinations under
+* ``repath``                   — re-path all verified library files to their corrected destinations under
   the current path-construction policy, using only embedded tags (no network calls).
-* ``regroup``          — consolidate confirmed split-release files into their canonical destinations
+* ``regroup``                  — consolidate confirmed split-release files into their canonical destinations
   (acts on case-(b) fragmentation detected by ``audit``).
-* ``audit``            — read the journal and report release-fragmentation anomalies (no network calls,
+* ``audit``                    — read the journal and report release-fragmentation anomalies (no network calls,
   no filesystem writes).  Read-only.
-* ``enrich``           — retroactively backfill fingerprint fields (audio_hash, acoustid_fingerprint,
+* ``enrich``                   — retroactively backfill fingerprint fields (audio_hash, acoustid_fingerprint,
   acoustid_id) into library files that are missing them.  Idempotent.
-* ``diff``             — diff the on-disk journal against a freshly-rebuilt in-memory cache and report
+* ``diff``                     — diff the on-disk journal against a freshly-rebuilt in-memory cache and report
   matches, stale, and leaked entries.
-* ``origin-time``      — migrate rip/download origin-time from the journal into authoritative sidecar
+* ``origin-time``              — migrate rip/download origin-time from the journal into authoritative sidecar
   YAML files (freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent.
-* ``rebuild``          — walk the library, read tags and sidecars per file, and emit a new journal
+* ``rebuild``                  — walk the library, read tags and sidecars per file, and emit a new journal
   (dry-run by default; use ``--apply`` to replace the on-disk journal).
-* ``unify``            — consolidate performer-split fragmented releases into their canonical top_dirs
+* ``unify``                    — consolidate performer-split fragmented releases into their canonical top_dirs
   (detects releases with ≥2 top_dirs sharing the same ``MUSICBRAINZ_ALBUMID`` tag).
-* ``repatch-acoustid`` — migrate the legacy ``CHROMAPRINT_FP`` fingerprint key to the Picard-aligned
+* ``repatch-acoustid``         — migrate the legacy ``CHROMAPRINT_FP`` fingerprint key to the Picard-aligned
   ``ACOUSTID_FINGERPRINT`` key, and (when ``--acoustid-key`` is supplied) re-source ``ACOUSTID_ID``
   from the fingerprint ``/v2/lookup`` endpoint.  Idempotent.
+* ``repatch-catalogue-colon``  — rewrite ``CWP_PART_*`` / ``CWP_GROUPHEADING`` tags corrupted by the
+  pre-fix bare-``":"`` split (catalogue-colon labels such as Hoboken ``"Hob. III:31"``).  Idempotent.
+  Supports ``--dry-run`` to preview planned repatches without writing any tags or journal entries.
+* ``preflight``                — run all maintenance passes with ``dry_run=True`` over ``dest_dir`` and
+  emit a consolidated report of planned changes, cross-pass overlaps, journal capacity, and
+  ``Reference/`` snapshot evidence.  Supports ``--json PATH`` to serialise the report to JSON.
 
 Usage::
 
@@ -79,6 +85,14 @@ Usage::
     music-annotator repatch-acoustid \\
         <dest_dir> \\
         [--acoustid-key KEY] [--dry-run]
+
+    music-annotator repatch-catalogue-colon \\
+        <dest_dir> \\
+        [--dry-run]
+
+    music-annotator preflight \\
+        <dest_dir> \\
+        [--journal-path PATH] [--json PATH]
 """
 
 from __future__ import annotations
@@ -789,6 +803,90 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     _add_acoustid_arg(repatch_acoustid_parser)
 
+    # ------------------------------------------------------------------
+    # repatch-catalogue-colon subcommand
+    # ------------------------------------------------------------------
+    repatch_cat_colon_parser = subparsers.add_parser(
+        "repatch-catalogue-colon",
+        help="Rewrite CWP_PART_* / CWP_GROUPHEADING tags corrupted by the pre-fix bare-':' split.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Scans the library at <dest_dir> for CWP_PART_{i} values produced by the retired
+            bare-':' fallback in strip_common_prefix — a colon inside a catalogue number (e.g.
+            Hoboken "Hob. III:31") caused the old split to truncate the label to a bare fragment
+            ("31").  The forward fix keys on ": " (colon-followed-by-space) so new ingests are
+            correct; this pass re-derives the corrected label offline from the CWP_WORK_{i} /
+            CWP_WORK_{i+1} pair already embedded in the file — no MusicBrainz network call needed.
+
+            Idempotent: a second run on a library where all labels are already correct is a no-op.
+            Use --dry-run first to preview all planned repatches.
+
+            Examples:
+              music-annotator repatch-catalogue-colon /tmp/music_library --dry-run
+              music-annotator repatch-catalogue-colon /tmp/music_library
+            """),
+    )
+    repatch_cat_colon_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    repatch_cat_colon_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log planned repatches without writing any tags or journal entries.",
+    )
+
+    # ------------------------------------------------------------------
+    # preflight subcommand
+    # ------------------------------------------------------------------
+    preflight_parser = subparsers.add_parser(
+        "preflight",
+        help="Run all maintenance passes with dry_run=True and emit a consolidated preflight report.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Runs each of the six maintenance passes (repath, regroup, unify, enrich,
+            repatch-catalogue-colon, repatch-acoustid) with dry_run=True over <dest_dir> and
+            assembles a consolidated report containing:
+
+              - Per-pass planned-change counts and cross-pass overlap counts.
+              - Cross-pass overlap map: files appearing in more than one pass's plan.
+              - Journal capacity: current entry count, on-disk size, and projected growth.
+              - Reference/ evidence: presence and footprint of the Reference/ snapshot directory.
+
+            When <dest_dir> is not mounted or is empty, prints a "scan not run" message and
+            exits cleanly.  This is structurally distinct from a scan that ran and found nothing.
+
+            Non-mutating: no files are moved, no tags are written, no journal entries are appended.
+
+            Examples:
+              music-annotator preflight /tmp/music_library
+              music-annotator preflight /tmp/music_library --json /tmp/preflight.json
+            """),
+    )
+    preflight_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    preflight_parser.add_argument(
+        "--journal-path",
+        metavar="PATH",
+        type=_resolve_path,
+        default=None,
+        help=("Path to the journal file.  Defaults to <dest_dir>/music_annotator_journal.json when not supplied."),
+    )
+    preflight_parser.add_argument(
+        "--json",
+        metavar="PATH",
+        type=_resolve_path,
+        default=None,
+        dest="json_path",
+        help="Serialise the preflight report to JSON at the given path.",
+    )
+
     return parser
 
 
@@ -796,7 +894,8 @@ def main() -> None:
     """Parse CLI arguments, configure logging, and dispatch to subcommands.
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
-    ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``, ``repatch-acoustid``.
+    ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``, ``repatch-acoustid``,
+    ``repatch-catalogue-colon``, ``preflight``.
 
     The ``repath`` subcommand dispatches to :func:`~music_annotator.repath` with ``dry_run`` and
     ``yes`` forwarded from the parsed arguments.  The ``regroup`` subcommand dispatches to
@@ -810,7 +909,11 @@ def main() -> None:
     (default) or ``dry_run=False`` when ``--apply`` is passed.  The ``unify`` subcommand
     dispatches to :func:`~music_annotator.unify`.  The ``repatch-acoustid`` subcommand dispatches
     to :func:`~music_annotator.repatch_acoustid_tags` with ``acoustid_key`` and ``dry_run``
-    forwarded.
+    forwarded.  The ``repatch-catalogue-colon`` subcommand dispatches to
+    :func:`~music_annotator.repatch_catalogue_colon` with ``dry_run`` forwarded.  The
+    ``preflight`` subcommand dispatches to :func:`~music_annotator.compose_preflight_report` and
+    prints the consolidated report; when ``scan_ran`` is ``False`` (root not mounted or empty),
+    prints a clear "scan not run" message and exits cleanly.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating.  All subcommands except ``prune`` use :func:`_dispatch` to convert any unhandled exception or keyboard
@@ -963,6 +1066,70 @@ def main() -> None:
                 "repatch_acoustid_error",
                 dest_root=str(args.dest_dir),
             )
+
+        case "repatch-catalogue-colon":
+            _dispatch(
+                lambda: music_annotator.repatch_catalogue_colon(
+                    dest_root=args.dest_dir,
+                    dry_run=args.dry_run,
+                ),
+                "repatch_catalogue_colon_error",
+                dest_root=str(args.dest_dir),
+            )
+
+        case "preflight":
+            _preflight_journal_path = (
+                args.journal_path if args.journal_path is not None else args.dest_dir / music_annotator.JOURNAL_FILENAME
+            )
+            _preflight_json_path = args.json_path
+
+            def _run_preflight() -> None:
+                """Run compose_preflight_report and emit the consolidated report.
+
+                Calls :func:`~music_annotator.compose_preflight_report` with the resolved
+                ``dest_root`` and ``journal_path``, prints a human-readable summary, and
+                optionally serialises the report to JSON when ``--json`` was supplied.
+                When ``scan_ran`` is ``False`` (root not mounted or empty), prints a clear
+                "scan not run" message and returns without printing pass summaries.
+                """
+                report = music_annotator.compose_preflight_report(
+                    dest_root=args.dest_dir,
+                    journal_path=_preflight_journal_path,
+                )
+                if not report.scan_ran:
+                    print(
+                        f"preflight: scan not run — '{args.dest_dir}' is not mounted or is empty.\n"
+                        "Mount the library root and re-run to obtain preflight evidence."
+                    )
+                else:
+                    print(f"\nPreflight report for: {args.dest_dir}\n")
+                    print("Pass summaries:")
+                    for summary in report.pass_summaries:
+                        overlap_note = f"  ({summary.overlap_count} overlap)" if summary.overlap_count else ""
+                        print(f"  {summary.pass_name:<30} {summary.count:>5} planned{overlap_note}")
+                    total = sum(s.count for s in report.pass_summaries)
+                    print(f"\n  {'TOTAL':<30} {total:>5} planned")
+                    if report.overlaps:
+                        print(f"\nCross-pass overlaps ({len(report.overlaps)} file(s) in >1 pass):")
+                        for overlap in report.overlaps:
+                            print(f"  {overlap.current_path}")
+                            print(f"    passes: {', '.join(overlap.pass_names)}")
+                    else:
+                        print("\nCross-pass overlaps: none")
+                    cap = report.journal_capacity
+                    print("\nJournal capacity:")
+                    print(f"  Current entries : {cap.current_entry_count}")
+                    print(f"  Current size    : {cap.current_size_bytes} bytes")
+                    print(f"  Projected delta : +{cap.projected_delta_entries} entries")
+                    ref = report.reference_evidence
+                    ref_status = f"present ({ref.size_bytes} bytes)" if ref.present else "absent"
+                    print(f"\nReference/ snapshot: {ref_status}")
+                if _preflight_json_path is not None:
+                    _preflight_json_path.parent.mkdir(parents=True, exist_ok=True)
+                    _preflight_json_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
+                    print(f"\nReport written to: {_preflight_json_path}")
+
+            _dispatch(_run_preflight, "preflight_error", dest_root=str(args.dest_dir))
 
         case _:  # pragma: no cover
             parser.print_help()

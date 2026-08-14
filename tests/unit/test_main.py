@@ -636,6 +636,81 @@ class TestBuildParser:
             parser.parse_args(["rebuild"])
         assert exc.value.code == 2
 
+    # ------------------------------------------------------------------
+    # repatch-catalogue-colon parser tests
+    # ------------------------------------------------------------------
+
+    _REPATCH_CAT_COLON_BASE = ["repatch-catalogue-colon", "/dest"]
+
+    def test_repatch_catalogue_colon_parses_dest_dir(self) -> None:
+        """repatch-catalogue-colon accepts dest_dir as a positional argument."""
+        parser = _build_parser()
+        ns = parser.parse_args(self._REPATCH_CAT_COLON_BASE)
+        assert ns.subcommand == "repatch-catalogue-colon"
+        assert ns.dest_dir == Path("/dest")
+        assert not ns.dry_run
+
+    def test_repatch_catalogue_colon_dry_run_flag(self) -> None:
+        """repatch-catalogue-colon --dry-run sets dry_run=True."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._REPATCH_CAT_COLON_BASE, "--dry-run"])
+        assert ns.dry_run
+
+    def test_repatch_catalogue_colon_requires_dest_dir(self) -> None:
+        """repatch-catalogue-colon exits with code 2 when dest_dir positional is missing."""
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["repatch-catalogue-colon"])
+        assert exc.value.code == 2
+
+    def test_repatch_catalogue_colon_appears_in_help(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """repatch-catalogue-colon appears in the top-level --help output."""
+        parser = _build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--help"])
+        assert "repatch-catalogue-colon" in capsys.readouterr().out
+
+    # ------------------------------------------------------------------
+    # preflight parser tests
+    # ------------------------------------------------------------------
+
+    _PREFLIGHT_BASE = ["preflight", "/dest"]
+
+    def test_preflight_parses_dest_dir(self) -> None:
+        """preflight accepts dest_dir as a positional argument."""
+        parser = _build_parser()
+        ns = parser.parse_args(self._PREFLIGHT_BASE)
+        assert ns.subcommand == "preflight"
+        assert ns.dest_dir == Path("/dest")
+        assert ns.journal_path is None
+        assert ns.json_path is None
+
+    def test_preflight_journal_path_flag(self) -> None:
+        """preflight --journal-path sets journal_path to the given path."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._PREFLIGHT_BASE, "--journal-path", "/custom/journal.json"])
+        assert ns.journal_path == Path("/custom/journal.json")
+
+    def test_preflight_json_flag(self) -> None:
+        """preflight --json sets json_path to the given path."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._PREFLIGHT_BASE, "--json", "/tmp/report.json"])
+        assert ns.json_path == Path("/tmp/report.json")
+
+    def test_preflight_requires_dest_dir(self) -> None:
+        """preflight exits with code 2 when dest_dir positional is missing."""
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["preflight"])
+        assert exc.value.code == 2
+
+    def test_preflight_appears_in_help(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """preflight appears in the top-level --help output."""
+        parser = _build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--help"])
+        assert "preflight" in capsys.readouterr().out
+
 
 # ---------------------------------------------------------------------------
 # main()
@@ -1430,6 +1505,228 @@ class TestMain:
         self._patch_common(mocker)
         mocker.patch("music_annotator.rebuild_journal", side_effect=KeyboardInterrupt)
         mocker.patch.object(sys, "argv", new=self._REBUILD_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    # ------------------------------------------------------------------
+    # repatch-catalogue-colon dispatch tests
+    # ------------------------------------------------------------------
+
+    _REPATCH_CAT_COLON_ARGV = ["music-annotator", "repatch-catalogue-colon", "/d"]
+
+    # pylint: disable-next=unused-argument
+    def test_repatch_catalogue_colon_dispatches(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() repatch-catalogue-colon calls repatch_catalogue_colon with dest_root and dry_run=False.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_repatch = mocker.patch("music_annotator.repatch_catalogue_colon")
+        mocker.patch.object(sys, "argv", new=self._REPATCH_CAT_COLON_ARGV)
+        main()
+        mock_repatch.assert_called_once_with(dest_root=Path("/d"), dry_run=False)
+
+    # pylint: disable-next=unused-argument
+    def test_repatch_catalogue_colon_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() repatch-catalogue-colon --dry-run passes dry_run=True; no file mutation occurs.
+
+        Verifies the dry-run branch: the mock is called with dry_run=True, and because the mock
+        returns None (no writes), no journal entries or tag writes occur.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_repatch = mocker.patch("music_annotator.repatch_catalogue_colon", return_value=None)
+        mocker.patch.object(sys, "argv", new=[*self._REPATCH_CAT_COLON_ARGV, "--dry-run"])
+        main()
+        _, kwargs = mock_repatch.call_args
+        assert kwargs["dry_run"] is True
+
+    # pylint: disable-next=unused-argument
+    def test_repatch_catalogue_colon_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() repatch-catalogue-colon exits with code 1 when repatch_catalogue_colon raises.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.repatch_catalogue_colon", side_effect=RuntimeError("boom"))
+        mocker.patch.object(sys, "argv", new=self._REPATCH_CAT_COLON_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    # pylint: disable-next=unused-argument
+    def test_repatch_catalogue_colon_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() repatch-catalogue-colon exits with code 1 on KeyboardInterrupt.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.repatch_catalogue_colon", side_effect=KeyboardInterrupt)
+        mocker.patch.object(sys, "argv", new=self._REPATCH_CAT_COLON_ARGV)
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+
+    # ------------------------------------------------------------------
+    # preflight dispatch tests
+    # ------------------------------------------------------------------
+
+    _PREFLIGHT_ARGV = ["music-annotator", "preflight", "/d"]
+
+    def test_preflight_dispatches_to_compose_preflight_report(
+        self, mocker: MockerFixture, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """main() preflight calls compose_preflight_report and prints the report.
+
+        Verifies that the preflight subcommand dispatches to compose_preflight_report with the
+        correct dest_root and journal_path, and that the report output is printed to stdout.
+        Exercises the no-overlaps branch (report.overlaps is empty).
+
+        :param mocker: pytest-mock fixture.
+        :param capsys: pytest stdout/stderr capture fixture.
+        """
+        from music_annotator.models import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+            JournalCapacity,
+            PreflightPassSummary,
+            PreflightReport,
+            ReferenceEvidence,
+        )
+
+        self._patch_common(mocker)
+        report = PreflightReport(
+            scan_ran=True,
+            pass_summaries=[PreflightPassSummary(pass_name="repath", count=2, overlap_count=0)],
+            journal_capacity=JournalCapacity(current_entry_count=10, current_size_bytes=500, projected_delta_entries=2),
+            reference_evidence=ReferenceEvidence(present=False, size_bytes=0),
+        )
+        mock_preflight = mocker.patch("music_annotator.compose_preflight_report", return_value=report)
+        mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
+        main()
+
+        mock_preflight.assert_called_once_with(
+            dest_root=Path("/d"),
+            journal_path=Path("/d") / music_annotator.JOURNAL_FILENAME,
+        )
+        out = capsys.readouterr().out
+        assert "repath" in out
+        assert "2" in out
+        assert "Cross-pass overlaps: none" in out
+
+    def test_preflight_report_with_overlaps(self, mocker: MockerFixture, capsys: pytest.CaptureFixture[str]) -> None:
+        """main() preflight prints cross-pass overlap details when overlaps are present.
+
+        Exercises the report.overlaps branch: when a file appears in more than one pass's plan,
+        the CLI prints the file path and the names of the passes that include it.
+
+        :param mocker: pytest-mock fixture.
+        :param capsys: pytest stdout/stderr capture fixture.
+        """
+        from music_annotator.models import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+            JournalCapacity,
+            PreflightOverlapEntry,
+            PreflightPassSummary,
+            PreflightReport,
+            ReferenceEvidence,
+        )
+
+        self._patch_common(mocker)
+        report = PreflightReport(
+            scan_ran=True,
+            pass_summaries=[
+                PreflightPassSummary(pass_name="repath", count=1, overlap_count=1),
+                PreflightPassSummary(pass_name="repatch_catalogue_colon", count=1, overlap_count=1),
+            ],
+            overlaps=[
+                PreflightOverlapEntry(
+                    current_path="/lib/track.flac",
+                    pass_names=["repath", "repatch_catalogue_colon"],
+                )
+            ],
+            journal_capacity=JournalCapacity(current_entry_count=5, current_size_bytes=200, projected_delta_entries=2),
+            reference_evidence=ReferenceEvidence(present=True, size_bytes=1024),
+        )
+        mocker.patch("music_annotator.compose_preflight_report", return_value=report)
+        mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
+        main()
+
+        out = capsys.readouterr().out
+        assert "/lib/track.flac" in out
+        assert "repath" in out
+        assert "repatch_catalogue_colon" in out
+        # Reference/ present branch
+        assert "present" in out
+
+    def test_preflight_scan_not_run_prints_message(self, mocker: MockerFixture, capsys: pytest.CaptureFixture[str]) -> None:
+        """main() preflight prints a 'scan not run' message when scan_ran=False.
+
+        When the library root is not mounted or is empty, compose_preflight_report returns a
+        report with scan_ran=False.  The CLI must print a clear message and exit cleanly (no
+        exception, no exit code 1).
+
+        :param mocker: pytest-mock fixture.
+        :param capsys: pytest stdout/stderr capture fixture.
+        """
+        from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.compose_preflight_report", return_value=PreflightReport(scan_ran=False))
+        mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
+        main()
+        out = capsys.readouterr().out
+        assert "scan not run" in out
+
+    def test_preflight_custom_journal_path(self, mocker: MockerFixture) -> None:
+        """main() preflight --journal-path passes the custom path to compose_preflight_report.
+
+        :param mocker: pytest-mock fixture.
+        """
+        from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+        self._patch_common(mocker)
+        mock_preflight = mocker.patch("music_annotator.compose_preflight_report", return_value=PreflightReport(scan_ran=False))
+        mocker.patch.object(sys, "argv", new=[*self._PREFLIGHT_ARGV, "--journal-path", "/custom/journal.json"])
+        main()
+        # The custom journal path is passed through to compose_preflight_report.
+        mock_preflight.assert_called_once_with(
+            dest_root=Path("/d"),
+            journal_path=Path("/custom/journal.json"),
+        )
+
+    # pylint: disable-next=unused-argument
+    def test_preflight_json_output(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() preflight --json writes the report to the given path as JSON.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+        self._patch_common(mocker)
+        report = PreflightReport(scan_ran=True)
+        mocker.patch("music_annotator.compose_preflight_report", return_value=report)
+        json_path = Path("/tmp/report.json")
+        mocker.patch.object(sys, "argv", new=[*self._PREFLIGHT_ARGV, "--json", str(json_path)])
+        main()
+        assert json_path.exists()
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        assert data["scan_ran"] is True
+
+    # pylint: disable-next=unused-argument
+    def test_preflight_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() preflight exits with code 1 when compose_preflight_report raises.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mocker.patch("music_annotator.compose_preflight_report", side_effect=RuntimeError("boom"))
+        mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 1

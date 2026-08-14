@@ -130,6 +130,7 @@ from music_annotator._pipeline_io import (
     write_transaction_log,
 )
 from music_annotator._pipeline_maint import (
+    compose_preflight_report,
     enrich,
     regroup,
     repatch_acoustid_tags,
@@ -200,6 +201,7 @@ __all__ = [
     "find_source_files",
     "CollisionPolicy",
     "SelectionMethod",
+    "compose_preflight_report",
     "enrich",
     "regroup",
     "repatch_acoustid_tags",
