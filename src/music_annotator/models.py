@@ -110,7 +110,8 @@ def classify_annotation_tier(signal: CensusSignal) -> tuple[AnnotationTier, bool
 
     :param signal: A :class:`CensusSignal` value from the census/discovery pass.
     :returns: A ``(tier, needs_spot_check)`` tuple.  ``needs_spot_check`` is ``True`` only for
-        ``mb-search-resolved`` entries (J1 adjudication: search-only confidence is real).
+        ``mb-search-resolved`` entries (search-only confidence requires human spot-check because
+        the match was not verified against an embedded MBID).
     """
     match signal:
         case CensusSignal.EMBEDDED_MBID:

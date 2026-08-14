@@ -1,0 +1,45 @@
+{
+  "pass_summaries": [
+    {
+      "pass_name": "repath",
+      "count": 0,
+      "overlap_count": 0
+    },
+    {
+      "pass_name": "regroup",
+      "count": 0,
+      "overlap_count": 0
+    },
+    {
+      "pass_name": "unify",
+      "count": 9009,
+      "overlap_count": 0
+    },
+    {
+      "pass_name": "enrich",
+      "count": 0,
+      "overlap_count": 0
+    },
+    {
+      "pass_name": "repatch_catalogue_colon",
+      "count": 0,
+      "overlap_count": 0
+    },
+    {
+      "pass_name": "repatch_acoustid_tags",
+      "count": 0,
+      "overlap_count": 0
+    }
+  ],
+  "overlaps": [],
+  "journal_capacity": {
+    "current_entry_count": 47559,
+    "current_size_bytes": 48780316,
+    "projected_delta_entries": 9009
+  },
+  "reference_evidence": {
+    "present": true,
+    "size_bytes": 428656585991
+  },
+  "scan_ran": true
+}

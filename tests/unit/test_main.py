@@ -711,6 +711,31 @@ class TestBuildParser:
             parser.parse_args(["--help"])
         assert "preflight" in capsys.readouterr().out
 
+    def test_preflight_user_agent_app_default(self) -> None:
+        """preflight user_agent_app defaults to the package version string."""
+        parser = _build_parser()
+        ns = parser.parse_args(self._PREFLIGHT_BASE)
+        assert ns.user_agent_app == _DEFAULT_USER_AGENT_APP
+        assert _VERSION in ns.user_agent_app
+
+    def test_preflight_user_agent_app_custom(self) -> None:
+        """preflight --user-agent-app overrides the default."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._PREFLIGHT_BASE, "--user-agent-app", "MyApp/2.0"])
+        assert ns.user_agent_app == "MyApp/2.0"
+
+    def test_preflight_user_agent_email_default_empty(self) -> None:
+        """preflight user_agent_email defaults to empty string when not supplied."""
+        parser = _build_parser()
+        ns = parser.parse_args(self._PREFLIGHT_BASE)
+        assert ns.user_agent_email == ""
+
+    def test_preflight_user_agent_email_stored(self) -> None:
+        """preflight --user-agent-email is stored on the namespace."""
+        parser = _build_parser()
+        ns = parser.parse_args([*self._PREFLIGHT_BASE, "--user-agent-email", "me@example.com"])
+        assert ns.user_agent_email == "me@example.com"
+
 
 # ---------------------------------------------------------------------------
 # main()
@@ -1599,6 +1624,7 @@ class TestMain:
         )
 
         self._patch_common(mocker)
+        mocker.patch("music_annotator.init_mb")
         report = PreflightReport(
             scan_ran=True,
             pass_summaries=[PreflightPassSummary(pass_name="repath", count=2, overlap_count=0)],
@@ -1636,6 +1662,7 @@ class TestMain:
         )
 
         self._patch_common(mocker)
+        mocker.patch("music_annotator.init_mb")
         report = PreflightReport(
             scan_ran=True,
             pass_summaries=[
@@ -1675,6 +1702,7 @@ class TestMain:
         from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
 
         self._patch_common(mocker)
+        mocker.patch("music_annotator.init_mb")
         mocker.patch("music_annotator.compose_preflight_report", return_value=PreflightReport(scan_ran=False))
         mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
         main()
@@ -1689,6 +1717,7 @@ class TestMain:
         from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
 
         self._patch_common(mocker)
+        mocker.patch("music_annotator.init_mb")
         mock_preflight = mocker.patch("music_annotator.compose_preflight_report", return_value=PreflightReport(scan_ran=False))
         mocker.patch.object(sys, "argv", new=[*self._PREFLIGHT_ARGV, "--journal-path", "/custom/journal.json"])
         main()
@@ -1708,6 +1737,7 @@ class TestMain:
         from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
 
         self._patch_common(mocker)
+        mocker.patch("music_annotator.init_mb")
         report = PreflightReport(scan_ran=True)
         mocker.patch("music_annotator.compose_preflight_report", return_value=report)
         json_path = Path("/tmp/report.json")
@@ -1725,11 +1755,64 @@ class TestMain:
         :param fs: pyfakefs fixture.
         """
         self._patch_common(mocker)
+        mocker.patch("music_annotator.init_mb")
         mocker.patch("music_annotator.compose_preflight_report", side_effect=RuntimeError("boom"))
         mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 1
+
+    def test_preflight_init_mb_called_with_user_agent(self, mocker: MockerFixture) -> None:
+        """main() preflight calls init_mb with the assembled user-agent string before compose_preflight_report.
+
+        The unify pass calls fetch_artist_aliases which requires the MusicBrainz user-agent to be
+        initialised.  Verifies that init_mb is called with the combined app+email string before
+        compose_preflight_report is invoked.
+
+        :param mocker: pytest-mock fixture.
+        """
+        from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+        self._patch_common(mocker)
+        mock_init_mb = mocker.patch("music_annotator.init_mb")
+        mocker.patch("music_annotator.compose_preflight_report", return_value=PreflightReport(scan_ran=False))
+        mocker.patch.object(
+            sys,
+            "argv",
+            new=[
+                "music-annotator",
+                "preflight",
+                "/d",
+                "--user-agent-app",
+                "MyApp/2.0",
+                "--user-agent-email",
+                "me@example.com",
+            ],
+        )
+        main()
+        mock_init_mb.assert_called_once_with("MyApp/2.0 me@example.com")
+
+    def test_preflight_init_mb_called_with_default_user_agent(self, mocker: MockerFixture) -> None:
+        """main() preflight calls init_mb with the default user-agent when no args are supplied.
+
+        When --user-agent-email is omitted (defaults to ""), the assembled string is stripped so
+        init_mb receives just the app token without a trailing space.
+
+        :param mocker: pytest-mock fixture.
+        """
+        from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+
+        self._patch_common(mocker)
+        mock_init_mb = mocker.patch("music_annotator.init_mb")
+        mocker.patch("music_annotator.compose_preflight_report", return_value=PreflightReport(scan_ran=False))
+        mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
+        main()
+        # With no --user-agent-email, the assembled string is just the app token (stripped).
+        call_args = mock_init_mb.call_args
+        assert call_args is not None
+        user_agent_arg = call_args.args[0]
+        assert _DEFAULT_USER_AGENT_APP in user_agent_arg
+        assert not user_agent_arg.endswith(" ")  # trailing space stripped
 
 
 # ---------------------------------------------------------------------------

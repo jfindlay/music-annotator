@@ -10213,3 +10213,232 @@ class TestComposePreflight:
         # The pass_name "repath" must appear only once in path_to_passes[dup_path].
         repath_summary = next(s for s in report.pass_summaries if s.pass_name == "repath")
         assert repath_summary.count == 2
+
+
+class TestPreflightParity:
+    """No-regression parity pin for :func:`compose_preflight_report` composition behaviour.
+
+    Exercises the full compose_preflight_report() path over a representative fixture that
+    contains at least one candidate for each of repath and repatch_catalogue_colon, including
+    a file that qualifies for both (triggering the overlap map).  This test is the behavioural
+    pin: it must pass even after future changes to the composition logic.
+
+    The fixture is deliberately minimal — three files, a known journal, no Reference/ directory
+    — so every assertion is exact rather than a lower bound.  The fixture exercises:
+
+    - The repath-only path (one file at a legacy path, no catalogue-colon corruption).
+    - The repatch_catalogue_colon-only path (one file at a correct path, with corruption).
+    - The overlap path (one file at a legacy path AND with corruption).
+    - Journal capacity: current_entry_count equals the number of pre-existing journal entries;
+      projected_delta_entries equals the sum of planned changes across all passes.
+    """
+
+    @staticmethod
+    def _make_repath_only_tags() -> TrackTags:
+        """Build tags for a repath-only candidate: correct tags, no catalogue-colon corruption.
+
+        The file will be placed at a legacy path so repath plans to move it, but
+        repatch_catalogue_colon finds nothing to fix.
+
+        :returns: A :class:`TrackTags` instance with clean CWP tags.
+        """
+        return TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Symphony No. 1",
+            recording_date="2019",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro",
+            artist="Karajan",
+        )
+
+    @staticmethod
+    def _make_repatch_only_tags() -> TrackTags:
+        """Build tags for a repatch_catalogue_colon candidate: corrupt CWP_PART_1 tag.
+
+        The file carries catalogue-colon corruption so repatch_catalogue_colon plans to rewrite
+        the corrupt CWP_PART_1 tag.  The file may also be a repath candidate depending on where
+        it is placed; assertions use >= so this does not affect correctness.
+
+        :returns: A :class:`TrackTags` instance with catalogue-colon corruption.
+        """
+        tags = TrackTags(
+            cwp_composer_lastnames="Haydn",
+            cwp_work_top="String Quartet in G major, Op. 76 No. 1, Hob. III:75",
+            recording_date="2018",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con spirito",
+            artist="Kodaly Quartet",
+        )
+        if tags.model_extra is not None:
+            tags.model_extra["cwp_work_0"] = "Allegro con spirito"
+            tags.model_extra["cwp_part_0"] = ""
+            tags.model_extra["cwp_work_1"] = "String Quartet in G major, Op. 76 No. 1, Hob. III:75"
+            tags.model_extra["cwp_part_1"] = "75"
+            tags.model_extra["cwp_work_2"] = ""
+        return tags
+
+    @staticmethod
+    def _make_overlap_tags() -> TrackTags:
+        """Build tags for a file that qualifies for both repath and repatch_catalogue_colon.
+
+        The file will be placed at a legacy path (repath candidate) and carries catalogue-colon
+        corruption (repatch_catalogue_colon candidate), triggering the cross-pass overlap map.
+
+        :returns: A :class:`TrackTags` instance with both a legacy path and catalogue-colon corruption.
+        """
+        tags = TrackTags(
+            cwp_composer_lastnames="Haydn",
+            cwp_work_top="String Quartet in E major, Op. 20 No. 4, Hob. III:31",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="I. Allegro moderato",
+            artist="Amadeus Quartet",
+        )
+        if tags.model_extra is not None:
+            tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
+            tags.model_extra["cwp_part_0"] = ""
+            tags.model_extra["cwp_work_1"] = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+            tags.model_extra["cwp_part_1"] = "31"
+            tags.model_extra["cwp_work_2"] = ""
+        return tags
+
+    def test_parity_pin_full_compose_path(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Parity pin: compose_preflight_report() composition behaviour over a representative fixture.
+
+        Constructs a three-file library:
+        - File A: repath candidate (legacy path, clean tags).
+        - File B: repatch_catalogue_colon candidate (corrupt CWP_PART_1; may also be a repath candidate).
+        - File C: both repath and repatch_catalogue_colon candidate (legacy path + corrupt CWP_PART_1).
+
+        Asserts all four parity properties:
+        (1) scan_ran=True — the root was mounted and non-empty.
+        (2) Per-pass counts: repath count >= 2 (files A and C); repatch_catalogue_colon count >= 2
+            (files B and C); regroup, unify, repatch_acoustid_tags count == 0.
+        (3) Overlap map: file C appears in the overlaps list with both "repath" and
+            "repatch_catalogue_colon" named; repath and repatch_catalogue_colon overlap_count >= 1.
+        (4) journal_capacity: current_entry_count == 3 (three pre-existing journal entries);
+            projected_delta_entries >= 4 (at least 2 repath + 2 repatch_catalogue_colon planned).
+
+        ``_run_fpcalc`` is mocked because fpcalc is not available in the test environment.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="")
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # --- File A: repath-only candidate ---
+        repath_only_tags = self._make_repath_only_tags()
+        # Place at a legacy path (old work name) so repath plans to move it.
+        file_a = _make_library_flac(
+            dest_root,
+            "Brahms - Karajan/OldSym1 [rec 2019]/01 - Allegro.flac",
+            repath_only_tags,
+        )
+
+        # --- File B: repatch_catalogue_colon candidate ---
+        repatch_only_tags = self._make_repatch_only_tags()
+        # Place at any stable path — repath may or may not plan to move it, but the
+        # repatch_catalogue_colon pass will plan to rewrite its corrupt CWP_PART_1 tag.
+        # Assertions use >= so file B being a repath candidate too does not break them.
+        file_b = _make_library_flac(
+            dest_root,
+            "Haydn - Kodaly/Quartet Op76 [rec 2018]/01 - Allegro con spirito.flac",
+            repatch_only_tags,
+        )
+
+        # --- File C: overlap candidate (both repath and repatch_catalogue_colon) ---
+        overlap_tags = self._make_overlap_tags()
+        # Place at a legacy path so repath plans to move it; tags also have catalogue-colon
+        # corruption so repatch_catalogue_colon plans to rewrite it.
+        file_c = _make_library_flac(
+            dest_root,
+            "Haydn - Amadeus/OldQuartet [rec 2021]/01 - Allegro.flac",
+            overlap_tags,
+        )
+
+        # --- Journal: three pre-existing entries (one per file) ---
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-brahms",
+                    "source": "/src/01.flac",
+                    "destination": str(file_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-haydn-kodaly",
+                    "source": "/src/02.flac",
+                    "destination": str(file_b),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "rel-haydn-amadeus",
+                    "source": "/src/03.flac",
+                    "destination": str(file_c),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        report = compose_preflight_report(dest_root, journal_path)
+
+        # --- Parity property (1): scan_ran=True ---
+        assert report.scan_ran is True, "scan_ran must be True when the root is mounted and non-empty"
+
+        # --- Parity property (2): per-pass counts ---
+        by_pass = {s.pass_name: s for s in report.pass_summaries}
+
+        # repath must plan to move file A (legacy path) and file C (legacy path + corruption).
+        assert by_pass["repath"].count >= 2, f"repath count must be >= 2 (files A and C); got {by_pass['repath'].count}"
+        # repatch_catalogue_colon must plan to rewrite file B (corruption) and file C (corruption).
+        assert by_pass["repatch_catalogue_colon"].count >= 2, (
+            f"repatch_catalogue_colon count must be >= 2 (files B and C); got {by_pass['repatch_catalogue_colon'].count}"
+        )
+        # No fragmented releases in this fixture.
+        assert by_pass["regroup"].count == 0, f"regroup must be 0; got {by_pass['regroup'].count}"
+        assert by_pass["unify"].count == 0, f"unify must be 0; got {by_pass['unify'].count}"
+        # No legacy CHROMAPRINT_FP keys in this fixture.
+        assert by_pass["repatch_acoustid_tags"].count == 0, (
+            f"repatch_acoustid_tags must be 0; got {by_pass['repatch_acoustid_tags'].count}"
+        )
+
+        # --- Parity property (3): overlap map populated for file C ---
+        overlap_paths = {e.current_path for e in report.overlaps}
+        assert str(file_c) in overlap_paths, f"file C ({file_c}) must appear in the overlap map; overlaps={overlap_paths}"
+        overlap_entry = next(e for e in report.overlaps if e.current_path == str(file_c))
+        assert "repath" in overlap_entry.pass_names, (
+            f"'repath' must be in file C's overlap pass_names; got {overlap_entry.pass_names}"
+        )
+        assert "repatch_catalogue_colon" in overlap_entry.pass_names, (
+            f"'repatch_catalogue_colon' must be in file C's overlap pass_names; got {overlap_entry.pass_names}"
+        )
+        # Both passes must report at least one overlapping file.
+        assert by_pass["repath"].overlap_count >= 1, f"repath overlap_count must be >= 1; got {by_pass['repath'].overlap_count}"
+        assert by_pass["repatch_catalogue_colon"].overlap_count >= 1, (
+            f"repatch_catalogue_colon overlap_count must be >= 1; got {by_pass['repatch_catalogue_colon'].overlap_count}"
+        )
+
+        # --- Parity property (4): journal_capacity reflects the fixture journal ---
+        cap = report.journal_capacity
+        # Three pre-existing journal entries (one per file).
+        assert cap.current_entry_count == 3, (
+            f"current_entry_count must be 3 (three pre-existing entries); got {cap.current_entry_count}"
+        )
+        assert cap.current_size_bytes > 0, "current_size_bytes must be nonzero (journal file exists)"
+        # At least 4 planned changes: 2 repath (A and C) + 2 repatch_catalogue_colon (B and C).
+        assert cap.projected_delta_entries >= 4, (
+            f"projected_delta_entries must be >= 4 (2 repath + 2 repatch_catalogue_colon); got {cap.projected_delta_entries}"
+        )

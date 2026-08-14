@@ -92,6 +92,7 @@ Usage::
 
     music-annotator preflight \\
         <dest_dir> \\
+        [--user-agent-app "AppName/Version"] [--user-agent-email contact@example.com] \\
         [--journal-path PATH] [--json PATH]
 """
 
@@ -872,6 +873,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Root of the annotated music library (contains music_annotator_journal.json).",
     )
     preflight_parser.add_argument(
+        "--user-agent-app",
+        default=_DEFAULT_USER_AGENT_APP,
+        metavar="STRING",
+        help='MusicBrainz user-agent app token in the form "AppName/Version" (default: %(default)s).',
+    )
+    preflight_parser.add_argument(
+        "--user-agent-email",
+        default="",
+        metavar="EMAIL",
+        help=(
+            "Contact e-mail address included in the MusicBrainz user-agent string.  "
+            "Required when the library contains files with MUSICBRAINZ_ARTISTID tags, "
+            "because the unify pass calls fetch_artist_aliases."
+        ),
+    )
+    preflight_parser.add_argument(
         "--journal-path",
         metavar="PATH",
         type=_resolve_path,
@@ -911,9 +928,12 @@ def main() -> None:
     to :func:`~music_annotator.repatch_acoustid_tags` with ``acoustid_key`` and ``dry_run``
     forwarded.  The ``repatch-catalogue-colon`` subcommand dispatches to
     :func:`~music_annotator.repatch_catalogue_colon` with ``dry_run`` forwarded.  The
-    ``preflight`` subcommand dispatches to :func:`~music_annotator.compose_preflight_report` and
-    prints the consolidated report; when ``scan_ran`` is ``False`` (root not mounted or empty),
-    prints a clear "scan not run" message and exits cleanly.
+    ``preflight`` subcommand initialises the MusicBrainz user-agent via
+    :func:`~music_annotator.init_mb` (required because the unify pass calls
+    :func:`~music_annotator._mb_api.fetch_artist_aliases`), then dispatches to
+    :func:`~music_annotator.compose_preflight_report` and prints the consolidated report; when
+    ``scan_ran`` is ``False`` (root not mounted or empty), prints a clear "scan not run" message
+    and exits cleanly.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating.  All subcommands except ``prune`` use :func:`_dispatch` to convert any unhandled exception or keyboard
@@ -1086,12 +1106,18 @@ def main() -> None:
             def _run_preflight() -> None:
                 """Run compose_preflight_report and emit the consolidated report.
 
+                Initialises the MusicBrainz user-agent via :func:`~music_annotator.init_mb`
+                before calling :func:`~music_annotator.compose_preflight_report`, because the
+                unify pass calls :func:`~music_annotator._mb_api.fetch_artist_aliases` which
+                requires the user-agent to be set.
+
                 Calls :func:`~music_annotator.compose_preflight_report` with the resolved
                 ``dest_root`` and ``journal_path``, prints a human-readable summary, and
                 optionally serialises the report to JSON when ``--json`` was supplied.
                 When ``scan_ran`` is ``False`` (root not mounted or empty), prints a clear
                 "scan not run" message and returns without printing pass summaries.
                 """
+                music_annotator.init_mb(f"{args.user_agent_app} {args.user_agent_email}".strip())
                 report = music_annotator.compose_preflight_report(
                     dest_root=args.dest_dir,
                     journal_path=_preflight_journal_path,

@@ -34,6 +34,7 @@ import os
 import sys
 from pathlib import Path
 
+import music_annotator
 from music_annotator._pipeline_io import JOURNAL_FILENAME
 from music_annotator._pipeline_maint import compose_preflight_report
 
@@ -81,7 +82,18 @@ def main() -> None:
         default="",
         help="Also serialise the report to a JSON file at PATH.",
     )
+    parser.add_argument(
+        "--user-agent",
+        default="music-annotator/1.0 preflight@localhost",
+        metavar="STRING",
+        help=(
+            'MusicBrainz user-agent string in the form "AppName/Version contact@example.com" '
+            "(default: %(default)s).  Required because the unify pass calls fetch_artist_aliases."
+        ),
+    )
     args = parser.parse_args()
+
+    music_annotator.init_mb(args.user_agent)
 
     root = args.root
     _check_root(root)
