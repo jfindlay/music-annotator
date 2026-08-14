@@ -462,7 +462,7 @@ transition contract and the value-source rule though S2 is the first consumer.
 | 1 @architect | Freeze the Picard-aligned AcoustID tag policy (value source + key rename + dual-read) | done | a30ed93 | C-ACID |
 | 2 | Align the AcoustID forward-write path to the frozen policy | done | bd8a0b6 | |
 | 3 | Migrate existing files in an offline AcoustID repatch pass | done | 0004016 | |
-| 4 ◆ | Scan the library for legacy AcoustID tag state + census + anneal | pending | | |
+| 4 ◆ | Scan the library for legacy AcoustID tag state + census + anneal | done | 4ec6907 | |
 
 ## Action-frame digest
 
@@ -471,6 +471,12 @@ Discovery/flex: Juncture fork identified that a hard field rename at S1 would br
 Affected: C-ACID (interface item 1 — model fields)
 Deferred: no
 Texture: S2 must remove the alias + property bridge as it propagates the rename; the bridge is transition-only code weight. Three extra test files (test_main.py, test_pipeline.py, test_pipeline_maint.py) updated to write legacy key directly via mutagen after _MP3_TXXX_MAP rename — allowed extras, noted in ledger.
+
+### S4 ◆ boundary — 2026-08-13
+Discovery/flex: Boundary fork confirmed still-on-intent. All three design-intent elements realized; all frozen contracts intact; register anneal clean (zero denylist hits in src/).
+Affected: none
+Deferred: no — R6d cross-shard dependency noted (R6d must drive repatch_acoustid_tags() destructively under J3; dual-read retirement deferred until post-R6d). Both are pre-committed PLAN postures, not new drift.
+Texture: fetch_acoustid_id survives as an exported helper (not deleted, no longer the ACOUSTID_ID source — matches S1 subtlety). Sub-track complete.
 
 ## Discoveries & risks
 
