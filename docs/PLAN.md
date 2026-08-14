@@ -469,7 +469,7 @@ destructive-run consumer though only the harness consumes it now.
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 @architect | Return a typed dry-run plan from every deferred maintenance pass | done | ac9ddb7 | C-PREFLIGHT (DryRunPlan/DryRunEntry models + six per-pass return widenings) |
-| 2 | Compose the deferred-pass plans into a consolidated dry-run preflight report | pending | | |
+| 2 | Compose the deferred-pass plans into a consolidated dry-run preflight report | done | d80cd38 | |
 | 3 | Wire the catalogue-colon repatch and preflight composite CLI subcommands | pending | | |
 | 4 ◆ | Run the preflight harness for J3 evidence + census + anneal | pending | | |
 
