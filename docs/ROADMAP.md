@@ -289,9 +289,11 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   the destructive library-wide repatch rides R6d's one J3-gated pass (D-A5 precedent)** — and this
   machinery *closes the R6d tag-content gap* (below) for the catalogue-colon case: R6d gains a
   tag-content-repatch capability its paths-only engine currently lacks.
-- **R6c** AcoustID tag naming + semantics — Picard alignment — **IN PROGRESS** (sharded 2026-08-13,
-  `docs/PLAN.md`).  Two persisted-tag migrations, both **code-only** (destructive library-wide repatch
-  rides R6d, D-A5).  **The two sub-questions were decided at PLAN derivation** against the live
+- **R6c** AcoustID tag naming + semantics — Picard alignment — **DONE 2026-08-13** (`docs/PLAN.md`
+  4/4 rows; commits `a30ed93` policy freeze / `bd8a0b6` forward-write / `0004016` offline repatch /
+  `4ec6907` scan+census+anneal, ledger `150da82`; ◆ `still-on-intent`).  **Froze C-ACID.**  Two
+  persisted-tag migrations, both **code-only** (destructive library-wide repatch rides R6d, D-A5).
+  **The two sub-questions were decided at PLAN derivation** against the live
   substrate (survey 2026-08-13): (1) **`ACOUSTID_ID` value source unified on the fingerprint
   `/v2/lookup` cluster UUID everywhere** (Picard-exact) — the survey corrected BACKLOG's premise:
   `fetch_acoustid_id`'s `list_by_mbid` value is *already* a cluster UUID (its own docstring,
@@ -301,7 +303,12 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   retain).  (2) **`CHROMAPRINT_FP` → `ACOUSTID_FINGERPRINT` rename** with a dual-read transition (read
   both keys; R6d migrates existing files).  Freezes **C-ACID**.
 - **R6d** Full-library repath under the frozen heuristics — the "more like itself" pass.  Gated by
-  **J3**.  J2 folded in (2026-07-30): the III-b rg-multi-release regroup (live hades scan
+  **J3**.  **J3-preflight IN PROGRESS (sharded 2026-08-13, `docs/PLAN.md`):** a consolidated dry-run
+  harness over the deferred passes (`repath`/`regroup`/`unify` + the R6b/R6c tag-content repatches)
+  produces the three J3 evidence categories (dry-run change-set, journal capacity, `Reference/`
+  retention support) without touching the live library — the go/no-go input J3 waits on (R5 exit is
+  the other precondition, operator-paced).  Freezes **C-PREFLIGHT** (the typed dry-run-plan return
+  shape).  J2 folded in (2026-07-30): the III-b rg-multi-release regroup (live hades scan
   prerequisite — R4b census) and the styleguide A-shards that reshape persisted tags/paths
   (concerto-gate deletion, REND-14 reorder + naming realignment, chorusmaster-into-`CONDUCTOR`,
   `IS_CLASSICAL` conditionalisation) land before or with this pass so the library re-derives once.
@@ -328,10 +335,11 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   catalogue-colon case — the first tag-content corruption with a *fully offline* re-derivation
   (`strip_common_prefix` over the embedded `CWP_WORK` pair, no MB call); the repatch pass
   (`repatch_catalogue_colon`, `CWP_PART_*` / `CWP_GROUPHEADING` rewrite on the `enrich` provenance
-  chain) is built and R6d drives it destructively under J3.  (b) **R6c (IN PROGRESS)** adds an AcoustID
-  tag-content repatch (`ACOUSTID_ID` re-source + `ACOUSTID_FINGERPRINT` key migration) on the same
-  chain — another R6d-driven destructive pass.  Other tag-content re-derivation (`CEA_*`, billing
-  order) still needs the explicit R6d scope decision above.
+  chain) is built and R6d drives it destructively under J3.  (b) **R6c (DONE 2026-08-13)** added an
+  AcoustID tag-content repatch (`ACOUSTID_ID` re-source + `ACOUSTID_FINGERPRINT` key migration via
+  `repatch_acoustid_tags`) on the same chain — R6d drives it destructively under J3; the C-ACID
+  dual-read retirement is deferred until the library is fully migrated (post-R6d).  Other
+  tag-content re-derivation (`CEA_*`, billing order) still needs the explicit R6d scope decision above.
 - **R6e** Conventions-spec finalisation (integrative writeup; consistently under-scheduled — allocate
   a full session minimum).
 
@@ -593,6 +601,20 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   where the old bare-`":"` split fired), so a census signature where a *correct* label disagrees with its
   recomputation remains the forward-fix reopen trigger — carried to R6d, not re-opened in-arc.  No frozen
   contract invalidated; no destructive-HALT.
+
+- **R6c ◆ boundary (2026-08-13) — AcoustID Picard-alignment machinery landed; two R6d-planning
+  inputs.**  R6c froze C-ACID and built the offline `repatch_acoustid_tags` pass + the forward-write
+  alignment, code-only (destructive run rides R6d).  Static-frame facts for R6d planning: (1) R6d's
+  one-pass now drives a **third** tag-content repatch (AcoustID key migration + `ACOUSTID_ID`
+  re-source) alongside R6b's catalogue-colon pass, on the same `enrich` re-tag→`_verify_copy`→journal
+  chain; (2) the C-ACID **dual-read (read both `ACOUSTID_FINGERPRINT` and legacy `CHROMAPRINT_FP`) is
+  retained until the library is fully migrated** — its removal is an explicit post-R6d decision, not
+  an in-R6d step.  `fetch_acoustid_id` survives as an exported helper (no longer the `ACOUSTID_ID`
+  source).  No frozen contract invalidated; no destructive-HALT.  **Next shardable slice:** with
+  R6a/R6b/R6c all landed as code-only machinery, the remaining R6 code work is R6d's destructive
+  one-pass (gated on J3 + R5 exit) — so the immediate agent-shardable target is the **R6d J3-preflight
+  sub-track** (a consolidated dry-run harness producing J3 go/no-go evidence; sharded 2026-08-13,
+  `docs/PLAN.md`), which advances J3 without touching the live library.
 
 - **Styleguide-arc node-A tail (2026-08-12) — no shardable styleguide sub-track remains.**  With
   `path-canonical-name-forms` done (C-CANON), the styleguide arc's node A has exhausted its three enumerated

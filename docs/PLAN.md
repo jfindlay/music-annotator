@@ -1,131 +1,113 @@
 <!-- juncture-tier: opus -->
-<!-- sub-track: R6c (AcoustID tag naming + semantics — Picard alignment) — library-completion arc
-     (docs/ROADMAP.md), Act III-a.  Two persisted-tag migrations over the AcoustID/Chromaprint tags:
-     (1) unify the ACOUSTID_ID value source on the fingerprint /v2/lookup cluster UUID everywhere
-     (Picard-exact), and (2) rename CWP-adjacent CHROMAPRINT_FP -> ACOUSTID_FINGERPRINT with a
-     dual-read transition.  CODE-ONLY: the destructive library-wide repatch rides R6d's one J3-gated
-     pass (D-A5 precedent); this shard builds + freezes the machinery and proves it on fixtures via
-     the src/tests gate.  This IS a /plan-run target: the tag-policy contract + the forward-write
-     changes + the offline repatch pass + tests, verifiable by the src/tests gate; the fresh
-     library-state scan is the S4 gating step (operator mounts the library). -->
+<!-- sub-track: R6d J3-preflight (dry-run evidence harness) — library-completion arc
+     (docs/ROADMAP.md), Act III-a.  R6a/R6b/R6c each built code-only library-wide maintenance
+     machinery (depth-clamp repath; catalogue-colon repatch; AcoustID repatch) and deferred the
+     destructive run to R6d's one J3-gated pass.  R6d itself is double-gated: J3 (a go/no-go on the
+     destructive-scale full-library repath) AND R5 exit (Original/ drained, operator-paced).  This
+     sub-track builds the J3 *evidence* — a consolidated DRY-RUN harness that runs every deferred
+     pass against the live library without mutating it and produces the three J3 evidence categories
+     (dry-run change-set, journal capacity, Reference/ retention support).  CODE + STANDALONE-SCRIPT:
+     the src/tests gate proves the plan-return machinery on fixtures; the S4 harness run against the
+     mounted library produces the J3 report artifact.  This is a /plan-run target for S1–S3 (the
+     typed dry-run-plan return + the harness + the CLI wiring, verifiable by the src/tests gate); S4
+     is the operator-gated live scan whose gating role is producing the J3 evidence, not passing the
+     gate.  NOT the destructive pass itself — R6d's destructive one-pass rides J3 firing + R5 exit,
+     neither delivered here. -->
 
-# PLAN — R6c: AcoustID tag naming + semantics (Picard alignment)
+# PLAN — R6d J3-preflight: consolidated dry-run evidence harness
 
 ## Purpose (design intent)
 
 *(Re-read at every ◆ boundary — anti-defocus anchor.)*
 
-music-annotator writes two AcoustID-related tags whose form diverges from MusicBrainz Picard, the
-project's tag-convention anchor.  Two independent divergences:
+R6d is the arc's terminal node: the destructive, library-wide "one-pass re-derivation" that re-paths
+every file under the frozen heuristics and runs the three deferred tag-content repatches (depth,
+catalogue-colon, AcoustID) so the library is made "more like itself" exactly once.  It is gated by
+**J3** — a go/no-go juncture that must weigh three evidence categories before any destructive operation
+touches the live library:
 
-1. **`ACOUSTID_ID` value source is inconsistent across writer paths.**  The main ingest pipeline fills
-   `ACOUSTID_ID` from `fetch_acoustid_id(recording_mbid)` — the AcoustID `/v2/track/list_by_mbid`
-   endpoint (`_mb_api.py:1080`, written at `_pipeline.py:1713`).  The `enrich(re_resolve=True)`
-   maintenance pass fills it from `_fetch_acoustid_lookup_raw` — the `/v2/lookup` fingerprint endpoint
-   (`_pipeline_maint.py`).  Picard defines `acoustid_id` as *"the ID returned as a result for the
-   fingerprint lookup on acoustid.org"* — i.e. the `/v2/lookup` cluster UUID.  A file touched by both
-   paths can carry two *different* UUIDs at different times, and the `audit` journal-vs-tag compare
-   (`_audit.py:203`) then flags a **spurious mismatch**.
+1. **Dry-run evidence** — *what would change.*  A precise, structured change-set: how many files each
+   deferred pass would move or re-tag, and to what.  Today this evidence is unobtainable in structured
+   form: every deferred pass (`repath`, `regroup`, `unify`, `repatch_catalogue_colon`,
+   `repatch_acoustid_tags`) supports `dry_run` but emits only per-file **structlog events** and returns
+   `None`.  A go/no-go on a destructive-scale operation cannot rest on parsed log lines.
+2. **Journal capacity** — *can the transaction journal absorb the write burst.*  The journal
+   (`music_annotator_journal.json`) is rewritten in full on every append (`write_transaction_log`,
+   `_pipeline_io.py:1192`); a library-wide repatch appends thousands of entries.  There is **no**
+   size/capacity measurement helper today.
+3. **`Reference/` retention** — *the non-destructiveness safety net decision.*  `Reference/` is the
+   pre-annotation library snapshot retained as a non-destructiveness check (NOTES).  J3 decides whether
+   to keep it through the destructive pass.  There is **no** `Reference/` code — it is a human decision
+   the harness must *support with evidence* (disk footprint, coverage), not automate.
 
-2. **The Chromaprint fingerprint is stored under the non-Picard key `CHROMAPRINT_FP`.**  Picard's key
-   is `acoustid_fingerprint`.  The value is already stored (the raw Chromaprint string); only the key
-   diverges.
+**This sub-track builds the J3 evidence, not the destructive pass.**  It delivers a consolidated
+dry-run harness that runs every deferred pass in `dry_run` mode against the live library, composes a
+structured change-set, measures journal capacity, and surfaces `Reference/` retention evidence — all
+without mutating a single file.  R6d's destructive one-pass rides J3 *firing* (this evidence) plus R5
+*exit* (Original/ drained, operator-paced) — neither delivered here.  Sequencing matches R6a/R6b/R6c:
+code + fixtures now, live destructive run deferred to the J3-gated R6d pass (D-A5 precedent).
 
-The operator intent (BACKLOG "AcoustID tag naming + semantics", deferred 2026-07-14 until library
-annotation is mostly complete): keep **both** AcoustID values (the cluster UUID and the fingerprint),
-make them **consistent** and **Picard-conformant**.
+**The structural facts that shape this shard (survey 2026-08-13).**
 
-**The structural facts that shape this shard (survey 2026-08-13 — they correct BACKLOG's premise).**
+- **Every deferred pass already materializes its full plan before the `dry_run` gate, then only logs
+  it.**  Confirmed at `repath` (`_pipeline_maint.py:634` — `plan_pairs` is fully built, including
+  collision resolution, before the gate), and the same shape holds for `regroup` (`:847`), `unify`
+  (`:1222`), `repatch_catalogue_colon` (`:1576`), `repatch_acoustid_tags` (`:1743`), and `enrich`
+  (`:1363`).  So the structured plan the harness needs **already exists in memory** at the gate — the
+  only change is to *return* it instead of discarding it after logging.
+- **No composite runner exists.**  Each pass is an independent CLI subcommand in `__main__.py`
+  (`repath`/`regroup`/`unify`/`enrich`/`repatch-acoustid`); there is no `preflight` or
+  `maintenance-run` subcommand.
+- **`repatch_catalogue_colon` has no CLI subcommand at all** — it is only callable in-process
+  (`_pipeline_maint.py:1446`).  A genuine gap the harness closes.
+- **`repatch_acoustid_tags` has an asymmetric signature** — it takes `journal: Path` as its first
+  positional arg (all other passes derive the journal path from `dest_root` internally) and already
+  returns `list[TransactionEntry]` (`[]` in dry_run).  The harness must special-case its call, and its
+  existing return is the closest precedent for C-PREFLIGHT.
+- **The standalone-scan precedent is `scripts/scan_*.py`** — read-only, `_check_root`-gated
+  (distinguishes scan-not-run/unmounted from no-findings), outside the tox `src/`+`tests/` gate.
+- **`Reference/` has zero code** — a pure J3 human decision backed by the NOTES description.
 
-- **BACKLOG's "two semantically different UUIDs (track vs cluster)" framing is imprecise.**
-  `fetch_acoustid_id`'s `list_by_mbid` value is itself an AcoustID **cluster** UUID — its own docstring
-  states it "is a cluster identifier that groups all crowd-sourced Chromaprint fingerprint submissions
-  for the same track" (`_mb_api.py:1084`).  So both paths already emit a *cluster* UUID; they differ
-  only in the **lookup key** — recording-MBID-keyed (`list_by_mbid`) vs fingerprint-keyed
-  (`/v2/lookup`).  The two can still *disagree* (a recording MBID may map to a different cluster than
-  the fingerprint lookup surfaces), so the audit-mismatch problem is real — but this is a
-  *value-source unification*, not a *value-type* fix.
-- **The Picard-conformant source is already computed and already called at ingest.**  The pipeline
-  already runs fpcalc at ingest (`final_tags.chromaprint_fp = _run_fpcalc(src_file)`,
-  `_pipeline.py:1217`) and already calls the `/v2/lookup` fingerprint endpoint at ingest
-  (`_pipeline.py:1226`) — but **discards** the returned cluster UUID (`_confirm_mbids, _ = ...`),
-  using it only for identity-confirm logging.  So unifying `ACOUSTID_ID` on the fingerprint-lookup
-  cluster UUID adds **no new fpcalc dependency** and no new network call at ingest: it captures the
-  already-fetched-and-discarded `[1]` value and drops the separate `fetch_acoustid_id` write.
+**Interface posture (resolved at this PLAN derivation — the S1 inflection judgment):**
 
-**The one genuine regression to rule on (the S1 inflection).**  The fingerprint-lookup source is only
-available when an AcoustID **api_key is supplied** and fpcalc yielded a **non-empty fingerprint**.
-The retired `list_by_mbid` source needed **neither** (recording-MBID-keyed, no key).  So switching the
-source means: when no api_key / no fingerprint, `ACOUSTID_ID` would be **empty at ingest** where it was
-previously filled cheaply.  The S1 judgment is the fallback policy (see posture 1 below).
+1. **Structured dry-run evidence comes from a typed plan the passes *return*, not from parsing
+   structlog (option A).**  Each pass's `dry_run` branch is widened to return a typed **`DryRunPlan`**
+   (the already-materialized plan) instead of returning `None` after logging; the harness composes the
+   returned plans.  Chosen over structlog-capture (option B) because J3 evidence backs a
+   destructive-scale go/no-go — it must be typed, testable, and covered by the src/tests gate (100%
+   branch + strict mypy), not brittle log-parsing living outside the gate.  **Tradeoff:** worse on blast
+   radius and on the passes' public-contract surface — five passes' `dry_run` return type widens from
+   `None`, and their tests grow a plan-return assertion (vs option B's zero `src/` change).  Accepted
+   because the passes already build the plan (the widening is mechanical, not a re-architecture), and
+   the evidence durability is load-bearing for a one-shot destructive decision.  **Reopen trigger:** if
+   widening a pass's return proves to fracture an irreducible internal invariant (e.g. a pass that
+   cannot expose its plan without leaking a half-built state), surface as a discovery — do not fall back
+   to log-parsing silently; an A-lite (return-plan for the tag-content passes only) is the documented
+   fallback shape.
 
-**Sequencing (D-A5/D-A7 precedent).**  Code-only: the forward-write changes and the offline repatch
-pass are built and unit-proven; the destructive library-wide repatch is R6d's one J3-gated pass.  No
-destructive library operation in R6c.  Matches R6a / R6b.
+**The four sessions, in landing order:**
 
-**Interface posture (resolved at this PLAN derivation — the S1 inflection judgments):**
-
-1. **Unify `ACOUSTID_ID` on the fingerprint `/v2/lookup` cluster UUID everywhere; on no-key/no-
-   fingerprint, leave `ACOUSTID_ID` empty at ingest and let `enrich` fill it later — do NOT fall back
-   to `list_by_mbid`.**  Chosen over a `list_by_mbid` fallback because a fallback re-introduces the
-   dual-source divergence this shard exists to remove (the audit could still see two different cluster
-   UUIDs).  Picard writes `acoustid_id` only from the fingerprint lookup; an empty tag pending enrich
-   is honest and Picard-consistent.  **Tradeoff:** worse on immediate completeness — a no-api-key
-   ingest now leaves `ACOUSTID_ID` empty where `list_by_mbid` filled it for free.  Accepted because
-   (a) the value is recoverable offline later via `enrich(re_resolve, acoustid_key=…)`, (b) the empty
-   is the correct provisional state (no fingerprint-confirmed AcoustID identity yet), and (c) it
-   removes the dual-source divergence permanently rather than papering over it.  **Reopen trigger:** if
-   the operator's ingest flow routinely runs without an api_key, the empty-at-ingest cost is larger
-   than estimated — surface as a discovery (a `list_by_mbid`-fallback additive-reshard), do not
-   silently restore the fallback.
-
-2. **`CHROMAPRINT_FP` → `ACOUSTID_FINGERPRINT` rename with a dual-read transition; write the new key,
-   read both.**  The forward write emits `ACOUSTID_FINGERPRINT`; every read-back helper accepts both
-   the new key and the legacy `CHROMAPRINT_FP`, so a mixed library (old files not yet repatched) reads
-   correctly throughout the transition.  Chosen over a hard rename (write-new/read-new-only) because
-   existing files carry the legacy key and would silently lose the fingerprint on read until R6d's
-   destructive repatch lands.  **Tradeoff:** the dual-read is permanent code weight (a two-key read
-   until every file is migrated *and* the legacy-read is deliberately retired) — worse on eventual
-   simplicity than a hard cutover, accepted because a persisted-key migration over a library that is
-   not repatched in this shard has no safe hard-cutover point.
-
-3. **Code-only; destructive library-wide repatch rides R6d (D-A5 precedent).**  This shard builds and
-   freezes the machinery (forward-write + offline repatch pass) and proves it on fixtures via the
-   src/tests gate; it does **not** run the repatch destructively on the live library.  R6d runs it
-   under J3 as one part of its one-pass — and this machinery adds an **AcoustID tag-content-repatch
-   capability** to R6d's paths-only engine (the same gap R6b closed for the catalogue-colon case).
-   **Tradeoff:** the existing library stays on the legacy `CHROMAPRINT_FP` key and the dual-source
-   `ACOUSTID_ID` until R6d — the accepted D-A4/D-A6-style temporary inconsistency (the dual-read makes
-   it harmless), worse on immediate library uniformity than an in-shard repatch, accepted to keep this
-   shard off J3 and inside the fast src/tests inner loop.
-
-The four sessions, in landing order:
-
-1. **S1 @architect — AcoustID tag policy substrate.**  Freeze **C-ACID**: the `ACOUSTID_ID`
-   value-source rule (fingerprint-lookup cluster UUID; the no-key/no-fingerprint empty-not-fallback
-   ruling), the `CHROMAPRINT_FP` → `ACOUSTID_FINGERPRINT` rename + the dual-read transition contract,
-   and the `audit`-compare mismatch semantics under the unified source.  No pipeline mutation yet —
-   S1 lands the policy + its KAT witnesses.
-2. **S2 — Forward-write alignment (pipeline + tagger + models + read helpers + audit).**  Rewrite the
-   ingest write to capture the already-fetched `/v2/lookup` cluster UUID and drop the separate
-   `fetch_acoustid_id` write; rename the fingerprint key on the write path (`_MP3_TXXX_MAP`, the FLAC
-   key, the model fields); make the read helpers dual-read; update the audit compare.  Consumes
-   C-ACID.
-3. **S3 — Offline AcoustID repatch pass.**  Add the maintenance pass (in `_pipeline_maint.py`,
-   modelled on `enrich` / `repatch_catalogue_colon`) that migrates existing files: re-source
-   `ACOUSTID_ID` (via `enrich`'s existing `/v2/lookup` path when a key is available) and rewrite the
-   legacy `CHROMAPRINT_FP` under the new `ACOUSTID_FINGERPRINT` key, on the re-tag→`_verify_copy`→
-   journal provenance chain, `dry_run`-aware and idempotent.  Consumes C-ACID.  Not run destructively.
-4. **S4 ◆ — Library-state scan + census + register anneal.**  New scanner for legacy `CHROMAPRINT_FP`
-   keys and dual-source `ACOUSTID_ID` state across the library; census the population R6d's repatch
-   will migrate (distinguish scan-not-run from no-findings); validate the repatch against a
-   representative fixture; close the sub-track; anneal the planning register.
+1. **S1 @architect — the dry-run-plan return contract (substrate).**  Freeze **C-PREFLIGHT**: the typed
+   `DryRunPlan` return shape, and widen every deferred pass's `dry_run` branch to return it.  The plan
+   captures each pass's already-materialized change-set (moves for repath/regroup/unify; per-file
+   tag-content deltas for the repatch passes).  Per-pass KAT witnesses that dry_run returns the plan and
+   still writes nothing.  No harness, no CLI, no live run.
+2. **S2 — the consolidated preflight harness.**  A new standalone `scripts/preflight_r6d.py`
+   (`scan_*.py` precedent) that composes the five passes' `DryRunPlan`s into one structured change-set,
+   measures journal capacity (`len(entries)` + on-disk size), surfaces `Reference/` retention evidence,
+   and is `_check_root`-gated.  Consumes C-PREFLIGHT.  Read-only; no live destructive op.
+3. **S3 — CLI wiring (integration).**  Add the missing `repatch-catalogue-colon` subcommand (survey
+   gap) and a `preflight` composite subcommand that runs the harness over `dest_root`; integration KAT.
+   Consumes C-PREFLIGHT.
+4. **S4 ◆ — run the harness + produce the J3 evidence report + anneal (integrative).**  Run the harness
+   against the operator-mounted library; produce the J3 evidence artifact (`docs/census-r6d-preflight.md`
+   / `.json`) — the three evidence categories, distinguishing scan-not-run from no-findings; a
+   no-regression parity KAT; close the sub-track; anneal the planning register.
 
 ## Verify gate
 
-Discovered from `pyproject.toml` (tox envs); do not assume `make`.  Both **binding** — this is a code
-sub-track.  (Confirmed green at shard time: `~/.local/bin/tox -e test` → 1758 passed, 100.00% branch
-coverage.)
+Discovered from `pyproject.toml` (tox envs; `[tool.tox.env.*]` + the `analyze` label); do not assume
+`make`.  Both **binding** — S1–S3 are a code sub-track.
 
 - **VERIFY_TEST**: `~/.local/bin/tox -e test` (`pytest tests/`; **100% branch coverage enforced**,
   `fail_under = 100`).
@@ -133,434 +115,388 @@ coverage.)
 - Full gate before any row is declared done: `~/.local/bin/tox -m analyze` (build + test + check_type +
   check_format + check_lint 10.00/10 + check_upgrade).  The AGENTS.md "never skip `tox -m analyze`" rule
   applies to every row.  Import order via `~/.local/bin/tox -m edit`, never hand-edited.
-- **S4 scan step is not gate-covered:** the new scanner lives outside `src/`+`tests/` (like
-  `scan_nonuniform_depth.py` / `scan_fragmentation.py` / `scan_catalogue_colon.py`); it runs clean under
-  `venv/bin/python -m py_compile` and best-effort `venv/bin/mypy scripts/` but is not `tox`-enforced.
-  Its gating role is producing a fresh scan the S4 ◆ review consumes, not passing the gate.
+- **S4 harness run is not gate-covered:** `scripts/preflight_r6d.py` lives outside `src/`+`tests/`
+  (like `scan_nonuniform_depth.py` / `scan_catalogue_colon.py` / `scan_acoustid_tags.py`); it runs
+  clean under `venv/bin/python -m py_compile` and best-effort `venv/bin/mypy scripts/` but is not
+  `tox`-enforced.  Its gating role is producing the fresh J3 evidence report the S4 ◆ review consumes,
+  not passing the gate.  (S2 builds the harness *logic* it can gate-test the composable parts of; the
+  standalone script wrapper and the live run are the ungated surface.)
 
 ## Session list
 
 | # | Session | Cat | Tier | Consumes | Expected files |
 |---|---------|-----|------|----------|----------------|
-| 1 @architect | Freeze the Picard-aligned AcoustID tag policy (value source + key rename + dual-read) | A | Opus | Picard tag convention (AGENTS.md anchor), C-AR (archival triple) | `src/music_annotator/models.py`, `src/music_annotator/_tagger.py`, `tests/unit/test_models.py` |
-| 2 | Align the AcoustID forward-write path to the frozen policy | B | Sonnet | **C-ACID** | `src/music_annotator/_pipeline.py`, `src/music_annotator/_tagger.py`, `src/music_annotator/_pipeline_io.py`, `src/music_annotator/_audit.py`, `tests/unit/test_pipeline.py` |
-| 3 | Migrate existing files in an offline AcoustID repatch pass | B | Sonnet | **C-ACID** | `src/music_annotator/_pipeline_maint.py`, `tests/unit/test_pipeline_maint.py` |
-| 4 ◆ | Scan the library for legacy AcoustID tag state + census + anneal | I | Sonnet | **C-ACID**, `scan_acoustid_tags.py` | `scripts/scan_acoustid_tags.py`, `docs/BACKLOG.md`, `tests/unit/test_pipeline_maint.py` |
+| 1 @architect | Return a typed dry-run plan from every deferred maintenance pass | A | Opus | C-PROV / C-MOVE (move/verify/journal provenance), the dry_run structlog convention | `src/music_annotator/models.py`, `src/music_annotator/_pipeline_maint.py`, `tests/unit/test_pipeline_maint.py` |
+| 2 | Compose the deferred-pass plans into a consolidated dry-run preflight report | B | Sonnet | **C-PREFLIGHT** | `scripts/preflight_r6d.py`, `src/music_annotator/_pipeline_maint.py`, `tests/unit/test_pipeline_maint.py` |
+| 3 | Wire the catalogue-colon repatch and preflight composite CLI subcommands | I | Sonnet | **C-PREFLIGHT** | `src/music_annotator/__main__.py`, `tests/unit/test_main.py` |
+| 4 ◆ | Run the preflight harness for J3 evidence + census + anneal | I | Sonnet | **C-PREFLIGHT**, `scripts/preflight_r6d.py` | `scripts/preflight_r6d.py`, `docs/census-r6d-preflight.md`, `tests/unit/test_pipeline_maint.py` |
 
-`Cat`: **S1 is A (substrate)** — freezes **C-ACID**, the tag policy every later session and R6d read;
-over-specify (carry the dual-read transition contract and the value-source rule even though S2 is the
-first consumer).  **S2 is B** — the forward-write mechanics over the frozen policy.  **S3 is B** — the
-offline migration mechanics, modelled on the existing `enrich` / `repatch_catalogue_colon` passes.
-**S4 is I (integrative)** — the library-state scan + census refresh give the contract its
-operator-visible/durable form (the scan is what R6d's repatch runs against), close the ◆, carry the
-anneal.
+`Cat`: **S1 is A (substrate)** — freezes **C-PREFLIGHT**, the dry-run-plan return shape every later
+session and the eventual R6d destructive-run consume; over-specify (carry the tag-content-delta plan
+fields even though only the harness/report consumes them, and expose a plan-summary shape a future
+destructive-run confirmation prompt can reuse).  **S2 is B** — the composition + capacity/`Reference/`
+evidence mechanics over the frozen plan shape, modelled on the read-only `scan_*.py` scripts.  **S3 is
+I** — the CLI is where the machinery gets its operator-visible public form (the missing subcommand +
+the composite); small but integrative.  **S4 is I (integrative)** — the live harness run + the J3
+evidence report give the contract its operator-visible/durable form (the report is what J3
+adjudicates), close the ◆, carry the anneal.
 
-`Tier`: **S1 is Opus + `@architect` inflection.**  The value-source unification is permanent
-library-wide tag policy, and the no-key/no-fingerprint fallback ruling is a real ingest-behaviour
-regression (empty `ACOUSTID_ID` where `list_by_mbid` filled it) that tests alone cannot adjudicate —
-lever 3 (design-error cost: a wrong fallback re-introduces the divergence) and lever 4
-(correctness-criticality: `ACOUSTID_ID` is an archival identity dimension).  **S2, S3, S4 are Sonnet**
-— mechanical over the frozen policy with a strong inner loop (lever 5: 100% branch coverage + strict
-mypy) and direct write-pass precedents (`enrich`, `repatch_catalogue_colon`) to model.
-`juncture-tier: opus` — kept (arc default).
+`Tier`: **S1 is Opus + `@architect` inflection.**  The dry-run-plan return shape is the evidence seam
+for a *destructive-scale* go/no-go, and widening five passes' public return type is a design-error-cost
+decision that tests alone cannot adjudicate — lever 3 (design-error cost: a wrong plan shape either
+under-captures the change-set J3 needs or leaks half-built pass state) and lever 4
+(correctness-criticality: this evidence gates a one-shot destructive library-wide operation).  **S2,
+S3, S4 are Sonnet** — mechanical over the frozen plan shape with a strong inner loop (lever 5: 100%
+branch coverage + strict mypy) and direct precedents (`scan_*.py` for the standalone read-only harness;
+the existing `repatch-acoustid` subcommand for the CLI wiring).  `juncture-tier: opus` — kept (arc
+default).
 
 **Sizing (levers named).**  Default band ~150–400 LOC / 2–4 files.
 
-- **S1 ≈ 80–160 LOC, 2–3 files** (the model-field rename + key-map rename + the policy KATs; the
-  policy itself is small — the value-source rule and dual-read are declarative).  Under/within band.
-  **Irreducible unit (lever 2, floor):** the value-source rule, the key rename, and the dual-read
-  transition are one contract — the rename with no dual-read strands existing files; the value rule
-  with no audit-semantics update leaves the spurious-mismatch bug.  Kept whole.  **Lever 3/4:** high
-  cost-of-wrong / correctness-crit is *why* S1 is Opus+inflection, not why it fractures.  One-line
-  title passes.
-- **S2 ≈ 150–300 LOC, 4–5 files** (capture the `/v2/lookup` UUID + drop the `fetch_acoustid_id` write
-  in `_pipeline.py`; rename the key in `_tagger.py` `_MP3_TXXX_MAP` + FLAC; dual-read helpers in
-  `_pipeline_io.py`; audit compare in `_audit.py`; tests).  Within band.  **Bundles both migrations'
-  forward-write** — legitimate: they touch the same tagger/model/read-helper files and there is no
-  consume-dependency between the value change and the rename, so splitting them would create a
-  half-boundary (see 5-session alternative, rejected).  One-line title: "Align the AcoustID
-  forward-write path to the frozen policy" — passes.  **Lever 1 (ambient complexity):** touches the
-  hot copy/tag/verify path — but only the AcoustID write region; the provenance chain is unchanged.
-- **S3 ≈ 120–220 LOC, 2 files** (the offline repatch pass + tests, modelled on
-  `repatch_catalogue_colon`).  Within band.  **Separate session by the one-line-commit-title
-  corollary** — "migrate existing files" is distinct from "change what new files get written"; split
-  at the contract-sharp C-ACID boundary (S1 freezes the policy, S2 does forward-write, S3 migrates the
-  back-catalogue).  **Lever 1:** two direct precedents (`enrich` offline `/v2/lookup` re-source;
-  `repatch_catalogue_colon` key-rewrite on the provenance chain) — not greenfield; not fractured below
-  the floor.
-- **S4 ≈ 60–120 LOC + scan run, 2–3 files** (new scanner + census + a no-regression repatch parity
-  test + anneal).  Under band; **separate by the corollary** — the scan/census/anneal is one
-  integrative unit; merging into S3 yields an "and"-joined title.  Not fractured below the floor (the
-  scan validates the population the census reports).
+- **S1 ≈ 180–320 LOC, 3 files** (the `DryRunPlan` model + the six `dry_run`-branch widenings +
+  per-pass plan-return KATs).  Within band.  **Irreducible unit (lever 2, floor):** the plan shape is
+  not *proven* until every deferred pass returns it — a shape that fits `repath`'s move-plan but not
+  the repatch passes' tag-content delta is a mis-freeze.  Splitting the shape-freeze from the five-pass
+  widening (the rejected alternative) would leave the contract unwitnessed by its own consumers.  Kept
+  whole.  **Lever 3/4:** high cost-of-wrong / correctness-crit is *why* S1 is Opus+inflection, not why
+  it fractures.  One-line title passes.
+- **S2 ≈ 150–280 LOC, 2–3 files** (the composition logic + journal-capacity measurement +
+  `Reference/` evidence + `_check_root` gate; the gate-testable composition helpers land in
+  `_pipeline_maint.py` so they are covered, the thin standalone wrapper in `scripts/`).  Within band.
+  **Separate session by the one-line-commit-title corollary** — "compose the plans into a report" is
+  distinct from "change what each pass returns" (S1); split at the contract-sharp C-PREFLIGHT boundary.
+  **Lever 1:** two read-only precedents (`scan_catalogue_colon.py` composition + `_check_root`) — not
+  greenfield.
+- **S3 ≈ 80–150 LOC, 2 files** (the `repatch-catalogue-colon` subcommand + the `preflight` composite
+  subcommand + `test_main.py` CLI tests).  Under/within band.  **Separate by the corollary** — CLI
+  surface is distinct from harness logic; the survey flagged the missing `repatch-catalogue-colon`
+  subcommand as its own gap.  Not fractured below the floor (the two subcommands are one CLI-surface
+  unit).  Cat I because the CLI is the public form.
+- **S4 ≈ 60–120 LOC + harness run, 2–3 files** (the live run + the J3 report artifact + a
+  no-regression parity KAT + anneal).  Under band; **separate by the corollary** — the
+  run/report/anneal is one integrative unit; merging into S2/S3 yields an "and"-joined title.  Not
+  fractured below the floor (the run produces the population the report tabulates).
 
 ## Session detail
 
-### S1 @architect — Freeze the Picard-aligned AcoustID tag policy — freezes C-ACID
+### S1 @architect — Return a typed dry-run plan from every deferred maintenance pass — freezes C-PREFLIGHT
 
-**Deliverable.**  The tag policy and its type/key surface, no pipeline mutation:
-- **Model + key rename.**  Rename the fingerprint field `chromaprint_fp` → `acoustid_fingerprint` on
-  `TrackTags` (`models.py:1490`) and `TransactionEntry` (`models.py:1811`); rename the tag-key map
-  entry `CHROMAPRINT_FP` → `ACOUSTID_FINGERPRINT` in `_tagger.py` (`_MP3_TXXX_MAP:117`, TXXX desc
-  `"Acoustid Fingerprint"`; FLAC Vorbis key `acoustid_fingerprint`).  Keep the archival-triple comment
-  (`# extensible: 4th dim slots in here`) and C-AR field ordering intact.
-- **Policy declarations (prose + typed contract).**  State the `ACOUSTID_ID` value-source rule (the
-  fingerprint `/v2/lookup` cluster UUID is the single source; empty-not-`list_by_mbid` when no
-  key/fingerprint) and the dual-read transition rule (write `ACOUSTID_FINGERPRINT`, read both keys) as
-  the frozen C-ACID contract — the read/write mechanics land at S2, but the *rule* freezes here.
-- Docstrings state the property (Picard-aligned AcoustID tag naming; single fingerprint-lookup source;
-  dual-read transition), citing the Picard convention (AGENTS.md anchor), never the plan coordinate.
+**Deliverable.**  The typed dry-run-plan return shape and its propagation, no new harness/CLI/run:
+- **`DryRunPlan` model (`models.py`).**  A Pydantic model capturing a single pass's dry-run change-set:
+  the pass name, a list of per-file entries (each with the current path and — depending on pass kind —
+  the planned new path *or* the planned tag-content delta), and a per-pass summary count.  Modelled on
+  `repatch_acoustid_tags`'s existing `list[TransactionEntry]` dry-run return; carries both the
+  move-plan shape (repath/regroup/unify) and the tag-content-delta shape (the repatch/enrich passes) so
+  one type serves all five (over-specify per Category-A).
+- **Widen every deferred pass's `dry_run` branch to return the plan.**  In each of `repath` (`:634`),
+  `regroup` (`:847`), `unify` (`:1222`), `repatch_catalogue_colon` (`:1576`), and `enrich` (`:1363`),
+  the `dry_run` branch already builds and logs the full plan — change it to build a `DryRunPlan` from
+  the already-materialized `plan_pairs` (or per-file corrected-tag set) and **return** it; keep the
+  existing structlog events (the log is still useful; the return is additive).  `repatch_acoustid_tags`
+  (`:1743`) already returns `list[TransactionEntry]` — adapt it to the `DryRunPlan` shape (or wrap its
+  existing return) so all five are uniform.  The **non-dry-run return stays `None`** for the
+  move/regroup/unify/repatch passes (they mutate; the dry_run branch is the only plan-returning path) —
+  i.e. the return type becomes `DryRunPlan | None`.
+- Docstrings state the property (dry_run returns the structured change-set; the plan is the same one
+  the pass would enact) citing the provenance-chain invariant, never the plan coordinate.
 
-**KAT (the freeze witness for C-ACID).**  In `test_models.py` (+ a tagger round-trip test):
-(a) **key rename round-trips** — a `TrackTags` with `acoustid_fingerprint` set writes the
-`ACOUSTID_FINGERPRINT` FLAC key / `"Acoustid Fingerprint"` TXXX desc and reads back equal (both
-formats);
-(b) **legacy key still reads** (dual-read witness at the model/tagger seam) — a file dict carrying the
-legacy `CHROMAPRINT_FP` key populates `acoustid_fingerprint` (the transition contract; the read side
-lands fully at S2 but S1 pins the model-level expectation);
-(c) **archival-triple integrity** — `audio_hash` / `acoustid_id` / `acoustid_fingerprint` all present,
-C-AR ordering preserved, no field dropped by the rename;
-(d) **value-source rule documented and asserted at the contract level** — a test that pins the frozen
-rule (e.g. a policy constant or the documented empty-on-no-key expectation) so S2 cannot regress it.
-
-**Subtleties.**
-- **The value-source fallback inflection (the `@architect` judgment).**  The load-bearing ruling:
-  when no api_key / no fingerprint, `ACOUSTID_ID` is **empty at ingest**, NOT re-filled from
-  `list_by_mbid`.  A `list_by_mbid` fallback re-introduces the dual-source divergence this shard
-  removes.  Freeze the empty-not-fallback rule; the reopen trigger is an operator ingest flow that
-  routinely runs keyless (then the empty-at-ingest cost is larger than estimated — a fallback
-  additive-reshard, surfaced as a discovery).
-- **The rename is a persisted-key migration — dual-read is mandatory.**  Existing library files carry
-  `CHROMAPRINT_FP`; a write-new/read-new-only rename silently drops the fingerprint on read until R6d.
-  Freeze the dual-read (read both keys) as part of C-ACID.
-- **`fetch_acoustid_id` is not deleted at S1.**  Its removal from the *write path* is S2's forward-
-  write change; the function may remain exported (BACKLOG deferred; a keyless MBID→cluster lookup is
-  still a legitimate helper).  S1 freezes the policy that it is no longer the `ACOUSTID_ID` *source*.
-- **100%-branch-coverage gate.**  The dual-read branch (new key present / legacy key present / neither)
-  needs explicit tests; any `match/case` gets `case _: # pragma: no cover` if exhaustive.
-
-**Deferrals.**  No pipeline/audit forward-write change (S2); no offline repatch pass (S3); no library
-scan/census (S4); no destructive repatch (R6d).
-
-### S2 — Align the AcoustID forward-write path to the frozen policy
-
-*(Lower-fidelity sketch — correct for a post-substrate row; crisply specified after C-ACID freezes at S1.)*
-
-**Deliverable.**  Apply the frozen policy to the forward (new-ingest) path:
-- **`ACOUSTID_ID` value source (`_pipeline.py`).**  In the copy/tag loop, capture the cluster UUID from
-  the `/v2/lookup` call already made at `_pipeline.py:1226` (currently `_confirm_mbids, _ = …` — take
-  the `[1]`) and write it to `final_tags.acoustid_id`; **remove** the separate per-track
-  `fetch_acoustid_id(rec_id)` write at `_pipeline.py:1713`.  When no api_key / no fingerprint, leave
-  `acoustid_id` empty (the frozen empty-not-fallback rule).
-- **Key rename on the write + read paths.**  Ensure `_tagger.py` writes `ACOUSTID_FINGERPRINT`; make
-  the read helpers (`_read_chromaprint_fp_tag` → renamed, and `_read_tags_flac`/`_read_tags_mp3`
-  reconstruction) **dual-read** both `ACOUSTID_FINGERPRINT` and legacy `CHROMAPRINT_FP`.
-- **Audit compare (`_audit.py`).**  Update `_DIFF_FIELDS` / `_audit_tag_adjudication` for the renamed
-  field and the unified `ACOUSTID_ID` source so a re-resolve overwrite is no longer a spurious mismatch.
-- No maintenance pass, no library run.
-
-**KAT (behavioural witness).**  A full-pipeline ingest with an api_key + fingerprint writes
-`ACOUSTID_ID` = the `/v2/lookup` cluster UUID (not the `list_by_mbid` value) and `ACOUSTID_FINGERPRINT`
-(not `CHROMAPRINT_FP`); an ingest with no api_key writes empty `ACOUSTID_ID` (no `list_by_mbid`
-fallback); a file carrying legacy `CHROMAPRINT_FP` reads back its fingerprint via the dual-read; the
-audit no longer flags a file re-resolved by `enrich` as a mismatch.
+**KAT (the freeze witness for C-PREFLIGHT).**  In `test_pipeline_maint.py`, per pass:
+(a) **plan-return witness** — a `dry_run=True` call returns a `DryRunPlan` whose per-file entries match
+the fixture's expected change-set (right count, right paths/deltas);
+(b) **no-write witness preserved** — the existing "no file moved / no journal entry appended" assertion
+still holds alongside the new return (dry_run stays non-mutating);
+(c) **empty-plan witness** — a fixture with nothing to change returns an empty `DryRunPlan` (count 0),
+*distinct* from a `None`/error (so the harness can tell "ran, found nothing" from "did not run");
+(d) **shape-uniformity witness** — a move-pass plan and a tag-content-pass plan both validate against
+the one `DryRunPlan` type (the over-specification is exercised).
 
 **Subtleties.**
-- **The `/v2/lookup` call is already made — reuse it, don't add a second.**  `_pipeline.py:1226`
-  already fetches; S2 captures the discarded UUID.  Do **not** add a new network call.
-- **Provenance chain unchanged.**  The AcoustID write is inside the existing copy/tag/verify loop; do
-  not touch the `_verify_copy` → journal ordering (confirmation-provenance invariant).
-- **Dual-read is a read-widen, not a write-fork.**  Write only the new key; read both.
-- **match/case / branch coverage.**  Cover key-present-new / key-present-legacy / key-absent and
-  api_key-present / api_key-absent.
+- **The plan already exists at the gate — this is a return-widen, not a re-plan.**  Confirmed at
+  `repath:634`; the same holds for all five.  Do **not** re-derive the plan; capture what is already in
+  `plan_pairs` / the per-file corrected-tag set.
+- **Provenance chain untouched.**  The non-dry-run paths (`_move_verify_journal` /
+  re-tag→`_verify_copy`→journal) are not touched; only the dry_run branch grows a return.  The
+  confirmation-provenance invariant is unchanged.
+- **`repatch_acoustid_tags`'s asymmetry.**  It takes `journal: Path` positionally and already returns a
+  list — uniformize to `DryRunPlan` without breaking its existing non-dry-run return contract (its
+  callers in `__main__.py:957` expect the current shape; adapt the type or keep a compatible surface).
+- **`enrich` is included** even though it is not strictly an R6d "repatch" — it is the provenance-chain
+  model and its dry-run change-set is legitimate J3 evidence (backfill scope).  Include it for
+  uniformity; the reopen trigger is if its inclusion bloats the plan shape.
+- **100%-branch-coverage gate.**  The `dry_run` / non-dry_run branch split in each pass now has a
+  return on one arm — both arms need explicit tests; any `match/case` gets `case _: # pragma: no cover`
+  if exhaustive.
 
-**Deferrals.**  No offline migration of existing files (S3); no library scan (S4); no destructive run (R6d).
+**Deferrals.**  No harness (S2); no CLI (S3); no live run/report (S4); no destructive repatch (R6d).
 
-### S3 — Migrate existing files in an offline AcoustID repatch pass
+### S2 — Compose the deferred-pass plans into a consolidated dry-run preflight report
 
-*(Lower-fidelity sketch — post-substrate row.)*
+*(Lower-fidelity sketch — correct for a post-substrate row; crisply specified after C-PREFLIGHT freezes at S1.)*
 
-**Deliverable.**  A new offline maintenance pass (in `_pipeline_maint.py`, modelled on `enrich` /
-`repatch_catalogue_colon`) that:
-- Resolves current on-disk paths via `_resolve_current_lib(journal)`; for each FLAC/MP3, migrates the
-  legacy `CHROMAPRINT_FP` value to the `ACOUSTID_FINGERPRINT` key, and (when an api_key is available)
-  re-sources `ACOUSTID_ID` from `/v2/lookup` via the existing `_fetch_acoustid_lookup_raw` path — the
-  same source `enrich(re_resolve)` already uses.
-- Writes via `apply_tags_flac` / `apply_tags_mp3` on the **`enrich` provenance chain**: re-tag →
-  `_verify_copy` → append a journal entry only after verification (a new `action`, e.g.
-  `"acoustid-repatched"`).  Idempotent (a second run on a migrated library is a no-op) and
-  `dry_run`-aware.
-- **Not run destructively on the live library** — proven on fixtures; R6d drives it under J3.
+**Deliverable.**  The consolidated read-only harness:
+- **Composition helper (gate-covered, in `_pipeline_maint.py`).**  A function that runs each deferred
+  pass with `dry_run=True` over a `dest_root`, collects the returned `DryRunPlan`s, and assembles a
+  consolidated report object (total files touched per pass; overlap detection where a file appears in
+  more than one pass's plan — a load-bearing J3 signal for one-pass ordering).  This is the composable,
+  testable core.
+- **Journal-capacity measurement.**  Measure `len(journal.entries)` and the on-disk journal file size;
+  project the post-repatch entry-count delta from the composed plans (each planned repatch appends one
+  entry).  No helper exists today — add one here.
+- **`Reference/` retention evidence.**  Surface the evidence a human J3 decision needs — the
+  `Reference/` directory's presence and disk footprint (read-only `os.path` inspection); do **not**
+  automate the retention decision.
+- **Standalone wrapper (`scripts/preflight_r6d.py`).**  A thin `scan_*.py`-style CLI wrapper that
+  `_check_root`-gates the library root (scan-not-run vs no-findings), calls the composition helper, and
+  prints/serializes the report.  The wrapper is the ungated surface; the helper it calls is gate-tested.
 
-**KAT (behavioural witness).**  A fixture FLAC/MP3 with legacy `CHROMAPRINT_FP` + a stale-source
-`ACOUSTID_ID` → after the pass, the fingerprint reads back under `ACOUSTID_FINGERPRINT`, the legacy key
-is gone, `ACOUSTID_ID` is re-sourced (or left when no key); a `dry_run` writes nothing; a second run is
-a no-op (idempotency); an already-migrated file is untouched (no-regression).
+**KAT (behavioural witness).**  Over a fixture library with known depth/catalogue-colon/AcoustID-legacy
+files: the composition helper returns a report whose per-pass counts match the fixtures; the
+journal-capacity measurement returns the right entry count + a nonzero size; an overlap fixture (a file
+both depth-repathed and AcoustID-repatched) is flagged; an empty fixture reports no-findings (distinct
+from scan-not-run); `Reference/` evidence reflects a fixture `Reference/` dir.
 
 **Subtleties.**
-- **Model on `repatch_catalogue_colon` / `enrich`, don't invent.**  Both are existing offline
-  tag-content write passes with the idempotent / dry-run / re-tag→`_verify_copy`→journal shape.  Reuse
-  it — this is R6b's precedent one node later.
-- **Key migration = write-new + drop-legacy.**  The pass writes `ACOUSTID_FINGERPRINT` and removes the
-  legacy `CHROMAPRINT_FP` key (the forward path's dual-read covers the transition; the repatch retires
-  the legacy key per file).
-- **`ACOUSTID_ID` re-source is api_key-gated.**  When no key is available the pass migrates the key
-  only and leaves `ACOUSTID_ID` for a later keyed run — consistent with S1's empty-not-fallback rule.
-- **Provenance chain load-bearing.**  Do not append the journal entry before `_verify_copy` confirms.
+- **Read-only, like the scan scripts.**  The harness runs every pass in `dry_run=True`; it must never
+  reach a mutating branch.  A test asserts no journal entry / no move across the whole composition.
+- **Overlap is J3-load-bearing.**  A file in multiple passes' plans means R6d must order the passes
+  (tag-content before repath, so the path re-renders the corrected tags) — surface it, don't hide it.
+- **`_check_root` from the scan-script precedent** — distinguish unmounted/empty root (scan-not-run,
+  never "clean") from no-findings (the R4b D-1 / R6a D-3 / R6b D-3 / R6c D-3 hazard).
 
-**Deferrals.**  No library scan/census (S4); no destructive library run (R6d).
+**Deferrals.**  No CLI subcommands (S3); no live run/report artifact (S4); no destructive run (R6d).
 
-### S4 ◆ — Scan the library for legacy AcoustID tag state + census + anneal
+### S3 — Wire the catalogue-colon repatch and preflight composite CLI subcommands
 
 *(Lower-fidelity sketch — post-substrate integrative row.)*
 
-**Deliverable.**  Validate the population and census the migration scope:
-- New `scripts/scan_acoustid_tags.py` (standalone, `scan_nonuniform_depth.py` precedent): scan the
-  **complete library** for files still carrying the legacy `CHROMAPRINT_FP` key and for `ACOUSTID_ID`
-  values that came from the retired `list_by_mbid` source where a re-source is warranted.
-  **Distinguish scan-not-run** (unmounted/empty root → never report clean) **from no-findings** (the
-  R4b D-1 / R6a D-3 / R6b D-3 hazard); if unmounted at execution, record the census as *not run*.
-- Census the population R6d's AcoustID repatch will migrate (how many files carry the legacy key; how
-  many carry a divergent `ACOUSTID_ID`).  A signature the S1 policy mis-handles (e.g. a file where the
-  fingerprint lookup and the MBID lookup return clusters that *should* agree but don't) is the reopen
-  trigger — surface as a discovery; do not silently absorb.
+**Deliverable.**  Close the CLI-surface gaps:
+- **`repatch-catalogue-colon` subcommand (`__main__.py`).**  `repatch_catalogue_colon` exists in
+  `_pipeline_maint.py` but has no CLI entry (survey gap) — add the subcommand mirroring the existing
+  `repatch-acoustid` dispatch (`__main__.py:957`), `dry_run`-aware.
+- **`preflight` composite subcommand.**  A subcommand that runs the S2 harness over `dest_root` and
+  emits the consolidated report — the operator's one-command J3-evidence entry point.
+- Both follow the existing subcommand-dispatch pattern; no new pass logic.
 
-**KAT.**  A no-regression parity test asserting the S2/S3 forward-write + repatch behaviour still holds
-against a representative fixture (the integrative session's behavioural pin).
+**KAT.**  A CLI test invoking `repatch-catalogue-colon --dry-run` dispatches to the pass with the right
+args and writes nothing; a `preflight` invocation runs the harness and emits the report; arg parsing /
+help surfaces are covered.
 
-**Subtleties.**  No `src/` change in S4 unless a scanner helper is promoted (it should not be — keep the
-scanner standalone per the `scan_fragmentation.py` precedent).  Purely a scan-validation + census +
-anneal row; **no destructive library operation** (R6d runs the repatch under J3).
+**Subtleties.**  No `src/` pass logic change beyond dispatch wiring.  Cover the `--dry-run` /
+non-dry-run arg branches for the new subcommands (branch coverage).
+
+**Deferrals.**  No live run/report artifact (S4); no destructive run (R6d).
+
+### S4 ◆ — Run the preflight harness for J3 evidence + census + anneal
+
+*(Lower-fidelity sketch — post-substrate integrative row.)*
+
+**Deliverable.**  Produce the J3 evidence:
+- **Run the harness against the operator-mounted library** and produce the J3 evidence artifact
+  (`docs/census-r6d-preflight.md` + `.json`): the three J3 categories — (1) the consolidated dry-run
+  change-set (per-pass counts + the overlap map), (2) journal capacity (current entries + size + the
+  projected post-repatch delta), (3) `Reference/` retention evidence (presence + footprint).
+  **Distinguish scan-not-run** (unmounted/empty root → never report clean) **from no-findings**; if
+  unmounted at execution, record the census as *not run*, not clean.
+- A signature the harness mis-handles (e.g. a pass whose live change-set contradicts its fixture-proven
+  shape, or an overlap the composed plan orders wrongly) is the reopen trigger — surface as a
+  discovery; do not silently absorb.
+
+**KAT.**  A no-regression parity test asserting the S1 plan-return + S2 composition behaviour still
+holds against a representative fixture (the integrative session's behavioural pin).
+
+**Subtleties.**  No `src/` change in S4 unless a harness helper is promoted (it should not be — keep the
+standalone wrapper in `scripts/` per the `scan_fragmentation.py` precedent).  Purely a
+run-validation + J3-report + anneal row; **no destructive library operation** (R6d runs the passes for
+real under J3, after this evidence and R5 exit).
 
 **◆ boundary (register anneal).**  Re-read Purpose.  Confirm all four sessions enacted, `tox -m analyze`
 green, ledger complete.  **Planning-register anneal:**
-- Durable files (`models.py`, `_tagger.py`, `_pipeline.py`, `_pipeline_io.py`, `_audit.py`,
-  `_pipeline_maint.py`, `scan_acoustid_tags.py` docstrings/comments) carry **no plan coordinates** — no
-  "S1/S2/S3/S4", no "R6c", no "AcoustID sub-track", no `/plan-run` vocabulary.  State the
-  property/reason/invariant (e.g. "the AcoustID cluster UUID from the fingerprint /v2/lookup — Picard's
-  `acoustid_id` source"), never the plan coordinate.
+- Durable files (`models.py`, `_pipeline_maint.py`, `__main__.py`, `preflight_r6d.py`
+  docstrings/comments) carry **no plan coordinates** — no "S1/S2/S3/S4", no "R6d", no "J3-preflight
+  sub-track", no `/plan-run` vocabulary.  State the property/reason/invariant (e.g. "dry_run returns
+  the structured change-set the pass would enact"), never the plan coordinate.
 - Grep the durable files against the **anneal denylist** (Notes for executors); translate any leaked
   coordinate into standalone prose.
-- Report to the library-completion roadmap: the AcoustID Picard-alignment machinery is enacted; C-ACID
-  frozen.  **R6d coordination noted** — the machinery adds an AcoustID tag-content-repatch capability;
-  R6d runs the destructive library-wide repatch under J3 (this sub-track lands the machinery, not the
-  destructive run).
+- Report to the library-completion roadmap: the J3 dry-run evidence harness is enacted; C-PREFLIGHT
+  frozen; the J3 evidence artifact is produced.  **R6d coordination noted** — J3 can now weigh the
+  dry-run change-set + journal capacity + `Reference/` evidence; R6d's destructive one-pass still
+  awaits J3 firing *and* R5 exit (Original/ drained, operator-paced).  Neither is delivered here.
 
 ## Cross-session contracts
 
-### C-ACID — the Picard-aligned AcoustID tag policy *(to be frozen at S1 — inflection design)*
+### C-PREFLIGHT — the typed dry-run-plan return shape *(to be frozen at S1 — inflection design)*
 
-**Value source (frozen at S1).**  `ACOUSTID_ID` is the AcoustID **cluster UUID from the fingerprint
-`/v2/lookup`** endpoint (`results[0]["id"]`) — Picard's `acoustid_id` source — on **every** writer
-path (ingest and enrich).  The retired `fetch_acoustid_id` `/v2/track/list_by_mbid` value is no longer
-a source.  **When no api_key is supplied or fpcalc yields no fingerprint, `ACOUSTID_ID` is left empty
-at ingest** — it is **not** re-filled from `list_by_mbid` (the empty-not-fallback rule; a keyed
-`enrich` fills it later).  **Invariant:** a file's `ACOUSTID_ID` is either empty or a fingerprint-lookup
-cluster UUID — never a `list_by_mbid` value — so the `audit` journal-vs-tag compare cannot flag a
-spurious dual-source mismatch.
+**Return shape (frozen at S1).**  Every deferred offline maintenance pass, when called with
+`dry_run=True`, **returns** a typed **`DryRunPlan`** capturing its already-materialized change-set
+instead of returning `None` after logging.  The plan carries: the pass identity, a list of per-file
+entries (current path + planned new path for the move passes; current path + planned tag-content delta
+for the tag-content passes), and a summary count.  An empty plan (count 0) is a *ran-found-nothing*
+result, structurally distinct from a not-run/error.  **Invariant:** a `dry_run=True` call is
+non-mutating — it returns the plan and writes nothing (no file move, no journal append); the plan is
+the same change-set the non-dry-run call would enact.
 
-**Key rename + dual-read transition (frozen at S1).**  The raw Chromaprint fingerprint is stored under
-the Picard key **`ACOUSTID_FINGERPRINT`** (FLAC Vorbis `acoustid_fingerprint`; MP3 TXXX desc
-`"Acoustid Fingerprint"`), renamed from the legacy `CHROMAPRINT_FP`.  The model field is
-`acoustid_fingerprint` on `TrackTags` and `TransactionEntry`.  **Dual-read transition:** the forward
-path writes only `ACOUSTID_FINGERPRINT`; every read-back helper reads **both** the new key and legacy
-`CHROMAPRINT_FP`, so a mixed (partially-migrated) library reads correctly throughout.  The legacy key
-is retired per-file by the S3 repatch pass; the dual-read is retained until the library is fully
-migrated (R6d) and its removal is a later, explicit decision — not part of this sub-track.
+**Resolved interface (to be frozen at S1).**  The concrete `DryRunPlan` fields, the per-pass return-type
+change, and the composition contract, split by which session mutates each.
 
-**Resolved interface (frozen).**  The concrete field/key names, the read-helper signature, and the
-value-source capture point, split by which session mutates each.  **Transition mechanism (load-bearing):**
-the legacy name `chromaprint_fp` is referenced as a Pydantic constructor kwarg *and* as attribute access
-outside S1's 3-file scope (`_pipeline.py:1388`, `_pipeline_io.py:280–289/1758/1774`,
-`_pipeline_maint.py:1322/1331–1335/1403/1413`, `_audit.py:49`, and ~82 test sites); `TransactionEntry`
-has no `extra: "allow"`, so an unknown kwarg is a hard validation error.  A hard field rename at S1 is
-therefore impossible inside a green `tox -m analyze` at 3-file scope — so the canonical name is introduced
-at S1 *behind an alias + read bridge* and the destructive rename propagates at S2.
+1. **`DryRunPlan` model (`models.py`).**  A Pydantic `BaseModel`: `pass_name: str`, `entries:
+   list[DryRunEntry]`, and a derived/stored count.  `DryRunEntry` carries `current_path: str` plus an
+   optional planned-path field (move passes) and an optional tag-delta field (tag-content passes) —
+   one type spanning both plan kinds (over-specified per Category-A).  Defaults per repo convention
+   (`""` / `[]`); no `Any`.
+2. **Per-pass `dry_run`-branch return.**  `repath` / `regroup` / `unify` /
+   `repatch_catalogue_colon` / `enrich` return type widens `None` → `DryRunPlan | None` (the
+   `DryRunPlan` on the dry_run arm, `None` on the mutating arm).  `repatch_acoustid_tags` adapts its
+   existing `list[TransactionEntry]` dry-run return to the `DryRunPlan` shape (or a compatible wrapper)
+   — its non-dry-run return contract to `__main__.py:957` is preserved.  Landed at S1.
+3. **Composition contract.**  A helper (`_pipeline_maint.py`) that runs the five passes with
+   `dry_run=True`, collects the `DryRunPlan`s, and assembles a consolidated report (per-pass totals +
+   the cross-pass overlap map — files appearing in >1 plan).  Landed at S2.
+4. **Journal-capacity measurement.**  `len(journal.entries)` + on-disk journal size + the projected
+   post-repatch entry-count delta from the composed plans.  New; no helper exists.  Landed at S2.
+5. **`Reference/` evidence surface.**  Read-only presence + footprint of the `Reference/` snapshot dir;
+   evidence only, never an automated retention decision.  Landed at S2.
+6. **CLI surface.**  `repatch-catalogue-colon` subcommand (survey gap) + a `preflight` composite
+   subcommand over `dest_root`.  Landed at S3.
 
-1. **Model fields.**  Canonical `acoustid_fingerprint: str = ""` on `TrackTags` (at its archival-triple
-   slot, after `audio_hash`) and `TransactionEntry` (between `audio_hash` and `acoustid_id`), each with
-   `Field(validation_alias=AliasChoices("acoustid_fingerprint", "chromaprint_fp"))`; both models'
-   `model_config` gains `"populate_by_name": True` (`TrackTags` keeps `"extra": "allow"`).  Each model
-   carries a transition-only read bridge `@property def chromaprint_fp(self) -> str: return
-   self.acoustid_fingerprint`.  This keeps every existing `chromaprint_fp=` kwarg and `.chromaprint_fp`
-   read green at S1's 3-file scope; S2 removes the alias + property when it propagates the rename to the
-   consuming files.  C-AR: the field keeps its per-model position and the `# extensible: 4th dim slots in
-   here` comment; only the name + inline comment change.
-2. **`_MP3_TXXX_MAP` entry.**  `"ACOUSTID_FINGERPRINT": "Acoustid Fingerprint"` replaces
-   `"CHROMAPRINT_FP": "Chromaprint Fingerprint"` (`_tagger.py:117`), positioned immediately after
-   `"AUDIO_HASH": "Audio Hash"` and before the AccurateRip block.  `"ACOUSTID_ID": "Acoustid Id"`
-   (line 115) is unchanged.
-3. **FLAC Vorbis Comment key.**  `acoustid_fingerprint` (lowercase; `to_file_dict` uppercases field names
-   to the on-disk key `ACOUSTID_FINGERPRINT`, and Vorbis keys are case-insensitive on read).  Legacy
-   on-disk key: `chromaprint_fp` / `CHROMAPRINT_FP`.
-4. **Read helper.**  `_read_acoustid_fingerprint_tag(path: Path) -> str` replaces `_read_chromaprint_fp_tag`
-   (`_pipeline_io.py:212`); signature unchanged (one `Path`, returns `str`, `""` on failure).  Renamed at
-   S2 (lives outside S1's scope) — named here as the concrete S2 target.
-5. **Dual-read logic.**  New key first, legacy second — FLAC:
-   `audio.get("acoustid_fingerprint") or audio.get("ACOUSTID_FINGERPRINT") or audio.get("chromaprint_fp")
-   or audio.get("CHROMAPRINT_FP") or []`, take `[0]`; MP3: match TXXX `frame.desc == "Acoustid
-   Fingerprint"` then `"Chromaprint Fingerprint"`.  Three coverage branches (new-key / legacy-key /
-   neither) each need an explicit test.  Landed at S2.
-6. **`ACOUSTID_ID` value source.**  The cluster UUID from the fingerprint `/v2/lookup` (`results[0]["id"]`
-   — the `[1]` element of `_fetch_acoustid_lookup_raw`'s return), the single source on every writer path.
-   On no api_key OR empty fpcalc fingerprint, `ACOUSTID_ID` is left empty at ingest, NEVER re-filled from
-   `fetch_acoustid_id` / `list_by_mbid` (the empty-not-fallback rule).  Invariant: a file's `ACOUSTID_ID`
-   is empty or a fingerprint-lookup cluster UUID — never a `list_by_mbid` value.
-7. **Audit `_DIFF_FIELDS`.**  The element `"chromaprint_fp"` (`_audit.py:49`) becomes
-   `"acoustid_fingerprint"`, order preserved:
-   `("release_id", "audio_hash", "acoustid_fingerprint", "acoustid_id", "origin_time")`.  S2 consumer;
-   named here as the concrete target.
-8. **`_pipeline.py` capture point.**  `_pipeline.py:1226` already makes the `/v2/lookup` call
-   (`_confirm_mbids, _ = _fetch_acoustid_lookup_raw(...)`); S2 captures the discarded `[1]` cluster UUID
-   into `final_tags.acoustid_id` and removes the separate `fetch_acoustid_id(rec_id)` write at
-   `_pipeline.py:1713`.  No new network call.  S2 consumer; named here.
+**S1 lands items 1–2** (the model + the per-pass return-widening, `test_pipeline_maint.py` KATs);
+**items 3–5 are S2's** composition/capacity/`Reference/` mechanics; **item 6 is S3's** CLI wiring; the
+live run + report is **S4's**.
 
-**S1 lands items 1–2** (the model + key-map surface, `test_models.py` KATs) within its 3-file green-gate
-scope via the alias + property transition bridge; **items 4–5, 7–8 are S2's** forward-write propagation;
-**item 6's rule is frozen here** and enforced by the S2 KATs.
-
-**Flavour:** compiler-enforced (the renamed model fields + key-map + read-helper signatures; mypy
-strict) + test-enforced (the S1 key-round-trip / dual-read / archival-triple / value-source KATs; the
-S2 forward-write KATs; the S3 repatch/dry-run/idempotency/no-regression KATs) + prose-enforced (the
-empty-not-fallback value rule and the dual-read transition invariant, cited to the Picard convention /
-AGENTS.md tag anchor / the MetaBrainz community thread).  **Defined-in:** S1.  **Consumed-by:** S2 (the
-forward-write), S3 (the offline repatch), S4 (scan validation), R6d (the one-pass drives the S3 pass
-destructively), any future AcoustID consumer.  Over-specified per Category-A: carries the dual-read
-transition contract and the value-source rule though S2 is the first consumer.
+**Flavour:** compiler-enforced (the `DryRunPlan` type + the widened return signatures; mypy strict) +
+test-enforced (the S1 plan-return/no-write/empty-plan/shape-uniformity KATs; the S2 composition/
+overlap/capacity KATs; the S3 CLI-dispatch KATs; the S4 parity KAT) + prose-enforced (the dry_run-is-
+non-mutating invariant; the scan-not-run-vs-no-findings distinction, cited to the `scan_*.py`
+precedent).  **Defined-in:** S1.  **Consumed-by:** S2 (composition), S3 (CLI), S4 (the live run +
+report), **J3** (weighs the evidence), and the eventual R6d destructive one-pass (the plan-summary
+shape a destructive-run confirmation prompt reuses).  Over-specified per Category-A: one `DryRunPlan`
+type spans both move and tag-content plan kinds, and a plan-summary shape is exposed for the future
+destructive-run consumer though only the harness consumes it now.
 
 ### Consumed (frozen upstream — invalidation is out of scope for this sub-track)
 
-- **Picard tag convention (AGENTS.md tag-convention anchor + the MetaBrainz community thread,
-  `community.metabrainz.org/t/acoustid-id-vs-acoustid-fingerprint/676749`)** — the authority on
-  `acoustid_id` (= fingerprint-lookup cluster UUID) and `acoustid_fingerprint` (= raw Chromaprint
-  string).  R6c aligns to it; it does not re-open the convention.
-- **C-AR (R3b) — the archival identity triple + AccurateRip 4th dimension.**  The fingerprint field is
-  part of the triple (`audio_hash` / `acoustid_id` / fingerprint).  R6c renames the fingerprint *key*,
-  never the triple's structure or the C-AR AccurateRip fields.  Validate-only — preserve field order
-  and the `# 4th dim slots in here` reserved-slot comment.
-- **C-PROV / C-MOVE + confirmation-provenance** — move/verify/journal provenance.  S2's write rides
-  the existing copy/tag/verify loop unchanged; S3's repatch rides the `enrich`
-  re-tag→`_verify_copy`→journal chain; the new `"acoustid-repatched"` entry is appended only after
-  verification.  Validate-only — preserve the chain exactly.
-- **C-NET-CORE / C-NET-TERM (R1) — the `_net` retrieval core + universal terminal rule.**  The
-  `/v2/lookup` and `list_by_mbid` calls already route through `retrieve()` with `_acoustid_classify`.
-  S2/S3 add no raw network call and do not alter the retry/terminal posture.  Validate-only.
-- **"Path is a handle, not a manifest"** — R6c changes tag *content*/keys, never path structure; no
-  `build_dest_path` change, no repath.
+- **C-PROV / C-MOVE + confirmation-provenance** — move/verify/journal provenance.  The passes'
+  *mutating* paths are untouched; only the `dry_run` branch grows a return.  The
+  re-tag→`_verify_copy`→journal ordering and the confirmation-provenance chain are preserved exactly.
+  Validate-only.
+- **The `dry_run` structlog convention** — every pass already logs a per-file dry-run event; S1 keeps
+  the log and adds the structured return (additive, not a replacement).  Validate-only.
+- **The `scan_*.py` read-only standalone precedent** — `_check_root` gating (scan-not-run vs
+  no-findings), root-not-mounted safety, outside the tox gate.  The harness follows it.  Validate-only.
+- **C-ACID / C-CAT-INT / C-W3b-INT** — the three deferred passes' own frozen contracts.  The preflight
+  runs them in dry_run; it does not re-open their re-derivation logic.  Validate-only.
+- **"Path is a handle, not a manifest"** — the preflight reports what the passes *would* do; it changes
+  no path structure and no `build_dest_path`.
 
 ### Produced
 
-- **C-ACID** — the Picard-aligned AcoustID tag policy at S1; the forward-write at S2; the offline
-  repatch at S3; scan validation at S4.  **Coordinates with R6d** (the destructive library-wide
-  repatch): the machinery is landed here; R6d runs the S3 pass destructively under J3 — adding an
-  **AcoustID tag-content-repatch capability** to R6d's engine (the same gap R6b closed for the
-  catalogue-colon case, now for the AcoustID key + value).
+- **C-PREFLIGHT** — the typed dry-run-plan return shape at S1; the composition + capacity/`Reference/`
+  evidence at S2; the CLI at S3; the live J3 report at S4.  **Coordinates with J3 and R6d:** the
+  evidence is the J3 go/no-go input; the plan shape is the substrate the R6d destructive one-pass
+  reuses (each pass runs for real under J3, ordered by the S2 overlap map).
 
 ## Progress ledger
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 @architect | Freeze the Picard-aligned AcoustID tag policy (value source + key rename + dual-read) | done | a30ed93 | C-ACID |
-| 2 | Align the AcoustID forward-write path to the frozen policy | done | bd8a0b6 | |
-| 3 | Migrate existing files in an offline AcoustID repatch pass | done | 0004016 | |
-| 4 ◆ | Scan the library for legacy AcoustID tag state + census + anneal | done | 4ec6907 | |
+| 1 @architect | Return a typed dry-run plan from every deferred maintenance pass | pending | | |
+| 2 | Compose the deferred-pass plans into a consolidated dry-run preflight report | pending | | |
+| 3 | Wire the catalogue-colon repatch and preflight composite CLI subcommands | pending | | |
+| 4 ◆ | Run the preflight harness for J3 evidence + census + anneal | pending | | |
 
 ## Action-frame digest
 
-### S1 — 2026-08-13
-Discovery/flex: Juncture fork identified that a hard field rename at S1 would break ~82 test sites outside the 3-file scope; designed a transition bridge (Field alias + @property) instead of AliasChoices — same semantic result, mypy-compatible.
-Affected: C-ACID (interface item 1 — model fields)
-Deferred: no
-Texture: S2 must remove the alias + property bridge as it propagates the rename; the bridge is transition-only code weight. Three extra test files (test_main.py, test_pipeline.py, test_pipeline_maint.py) updated to write legacy key directly via mutagen after _MP3_TXXX_MAP rename — allowed extras, noted in ledger.
-
-### S4 ◆ boundary — 2026-08-13
-Discovery/flex: Boundary fork confirmed still-on-intent. All three design-intent elements realized; all frozen contracts intact; register anneal clean (zero denylist hits in src/).
-Affected: none
-Deferred: no — R6d cross-shard dependency noted (R6d must drive repatch_acoustid_tags() destructively under J3; dual-read retirement deferred until post-R6d). Both are pre-committed PLAN postures, not new drift.
-Texture: fetch_acoustid_id survives as an exported helper (not deleted, no longer the ACOUSTID_ID source — matches S1 subtlety). Sub-track complete.
+*(none yet)*
 
 ## Discoveries & risks
 
-- **D-1 (S1 value-source fallback — the inflection judgment).**  When no api_key / no fingerprint,
-  `ACOUSTID_ID` is empty at ingest (empty-not-`list_by_mbid`, per posture 1).  Resolution to freeze at
-  S1: the fingerprint `/v2/lookup` cluster UUID is the single source; a `list_by_mbid` fallback would
-  re-introduce the dual-source divergence the shard removes.  **Reopen trigger:** if the operator's
-  ingest routinely runs keyless, the empty-at-ingest cost is larger than estimated — an
-  *additive-reshard* (a `list_by_mbid`-fallback row), decided live; do **not** silently restore the
-  fallback in-track.  *internal-continue* pending the S1 freeze.
-- **D-2 (persisted-key migration — dual-read is mandatory).**  Existing library files carry the legacy
-  `CHROMAPRINT_FP` key; a hard rename (write-new/read-new-only) silently drops the fingerprint on read
-  until R6d.  Resolution (posture 2): dual-read (read both keys) frozen in C-ACID; the S3 repatch
-  retires the legacy key per file; dual-read removal is a later explicit decision.  *internal-continue.*
-- **D-3 (host-path silent-no-op hazard — carried from R6a D-3 / R6b D-3 / R4b D-1).**  The new
-  scanner's `ROOT` is machine-specific (`~/Remote/hades/Music/Done`, the `scan_nonuniform_depth.py`
-  pattern).  S4 **must** distinguish scan-not-run (unmounted/empty root → never "clean") from
-  no-findings.  Operator mounts the library before `/plan-run`; if unmounted at execution, the census
-  refresh is recorded pending, not asserted.  *internal-continue* (S4 handles it structurally).
-- **D-4 (R6d coupling — sequencing constraint, not a risk).**  This shard builds the machinery; the
-  destructive library-wide AcoustID repatch is R6d's one J3-gated pass (D-A5/D-A7).  The S3 pass is the
-  machinery R6d drives — adding an AcoustID tag-content-repatch capability to R6d's engine (mirrors R6b
-  for the catalogue-colon case).  No destructive op in this sub-track.  *internal-continue.*
-- **D-5 (temporary library inconsistency — accepted, D-A4/D-A6-style).**  Until R6d's repatch, the
-  on-disk library mixes migrated (new ingests: `ACOUSTID_FINGERPRINT`, fingerprint-sourced
-  `ACOUSTID_ID`) and legacy (`CHROMAPRINT_FP`, `list_by_mbid`-sourced `ACOUSTID_ID`) files.  The
-  dual-read makes this harmless for reads.  Accepted (posture 3); not a defect to remediate in-track.
-  Noted so `/plan-run` does not treat it as an in-track discovery.
-- **D-6 (BACKLOG premise correction — recorded, not a risk).**  BACKLOG framed the value problem as
-  "track UUID vs cluster UUID"; the survey (2026-08-13) found both writer paths already emit a *cluster*
-  UUID (the `list_by_mbid` id is a cluster identifier, `_mb_api.py:1084`), differing only by lookup key.
-  So the fix is a value-*source* unification, not a value-*type* fix, and it adds **no new fpcalc
-  dependency** (fpcalc + `/v2/lookup` already run at ingest, `_pipeline.py:1217,1226`).  Noted so
-  `/plan-run` does not re-derive against the superseded BACKLOG framing.  *internal-continue.*
+- **D-1 (S1 evidence-seam judgment — the inflection).**  Structured dry-run evidence comes from a typed
+  `DryRunPlan` the passes *return* (option A), not from parsing structlog (option B).  Resolution to
+  freeze at S1: the passes already materialize the plan before the dry_run gate (`repath:634` et al.),
+  so the return-widen is mechanical; typed + gate-covered evidence is required to back a
+  destructive-scale J3 go/no-go.  **Reopen trigger:** if widening a pass's return fractures an
+  irreducible internal invariant (a pass that cannot expose its plan without leaking half-built state),
+  surface as a discovery — the documented fallback is A-lite (return-plan for the tag-content passes
+  only), *not* a silent drop to log-parsing.  *internal-continue* pending the S1 freeze.
+- **D-2 (`repatch_catalogue_colon` has no CLI subcommand — a real gap, resolved by S3).**  It is only
+  callable in-process (`_pipeline_maint.py:1446`); the CLI has `repatch-acoustid` but no
+  `repatch-catalogue-colon`.  S3 adds it alongside the `preflight` composite.  Not a risk; a scope item.
+  *internal-continue.*
+- **D-3 (host-path silent-no-op hazard — carried from R6a D-3 / R6b D-3 / R6c D-3 / R4b D-1).**  The
+  harness's `ROOT` is machine-specific (`~/Remote/hades/Music/Done`, the `scan_*.py` pattern).  S2/S4
+  **must** distinguish scan-not-run (unmounted/empty root → never "clean") from no-findings via
+  `_check_root`.  Operator mounts the library before the S4 run; if unmounted at execution, the J3
+  report is recorded *not run*, not clean.  *internal-continue* (S2/S4 handle it structurally).
+- **D-4 (cross-pass overlap ordering — a J3-planning input, surfaced by S2).**  A file in more than one
+  pass's dry-run plan (e.g. depth-repathed *and* AcoustID-repatched) means the R6d destructive pass
+  must order the passes (tag-content before repath, so the path re-renders corrected tags).  The S2
+  overlap map surfaces this; the *ordering decision* belongs to R6d's PLAN derivation, not this
+  sub-track.  Noted so R6d planning consumes the overlap evidence.  *internal-continue.*
+- **D-5 (R6d + J3 + R5 coupling — sequencing constraint, not a risk).**  This sub-track builds J3
+  *evidence*; R6d's destructive one-pass rides J3 *firing* (this evidence) plus R5 *exit* (Original/
+  drained, operator-paced).  Neither the J3 verdict nor the destructive run is in scope here.  The
+  harness makes J3 *decidable*, not *decided*.  *internal-continue.*
+- **D-6 (journal write-amplification — an evidence datum, not an in-track defect).**  The journal is
+  rewritten in full on every append (`write_transaction_log`, `_pipeline_io.py:1192`); a library-wide
+  repatch appends thousands of entries, each rewriting the whole file.  S2 *measures* this (the J3
+  capacity category); whether it warrants a streaming-append rewrite is an R6d/J3 decision, not an
+  in-track remedy.  Noted so `/plan-run` does not treat the measurement as a discovered defect to fix.
+  *internal-continue.*
 
 ## Notes for executors
 
-- **Tier routing.**  S1 is **Opus + `@architect` inflection** (the C-ACID value-source + dual-read
-  policy; permanent library-wide tag policy; correctness-crit — a wrong fallback re-introduces the
-  divergence, an archival identity dimension is at stake).  S2, S3, S4 are **Sonnet** (mechanical over
-  the frozen policy, modelled on `enrich` / `repatch_catalogue_colon`).  `juncture-tier: opus` — kept.
-- **Register: align to Picard, don't re-open the convention.**  Picard's `acoustid_id` /
-  `acoustid_fingerprint` definitions (AGENTS.md tag anchor) are the authority; R6c conforms to them.
-- **Empty-not-fallback is load-bearing.**  On no api_key / no fingerprint, leave `ACOUSTID_ID` empty —
-  never re-fill from `list_by_mbid`.  Every forward-write test must carry a no-key case asserting the
-  empty result (no fallback).
-- **Reuse the already-made `/v2/lookup` call.**  Ingest already fetches the cluster UUID at
-  `_pipeline.py:1226` and discards it — capture the `[1]` value; do **not** add a second network call.
-- **Dual-read is a read-widen, not a write-fork.**  Write only `ACOUSTID_FINGERPRINT`; read both it and
-  legacy `CHROMAPRINT_FP`.  A write that emits the legacy key violates the policy.
-- **Model S3 on `repatch_catalogue_colon` / `enrich`, not fresh.**  Both are existing offline
-  tag-content write passes: idempotent, `dry_run`, re-tag→`_verify_copy`→journal (P-FP3/P-FP4).  Reuse
-  that shape (a new `action="acoustid-repatched"` entry appended only after verification).
+- **Tier routing.**  S1 is **Opus + `@architect` inflection** (C-PREFLIGHT — the dry-run-plan evidence
+  seam for a destructive-scale J3 go/no-go; widening five passes' public return type; correctness-crit).
+  S2, S3, S4 are **Sonnet** (mechanical over the frozen plan shape, modelled on the read-only
+  `scan_*.py` scripts and the existing `repatch-acoustid` subcommand).  `juncture-tier: opus` — kept.
+- **This sub-track builds J3 evidence, never runs the destructive pass.**  Every pass runs in
+  `dry_run=True`.  A mutating branch reached anywhere in the harness is a violation.  R6d runs the
+  passes for real, later, under J3 + R5 exit.
+- **Return-widen, don't re-plan.**  The plan already exists at each pass's dry_run gate (`repath:634`,
+  and the same for the other four/five).  Capture what is in `plan_pairs` / the per-file corrected-tag
+  set; do not re-derive.
+- **dry_run stays non-mutating.**  Keep the existing structlog events; the `DryRunPlan` return is
+  additive.  Every widened pass keeps its "no move / no journal entry" test alongside the new
+  plan-return assertion.
+- **Empty plan ≠ not-run.**  An empty `DryRunPlan` (count 0) is *ran-found-nothing*; a not-run
+  (unmounted root) is a distinct state.  The harness must never report unmounted as clean (`_check_root`
+  from the `scan_*.py` precedent).
+- **Model the harness on `scan_*.py`, not fresh.**  `scan_catalogue_colon.py` / `scan_acoustid_tags.py`
+  are read-only, `_check_root`-gated, outside the tox gate — reuse that shape.  Keep the gate-testable
+  composition logic in `_pipeline_maint.py`; keep only the thin wrapper in `scripts/`.
+- **`repatch_acoustid_tags` is asymmetric.**  It takes `journal: Path` positionally and already returns
+  a list — uniformize to `DryRunPlan` without breaking its `__main__.py:957` caller contract.
 - **REGISTER rule (durable-file discipline).**  In source/tests, state the *property/reason/invariant*
-  — never the plan coordinate.  "the AcoustID cluster UUID from the fingerprint /v2/lookup (Picard's
-  `acoustid_id` source)" is right; "the S1 value-source freeze" is not.  Plan vocabulary (S1/S2/S3/S4,
-  R6c, sub-track names, `/plan-run`) lives only in `PLAN.md` / `ROADMAP*.md` / the ledger / commit
-  messages.  See the repo `AGENTS.md` "Register rule" block.
+  — never the plan coordinate.  "dry_run returns the structured change-set the pass would enact" is
+  right; "the S1 plan-return freeze" is not.  Plan vocabulary (S1/S2/S3/S4, R6d, J3-preflight,
+  sub-track names, `/plan-run`) lives only in `PLAN.md` / `ROADMAP*.md` / the ledger / commit messages.
+  See the repo `AGENTS.md` "Register rule" block.
 - **Anneal denylist (◆ gate greps durable files for these).**  Seeded from the `/plan-run` default,
   tuned for this project's vocabulary:
   - `\bS[1-9]\b` (this sub-track's plan session coordinates) — **but** allow STYLEGUIDE-rule-section
     forms (`\b[1-5]\.[0-9]\b` like "4.5", "3.1" are register/rule cites, not plan coordinates — do
     **not** flag).
-  - `\bR6[a-e]\b`, `\bR[0-9]\b` (roadmap node coordinates) — flag in durable source/tests; legitimate
-    only in PLAN/ROADMAP/ledger/commit messages.
-  - `sub-track`, `plan-run`, `plan-shard`, `halt-at-boundaries`, `run-to-boundary`
-  - `C-ACID` **only outside docstrings that legitimately name the contract** — contract names in
+  - `\bR6[a-e]\b`, `\bR[0-9]\b`, `\bJ[1-3]\b` (roadmap node + juncture coordinates) — flag in durable
+    source/tests; legitimate only in PLAN/ROADMAP/ledger/commit messages.
+  - `sub-track`, `plan-run`, `plan-shard`, `halt-at-boundaries`, `run-to-boundary`, `preflight`
+    **only as a plan coordinate** — the `preflight` CLI subcommand name and `preflight_r6d.py` are
+    legitimate durable vocabulary (flag "the R6d preflight sub-track" prose, not the command/file name).
+  - `C-PREFLIGHT` **only outside docstrings that legitimately name the contract** — contract names in
     docstrings are the intended durable form; flag bare "S1 freeze"-style prose, not the contract name.
   - `juncture`, `inflection`, `action-frame`, `◆`
-  - Do **not** add `AcoustID`, `acoustid_id`, `ACOUSTID_ID`, `ACOUSTID_FINGERPRINT`, `CHROMAPRINT_FP`,
-    `chromaprint`, `Picard`, `/v2/lookup`, `list_by_mbid`, `cluster UUID`, `fingerprint` to the
-    denylist — these are legitimate domain/convention vocabulary this sub-track deliberately renders
-    and cites.
-- **Invariants to preserve:** the empty-not-fallback value rule + the dual-read transition (C-ACID);
-  the Picard convention alignment; the `enrich` / copy-tag-verify confirmation-provenance chain (S2/S3
-  ride it unchanged — the `"acoustid-repatched"` entry appended only after verification); C-AR (the
-  archival triple structure + AccurateRip fields + the reserved 4th-dim slot — unchanged, only the
-  fingerprint *key* renames); C-NET-CORE/C-NET-TERM (no raw network call, retry/terminal posture
-  unchanged); "path is a handle, not a manifest" (no path/repath change — tag content only).
+  - Do **not** add `dry_run`, `DryRunPlan`, `repath`, `regroup`, `unify`, `repatch`, `enrich`,
+    `journal`, `Reference`, `Original`, `Done`, `preflight_r6d`, `scan_*` — these are legitimate
+    domain/API vocabulary this sub-track deliberately renders and cites.
+- **Invariants to preserve:** the dry_run-is-non-mutating invariant + the empty-plan-≠-not-run
+  distinction (C-PREFLIGHT); the `enrich` / copy-tag-verify confirmation-provenance chain (the mutating
+  paths are untouched); the three deferred passes' own frozen contracts (C-ACID / C-CAT-INT /
+  C-W3b-INT — the preflight runs them in dry_run, never re-opens their logic); "path is a handle, not a
+  manifest" (the preflight reports, changes nothing).
 - **Every row runs `~/.local/bin/tox -m analyze` before ledger-done** (build + test at 100% branch
   coverage + strict mypy + ruff + pylint 10.00/10 + pyupgrade).  Import order via
   `~/.local/bin/tox -m edit`, never hand-edited.
-- **Suggested first `/plan-run` invocation:** `halt-at-boundaries` — the C-ACID value-source policy
-  (the empty-not-fallback ruling + the dual-read transition) is the first unproven substrate judgment
-  in this shard; stop after S1 for an operator check that the freeze (especially the no-key
-  empty-at-ingest behaviour and the dual-read transition) is right before S2 consumes it.  Once S1
-  confirms, `run-to-boundary` through the S4 ◆.
+- **Suggested first `/plan-run` invocation:** `halt-at-boundaries` — the C-PREFLIGHT dry-run-plan
+  return shape is the first unproven substrate judgment in this shard (it widens five passes' public
+  return type to back a destructive-scale J3 evidence decision); stop after S1 for an operator check
+  that the plan shape captures the J3 evidence J3 actually needs (especially the tag-content-delta shape
+  and the empty-vs-not-run distinction) before S2 composes it.  Once S1 confirms, `run-to-boundary`
+  through the S4 ◆.
