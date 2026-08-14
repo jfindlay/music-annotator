@@ -1917,6 +1917,116 @@ class DryRunPlan(BaseModel):
     """Stored summary count; must equal ``len(entries)`` at construction."""
 
 
+class PreflightPassSummary(BaseModel):
+    """Per-pass summary from a consolidated dry-run preflight report.
+
+    Records how many files a single maintenance pass would act on, and how many of those files
+    also appear in at least one other pass's plan (the cross-pass overlap count).  An overlap
+    means the two passes would touch the same file; the ordering of those passes matters for
+    correctness (tag-content rewrites must precede path rewrites so the corrected tags drive the
+    new path).
+
+    Important attributes: ``pass_name``, ``count``, ``overlap_count``.
+    """
+
+    pass_name: str = ""
+    """The pass identity (e.g. ``"repath"``, ``"enrich"``, ``"repatch_acoustid_tags"``)."""
+
+    count: int = 0
+    """Number of files the pass would act on (equals the corresponding :class:`DryRunPlan` ``count``)."""
+
+    overlap_count: int = 0
+    """Number of files in this pass's plan that also appear in at least one other pass's plan."""
+
+
+class PreflightOverlapEntry(BaseModel):
+    """A file that appears in more than one maintenance pass's dry-run plan.
+
+    When a file is planned for changes by multiple passes, the ordering of those passes is
+    load-bearing: tag-content rewrites must precede path rewrites so the corrected tags drive
+    the new destination path.  Surfacing these overlaps as explicit evidence lets the operator
+    verify the ordering before any destructive run.
+
+    Important attributes: ``current_path``, ``pass_names``.
+    """
+
+    current_path: str = ""
+    """The file's current on-disk path (the key used to detect cross-pass overlap)."""
+
+    pass_names: list[str] = Field(default_factory=list)
+    """Names of all passes whose dry-run plan includes this file."""
+
+
+class JournalCapacity(BaseModel):
+    """Journal capacity snapshot for a preflight report.
+
+    Captures the current journal state and projects how much it would grow if all planned
+    maintenance passes were executed.  Each planned file action (move or tag-content write)
+    appends one journal entry, so the projected delta equals the sum of all pass plan counts.
+
+    Important attributes: ``current_entry_count``, ``current_size_bytes``, ``projected_delta_entries``.
+    """
+
+    current_entry_count: int = 0
+    """Number of entries currently in the journal."""
+
+    current_size_bytes: int = 0
+    """On-disk size of the journal file in bytes (0 when the file does not exist)."""
+
+    projected_delta_entries: int = 0
+    """Projected number of new journal entries if all planned passes were executed."""
+
+
+class ReferenceEvidence(BaseModel):
+    """Read-only presence and footprint of the ``Reference/`` snapshot directory.
+
+    Surfaces the evidence a human decision needs before any destructive library operation:
+    whether a ``Reference/`` snapshot exists alongside the library root, and how large it is.
+    This is evidence only — no automated retention decision is made here.
+
+    Important attributes: ``present``, ``size_bytes``.
+    """
+
+    present: bool = False
+    """``True`` when the ``Reference/`` directory exists alongside the library root."""
+
+    size_bytes: int = 0
+    """Total disk footprint of the ``Reference/`` directory in bytes (0 when not present)."""
+
+
+class PreflightReport(BaseModel):
+    """Consolidated dry-run preflight report across all maintenance passes.
+
+    Assembles the output of running every maintenance pass with ``dry_run=True`` into a single
+    structured report.  The report is the read-only evidence surface for a human decision about
+    whether and in what order to execute the passes for real.
+
+    ``scan_ran`` distinguishes two structurally different outcomes: ``False`` means the library
+    root was not mounted or was empty so no scan was attempted (never report this as "clean");
+    ``True`` means the scan ran and the pass summaries reflect the actual library state (all
+    counts may be zero, which is a genuine "no findings" result).
+
+    Important attributes: ``pass_summaries``, ``overlaps``, ``journal_capacity``,
+    ``reference_evidence``, ``scan_ran``.
+    """
+
+    pass_summaries: list[PreflightPassSummary] = Field(default_factory=list)
+    """Per-pass summaries, one entry per maintenance pass, in the order the passes were run."""
+
+    overlaps: list[PreflightOverlapEntry] = Field(default_factory=list)
+    """Files appearing in more than one pass's plan; empty when no cross-pass overlap exists."""
+
+    journal_capacity: JournalCapacity = Field(default_factory=JournalCapacity)
+    """Current journal state and projected growth from executing all planned passes."""
+
+    reference_evidence: ReferenceEvidence = Field(default_factory=ReferenceEvidence)
+    """Presence and footprint of the ``Reference/`` snapshot directory."""
+
+    scan_ran: bool = False
+    """``True`` when the scan ran against a mounted, non-empty library root; ``False`` when the
+    root was absent or empty and no scan was attempted."""
+
+
 class ProvenanceSidecar(BaseModel):
     """Provenance fields written into ``freedb_disc_N.yaml`` or ``music_annotator_provenance.yaml``.
 

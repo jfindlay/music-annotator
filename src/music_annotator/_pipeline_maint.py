@@ -81,8 +81,13 @@ from music_annotator.models import (
     CopyPlanEntry,
     DryRunEntry,
     DryRunPlan,
+    JournalCapacity,
     MBRelease,
     MBTrack,
+    PreflightOverlapEntry,
+    PreflightPassSummary,
+    PreflightReport,
+    ReferenceEvidence,
     TrackTags,
     TransactionEntry,
     TransactionLog,
@@ -1901,3 +1906,202 @@ def repatch_acoustid_tags(
             count=len(acoustid_dry_run_entries),
         )
     return appended
+
+
+def _check_dest_root(dest_root: Path) -> bool:
+    """Return ``True`` when ``dest_root`` is a non-empty directory suitable for scanning.
+
+    Distinguishes "root not mounted or empty" (returns ``False`` — scan should not run) from
+    "root present and non-empty" (returns ``True`` — scan may proceed).  This mirrors the
+    ``_check_root`` guard in the ``scan_*.py`` scripts: a missing or empty root must never be
+    reported as "no findings", because that would be a data-integrity hazard when the result is
+    used to validate the library population before a destructive pass runs.
+
+    :param dest_root: Path to the library root directory.
+    :returns: ``True`` when the root exists and contains at least one entry; ``False`` otherwise.
+    """
+    if not dest_root.is_dir():
+        return False
+    try:
+        entries = os.listdir(dest_root)
+    except PermissionError:
+        return False
+    return bool(entries)
+
+
+def _reference_evidence(dest_root: Path) -> ReferenceEvidence:
+    """Measure the presence and disk footprint of the ``Reference/`` snapshot directory.
+
+    Looks for a sibling directory named ``Reference`` alongside ``dest_root`` (i.e.
+    ``dest_root.parent / "Reference"``).  This is the conventional location for a pre-repatch
+    snapshot of the library.  Returns a :class:`~music_annotator.models.ReferenceEvidence`
+    with ``present=True`` and the total byte footprint when the directory exists, or
+    ``present=False`` and ``size_bytes=0`` when it does not.
+
+    This function is read-only: it never creates, modifies, or deletes any files.
+
+    :param dest_root: Root of the annotated music library.
+    :returns: A :class:`~music_annotator.models.ReferenceEvidence` reflecting the snapshot state.
+    """
+    ref_dir = dest_root.parent / "Reference"
+    if not ref_dir.is_dir():
+        return ReferenceEvidence(present=False, size_bytes=0)
+
+    total_bytes = 0
+    for dirpath, _dirnames, filenames in os.walk(ref_dir):
+        for fname in filenames:
+            try:
+                total_bytes += os.path.getsize(os.path.join(dirpath, fname))
+            except OSError:
+                pass
+    return ReferenceEvidence(present=True, size_bytes=total_bytes)
+
+
+def _journal_capacity(journal_path: Path, plans: list[DryRunPlan]) -> JournalCapacity:
+    """Measure the current journal state and project the entry-count growth from executing all plans.
+
+    Reads the journal at ``journal_path`` to obtain the current entry count, and measures the
+    on-disk file size.  The projected delta is the sum of all plan counts: each planned file
+    action (move or tag-content write) appends exactly one journal entry when the pass runs for
+    real.
+
+    :param journal_path: Path to the journal file (``<dest_root>/music_annotator_journal.json``).
+    :param plans: The :class:`~music_annotator.models.DryRunPlan` objects returned by each pass.
+    :returns: A :class:`~music_annotator.models.JournalCapacity` with current and projected state.
+    """
+    journal = read_journal(journal_path)
+    current_count = len(journal.entries)
+    current_size = journal_path.stat().st_size if journal_path.exists() else 0
+    projected_delta = sum(p.count for p in plans)
+    return JournalCapacity(
+        current_entry_count=current_count,
+        current_size_bytes=current_size,
+        projected_delta_entries=projected_delta,
+    )
+
+
+def compose_preflight_report(dest_root: Path, journal_path: Path) -> PreflightReport:
+    """Run all maintenance passes with ``dry_run=True`` and assemble a consolidated preflight report.
+
+    Calls each of the six maintenance passes (:func:`repath`, :func:`regroup`, :func:`unify`,
+    :func:`enrich`, :func:`repatch_catalogue_colon`, :func:`repatch_acoustid_tags`) with
+    ``dry_run=True`` over ``dest_root``, collects the returned :class:`~music_annotator.models.DryRunPlan`
+    objects, and assembles a :class:`~music_annotator.models.PreflightReport` containing:
+
+    - **Per-pass summaries**: the count of planned changes per pass and the cross-pass overlap
+      count for each pass.
+    - **Cross-pass overlap map**: files appearing in more than one pass's plan, keyed on
+      ``current_path``.  A file in multiple plans means the ordering of those passes is
+      load-bearing (tag-content rewrites must precede path rewrites so the corrected tags drive
+      the new destination path).
+    - **Journal capacity**: the current journal entry count, on-disk file size, and the projected
+      entry-count delta if all planned passes were executed.
+    - **Reference/ evidence**: read-only presence check and disk footprint of the
+      ``Reference/`` snapshot directory alongside ``dest_root``.
+
+    When ``dest_root`` is not mounted or is empty, returns a :class:`~music_annotator.models.PreflightReport`
+    with ``scan_ran=False`` and all other fields at their defaults.  This is structurally distinct
+    from a report with ``scan_ran=True`` and all counts zero (which means the scan ran and found
+    nothing to change).
+
+    This function is non-mutating: it calls every pass with ``dry_run=True`` and never reaches
+    any mutating branch.  No files are moved, no tags are written, and no journal entries are
+    appended.
+
+    :param dest_root: Root of the annotated music library (contains
+        ``music_annotator_journal.json``).
+    :param journal_path: Path to the journal file (typically
+        ``dest_root / JOURNAL_FILENAME``).
+    :returns: A :class:`~music_annotator.models.PreflightReport` with the consolidated dry-run
+        evidence, or a not-run report when the root is absent or empty.
+    """
+    if not _check_dest_root(dest_root):
+        log.info("compose_preflight_report_root_not_mounted", dest_root=str(dest_root))
+        return PreflightReport(scan_ran=False)
+
+    # Run all six passes with dry_run=True.  The asymmetric repatch_acoustid_tags signature
+    # (journal: Path as first positional arg) is handled explicitly; all other passes take
+    # dest_root as their first positional arg.
+    repath_plan = repath(dest_root, dry_run=True)
+    regroup_plan = regroup(dest_root, dry_run=True)
+    unify_plan = unify(dest_root, dry_run=True)
+    enrich_plan = enrich(dest_root, dry_run=True)
+    cat_colon_plan = repatch_catalogue_colon(dest_root, dry_run=True)
+    acoustid_result = repatch_acoustid_tags(journal_path, dest_root, dry_run=True)
+
+    # All six passes return DryRunPlan when dry_run=True.  The type checker knows
+    # repatch_acoustid_tags returns DryRunPlan | list[TransactionEntry]; assert the dry-run arm.
+    assert isinstance(acoustid_result, DryRunPlan), "repatch_acoustid_tags(dry_run=True) must return DryRunPlan"
+
+    # Collect plans; each pass returns DryRunPlan | None on the dry-run arm (except
+    # repatch_acoustid_tags which always returns DryRunPlan on dry_run=True).  The move passes
+    # return None only on the non-dry-run arm, so under dry_run=True they always return a plan.
+    # Guard defensively: treat None as an empty plan so the report is always complete.
+    def _as_plan(result: DryRunPlan | None, pass_name: str) -> DryRunPlan:
+        """Coerce a possibly-None dry-run result to a DryRunPlan.
+
+        :param result: The value returned by a pass called with ``dry_run=True``.
+        :param pass_name: The pass name to use when constructing an empty fallback plan.
+        :returns: The result as-is when it is a :class:`~music_annotator.models.DryRunPlan`,
+            or an empty plan when it is ``None``.
+        """
+        if result is None:  # pragma: no cover — dry_run=True always returns a plan
+            return DryRunPlan(pass_name=pass_name, entries=[], count=0)
+        return result
+
+    plans: list[DryRunPlan] = [
+        _as_plan(repath_plan, "repath"),
+        _as_plan(regroup_plan, "regroup"),
+        _as_plan(unify_plan, "unify"),
+        _as_plan(enrich_plan, "enrich"),
+        _as_plan(cat_colon_plan, "repatch_catalogue_colon"),
+        acoustid_result,
+    ]
+
+    # --- Build cross-pass overlap map ---
+    # A file is overlapping when its current_path appears in more than one plan's entries.
+    # Keyed on current_path; value is the list of pass names that include the file.
+    path_to_passes: dict[str, list[str]] = {}
+    for plan in plans:
+        for entry in plan.entries:
+            if entry.current_path not in path_to_passes:
+                path_to_passes[entry.current_path] = []
+            if plan.pass_name not in path_to_passes[entry.current_path]:
+                path_to_passes[entry.current_path].append(plan.pass_name)
+
+    overlap_paths: set[str] = {p for p, names in path_to_passes.items() if len(names) > 1}
+    overlaps: list[PreflightOverlapEntry] = [
+        PreflightOverlapEntry(current_path=p, pass_names=path_to_passes[p]) for p in sorted(overlap_paths)
+    ]
+
+    # --- Build per-pass summaries ---
+    pass_summaries: list[PreflightPassSummary] = []
+    for plan in plans:
+        overlap_count = sum(1 for e in plan.entries if e.current_path in overlap_paths)
+        pass_summaries.append(
+            PreflightPassSummary(
+                pass_name=plan.pass_name,
+                count=plan.count,
+                overlap_count=overlap_count,
+            )
+        )
+
+    # --- Journal capacity ---
+    capacity = _journal_capacity(journal_path, plans)
+
+    # --- Reference/ evidence ---
+    ref_evidence = _reference_evidence(dest_root)
+
+    log.info(
+        "compose_preflight_report_complete",
+        dest_root=str(dest_root),
+        total_planned=sum(p.count for p in plans),
+        overlap_files=len(overlaps),
+    )
+    return PreflightReport(
+        pass_summaries=pass_summaries,
+        overlaps=overlaps,
+        journal_capacity=capacity,
+        reference_evidence=ref_evidence,
+        scan_ran=True,
+    )
