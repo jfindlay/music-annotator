@@ -324,43 +324,113 @@ green, ledger complete.  **Planning-register anneal:**
 
 ## Cross-session contracts
 
-### C-PREFLIGHT — the typed dry-run-plan return shape *(to be frozen at S1 — inflection design)*
+### C-PREFLIGHT — the typed dry-run-plan return shape *(RESOLVED at inflection design 2026-08-13; frozen at S1)*
 
 **Return shape (frozen at S1).**  Every deferred offline maintenance pass, when called with
-`dry_run=True`, **returns** a typed **`DryRunPlan`** capturing its already-materialized change-set
-instead of returning `None` after logging.  The plan carries: the pass identity, a list of per-file
-entries (current path + planned new path for the move passes; current path + planned tag-content delta
-for the tag-content passes), and a summary count.  An empty plan (count 0) is a *ran-found-nothing*
-result, structurally distinct from a not-run/error.  **Invariant:** a `dry_run=True` call is
-non-mutating — it returns the plan and writes nothing (no file move, no journal append); the plan is
-the same change-set the non-dry-run call would enact.
+`dry_run=True`, **returns** a typed **`DryRunPlan`** capturing the change-set it would enact instead of
+returning `None`/`[]` after logging.  The plan carries: the pass identity, a list of per-file entries
+(current path + planned new path for the move passes; current path + planned tag-content delta for the
+tag-content passes), and a summary count.  An empty plan (count 0) is a *ran-found-nothing* result,
+structurally distinct from a not-run/error.  **Invariant:** a `dry_run=True` call is non-mutating — it
+returns the plan and writes nothing (no file move, no journal append); the plan is the same change-set
+the non-dry-run call would enact.
 
-**Resolved interface (to be frozen at S1).**  The concrete `DryRunPlan` fields, the per-pass return-type
+**Survey reconciliation (2026-08-13 — corrects two draft framings against the code):**
+
+- **"Plan already materialized at the gate" holds only for the three *move* passes.**  `repath`
+  (`:634`), `regroup` (`:847`), `unify` (`:1222`) build a full `plan_pairs` list — including collision
+  resolution — *before* a single `dry_run` gate; the widening reads `plan_pairs`.  Move-plan tuple
+  shape confirmed: `(current_path, new_dest, acoustid, length[, release_id])` (`repath` omits
+  `release_id`; `regroup`/`unify` carry it).  The three *tag-content* passes — `enrich` (`:1363`),
+  `repatch_catalogue_colon` (`:1576`), `repatch_acoustid_tags` (`:1743`) — gate `dry_run` **inside a
+  per-file loop** (`continue`); there is **no** pre-gate aggregate.  Each iteration has the fully
+  computed per-file datum at the gate (`enrich`: `write_fields.keys()`; `repatch_catalogue_colon`:
+  `corrected_parts` + `new_groupheading`; `repatch_acoustid_tags`: `fingerprint` present +
+  `will_re_resolve`).  So the widening for these three is **accumulate a `DryRunEntry` per loop
+  iteration into a plan list, and `return` the accumulated `DryRunPlan` at function end** — *not* a
+  pre-gate `plan_pairs` capture.  This is reconcilable and mechanical (the entry content is fully
+  materialized before each `continue`; no half-built state leaks) — **the D-1 reopen trigger does not
+  fire.**  The executor instruction "capture what is in `plan_pairs`" is corrected to: *capture what is
+  materialized at each pass's gate — `plan_pairs` for the move passes, the accumulated per-file
+  corrected-tag set for the tag-content passes.*
+- **`repatch_acoustid_tags` does NOT "already return the dry-run plan."**  Its `appended:
+  list[TransactionEntry]` is populated only on the **mutating** path (`:1823`); its dry-run arm
+  (`:1743`) logs and `continue`s, so its dry-run return is **unconditionally `[]`** regardless of how
+  many files would migrate.  The `list[TransactionEntry]` return is therefore a *result of mutation*,
+  not a *plan* — it is not the C-PREFLIGHT precedent the draft named it.  Its non-dry-run
+  `list[TransactionEntry]` return, however, **is** a real contract: the `__main__.py:957` caller and
+  `test_dry_run_writes_nothing_returns_empty` depend on it.  Resolution below (item 2, acoustid arm).
+
+**Resolved interface (frozen at S1).**  The concrete `DryRunPlan` fields, the per-pass return-type
 change, and the composition contract, split by which session mutates each.
 
-1. **`DryRunPlan` model (`models.py`).**  A Pydantic `BaseModel`: `pass_name: str`, `entries:
-   list[DryRunEntry]`, and a derived/stored count.  `DryRunEntry` carries `current_path: str` plus an
-   optional planned-path field (move passes) and an optional tag-delta field (tag-content passes) —
-   one type spanning both plan kinds (over-specified per Category-A).  Defaults per repo convention
-   (`""` / `[]`); no `Any`.
-2. **Per-pass `dry_run`-branch return.**  `repath` / `regroup` / `unify` /
-   `repatch_catalogue_colon` / `enrich` return type widens `None` → `DryRunPlan | None` (the
-   `DryRunPlan` on the dry_run arm, `None` on the mutating arm).  `repatch_acoustid_tags` adapts its
-   existing `list[TransactionEntry]` dry-run return to the `DryRunPlan` shape (or a compatible wrapper)
-   — its non-dry-run return contract to `__main__.py:957` is preserved.  Landed at S1.
-3. **Composition contract.**  A helper (`_pipeline_maint.py`) that runs the five passes with
+1. **`DryRunPlan` / `DryRunEntry` models (`models.py`).**  Two Pydantic `BaseModel`s, defaults per repo
+   convention (`""` / `[]`), no `Any`, `model_config = {"populate_by_name": True}` if any alias is
+   introduced (none needed — these are internal, not MB-API):
+   - **`DryRunEntry`** — one type spanning both plan kinds (over-specified per Category-A):
+     - `current_path: str = ""` — the file's current on-disk path (move passes: the *old* path;
+       tag-content passes: the in-place path).
+     - `planned_path: str = ""` — the planned new path (move passes populate; tag-content passes leave
+       `""`, since they write in place).
+     - `tag_delta: dict[str, str] = {}` — the planned per-tag change-set keyed by tag name
+       (tag-content passes populate: `enrich` → the `write_fields` map; `repatch_catalogue_colon` →
+       the corrected `CWP_PART_i` labels + rebuilt `CWP_GROUPHEADING`; `repatch_acoustid_tags` → the
+       migrated `ACOUSTID_FINGERPRINT` [+ `ACOUSTID_ID` when re-resolved]).  Move passes leave `{}`.
+       (`dict[str, str]`, not `Any` — every value is a rendered tag string.)
+     - The move-vs-tag-content distinction is **structural, not a discriminator field**: a move entry
+       has `planned_path != ""` and `tag_delta == {}`; a tag-content entry has `planned_path == ""`
+       and `tag_delta != {}`.  The KAT (d) shape-uniformity witness exercises both against the one type.
+   - **`DryRunPlan`** —
+     - `pass_name: str = ""` — the pass identity (e.g. `"repath"`, `"enrich"`,
+       `"repatch_acoustid_tags"`; the pass's own name, a durable property, not a plan coordinate).
+     - `entries: list[DryRunEntry] = []` — the per-file change-set.
+     - `count: int = 0` — **stored, not derived** (an explicit field, so an empty plan serializes
+       `count=0` and a not-run/error state — a `None` return — is structurally distinct from
+       `DryRunPlan(count=0)`).  S1 sets `count = len(entries)` at construction; do not make it a
+       computed property (the harness/report reads it as a plain field, and a stored count survives
+       JSON round-trip for the S4 `.json` artifact).
+2. **Per-pass `dry_run`-branch return.**
+   - **Move passes** — `repath`, `regroup`, `unify`: return type widens `None` → `DryRunPlan | None`
+     (the `DryRunPlan` built from `plan_pairs` on the `dry_run` arm; `None` on the mutating arm).
+     Build the plan just before the existing `if dry_run:` gate's `return`, from the
+     already-collision-resolved `plan_pairs`.
+   - **Tag-content loop passes** — `enrich`, `repatch_catalogue_colon`: return type widens
+     `None` → `DryRunPlan | None`.  Initialise an accumulator list before the loop; on the `dry_run`
+     arm, append a `DryRunEntry` (with `tag_delta`) instead of only `continue`; after the loop, when
+     `dry_run` is set, `return DryRunPlan(...)`.  The mutating arm still returns `None`.
+   - **`repatch_acoustid_tags` (the asymmetric pass)** — return type becomes
+     **`DryRunPlan | list[TransactionEntry]`**: the `dry_run` arm returns a `DryRunPlan` (accumulated
+     across the loop, as above); the **non-dry-run arm keeps its existing `list[TransactionEntry]`
+     return unchanged** (the `appended` list — the `__main__.py:957` caller contract preserved
+     exactly).  Rationale: the harness (S2) calls every pass with `dry_run=True`, so it always receives
+     a `DryRunPlan`; the CLI caller always takes the mutating path, so it always receives the list.
+     **Uniformity is on the dry-run arm** (all six passes return a `DryRunPlan` under `dry_run=True`) —
+     which is exactly the surface the harness composes over — *not* total-signature uniformity.  Chosen
+     over a `DryRunPlan | None` rewrite (would break the mutating-path list contract) and over a
+     `DryRunPlan | list` union on *all six* (needlessly widens the five `None`-returning mutating arms).
+     **Tradeoff:** this pass's signature is non-uniform with the other five (two return-type shapes
+     vs one), so the harness must not assume a single return type across passes — but it never does
+     (it only ever reads the dry-run arm).  **KAT (c) update:** `test_dry_run_writes_nothing_returns_empty`
+     currently asserts `result == []`; S1 changes it to assert an **empty `DryRunPlan` (`count == 0`,
+     `entries == []`)**, per the empty-plan-≠-not-run witness — the `[]` return is retired on the
+     dry-run arm.
+   - The keyword-only `dry_run` params and the `journal: Path` positional-first asymmetry of
+     `repatch_acoustid_tags` are unchanged — only return types widen.
+3. **Composition contract.**  A helper (`_pipeline_maint.py`) that runs the five/six passes with
    `dry_run=True`, collects the `DryRunPlan`s, and assembles a consolidated report (per-pass totals +
-   the cross-pass overlap map — files appearing in >1 plan).  Landed at S2.
+   the cross-pass overlap map — files appearing in >1 plan, keyed on `current_path`).  Landed at S2.
 4. **Journal-capacity measurement.**  `len(journal.entries)` + on-disk journal size + the projected
-   post-repatch entry-count delta from the composed plans.  New; no helper exists.  Landed at S2.
+   post-repatch entry-count delta from the composed plans (each tag-content `DryRunEntry` projects one
+   appended journal entry; each move `DryRunEntry` projects one).  New; no helper exists.  Landed at S2.
 5. **`Reference/` evidence surface.**  Read-only presence + footprint of the `Reference/` snapshot dir;
    evidence only, never an automated retention decision.  Landed at S2.
-6. **CLI surface.**  `repatch-catalogue-colon` subcommand (survey gap) + a `preflight` composite
-   subcommand over `dest_root`.  Landed at S3.
+6. **CLI surface.**  `repatch-catalogue-colon` subcommand (survey gap — the pass exists at
+   `_pipeline_maint.py:1446` but has no CLI entry; only `repatch-acoustid` is wired at
+   `__main__.py:955`) + a `preflight` composite subcommand over `dest_root`.  Landed at S3.
 
-**S1 lands items 1–2** (the model + the per-pass return-widening, `test_pipeline_maint.py` KATs);
-**items 3–5 are S2's** composition/capacity/`Reference/` mechanics; **item 6 is S3's** CLI wiring; the
-live run + report is **S4's**.
+**S1 lands items 1–2** (the `DryRunPlan` + `DryRunEntry` models + the six per-pass return-widenings,
+`test_pipeline_maint.py` KATs); **items 3–5 are S2's** composition/capacity/`Reference/` mechanics;
+**item 6 is S3's** CLI wiring; the live run + report is **S4's**.
 
 **Flavour:** compiler-enforced (the `DryRunPlan` type + the widened return signatures; mypy strict) +
 test-enforced (the S1 plan-return/no-write/empty-plan/shape-uniformity KATs; the S2 composition/
@@ -416,7 +486,14 @@ destructive-run consumer though only the harness consumes it now.
   destructive-scale J3 go/no-go.  **Reopen trigger:** if widening a pass's return fractures an
   irreducible internal invariant (a pass that cannot expose its plan without leaking half-built state),
   surface as a discovery — the documented fallback is A-lite (return-plan for the tag-content passes
-  only), *not* a silent drop to log-parsing.  *internal-continue* pending the S1 freeze.
+  only), *not* a silent drop to log-parsing.  **Reopen-trigger evaluated at inflection design
+  (2026-08-13): does NOT fire.**  The move passes expose a pre-gate `plan_pairs`; the three
+  tag-content passes gate `dry_run` inside a per-file loop but the per-file datum is fully computed
+  before each `continue`, so the widening accumulates a `DryRunEntry` per iteration and returns the
+  plan at function end — no half-built state leaks, no invariant fractures.  Option A stands; C-PREFLIGHT
+  is resolved.  See the C-PREFLIGHT "Survey reconciliation" block for the two corrected draft framings
+  (the loop-gate accumulation shape; `repatch_acoustid_tags`'s dry-run return being `[]`, not a plan).
+  *internal-continue* → C-PREFLIGHT resolved, ready for S1 freeze.
 - **D-2 (`repatch_catalogue_colon` has no CLI subcommand — a real gap, resolved by S3).**  It is only
   callable in-process (`_pipeline_maint.py:1446`); the CLI has `repatch-acoustid` but no
   `repatch-catalogue-colon`.  S3 adds it alongside the `preflight` composite.  Not a risk; a scope item.
