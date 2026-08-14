@@ -47,6 +47,7 @@ from music_annotator._pipeline_maint import (
     _resolve_current_lib,
     _tags_from_file_dict,
     _unify_classical_composer_groups,
+    repatch_acoustid_tags,
 )
 from music_annotator._tags import _work_top_dir
 from music_annotator._works import work_group_modal_depth
@@ -8284,3 +8285,125 @@ class TestRepatchAcoustidTags:
 
         result = _has_legacy_acoustid_key(path)
         assert result is False
+
+
+# ---------------------------------------------------------------------------
+# AcoustID tag parity pin — integrative behavioural witness
+# ---------------------------------------------------------------------------
+
+
+class TestAcoustidTagParityPin:
+    """Integrative behavioural parity pins for the AcoustID forward-write and repatch paths.
+
+    These tests assert the observable on-disk tag state produced by the two AcoustID tag
+    migration mechanisms:
+
+    1. **Forward-write parity pin**: a FLAC written by :func:`apply_tags_flac` with
+       ``acoustid_fingerprint`` set reads back the Picard-aligned ``ACOUSTID_FINGERPRINT``
+       Vorbis Comment key and carries no legacy ``CHROMAPRINT_FP`` key.
+
+    2. **Repatch parity pin**: a FLAC carrying the legacy ``CHROMAPRINT_FP`` key, after
+       :func:`~music_annotator._pipeline_maint.repatch_acoustid_tags` runs, reads back
+       ``ACOUSTID_FINGERPRINT`` and carries no legacy ``CHROMAPRINT_FP`` key.
+
+    These are integrative behavioural pins, not unit tests of individual functions.  They
+    verify the end-to-end property that the forward-write and offline repatch paths both
+    produce Picard-aligned on-disk tag state.
+    """
+
+    def test_forward_write_parity_pin_flac(self, fs: FakeFilesystem) -> None:
+        """Forward-write parity pin: apply_tags_flac writes ACOUSTID_FINGERPRINT, not CHROMAPRINT_FP.
+
+        Writes a FLAC via :func:`apply_tags_flac` with ``acoustid_fingerprint`` set, then reads
+        the on-disk Vorbis Comment block directly via mutagen and asserts:
+
+        (a) ``acoustid_fingerprint`` (the Picard-aligned key) is present with the correct value.
+        (b) ``chromaprint_fp`` (the legacy key) is absent.
+
+        This pins the forward-write path: new ingests and enrich runs write the Picard-aligned
+        key, never the legacy key.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+
+        tags = TrackTags(acoustid_fingerprint="AQADtMmybckm_forward_write")
+        apply_tags_flac(path, tags)
+
+        # Read back via mutagen directly (not via the tagger helpers) to verify on-disk state.
+        audio = MutagenFLAC(str(path))
+
+        # (a) Picard-aligned key must be present with the correct value.
+        fp_vals = audio.get("acoustid_fingerprint") or []
+        assert fp_vals and fp_vals[0] == "AQADtMmybckm_forward_write", (
+            f"Expected acoustid_fingerprint='AQADtMmybckm_forward_write', got {fp_vals!r}"
+        )
+
+        # (b) Legacy key must be absent.
+        legacy_vals = audio.get("chromaprint_fp") or audio.get("CHROMAPRINT_FP") or []
+        assert not legacy_vals, f"Legacy CHROMAPRINT_FP key must be absent after forward-write; found {legacy_vals!r}"
+
+    def test_repatch_parity_pin_flac(self, fs: FakeFilesystem) -> None:
+        """Repatch parity pin: repatch_acoustid_tags migrates CHROMAPRINT_FP to ACOUSTID_FINGERPRINT.
+
+        Constructs a FLAC carrying the legacy ``CHROMAPRINT_FP`` Vorbis Comment key (written
+        directly via mutagen to simulate a pre-migration library file), runs
+        :func:`~music_annotator._pipeline_maint.repatch_acoustid_tags`, then reads the on-disk
+        Vorbis Comment block directly via mutagen and asserts:
+
+        (a) ``acoustid_fingerprint`` (the Picard-aligned key) is present with the migrated value.
+        (b) ``chromaprint_fp`` (the legacy key) is absent.
+
+        This pins the repatch path: the offline migration pass correctly retires the legacy key
+        and writes the Picard-aligned key, leaving no trace of the legacy key on disk.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Create a FLAC with the legacy CHROMAPRINT_FP key written directly via mutagen,
+        # simulating a pre-migration library file (before the repatch pass runs).
+        path = dest_root / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+
+        # Write a minimal set of tags via apply_tags_flac first (so the file is valid).
+        base_tags = TrackTags(title="Test Track", acoustid_id="test-uuid")
+        apply_tags_flac(path, base_tags)
+
+        # Inject the legacy CHROMAPRINT_FP key directly, bypassing the tagger.
+        audio = MutagenFLAC(str(path))
+        audio["chromaprint_fp"] = ["AQADtMmybckm_legacy"]
+        audio.save()
+
+        # Verify the legacy key is present before the repatch (test precondition).
+        audio_before = MutagenFLAC(str(path))
+        assert audio_before.get("chromaprint_fp"), "Test precondition: legacy key must be present before repatch"
+
+        # Write a journal entry so repatch_acoustid_tags can resolve the file.
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text(
+            '[{"timestamp": "2024-01-01T00:00:00+00:00", "release_id": "r1", '
+            '"source": "/src/01.flac", "destination": "' + str(path) + '", "action": "tagged"}]',
+            encoding="utf-8",
+        )
+
+        # Run the repatch pass (no acoustid_key → key migration only, no re-resolve).
+        repatch_acoustid_tags(journal=journal_path, dest_root=dest_root, acoustid_key="", dry_run=False)
+
+        # Read back via mutagen directly to verify on-disk state.
+        audio_after = MutagenFLAC(str(path))
+
+        # (a) Picard-aligned key must be present with the migrated value.
+        fp_vals = audio_after.get("acoustid_fingerprint") or []
+        assert fp_vals and fp_vals[0] == "AQADtMmybckm_legacy", (
+            f"Expected acoustid_fingerprint='AQADtMmybckm_legacy' after repatch, got {fp_vals!r}"
+        )
+
+        # (b) Legacy key must be absent.
+        legacy_vals = audio_after.get("chromaprint_fp") or audio_after.get("CHROMAPRINT_FP") or []
+        assert not legacy_vals, f"Legacy CHROMAPRINT_FP key must be absent after repatch; found {legacy_vals!r}"

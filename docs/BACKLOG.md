@@ -376,46 +376,40 @@ why L0/L1 (per-group leaf index) was the load-bearing fix — it covers all mult
 of depth — and L2 (depth) is the smaller, secondary concern touching only Shapes C/D.
 Do not let L2's intricacy inflate its priority.
 
-#### AcoustID tag naming + semantics — Picard alignment  → ROADMAP R6c
+#### AcoustID tag naming + semantics — Picard alignment  → ROADMAP R6c  **DONE**
 
-**Deferred by user (2026-07-14)** until library annotation is (mostly) complete; a persisted-tag
-migration — do not churn the convention mid-flight.
+**Machinery enacted (2026-08-13).**  The forward-write and offline repatch machinery is fully
+implemented and proven on fixtures via the `src/tests` gate.  The destructive library-wide repatch
+rides ROADMAP R6d's one-pass under operator confirmation (J3) — this item lands the machinery, not
+the destructive run.
 
-**The confirmed inconsistency.**  The `ACOUSTID_ID` tag is written with **two semantically
-different UUIDs** depending on which path touches the file:
-- **Main pipeline** (`_pipeline.py` → `fetch_acoustid_id`): the AcoustID **track UUID** from
-  `/v2/track/list_by_mbid` (recording-MBID keyed).
-- **`enrich(re_resolve=True)`** (`_pipeline_maint.py` → `_fetch_acoustid_lookup_raw`): the
-  AcoustID **cluster UUID** from `/v2/lookup` `results[0].id` (fingerprint keyed).
-These can be different UUIDs for the same file; the audit pass (`_audit.py`, journal-vs-tag
-`acoustid_id` compare) could flag spurious mismatches on a file touched by both.
+**What was built:**
+- `ACOUSTID_ID` is now sourced exclusively from the fingerprint `/v2/lookup` cluster UUID on every
+  writer path (ingest and enrich).  The retired `list_by_mbid` source is no longer used.  When no
+  API key or fingerprint is available, `ACOUSTID_ID` is left empty at ingest (honest and
+  Picard-consistent; a keyed `enrich --re-resolve` fills it later).
+- The raw Chromaprint fingerprint is stored under the Picard-aligned `ACOUSTID_FINGERPRINT` key
+  (FLAC Vorbis `acoustid_fingerprint`; MP3 TXXX desc `"Acoustid Fingerprint"`), renamed from the
+  legacy `CHROMAPRINT_FP`.  Every read-back helper dual-reads both the new key and the legacy key
+  so a mixed (partially-migrated) library reads correctly throughout the transition.
+- `repatch_acoustid_tags()` in `_pipeline_maint.py` is the offline migration pass: for each file
+  carrying the legacy `CHROMAPRINT_FP` key, it migrates the fingerprint value to `ACOUSTID_FINGERPRINT`
+  and removes the legacy key, on the re-tag → `_verify_copy` → journal provenance chain.  Idempotent
+  and `dry_run`-aware.
+- `scripts/scan_acoustid_tags.py` is the standalone library scanner: reports files still carrying
+  the legacy key and files with empty `ACOUSTID_ID`, distinguishing scan-not-run (unmounted root)
+  from no-findings.
 
-**Authoritative reference (Picard, per AGENTS.md tag-convention anchor).**  Confirmed against the
-MetaBrainz community thread with Picard's lead dev (Philipp Wolfer / `outsidecontext`,
-`community.metabrainz.org/t/acoustid-id-vs-acoustid-fingerprint/676749`).  Picard defines exactly two
-AcoustID tags:
-- **`acoustid_id`** = *"the ID returned as a result for the fingerprint lookup on acoustid.org"* —
-  i.e. the **cluster UUID from `/v2/lookup`**.  This is what `enrich` writes; the **main pipeline's
-  `list_by_mbid` track UUID is the divergent-from-Picard value.**  (Correction to an earlier
-  session framing that called the enrich write "the bug" — against Picard it is the pipeline that
-  diverges.)
-- **`acoustid_fingerprint`** = the raw **Chromaprint fingerprint string** (not a UUID; recomputable
-  from audio; Picard does not write it by default).  music-annotator already stores this value but
-  **under the key `CHROMAPRINT_FP`** ("Chromaprint Fingerprint"), not Picard's `ACOUSTID_FINGERPRINT`.
+**Remaining:** the destructive library-wide repatch (run `repatch_acoustid_tags` on the live
+library) rides ROADMAP R6d's one-pass under J3.  The dual-read in the read helpers is retained
+until the library is fully migrated and its removal is an explicit later decision.
 
-**User intent**: keep **both** AcoustID values in the tags — the AcoustID UUID and the fingerprint.
-Both are already stored; the work is making them *consistent* and *Picard-conformant*.
-
-**Scope when reopened** (decide the two sub-questions at that time):
-1. **`ACOUSTID_ID` value**: make it the `/v2/lookup` cluster UUID **everywhere** (Picard-aligned;
-   both writer paths source it identically; the main pipeline switches from `list_by_mbid` — note
-   this adds an fpcalc + lookup dependency to the pipeline for a value it currently gets cheaply from
-   the recording MBID).  *Alternative*: keep both UUIDs as distinct tags (`ACOUSTID_ID`=cluster +
-   a new `ACOUSTID_TRACKID`=track UUID) — nothing lost, no new fpcalc dependency, but a non-Picard
-   tag extension.
-2. **`CHROMAPRINT_FP` → `ACOUSTID_FINGERPRINT` rename** for full Picard conformance — a persisted-key
-   migration (existing files carry `CHROMAPRINT_FP`; audit/enrich must read both old and new keys
-   during transition).  May not be worth it if `CHROMAPRINT_FP` is an intentional project choice.
+**Original context (preserved for reference).**  The `ACOUSTID_ID` tag was written with two
+semantically different UUIDs depending on which path touched the file (main pipeline via
+`list_by_mbid`; enrich via `/v2/lookup`), and the fingerprint was stored under the non-Picard key
+`CHROMAPRINT_FP`.  Both divergences are now resolved.  Authoritative reference: Picard's lead dev
+(Philipp Wolfer / `outsidecontext`,
+`community.metabrainz.org/t/acoustid-id-vs-acoustid-fingerprint/676749`).
 
 ### III-b — Perpetual upgrade loop (ungated, ongoing)
 
