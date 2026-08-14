@@ -1,7 +1,8 @@
 """Library maintenance operations for music-annotator.
 
-Provides the five maintenance-mode commands that operate on an already-annotated library
-without making MusicBrainz network calls:
+Provides the six maintenance-mode commands that operate on an already-annotated library
+without making MusicBrainz network calls (except :func:`repatch_acoustid_tags` when an
+AcoustID API key is supplied):
 
 * :func:`repath`                  — re-path all verified library files to their corrected destinations.
 * :func:`regroup`                 — consolidate confirmed split-release files into their canonical destinations.
@@ -10,8 +11,11 @@ without making MusicBrainz network calls:
 * :func:`repatch_catalogue_colon` — rewrite ``CWP_PART_*`` / ``CWP_GROUPHEADING`` tags corrupted by the
   pre-fix bare-``":"`` split (catalogue-colon labels such as Hoboken ``"Hob. III:31"``), re-deriving each
   label offline from the embedded ``CWP_WORK`` pair per the shipped ``": "`` rule (NORM-9 / STYLEGUIDE 4.x).
+* :func:`repatch_acoustid_tags`   — migrate the legacy ``CHROMAPRINT_FP`` fingerprint key to the
+  Picard-aligned ``ACOUSTID_FINGERPRINT`` key, and (when an AcoustID API key is supplied) re-source
+  ``ACOUSTID_ID`` from the fingerprint ``/v2/lookup`` endpoint.
 
-Also provides the shared primitives consumed by all four commands:
+Also provides the shared primitives consumed by all commands:
 
 * :func:`_move_verify_journal`  — the single journal-append site for move-type entries (C-PROV).
 * :func:`_resolve_current_lib`  — lineage walk that resolves the current on-disk path per file.
@@ -39,6 +43,8 @@ from pathlib import Path
 
 import structlog
 from mutagen._util import MutagenError
+from mutagen.flac import FLAC as MutagenFLAC
+from mutagen.id3 import ID3
 from rich.markup import escape as _markup_escape
 
 from music_annotator._artists import last_name
@@ -53,6 +59,7 @@ from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
     _assess_collisions,
     _needs_enrich,
+    _read_acoustid_fingerprint_tag,
     _read_duration_ms,
     _read_tags_flac,
     _read_tags_mp3,
@@ -276,7 +283,7 @@ def _resolve_current_lib(journal: TransactionLog) -> dict[Path, str]:
             old_path = Path(entry.source)
             release_id_for_path = current_lib.pop(old_path, entry.release_id)
             current_lib[dest_path] = release_id_for_path
-        elif entry.action in {"enriched", "repatched"}:
+        elif entry.action in {"enriched", "repatched", "acoustid-repatched"}:
             # In-place update: source == destination, path unchanged.
             # Re-register to keep release_id current.
             current_lib[dest_path] = entry.release_id
@@ -1622,3 +1629,210 @@ def repatch_catalogue_colon(dest_root: Path, *, dry_run: bool = False) -> None:
         noop=count_noop,
         dry_run=count_dry_run,
     )
+
+
+def _has_legacy_acoustid_key(path: Path) -> bool:
+    """Return ``True`` when ``path`` carries the legacy ``CHROMAPRINT_FP`` fingerprint key on disk.
+
+    Reads the file directly via mutagen to detect the legacy key without relying on the
+    ``_read_tags_flac`` / ``_read_tags_mp3`` helpers (which only return keys they know about).
+
+    For FLAC files the Vorbis Comment key ``"chromaprint_fp"`` (case-insensitive) is checked.
+    For MP3 files the TXXX frame with description ``"Chromaprint Fingerprint"`` is checked.
+
+    :param path: Path to the FLAC or MP3 file to inspect.
+    :returns: ``True`` when the legacy key is present, ``False`` otherwise (including on read error).
+    """
+    try:
+        match path.suffix.lower():
+            case ".flac":
+                audio = MutagenFLAC(str(path))
+                # Vorbis Comment keys are case-insensitive; mutagen stores them lowercase.
+                return bool(audio.get("chromaprint_fp") or audio.get("CHROMAPRINT_FP"))
+            case ".mp3":
+                id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+                for frame in id3.getall("TXXX"):  # type: ignore[no-untyped-call]
+                    if frame.desc == "Chromaprint Fingerprint":
+                        return True
+                return False
+            case _:
+                return False
+    except Exception:  # noqa: BLE001 — best-effort; any failure means cannot determine
+        return False
+
+
+def repatch_acoustid_tags(
+    journal: Path,
+    dest_root: Path,
+    acoustid_key: str = "",
+    dry_run: bool = False,
+) -> list[TransactionEntry]:
+    """Migrate the legacy ``CHROMAPRINT_FP`` fingerprint key to the Picard-aligned ``ACOUSTID_FINGERPRINT`` key.
+
+    Scans each FLAC and MP3 file in the annotated library (resolved via the journal lineage) for
+    the legacy ``CHROMAPRINT_FP`` Vorbis Comment key (FLAC) or TXXX ``"Chromaprint Fingerprint"``
+    frame (MP3).  For each file carrying the legacy key, migrates the fingerprint value to the
+    Picard-aligned ``ACOUSTID_FINGERPRINT`` key and removes the legacy key.  When an AcoustID API
+    key is supplied and a fingerprint is present, re-sources ``ACOUSTID_ID`` from the fingerprint
+    ``/v2/lookup`` endpoint (the same path :func:`enrich` uses under ``re_resolve=True``).
+
+    **Provenance-chain invariant (C-PROV):** a journal entry with ``action="acoustid-repatched"``
+    is appended **only** after :func:`~music_annotator._pipeline_io._verify_copy` confirms the
+    tag round-trip.  The entry is never written before verification succeeds.
+
+    **Idempotency:** a file already carrying ``ACOUSTID_FINGERPRINT`` and no legacy
+    ``CHROMAPRINT_FP`` key is a no-op.  A second run on a fully-migrated library appends no
+    journal entries.
+
+    **Key migration mechanics:** :func:`~music_annotator._tagger.apply_tags_flac` calls
+    ``audio.clear()`` before writing, so the legacy ``CHROMAPRINT_FP`` Vorbis Comment is
+    automatically removed when the new ``ACOUSTID_FINGERPRINT`` is written.  Similarly,
+    :func:`~music_annotator._tagger.apply_tags_mp3` deletes all existing ID3 tags before writing,
+    so the legacy TXXX ``"Chromaprint Fingerprint"`` frame is removed automatically.
+
+    :param journal: Path to the journal file (``<dest_root>/music_annotator_journal.json``).
+    :param dest_root: Root of the annotated music library; used for log messages.
+    :param acoustid_key: AcoustID application API key.  When non-empty and a fingerprint is
+        present, performs a keyed ``/v2/lookup`` after migrating the key and backfills
+        ``ACOUSTID_ID`` with the top AcoustID cluster UUID.  When empty, ``ACOUSTID_ID`` is
+        left unchanged.
+    :param dry_run: When ``True``, log planned migrations without writing any tags or journal
+        entries.  Returns an empty list.
+    :returns: The list of :class:`~music_annotator.models.TransactionEntry` objects appended to
+        the journal during this run.  Empty when ``dry_run=True`` or when no files needed
+        migration.
+    """
+    tx_log = read_journal(journal)
+
+    # Resolve current on-disk path for each logical library file.
+    # _resolve_current_lib walks entries in chronological order; "tagged" seeds the map;
+    # "repathed"/"regrouped" update it; "enriched"/"repatched"/"acoustid-repatched" re-register
+    # the path in-place.  Multi-hop chains resolve naturally.
+    current_lib = _resolve_current_lib(tx_log)
+
+    # Filter to files that actually exist on disk and are FLAC or MP3
+    existing_files: list[tuple[Path, str]] = [
+        (p, rid) for p, rid in current_lib.items() if p.exists() and p.suffix.lower() in {".flac", ".mp3"}
+    ]
+
+    if not existing_files:
+        log.info("repatch_acoustid_tags_nothing_to_repatch", dest_root=str(dest_root))
+        return []
+
+    now = datetime.datetime.now(datetime.UTC).isoformat()
+    count_migrated = 0
+    count_noop = 0
+    count_dry_run = 0
+    appended: list[TransactionEntry] = []
+
+    for current_path, release_id in existing_files:
+        ext = current_path.suffix.lower()
+
+        # Idempotency check: skip files that do not carry the legacy key.
+        # A file already migrated to ACOUSTID_FINGERPRINT (and no CHROMAPRINT_FP) is a no-op.
+        if not _has_legacy_acoustid_key(current_path):
+            log.debug("repatch_acoustid_tags_noop", path=str(current_path.relative_to(dest_root)))
+            count_noop += 1
+            continue
+
+        # Read the fingerprint value via the dual-read helper (new key first, legacy second).
+        # Since _has_legacy_acoustid_key returned True, the legacy key is present; the dual-read
+        # helper will find it even if the new key is absent.
+        fingerprint = _read_acoustid_fingerprint_tag(current_path)
+
+        if dry_run:
+            log.info(
+                "repatch_acoustid_tags_dry_run",
+                path=str(current_path.relative_to(dest_root)),
+                has_fingerprint=bool(fingerprint),
+                will_re_resolve=bool(acoustid_key and fingerprint),
+            )
+            count_dry_run += 1
+            continue
+
+        # Read current tags, update the fingerprint field, and write back.
+        try:
+            match ext:
+                case ".flac":
+                    file_dict = _read_tags_flac(current_path)
+                case ".mp3":
+                    file_dict = _read_tags_mp3(current_path)
+                case _:  # pragma: no cover — filtered to .flac/.mp3 above
+                    log.warning("repatch_acoustid_tags_unsupported_format", path=str(current_path), ext=ext)
+                    continue
+        except Exception as exc:  # noqa: BLE001 — tag read failure: log and skip
+            log.warning("repatch_acoustid_tags_tag_read_error", path=str(current_path), error=str(exc))
+            continue
+
+        # Migrate the fingerprint to the new key in the tag dict.
+        # The legacy CHROMAPRINT_FP key is removed automatically by apply_tags_flac/apply_tags_mp3
+        # (both clear all existing tags before writing), so we only need to set the new key.
+        file_dict["ACOUSTID_FINGERPRINT"] = fingerprint
+        # Remove the legacy key from the dict so _tags_from_file_dict does not carry it forward
+        # as an extra field (which would cause _verify_copy to fail on round-trip).
+        file_dict.pop("CHROMAPRINT_FP", None)
+
+        # When an AcoustID key is available and a fingerprint is present, re-source ACOUSTID_ID
+        # from the fingerprint /v2/lookup endpoint — the same path enrich(re_resolve) uses.
+        # On lookup failure, leave ACOUSTID_ID unchanged (inconclusive; not a hard error).
+        if acoustid_key and fingerprint:
+            _dur_s = _read_duration_ms(current_path) // 1000
+            try:
+                _, _top_uuid = _fetch_acoustid_lookup_raw(fingerprint, _dur_s, acoustid_key)
+            except (OSError, RuntimeError, ValueError) as _exc:
+                log.warning(
+                    "repatch_acoustid_tags_lookup_failed",
+                    path=str(current_path.relative_to(dest_root)),
+                    error=str(_exc),
+                )
+                _top_uuid = ""
+            if _top_uuid:
+                file_dict["ACOUSTID_ID"] = _top_uuid
+
+        tags = _tags_from_file_dict(file_dict)
+
+        try:
+            match ext:
+                case ".flac":
+                    apply_tags_flac(current_path, tags)
+                case ".mp3":
+                    apply_tags_mp3(current_path, tags)
+                case _:  # pragma: no cover
+                    pass
+        except MutagenError as exc:
+            raise RuntimeError(f"repatch_acoustid_tags write failure for '{current_path.name}': {exc}") from exc
+
+        # Confirm the tag round-trip before journalling (provenance-chain invariant C-PROV):
+        # the journal entry is appended only after _verify_copy confirms the write succeeded.
+        post_mtime = current_path.stat().st_mtime
+        _verify_copy(current_path, current_path, tags, None, post_mtime)
+
+        final_fingerprint = tags.acoustid_fingerprint
+        final_acoustid_id = file_dict.get("ACOUSTID_ID", "")
+
+        entry = TransactionEntry(
+            timestamp=now,
+            release_id=release_id,
+            source=str(current_path),
+            destination=str(current_path),
+            action="acoustid-repatched",
+            acoustid_fingerprint=final_fingerprint,
+            acoustid_id=final_acoustid_id,
+        )
+        write_transaction_log(journal, [entry])
+        appended.append(entry)
+        log.info(
+            "repatch_acoustid_tags_written",
+            path=str(current_path.relative_to(dest_root)),
+            re_resolved=bool(acoustid_key and fingerprint and final_acoustid_id),
+        )
+        count_migrated += 1
+
+    log.info(
+        "repatch_acoustid_tags_complete",
+        dest_root=str(dest_root),
+        migrated=count_migrated,
+        noop=count_noop,
+        dry_run=count_dry_run,
+    )
+    return appended

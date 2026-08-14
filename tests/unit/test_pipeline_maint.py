@@ -1,5 +1,5 @@
 """Unit tests for _pipeline_maint functions: repath, regroup, unify, enrich,
-_move_verify_journal, _resolve_current_lib, and related helpers.
+_move_verify_journal, _resolve_current_lib, repatch_acoustid_tags, and related helpers.
 
 Migrated from test_main.py (TestRepath, TestRegroup, TestEnrich, TestUnify, etc.)
 and test_pipeline.py (TestMoveVerifyJournal, TestResolveCurrentLib, TestRepathConfirmation).
@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from mutagen._util import MutagenError
 from mutagen.flac import FLAC as MutagenFLAC
+from mutagen.id3 import ID3, TXXX  # type: ignore[attr-defined]
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
@@ -40,6 +41,7 @@ from music_annotator._pipeline_io import (
     _sha256_file,
 )
 from music_annotator._pipeline_maint import (
+    _has_legacy_acoustid_key,
     _hydrate_performer_lists,
     _move_verify_journal,
     _resolve_current_lib,
@@ -7516,3 +7518,769 @@ class TestRepatchCatalogueColonParity:
         assert gh_vals and "String Quartet in E major, Op. 20 No. 4, Hob. III:31" in gh_vals[0], (
             f"CWP_GROUPHEADING should contain corrected part label, got {gh_vals}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for TestRepatchAcoustidTags
+# ---------------------------------------------------------------------------
+
+
+def _write_legacy_flac_fingerprint(path: Path, fingerprint: str) -> None:
+    """Write the legacy ``CHROMAPRINT_FP`` Vorbis Comment key to a FLAC file.
+
+    Used in tests to simulate a pre-migration FLAC file that carries the legacy key.
+    Appends the key to the existing Vorbis Comments without clearing other tags.
+
+    :param path: Path to the FLAC file to modify.
+    :param fingerprint: The Chromaprint fingerprint string to embed.
+    """
+    audio = MutagenFLAC(str(path))
+    audio["chromaprint_fp"] = [fingerprint]
+    audio.save()
+
+
+def _write_legacy_mp3_fingerprint(path: Path, fingerprint: str) -> None:
+    """Write the legacy TXXX ``"Chromaprint Fingerprint"`` frame to an MP3 file.
+
+    Used in tests to simulate a pre-migration MP3 file that carries the legacy key.
+    Adds the TXXX frame to the existing ID3 tags without clearing other frames.
+
+    :param path: Path to the MP3 file to modify.
+    :param fingerprint: The Chromaprint fingerprint string to embed.
+    """
+    id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+    id3.add(TXXX(encoding=3, desc="Chromaprint Fingerprint", text=fingerprint))  # type: ignore[no-untyped-call]
+    id3.save(str(path))
+
+
+class TestRepatchAcoustidTags:
+    """Tests for :func:`music_annotator.repatch_acoustid_tags`.
+
+    Exercises the full re-tag → ``_verify_copy`` → journal provenance chain without mocking
+    ``apply_tags_flac``, ``apply_tags_mp3``, or ``_verify_copy`` (real round-trip, only the
+    filesystem is fake via pyfakefs).
+
+    KATs:
+    (a) FLAC with legacy ``CHROMAPRINT_FP`` + stale ``ACOUSTID_ID`` → migrated to
+        ``ACOUSTID_FINGERPRINT``, legacy key gone, ``ACOUSTID_ID`` re-sourced when api_key given.
+    (b) MP3 with legacy ``CHROMAPRINT_FP`` → same migration.
+    (c) ``dry_run=True`` writes nothing and returns empty list.
+    (d) Second run on an already-migrated file is a no-op (idempotency).
+    (e) Already-migrated file (has ``ACOUSTID_FINGERPRINT``, no ``CHROMAPRINT_FP``) is untouched.
+    (f) No api_key: migrates the key only, leaves ``ACOUSTID_ID`` unchanged.
+    (g) ``_verify_copy`` failure: no journal entry appended (provenance chain).
+    """
+
+    _FLAC_REL = "Classical/Beethoven - Karajan/Symphony No. 5 [rec 2020]/01 - Allegro.flac"
+    _MP3_REL = "Classical/Beethoven - Karajan/Symphony No. 5 [rec 2020]/01 - Allegro.mp3"
+    _FINGERPRINT = "AQADtNSibcmS5EiS"
+    _ACOUSTID_UUID = "test-acoustid-uuid-1234"
+
+    @staticmethod
+    def _make_base_tags() -> TrackTags:
+        """Build a minimal :class:`TrackTags` for use in repatch_acoustid_tags tests.
+
+        :returns: A :class:`TrackTags` instance with title and artist set.
+        """
+        return TrackTags(title="Allegro con brio", artist="Karajan", acoustid_id="stale-list-by-mbid-value")
+
+    def test_flac_legacy_key_migrated_with_api_key(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """(a) FLAC with legacy CHROMAPRINT_FP is migrated; ACOUSTID_ID re-sourced when api_key given.
+
+        After the pass:
+        - ``ACOUSTID_FINGERPRINT`` reads back with the fingerprint value.
+        - The legacy ``CHROMAPRINT_FP`` key is absent.
+        - ``ACOUSTID_ID`` is updated to the cluster UUID from the mocked ``/v2/lookup``.
+        - A journal entry with ``action="acoustid-repatched"`` is appended.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_base_tags()
+        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
+        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
+            return_value=(self._FINGERPRINT, self._ACOUSTID_UUID),
+        )
+        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=300_000)
+
+        result = music_annotator.repatch_acoustid_tags(
+            journal=journal_path,
+            dest_root=dest_root,
+            acoustid_key="test-key",
+        )
+
+        # Fingerprint migrated to new key
+        audio = MutagenFLAC(str(path))
+        new_fp = audio.get("acoustid_fingerprint") or []
+        legacy_fp = audio.get("chromaprint_fp") or []
+        assert new_fp and new_fp[0] == self._FINGERPRINT, f"ACOUSTID_FINGERPRINT should be set, got {new_fp}"
+        assert not legacy_fp, f"CHROMAPRINT_FP should be absent after migration, got {legacy_fp}"
+
+        # ACOUSTID_ID re-sourced
+        acoustid_id_vals = audio.get("acoustid_id") or []
+        assert acoustid_id_vals and acoustid_id_vals[0] == self._ACOUSTID_UUID, (
+            f"ACOUSTID_ID should be re-sourced, got {acoustid_id_vals}"
+        )
+
+        # Journal entry appended
+        journal = read_journal(journal_path)
+        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
+        assert len(repatched) == 1
+        assert repatched[0].source == str(path)
+        assert repatched[0].destination == str(path)
+        assert repatched[0].release_id == "rel-1"
+        assert repatched[0].acoustid_fingerprint == self._FINGERPRINT
+        assert repatched[0].acoustid_id == self._ACOUSTID_UUID
+
+        # Return value matches appended entries
+        assert len(result) == 1
+        assert result[0].action == "acoustid-repatched"
+
+    def test_mp3_legacy_key_migrated(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """(b) MP3 with legacy TXXX "Chromaprint Fingerprint" is migrated to ACOUSTID_FINGERPRINT.
+
+        After the pass:
+        - The TXXX ``"Acoustid Fingerprint"`` frame carries the fingerprint value.
+        - The legacy TXXX ``"Chromaprint Fingerprint"`` frame is absent.
+        - A journal entry with ``action="acoustid-repatched"`` is appended.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_base_tags()
+        path = _make_library_mp3(dest_root, self._MP3_REL, tags)
+        _write_legacy_mp3_fingerprint(path, self._FINGERPRINT)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mp3",
+                    "source": "/src/01.mp3",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
+            return_value=(self._FINGERPRINT, self._ACOUSTID_UUID),
+        )
+        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=300_000)
+
+        result = music_annotator.repatch_acoustid_tags(
+            journal=journal_path,
+            dest_root=dest_root,
+            acoustid_key="test-key",
+        )
+
+        # Fingerprint migrated to new TXXX frame
+        id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+        all_txxx = id3.getall("TXXX")  # type: ignore[no-untyped-call]
+        new_fp_frames = [f for f in all_txxx if f.desc == "Acoustid Fingerprint"]
+        legacy_fp_frames = [f for f in all_txxx if f.desc == "Chromaprint Fingerprint"]
+        assert new_fp_frames and str(new_fp_frames[0].text[0]) == self._FINGERPRINT, (
+            f"Acoustid Fingerprint TXXX should be set, got {new_fp_frames}"
+        )
+        assert not legacy_fp_frames, f"Chromaprint Fingerprint TXXX should be absent, got {legacy_fp_frames}"
+
+        # Journal entry appended
+        journal = read_journal(journal_path)
+        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
+        assert len(repatched) == 1
+        assert repatched[0].release_id == "rel-mp3"
+
+        assert len(result) == 1
+
+    def test_dry_run_writes_nothing_returns_empty(self, fs: FakeFilesystem) -> None:
+        """(c) dry_run=True logs planned migrations but writes no tags and returns empty list.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_base_tags()
+        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
+        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-dry",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repatch_acoustid_tags(
+            journal=journal_path,
+            dest_root=dest_root,
+            dry_run=True,
+        )
+
+        # Tags must be unchanged (legacy key still present)
+        audio = MutagenFLAC(str(path))
+        legacy_fp = audio.get("chromaprint_fp") or []
+        new_fp = audio.get("acoustid_fingerprint") or []
+        assert legacy_fp, "dry_run must not remove legacy key"
+        assert not new_fp, "dry_run must not write new key"
+
+        # No journal entry appended
+        journal = read_journal(journal_path)
+        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
+        assert len(repatched) == 0, f"dry_run must not append journal entries, got {repatched}"
+
+        # Return value is empty
+        assert result == []
+
+    def test_idempotent_second_run_is_noop(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """(d) Second run on an already-migrated file is a no-op (idempotency).
+
+        Run 1: legacy key present → migrated, one ``"acoustid-repatched"`` journal entry.
+        Run 2: legacy key absent (already migrated) → no writes, no new journal entry.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_base_tags()
+        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
+        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-idem",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
+            return_value=(self._FINGERPRINT, self._ACOUSTID_UUID),
+        )
+        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=300_000)
+
+        # Run 1: migrates the legacy key
+        result1 = music_annotator.repatch_acoustid_tags(
+            journal=journal_path,
+            dest_root=dest_root,
+            acoustid_key="test-key",
+        )
+        assert len(result1) == 1
+
+        journal1 = read_journal(journal_path)
+        repatched1 = [e for e in journal1.entries if e.action == "acoustid-repatched"]
+        assert len(repatched1) == 1, "Run 1 must append exactly one acoustid-repatched entry"
+
+        # Run 2: file is already migrated — must be a no-op
+        result2 = music_annotator.repatch_acoustid_tags(
+            journal=journal_path,
+            dest_root=dest_root,
+            acoustid_key="test-key",
+        )
+        assert result2 == []
+
+        journal2 = read_journal(journal_path)
+        repatched2 = [e for e in journal2.entries if e.action == "acoustid-repatched"]
+        assert len(repatched2) == 1, "Run 2 must not append a new entry (idempotency)"
+
+    def test_already_migrated_file_is_untouched(self, fs: FakeFilesystem) -> None:
+        """(e) A file already carrying ACOUSTID_FINGERPRINT and no CHROMAPRINT_FP is untouched.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Create a file with the new key already set (no legacy key)
+        tags = TrackTags(title="Allegro", artist="Karajan", acoustid_fingerprint=self._FINGERPRINT)
+        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-already",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repatch_acoustid_tags(
+            journal=journal_path,
+            dest_root=dest_root,
+        )
+
+        # No journal entry appended
+        journal = read_journal(journal_path)
+        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
+        assert len(repatched) == 0, f"Already-migrated file must not produce a journal entry, got {repatched}"
+        assert result == []
+
+    def test_no_api_key_migrates_key_only(self, fs: FakeFilesystem) -> None:
+        """(f) Without an api_key, the fingerprint key is migrated but ACOUSTID_ID is unchanged.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        original_acoustid_id = "original-acoustid-id"
+        tags = TrackTags(title="Allegro", artist="Karajan", acoustid_id=original_acoustid_id)
+        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
+        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-nokey",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repatch_acoustid_tags(
+            journal=journal_path,
+            dest_root=dest_root,
+            acoustid_key="",  # no api key
+        )
+
+        # Fingerprint migrated
+        audio = MutagenFLAC(str(path))
+        new_fp = audio.get("acoustid_fingerprint") or []
+        legacy_fp = audio.get("chromaprint_fp") or []
+        assert new_fp and new_fp[0] == self._FINGERPRINT, f"ACOUSTID_FINGERPRINT should be set, got {new_fp}"
+        assert not legacy_fp, f"CHROMAPRINT_FP should be absent, got {legacy_fp}"
+
+        # ACOUSTID_ID unchanged (no lookup performed)
+        acoustid_id_vals = audio.get("acoustid_id") or []
+        assert acoustid_id_vals and acoustid_id_vals[0] == original_acoustid_id, (
+            f"ACOUSTID_ID should be unchanged without api_key, got {acoustid_id_vals}"
+        )
+
+        # Journal entry appended (migration happened)
+        journal = read_journal(journal_path)
+        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
+        assert len(repatched) == 1
+        assert len(result) == 1
+
+    def test_verify_copy_failure_no_journal_entry(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """(g) _verify_copy failure: RuntimeError propagates and no journal entry is appended.
+
+        The provenance-chain invariant (C-PROV) requires that the journal entry is written
+        only after _verify_copy confirms the write succeeded.  When _verify_copy raises
+        RuntimeError, the entry must not be appended.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_base_tags()
+        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
+        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-verify-fail",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._verify_copy",
+            side_effect=RuntimeError("verify_copy simulated failure"),
+        )
+
+        with pytest.raises(RuntimeError, match="verify_copy simulated failure"):
+            music_annotator.repatch_acoustid_tags(
+                journal=journal_path,
+                dest_root=dest_root,
+            )
+
+        # No journal entry must have been appended (provenance chain)
+        journal = read_journal(journal_path)
+        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
+        assert len(repatched) == 0, f"No journal entry must be written when _verify_copy fails, got {repatched}"
+
+    def test_empty_journal_returns_empty(self, fs: FakeFilesystem) -> None:
+        """repatch_acoustid_tags() returns empty list when the journal has no entries.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(dest_root, [])
+
+        result = music_annotator.repatch_acoustid_tags(
+            journal=journal_path,
+            dest_root=dest_root,
+        )
+        assert result == []
+
+    def test_acoustid_lookup_failure_leaves_acoustid_id_unchanged(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """When the AcoustID /v2/lookup call fails, ACOUSTID_ID is left unchanged and migration proceeds.
+
+        A transient AcoustID outage must not abort the migration or prevent the journal entry.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        original_acoustid_id = "original-id"
+        tags = TrackTags(title="Allegro", artist="Karajan", acoustid_id=original_acoustid_id)
+        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
+        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-lookup-fail",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
+            side_effect=RuntimeError("AcoustID lookup failed"),
+        )
+        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=300_000)
+
+        result = music_annotator.repatch_acoustid_tags(
+            journal=journal_path,
+            dest_root=dest_root,
+            acoustid_key="test-key",
+        )
+
+        # Migration still happened (fingerprint key migrated)
+        audio = MutagenFLAC(str(path))
+        new_fp = audio.get("acoustid_fingerprint") or []
+        assert new_fp and new_fp[0] == self._FINGERPRINT
+
+        # ACOUSTID_ID left unchanged (lookup failed)
+        acoustid_id_vals = audio.get("acoustid_id") or []
+        assert acoustid_id_vals and acoustid_id_vals[0] == original_acoustid_id, (
+            f"ACOUSTID_ID should be unchanged when lookup fails, got {acoustid_id_vals}"
+        )
+
+        # Journal entry still appended (migration succeeded despite lookup failure)
+        journal = read_journal(journal_path)
+        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
+        assert len(repatched) == 1
+        assert len(result) == 1
+
+    def test_acoustid_repatched_action_in_resolve_current_lib(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """acoustid-repatched journal entries are handled by _resolve_current_lib (in-place update).
+
+        After a repatch, a second repatch run must correctly resolve the file path via the
+        journal lineage (the acoustid-repatched entry re-registers the path in-place).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_base_tags()
+        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
+        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-resolve",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
+            return_value=(self._FINGERPRINT, self._ACOUSTID_UUID),
+        )
+        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=300_000)
+
+        # Run 1: migrates
+        music_annotator.repatch_acoustid_tags(
+            journal=journal_path,
+            dest_root=dest_root,
+            acoustid_key="test-key",
+        )
+
+        # Verify the journal now has an acoustid-repatched entry
+        journal = read_journal(journal_path)
+        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
+        assert len(repatched) == 1
+
+        # _resolve_current_lib must handle the acoustid-repatched entry correctly
+        current_lib = _resolve_current_lib(journal)
+        assert path in current_lib, f"Path {path} should be in current_lib after acoustid-repatched entry"
+
+    def test_has_legacy_acoustid_key_flac(self, fs: FakeFilesystem) -> None:
+        """_has_legacy_acoustid_key returns True for FLAC with CHROMAPRINT_FP, False without.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Test", artist="Test")
+        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
+
+        # No legacy key yet
+        assert not _has_legacy_acoustid_key(path)
+
+        # Add legacy key
+        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
+        assert _has_legacy_acoustid_key(path)
+
+    def test_has_legacy_acoustid_key_mp3(self, fs: FakeFilesystem) -> None:
+        """_has_legacy_acoustid_key returns True for MP3 with Chromaprint Fingerprint TXXX, False without.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Test", artist="Test")
+        path = _make_library_mp3(dest_root, self._MP3_REL, tags)
+
+        # No legacy key yet
+        assert not _has_legacy_acoustid_key(path)
+
+        # Add legacy key
+        _write_legacy_mp3_fingerprint(path, self._FINGERPRINT)
+        assert _has_legacy_acoustid_key(path)
+
+    def test_repatch_acoustid_cli_subcommand(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repatch-acoustid CLI subcommand dispatches to repatch_acoustid_tags correctly.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(dest_root, [])
+
+        mock_repatch = mocker.patch("music_annotator.repatch_acoustid_tags", return_value=[])
+
+        sys.argv = ["music-annotator", "repatch-acoustid", str(dest_root), "--acoustid-key", "MY_KEY"]
+        main()
+
+        mock_repatch.assert_called_once_with(
+            journal=journal_path,
+            dest_root=dest_root,
+            acoustid_key="MY_KEY",
+            dry_run=False,
+        )
+
+    def test_repatch_acoustid_cli_dry_run(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repatch-acoustid CLI subcommand passes dry_run=True when --dry-run is given.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(dest_root, [])
+
+        mock_repatch = mocker.patch("music_annotator.repatch_acoustid_tags", return_value=[])
+
+        sys.argv = ["music-annotator", "repatch-acoustid", str(dest_root), "--dry-run"]
+        main()
+
+        mock_repatch.assert_called_once_with(
+            journal=journal_path,
+            dest_root=dest_root,
+            acoustid_key="",
+            dry_run=True,
+        )
+
+    def test_tag_read_failure_logs_and_skips(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Tag read failure is logged and the file is skipped (no journal entry, no crash).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_base_tags()
+        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
+        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-read-fail",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._read_tags_flac",
+            side_effect=MutagenError("simulated read failure"),
+        )
+
+        result = music_annotator.repatch_acoustid_tags(
+            journal=journal_path,
+            dest_root=dest_root,
+        )
+
+        # No journal entry appended (file was skipped)
+        journal = read_journal(journal_path)
+        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
+        assert len(repatched) == 0
+        assert result == []
+
+    def test_apply_tags_failure_raises_runtime_error(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """MutagenError from apply_tags_flac is re-raised as RuntimeError.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_base_tags()
+        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
+        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-apply-fail",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint.apply_tags_flac",
+            side_effect=MutagenError("simulated write failure"),
+        )
+
+        with pytest.raises(RuntimeError, match="repatch_acoustid_tags write failure"):
+            music_annotator.repatch_acoustid_tags(
+                journal=journal_path,
+                dest_root=dest_root,
+            )
+
+        # No journal entry appended (write failed before _verify_copy)
+        journal = read_journal(journal_path)
+        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
+        assert len(repatched) == 0
+
+    def test_has_legacy_acoustid_key_read_error_returns_false(self, fs: FakeFilesystem) -> None:
+        """_has_legacy_acoustid_key returns False when mutagen raises an exception (e.g. corrupt file).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Write a corrupt FLAC file (not valid FLAC bytes) — mutagen will raise on open
+        path = dest_root / "corrupt.flac"
+        path.write_bytes(b"not a valid flac file")
+
+        result = _has_legacy_acoustid_key(path)
+        assert result is False
+
+    def test_has_legacy_acoustid_key_unsupported_extension_returns_false(self, fs: FakeFilesystem) -> None:
+        """_has_legacy_acoustid_key returns False for unsupported file extensions.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        path = dest_root / "track.ogg"
+        path.write_bytes(b"OggS")
+
+        result = _has_legacy_acoustid_key(path)
+        assert result is False

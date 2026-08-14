@@ -1,28 +1,31 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes eleven subcommands:
+Configures structlog for human-friendly console output and exposes twelve subcommands:
 
-* ``apply``       — copy and tag a directory of tracks for a known MusicBrainz release MBID.
-* ``search``      — search MusicBrainz for a release matching a source directory, prompt for
+* ``apply``            — copy and tag a directory of tracks for a known MusicBrainz release MBID.
+* ``search``           — search MusicBrainz for a release matching a source directory, prompt for
   confirmation, then apply tags.
-* ``prune``       — read the journal, verify source and destination file presence, and prompt to
+* ``prune``            — read the journal, verify source and destination file presence, and prompt to
   delete the source directory.
-* ``repath``      — re-path all verified library files to their corrected destinations under
+* ``repath``           — re-path all verified library files to their corrected destinations under
   the current path-construction policy, using only embedded tags (no network calls).
-* ``regroup``     — consolidate confirmed split-release files into their canonical destinations
+* ``regroup``          — consolidate confirmed split-release files into their canonical destinations
   (acts on case-(b) fragmentation detected by ``audit``).
-* ``audit``       — read the journal and report release-fragmentation anomalies (no network calls,
+* ``audit``            — read the journal and report release-fragmentation anomalies (no network calls,
   no filesystem writes).  Read-only.
-* ``enrich``      — retroactively backfill fingerprint fields (audio_hash, acoustid_fingerprint,
+* ``enrich``           — retroactively backfill fingerprint fields (audio_hash, acoustid_fingerprint,
   acoustid_id) into library files that are missing them.  Idempotent.
-* ``diff``        — diff the on-disk journal against a freshly-rebuilt in-memory cache and report
+* ``diff``             — diff the on-disk journal against a freshly-rebuilt in-memory cache and report
   matches, stale, and leaked entries.
-* ``origin-time`` — migrate rip/download origin-time from the journal into authoritative sidecar
+* ``origin-time``      — migrate rip/download origin-time from the journal into authoritative sidecar
   YAML files (freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent.
-* ``rebuild``     — walk the library, read tags and sidecars per file, and emit a new journal
+* ``rebuild``          — walk the library, read tags and sidecars per file, and emit a new journal
   (dry-run by default; use ``--apply`` to replace the on-disk journal).
-* ``unify``       — consolidate performer-split fragmented releases into their canonical top_dirs
+* ``unify``            — consolidate performer-split fragmented releases into their canonical top_dirs
   (detects releases with ≥2 top_dirs sharing the same ``MUSICBRAINZ_ALBUMID`` tag).
+* ``repatch-acoustid`` — migrate the legacy ``CHROMAPRINT_FP`` fingerprint key to the Picard-aligned
+  ``ACOUSTID_FINGERPRINT`` key, and (when ``--acoustid-key`` is supplied) re-source ``ACOUSTID_ID``
+  from the fingerprint ``/v2/lookup`` endpoint.  Idempotent.
 
 Usage::
 
@@ -72,6 +75,10 @@ Usage::
     music-annotator unify \\
         <dest_dir> \\
         [--dry-run] [-y/--yes]
+
+    music-annotator repatch-acoustid \\
+        <dest_dir> \\
+        [--acoustid-key KEY] [--dry-run]
 """
 
 from __future__ import annotations
@@ -268,6 +275,8 @@ def _build_parser() -> argparse.ArgumentParser:
     dry-run (no write); pass ``--apply`` to replace the on-disk journal.
     ``unify`` scans the library for releases fragmented across ≥2 top_dirs (by ``MUSICBRAINZ_ALBUMID`` tag),
     computes the canonical top_dir for each, and moves the fragments.  Supports ``--dry-run`` and ``-y``/``--yes``.
+    ``repatch-acoustid`` migrates the legacy ``CHROMAPRINT_FP`` fingerprint key to the Picard-aligned
+    ``ACOUSTID_FINGERPRINT`` key; accepts ``--acoustid-key`` and ``--dry-run``.
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -741,6 +750,45 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Skip the confirmation prompt and move files immediately.",
     )
 
+    # ------------------------------------------------------------------
+    # repatch-acoustid subcommand
+    # ------------------------------------------------------------------
+    repatch_acoustid_parser = subparsers.add_parser(
+        "repatch-acoustid",
+        help="Migrate the legacy CHROMAPRINT_FP fingerprint key to the Picard-aligned ACOUSTID_FINGERPRINT key.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Scans the library at <dest_dir> for files still carrying the legacy CHROMAPRINT_FP
+            Vorbis Comment key (FLAC) or TXXX "Chromaprint Fingerprint" frame (MP3), migrates
+            the fingerprint value to the Picard-aligned ACOUSTID_FINGERPRINT key, and removes
+            the legacy key.
+
+            When --acoustid-key is supplied and a fingerprint is present, re-sources ACOUSTID_ID
+            from the fingerprint /v2/lookup endpoint (the same path 'enrich --re-resolve' uses).
+            Without --acoustid-key, ACOUSTID_ID is left unchanged.
+
+            Idempotent: a second run on a fully-migrated library is a no-op.
+            Use --dry-run first to preview all planned migrations.
+
+            Examples:
+              music-annotator repatch-acoustid /tmp/music_library --dry-run
+              music-annotator repatch-acoustid /tmp/music_library
+              music-annotator repatch-acoustid /tmp/music_library --acoustid-key MY_KEY
+            """),
+    )
+    repatch_acoustid_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    repatch_acoustid_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log planned migrations without writing any tags or journal entries.",
+    )
+    _add_acoustid_arg(repatch_acoustid_parser)
+
     return parser
 
 
@@ -748,7 +796,7 @@ def main() -> None:
     """Parse CLI arguments, configure logging, and dispatch to subcommands.
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
-    ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``.
+    ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``, ``repatch-acoustid``.
 
     The ``repath`` subcommand dispatches to :func:`~music_annotator.repath` with ``dry_run`` and
     ``yes`` forwarded from the parsed arguments.  The ``regroup`` subcommand dispatches to
@@ -760,7 +808,9 @@ def main() -> None:
     :func:`~music_annotator.enrich_origin_time` with ``dry_run`` forwarded.  The ``rebuild``
     subcommand dispatches to :func:`~music_annotator.rebuild_journal` with ``dry_run=True``
     (default) or ``dry_run=False`` when ``--apply`` is passed.  The ``unify`` subcommand
-    dispatches to :func:`~music_annotator.unify`.
+    dispatches to :func:`~music_annotator.unify`.  The ``repatch-acoustid`` subcommand dispatches
+    to :func:`~music_annotator.repatch_acoustid_tags` with ``acoustid_key`` and ``dry_run``
+    forwarded.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating.  All subcommands except ``prune`` use :func:`_dispatch` to convert any unhandled exception or keyboard
@@ -899,6 +949,18 @@ def main() -> None:
             _dispatch(
                 lambda: music_annotator.unify(dest_root=args.dest_dir, yes=args.yes, dry_run=args.dry_run),
                 "unify_error",
+                dest_root=str(args.dest_dir),
+            )
+
+        case "repatch-acoustid":
+            _dispatch(
+                lambda: music_annotator.repatch_acoustid_tags(
+                    journal=args.dest_dir / music_annotator.JOURNAL_FILENAME,
+                    dest_root=args.dest_dir,
+                    acoustid_key=args.acoustid_key,
+                    dry_run=args.dry_run,
+                ),
+                "repatch_acoustid_error",
                 dest_root=str(args.dest_dir),
             )
 
