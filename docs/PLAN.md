@@ -461,7 +461,7 @@ transition contract and the value-source rule though S2 is the first consumer.
 |---|---------|--------|--------|-------|
 | 1 @architect | Freeze the Picard-aligned AcoustID tag policy (value source + key rename + dual-read) | done | a30ed93 | C-ACID |
 | 2 | Align the AcoustID forward-write path to the frozen policy | done | bd8a0b6 | |
-| 3 | Migrate existing files in an offline AcoustID repatch pass | pending | | |
+| 3 | Migrate existing files in an offline AcoustID repatch pass | done | 0004016 | |
 | 4 ◆ | Scan the library for legacy AcoustID tag state + census + anneal | pending | | |
 
 ## Action-frame digest
