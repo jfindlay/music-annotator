@@ -468,14 +468,18 @@ destructive-run consumer though only the harness consumes it now.
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 @architect | Return a typed dry-run plan from every deferred maintenance pass | pending | | |
+| 1 @architect | Return a typed dry-run plan from every deferred maintenance pass | done | ac9ddb7 | C-PREFLIGHT (DryRunPlan/DryRunEntry models + six per-pass return widenings) |
 | 2 | Compose the deferred-pass plans into a consolidated dry-run preflight report | pending | | |
 | 3 | Wire the catalogue-colon repatch and preflight composite CLI subcommands | pending | | |
 | 4 ◆ | Run the preflight harness for J3 evidence + census + anneal | pending | | |
 
 ## Action-frame digest
 
-*(none yet)*
+### S1 — 2026-08-13
+Discovery/flex: Inflection design confirmed two draft-framing corrections: tag-content passes accumulate DryRunEntry per loop iteration (not pre-gate plan_pairs); repatch_acoustid_tags dry-run arm was returning [] unconditionally (not a plan), resolved by DryRunPlan | list[TransactionEntry] asymmetric return.
+Affected: C-PREFLIGHT
+Deferred: no
+Texture: D-1 reopen trigger evaluated and does not fire; Option A (typed return) stands; KATs witness all four witnesses for all six passes; 1816 tests green, 100% branch coverage.
 
 ## Discoveries & risks
 
