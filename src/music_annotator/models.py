@@ -1866,6 +1866,57 @@ class TransactionLog(BaseModel):
     entries: list[TransactionEntry] = Field(default_factory=list)
 
 
+class DryRunEntry(BaseModel):
+    """One file's planned change-set from a single maintenance pass run with ``dry_run=True``.
+
+    Spans both move-plan and tag-content-delta plan kinds so one type serves all maintenance passes.
+    The structural distinction between the two kinds is carried by which fields are populated:
+
+    - **Move passes** (``repath``, ``regroup``, ``unify``): ``planned_path`` is non-empty;
+      ``tag_delta`` is ``{}``.
+    - **Tag-content passes** (``enrich``, ``repatch_catalogue_colon``, ``repatch_acoustid_tags``):
+      ``planned_path`` is ``""`` (in-place write); ``tag_delta`` is non-empty.
+
+    All fields default to empty/zero so an entry can be constructed incrementally.
+
+    Important attributes: ``current_path``, ``planned_path``, ``tag_delta``.
+    """
+
+    current_path: str = ""
+    """The file's current on-disk path.  Populated by all pass kinds."""
+
+    planned_path: str = ""
+    """The planned new path after a move.  Move passes populate this; tag-content passes leave ``""``."""
+
+    tag_delta: dict[str, str] = Field(default_factory=dict)
+    """Planned per-tag change-set keyed by tag name.  Tag-content passes populate this; move passes leave ``{}``."""
+
+
+class DryRunPlan(BaseModel):
+    """The structured change-set a single maintenance pass would enact, returned when ``dry_run=True``.
+
+    Every maintenance pass called with ``dry_run=True`` returns a ``DryRunPlan`` capturing the
+    full set of changes it would make.  An empty plan (``count=0``, ``entries=[]``) means the pass
+    ran and found nothing to change — structurally distinct from ``None`` (pass did not run or
+    errored).
+
+    ``count`` is stored explicitly (not derived) so that an empty plan serialises ``count=0`` and
+    survives a JSON round-trip without recomputation.  Callers must set ``count=len(entries)`` at
+    construction.
+
+    Important attributes: ``pass_name``, ``entries``, ``count``.
+    """
+
+    pass_name: str = ""
+    """The pass identity (e.g. ``"repath"``, ``"enrich"``, ``"repatch_acoustid_tags"``)."""
+
+    entries: list[DryRunEntry] = Field(default_factory=list)
+    """Per-file change-set entries; one per file the pass would act on."""
+
+    count: int = 0
+    """Stored summary count; must equal ``len(entries)`` at construction."""
+
+
 class ProvenanceSidecar(BaseModel):
     """Provenance fields written into ``freedb_disc_N.yaml`` or ``music_annotator_provenance.yaml``.
 

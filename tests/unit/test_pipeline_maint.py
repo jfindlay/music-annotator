@@ -53,6 +53,7 @@ from music_annotator._tags import _work_top_dir
 from music_annotator._works import work_group_modal_depth
 from music_annotator.models import (
     ArtistEntry,
+    DryRunPlan,
     MBArtist,
     MBRelease,
     MBTrack,
@@ -7653,7 +7654,8 @@ class TestRepatchAcoustidTags:
         assert repatched[0].acoustid_fingerprint == self._FINGERPRINT
         assert repatched[0].acoustid_id == self._ACOUSTID_UUID
 
-        # Return value matches appended entries
+        # Return value matches appended entries (non-dry-run returns list[TransactionEntry])
+        assert isinstance(result, list)
         assert len(result) == 1
         assert result[0].action == "acoustid-repatched"
 
@@ -7717,10 +7719,16 @@ class TestRepatchAcoustidTags:
         assert len(repatched) == 1
         assert repatched[0].release_id == "rel-mp3"
 
+        assert isinstance(result, list)
         assert len(result) == 1
 
     def test_dry_run_writes_nothing_returns_empty(self, fs: FakeFilesystem) -> None:
-        """(c) dry_run=True logs planned migrations but writes no tags and returns empty list.
+        """(c) dry_run=True logs planned migrations but writes no tags and returns an empty DryRunPlan.
+
+        An empty DryRunPlan (count=0, entries=[]) is structurally distinct from None (not-run):
+        the pass ran and found one file to migrate, but dry_run=True means no writes occurred.
+        Wait — this fixture has one file with the legacy key, so the plan is non-empty.
+        The "empty plan" witness is covered by test_dry_run_empty_plan_no_legacy_files.
 
         :param fs: pyfakefs fixture.
         """
@@ -7763,8 +7771,12 @@ class TestRepatchAcoustidTags:
         repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
         assert len(repatched) == 0, f"dry_run must not append journal entries, got {repatched}"
 
-        # Return value is empty
-        assert result == []
+        # Return value is a DryRunPlan with one entry (the file that would be migrated)
+        assert isinstance(result, DryRunPlan), f"dry_run must return DryRunPlan, got {type(result)}"
+        assert result.count == 1, f"expected count=1 (one file to migrate), got {result.count}"
+        assert len(result.entries) == 1
+        assert result.entries[0].current_path == str(path)
+        assert "ACOUSTID_FINGERPRINT" in result.entries[0].tag_delta
 
     def test_idempotent_second_run_is_noop(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
         """(d) Second run on an already-migrated file is a no-op (idempotency).
@@ -7808,6 +7820,7 @@ class TestRepatchAcoustidTags:
             dest_root=dest_root,
             acoustid_key="test-key",
         )
+        assert isinstance(result1, list)
         assert len(result1) == 1
 
         journal1 = read_journal(journal_path)
@@ -7820,6 +7833,7 @@ class TestRepatchAcoustidTags:
             dest_root=dest_root,
             acoustid_key="test-key",
         )
+        assert isinstance(result2, list)
         assert result2 == []
 
         journal2 = read_journal(journal_path)
@@ -7913,6 +7927,7 @@ class TestRepatchAcoustidTags:
         journal = read_journal(journal_path)
         repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
         assert len(repatched) == 1
+        assert isinstance(result, list)
         assert len(result) == 1
 
     def test_verify_copy_failure_no_journal_entry(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
@@ -8035,6 +8050,7 @@ class TestRepatchAcoustidTags:
         journal = read_journal(journal_path)
         repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
         assert len(repatched) == 1
+        assert isinstance(result, list)
         assert len(result) == 1
 
     def test_acoustid_repatched_action_in_resolve_current_lib(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
@@ -8407,3 +8423,1153 @@ class TestAcoustidTagParityPin:
         # (b) Legacy key must be absent.
         legacy_vals = audio_after.get("chromaprint_fp") or audio_after.get("CHROMAPRINT_FP") or []
         assert not legacy_vals, f"Legacy CHROMAPRINT_FP key must be absent after repatch; found {legacy_vals!r}"
+
+
+# ---------------------------------------------------------------------------
+# KAT: dry_run returns the structured change-set the pass would enact
+# ---------------------------------------------------------------------------
+
+
+class TestDryRunPlanReturn:
+    """KAT witnesses: every maintenance pass with dry_run=True returns a DryRunPlan.
+
+    Four witnesses per pass (where applicable):
+    (a) plan-return witness — dry_run=True returns a DryRunPlan with correct count and entries.
+    (b) no-write witness — existing "no file moved / no journal entry" assertion still holds.
+    (c) empty-plan witness — fixture with nothing to change returns DryRunPlan(count=0), not None.
+    (d) shape-uniformity witness — a move pass and a tag-content pass both return DryRunPlan.
+
+    The empty-plan witness (c) is structurally distinct from None (not-run): DryRunPlan(count=0)
+    means the pass ran and found nothing to change; None means the pass did not run or errored.
+    """
+
+    # ---------------------------------------------------------------------------
+    # Shared tag fixtures
+    # ---------------------------------------------------------------------------
+
+    @staticmethod
+    def _make_repath_tags() -> TrackTags:
+        """Build TrackTags that drive repath to a different path than the legacy location.
+
+        :returns: A :class:`TrackTags` instance with CWP and performer tags set.
+        """
+        return TrackTags(
+            cwp_composer_lastnames="Mozart",
+            cwp_work_top="Symphony No. 40",
+            recording_date="2019",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Molto allegro",
+            artist="Bohm",
+        )
+
+    @staticmethod
+    def _make_enrich_tags() -> TrackTags:
+        """Build TrackTags for an enrichable file (no audio_hash or acoustid_fingerprint).
+
+        :returns: A :class:`TrackTags` instance with title and artist only.
+        """
+        return TrackTags(title="Molto allegro", artist="Bohm")
+
+    # ---------------------------------------------------------------------------
+    # (a) + (b): plan-return witness + no-write witness — repath
+    # ---------------------------------------------------------------------------
+
+    def test_repath_dry_run_returns_plan_with_entries(self, fs: FakeFilesystem) -> None:
+        """(a)+(b) repath(dry_run=True) returns a DryRunPlan with correct entries; writes nothing.
+
+        Constructs a two-file library at legacy paths.  Calls repath(dry_run=True) and asserts:
+        (a) The return value is a DryRunPlan with count=2 and entries matching the planned moves.
+        (b) Files remain at their old paths; no "repathed" journal entries are appended.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_repath_tags()
+        old_path = _make_library_flac(dest_root, "Mozart - Bohm/OldSym [rec 2019]/01 - Molto allegro.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r-repath",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repath(dest_root=dest_root, dry_run=True)
+
+        # (a) Returns a DryRunPlan with the planned move
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan, got {type(result)}"
+        assert result.pass_name == "repath"
+        assert result.count == 1
+        assert len(result.entries) == 1
+        entry = result.entries[0]
+        assert entry.current_path == str(old_path)
+        assert entry.planned_path != ""
+        assert entry.tag_delta == {}
+
+        # (b) No writes: file still at old path, no journal entry
+        assert old_path.exists(), "dry_run must not move files"
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 0, "dry_run must not append journal entries"
+
+    # ---------------------------------------------------------------------------
+    # (c): empty-plan witness — repath
+    # ---------------------------------------------------------------------------
+
+    def test_repath_dry_run_empty_plan_when_already_current(self, fs: FakeFilesystem) -> None:
+        """(c) repath(dry_run=True) returns DryRunPlan(count=0) when all files are already current.
+
+        When every file's current path matches the recomputed path, the plan is empty.
+        An empty DryRunPlan is structurally distinct from None (not-run).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_repath_tags()
+        # Place the file at the canonical path (what build_dest_path would compute)
+        canonical_path = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        _make_library_flac(dest_root, str(canonical_path.relative_to(dest_root)), tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r-repath-noop",
+                    "source": "/src/01.flac",
+                    "destination": str(canonical_path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repath(dest_root=dest_root, dry_run=True)
+
+        # Empty plan — not None
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan(count=0), got {type(result)}"
+        assert result.count == 0
+        assert result.entries == []
+
+    # ---------------------------------------------------------------------------
+    # (a) + (b): plan-return witness + no-write witness — regroup
+    # ---------------------------------------------------------------------------
+
+    def test_regroup_dry_run_returns_plan_with_entries(self, fs: FakeFilesystem) -> None:
+        """(a)+(b) regroup(dry_run=True) returns a DryRunPlan with correct entries; writes nothing.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Reuse the split-release scenario from TestRegroup
+        split_tags = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Vienna PO",
+            musicbrainz_albumid="split-rel-kat",
+        )
+        canonical_path = build_dest_path(dest_root, MBRelease(), MBTrack(), split_tags, global_track_idx=0).with_suffix(".flac")
+        old_path = _make_library_flac(dest_root, "Brahms - Vienna PO/OldWork [2021]/01 - First movement.flac", split_tags)
+        assert old_path != canonical_path
+
+        # Journal: two entries for the same release_id under different work_dirs (split scenario)
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "split-rel-kat",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "split-rel-kat",
+                    "source": "/src/phantom.flac",
+                    "destination": str(canonical_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        result = music_annotator.regroup(dest_root=dest_root, dry_run=True)
+
+        # (a) Returns a DryRunPlan with the planned move
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan, got {type(result)}"
+        assert result.pass_name == "regroup"
+        assert result.count == 1
+        assert len(result.entries) == 1
+        entry = result.entries[0]
+        assert entry.current_path == str(old_path)
+        assert entry.planned_path != ""
+        assert entry.tag_delta == {}
+
+        # (b) No writes
+        assert old_path.exists(), "dry_run must not move files"
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 0, "dry_run must not append journal entries"
+
+    # ---------------------------------------------------------------------------
+    # (c): empty-plan witness — regroup
+    # ---------------------------------------------------------------------------
+
+    def test_regroup_dry_run_empty_plan_when_nothing_to_regroup(self, fs: FakeFilesystem) -> None:
+        """(c) regroup(dry_run=True) returns DryRunPlan(count=0) when no confirmed split releases.
+
+        When there are no confirmed case-(b) split-release candidates, the plan is empty.
+        An empty DryRunPlan is structurally distinct from None (not-run).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Single file, single release_id — no fragmentation
+        tags = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Symphony No. 1",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Un poco sostenuto",
+            artist="Karajan",
+            musicbrainz_albumid="no-split-rel",
+        )
+        path = _make_library_flac(dest_root, "Brahms - Karajan/Symphony No. 1 [rec 2020]/01 - Un poco sostenuto.flac", tags)
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "no-split-rel",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.regroup(dest_root=dest_root, dry_run=True)
+
+        # Empty plan — not None (ran, found nothing is distinct from not-run)
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan(count=0), got {type(result)}"
+        assert result.count == 0
+        assert result.entries == []
+
+    # ---------------------------------------------------------------------------
+    # (a) + (b): plan-return witness + no-write witness — unify
+    # ---------------------------------------------------------------------------
+
+    def test_unify_dry_run_returns_plan_with_entries(self, fs: FakeFilesystem) -> None:
+        """(a)+(b) unify(dry_run=True) returns a DryRunPlan with correct entries; writes nothing.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        frag_tags = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Karajan",
+            musicbrainz_albumid="frag-rel-kat",
+        )
+        canonical_path = build_dest_path(dest_root, MBRelease(), MBTrack(), frag_tags, global_track_idx=0).with_suffix(".flac")
+        old_path = _make_library_flac(
+            dest_root, "Brahms - Pollini/Piano Concerto No. 1 [rec 2021]/01 - First movement.flac", frag_tags
+        )
+        # File B at canonical path ensures two distinct top_dirs for the same release_id
+        _make_library_flac(dest_root, str(canonical_path.relative_to(dest_root)), frag_tags)
+        assert old_path != canonical_path
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "frag-rel-kat",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "frag-rel-kat",
+                    "source": "/src/02.flac",
+                    "destination": str(canonical_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        result = music_annotator.unify(dest_root=dest_root, dry_run=True)
+
+        # (a) Returns a DryRunPlan with the planned move
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan, got {type(result)}"
+        assert result.pass_name == "unify"
+        assert result.count == 1
+        assert len(result.entries) == 1
+        entry = result.entries[0]
+        assert entry.current_path == str(old_path)
+        assert entry.planned_path != ""
+        assert entry.tag_delta == {}
+
+        # (b) No writes
+        assert old_path.exists(), "dry_run must not move files"
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 0, "dry_run must not append journal entries"
+
+    # ---------------------------------------------------------------------------
+    # (c): empty-plan witness — unify
+    # ---------------------------------------------------------------------------
+
+    def test_unify_dry_run_empty_plan_when_nothing_to_unify(self, fs: FakeFilesystem) -> None:
+        """(c) unify(dry_run=True) returns DryRunPlan(count=0) when no fragmented releases.
+
+        When there are no performer-split or composer-split fragmented releases, the plan is empty.
+        An empty DryRunPlan is structurally distinct from None (not-run).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Single file, single release_id, single top_dir — no fragmentation
+        tags = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Symphony No. 1",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Un poco sostenuto",
+            artist="Karajan",
+            musicbrainz_albumid="no-frag-rel",
+        )
+        path = _make_library_flac(dest_root, "Brahms - Karajan/Symphony No. 1 [rec 2020]/01 - Un poco sostenuto.flac", tags)
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "no-frag-rel",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.unify(dest_root=dest_root, dry_run=True)
+
+        # Empty plan — not None (ran, found nothing is distinct from not-run)
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan(count=0), got {type(result)}"
+        assert result.count == 0
+        assert result.entries == []
+
+    # ---------------------------------------------------------------------------
+    # (a) + (b): plan-return witness + no-write witness — enrich
+    # ---------------------------------------------------------------------------
+
+    def test_enrich_dry_run_returns_plan_with_entries(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """(a)+(b) enrich(dry_run=True) returns a DryRunPlan with correct entries; writes nothing.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_enrich_tags()
+        path = _make_library_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-enrich-kat",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm_kat")
+
+        result = music_annotator.enrich(dest_root=dest_root, dry_run=True)
+
+        # (a) Returns a DryRunPlan with the planned tag writes
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan, got {type(result)}"
+        assert result.pass_name == "enrich"
+        assert result.count >= 1
+        assert len(result.entries) == result.count
+        entry = result.entries[0]
+        assert entry.current_path == str(path)
+        assert entry.planned_path == ""  # tag-content pass: in-place write
+        assert entry.tag_delta != {}  # at least one field to write
+
+        # (b) No writes: no tags written, no journal entry
+        audio = MutagenFLAC(str(path))
+        assert not (audio.get("audio_hash") or []), "dry_run must not write audio_hash"
+        assert not (audio.get("acoustid_fingerprint") or []), "dry_run must not write acoustid_fingerprint"
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 0, "dry_run must not append journal entries"
+
+    # ---------------------------------------------------------------------------
+    # (c): empty-plan witness — enrich
+    # ---------------------------------------------------------------------------
+
+    def test_enrich_dry_run_empty_plan_when_already_enriched(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """(c) enrich(dry_run=True) returns DryRunPlan(count=0) when all files are already enriched.
+
+        When every file already has audio_hash and acoustid_fingerprint, the plan is empty.
+        An empty DryRunPlan is structurally distinct from None (not-run).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File already has both enrichment fields set
+        tags = TrackTags(title="Track", artist="Artist", audio_hash="flac-md5:abc123", acoustid_fingerprint="AQADtMmy")
+        path = _make_library_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-enrich-noop",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmy")
+
+        result = music_annotator.enrich(dest_root=dest_root, dry_run=True)
+
+        # Empty plan — not None
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan(count=0), got {type(result)}"
+        assert result.count == 0
+        assert result.entries == []
+
+    # ---------------------------------------------------------------------------
+    # (a) + (b): plan-return witness + no-write witness — repatch_catalogue_colon
+    # ---------------------------------------------------------------------------
+
+    def test_repatch_catalogue_colon_dry_run_returns_plan_with_entries(self, fs: FakeFilesystem) -> None:
+        """(a)+(b) repatch_catalogue_colon(dry_run=True) returns a DryRunPlan; writes nothing.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = _make_haydn_corrupt_tags()
+        path = _make_library_flac(
+            dest_root,
+            "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]/01 - 31/01 - I. Allegro moderato.flac",
+            tags,
+        )
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-kat",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repatch_catalogue_colon(dest_root=dest_root, dry_run=True)
+
+        # (a) Returns a DryRunPlan with the planned tag writes
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan, got {type(result)}"
+        assert result.pass_name == "repatch_catalogue_colon"
+        assert result.count == 1
+        assert len(result.entries) == 1
+        entry = result.entries[0]
+        assert entry.current_path == str(path)
+        assert entry.planned_path == ""  # tag-content pass: in-place write
+        assert "CWP_PART_1" in entry.tag_delta
+        assert "CWP_GROUPHEADING" in entry.tag_delta
+
+        # (b) No writes: tags unchanged, no journal entry
+        audio = MutagenFLAC(str(path))
+        part1_vals = audio.get("cwp_part_1") or []
+        assert part1_vals and part1_vals[0] == "31", "dry_run must not write tags"
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repatched = [e for e in journal.entries if e.action == "repatched"]
+        assert len(repatched) == 0, "dry_run must not append journal entries"
+
+    # ---------------------------------------------------------------------------
+    # (c): empty-plan witness — repatch_catalogue_colon
+    # ---------------------------------------------------------------------------
+
+    def test_repatch_catalogue_colon_dry_run_empty_plan_when_already_correct(self, fs: FakeFilesystem) -> None:
+        """(c) repatch_catalogue_colon(dry_run=True) returns DryRunPlan(count=0) when all correct.
+
+        When every file already has correct CWP_PART labels, the plan is empty.
+        An empty DryRunPlan is structurally distinct from None (not-run).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = _make_haydn_correct_tags()
+        path = _make_library_flac(
+            dest_root,
+            "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]/01 - Hob/01 - I. Allegro moderato.flac",
+            tags,
+        )
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-correct",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repatch_catalogue_colon(dest_root=dest_root, dry_run=True)
+
+        # Empty plan — not None
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan(count=0), got {type(result)}"
+        assert result.count == 0
+        assert result.entries == []
+
+    # ---------------------------------------------------------------------------
+    # (a) + (b): plan-return witness + no-write witness — repatch_acoustid_tags
+    # ---------------------------------------------------------------------------
+
+    def test_repatch_acoustid_tags_dry_run_returns_plan_with_entries(self, fs: FakeFilesystem) -> None:
+        """(a)+(b) repatch_acoustid_tags(dry_run=True) returns a DryRunPlan; writes nothing.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Allegro", artist="Karajan", acoustid_id="stale-id")
+        path = _make_library_flac(dest_root, "Classical/Beethoven - Karajan/Symphony No. 5/01 - Allegro.flac", tags)
+        _write_legacy_flac_fingerprint(path, "AQADtNSibcmS5EiS_kat")
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-acoustid-kat",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repatch_acoustid_tags(journal=journal_path, dest_root=dest_root, dry_run=True)
+
+        # (a) Returns a DryRunPlan with the planned tag writes
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan, got {type(result)}"
+        assert result.pass_name == "repatch_acoustid_tags"
+        assert result.count == 1
+        assert len(result.entries) == 1
+        entry = result.entries[0]
+        assert entry.current_path == str(path)
+        assert entry.planned_path == ""  # tag-content pass: in-place write
+        assert "ACOUSTID_FINGERPRINT" in entry.tag_delta
+
+        # (b) No writes: legacy key still present, no journal entry
+        audio = MutagenFLAC(str(path))
+        legacy_fp = audio.get("chromaprint_fp") or []
+        new_fp = audio.get("acoustid_fingerprint") or []
+        assert legacy_fp, "dry_run must not remove legacy key"
+        assert not new_fp, "dry_run must not write new key"
+        journal = read_journal(journal_path)
+        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
+        assert len(repatched) == 0, "dry_run must not append journal entries"
+
+    # ---------------------------------------------------------------------------
+    # (c): empty-plan witness — repatch_acoustid_tags
+    # ---------------------------------------------------------------------------
+
+    def test_repatch_acoustid_tags_dry_run_empty_plan_no_legacy_files(self, fs: FakeFilesystem) -> None:
+        """(c) repatch_acoustid_tags(dry_run=True) returns DryRunPlan(count=0) when no legacy files.
+
+        When no files carry the legacy CHROMAPRINT_FP key, the plan is empty.
+        An empty DryRunPlan is structurally distinct from None (not-run).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File already has the new ACOUSTID_FINGERPRINT key (no legacy key)
+        tags = TrackTags(title="Allegro", artist="Karajan", acoustid_fingerprint="AQADtNSibcmS5EiS")
+        path = _make_library_flac(dest_root, "Classical/Beethoven - Karajan/Symphony No. 5/01 - Allegro.flac", tags)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-acoustid-noop",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repatch_acoustid_tags(journal=journal_path, dest_root=dest_root, dry_run=True)
+
+        # Empty plan — not None
+        assert isinstance(result, DryRunPlan), f"expected DryRunPlan(count=0), got {type(result)}"
+        assert result.count == 0
+        assert result.entries == []
+
+    # ---------------------------------------------------------------------------
+    # (d): shape-uniformity witness — move pass and tag-content pass both return DryRunPlan
+    # ---------------------------------------------------------------------------
+
+    def test_shape_uniformity_move_and_tag_content_both_return_dry_run_plan(
+        self, mocker: MockerFixture, fs: FakeFilesystem
+    ) -> None:
+        """(d) A move pass (repath) and a tag-content pass (enrich) both return DryRunPlan instances.
+
+        Validates that the single DryRunPlan type spans both plan kinds:
+        - Move entry: planned_path != "", tag_delta == {}
+        - Tag-content entry: planned_path == "", tag_delta != {}
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # --- Move pass: repath ---
+        repath_tags = self._make_repath_tags()
+        old_path = _make_library_flac(dest_root, "Mozart - Bohm/OldSym [rec 2019]/01 - Molto allegro.flac", repath_tags)
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r-shape",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        repath_result = music_annotator.repath(dest_root=dest_root, dry_run=True)
+
+        # --- Tag-content pass: enrich (separate dest_root to avoid journal interference) ---
+        dest_root2 = Path("/lib2")
+        fs.create_dir(str(dest_root2))
+        enrich_tags = self._make_enrich_tags()
+        enrich_path = _make_library_flac(dest_root2, "Artist/Album/01 - Track.flac", enrich_tags)
+        _write_library_journal(
+            dest_root2,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-shape",
+                    "source": "/src/01.flac",
+                    "destination": str(enrich_path),
+                    "action": "tagged",
+                }
+            ],
+        )
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm_shape")
+        enrich_result = music_annotator.enrich(dest_root=dest_root2, dry_run=True)
+
+        # Both are DryRunPlan instances
+        assert isinstance(repath_result, DryRunPlan), f"repath must return DryRunPlan, got {type(repath_result)}"
+        assert isinstance(enrich_result, DryRunPlan), f"enrich must return DryRunPlan, got {type(enrich_result)}"
+
+        # Move entry shape: planned_path populated, tag_delta empty
+        assert repath_result.count >= 1
+        move_entry = repath_result.entries[0]
+        assert move_entry.planned_path != "", "move entry must have planned_path"
+        assert move_entry.tag_delta == {}, "move entry must have empty tag_delta"
+
+        # Tag-content entry shape: planned_path empty, tag_delta populated
+        assert enrich_result.count >= 1
+        tag_entry = enrich_result.entries[0]
+        assert tag_entry.planned_path == "", "tag-content entry must have empty planned_path"
+        assert tag_entry.tag_delta != {}, "tag-content entry must have non-empty tag_delta"
+
+    # ---------------------------------------------------------------------------
+    # Coverage: early-return DryRunPlan(count=0) paths for each pass
+    # ---------------------------------------------------------------------------
+
+    def test_repath_dry_run_empty_plan_no_existing_files(self, fs: FakeFilesystem) -> None:
+        """repath(dry_run=True) returns DryRunPlan(count=0) when no files exist in the journal.
+
+        Exercises the early-return path when the journal is empty (no existing files on disk).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        # Empty journal — no files to repath
+        _write_library_journal(dest_root, [])
+
+        result = music_annotator.repath(dest_root=dest_root, dry_run=True)
+
+        assert isinstance(result, DryRunPlan)
+        assert result.count == 0
+        assert result.entries == []
+
+    def test_repath_dry_run_empty_plan_after_intra_collision_filter(self, fs: FakeFilesystem) -> None:
+        """repath(dry_run=True) returns DryRunPlan(count=0) when all plan pairs are intra-collision.
+
+        Exercises the early-return path when all planned moves collide with each other (two files
+        recompute to the same destination), causing the plan to be empty after filtering.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two files with identical tags → both recompute to the same destination → intra-collision
+        tags = TrackTags(
+            cwp_composer_lastnames="Mozart",
+            cwp_work_top="Symphony No. 40",
+            recording_date="2019",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Molto allegro",
+            artist="Bohm",
+        )
+        old_path1 = _make_library_flac(dest_root, "Mozart - Bohm/OldSym [rec 2019]/01 - Molto allegro.flac", tags)
+        old_path2 = _make_library_flac(dest_root, "Mozart - Bohm/OldSym2 [rec 2019]/01 - Molto allegro.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "r1",
+                    "source": "/src/02.flac",
+                    "destination": str(old_path2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        result = music_annotator.repath(dest_root=dest_root, dry_run=True)
+
+        # Both files collide → plan is empty after intra-collision filter
+        assert isinstance(result, DryRunPlan)
+        assert result.count == 0
+        assert result.entries == []
+
+    def test_regroup_dry_run_empty_plan_no_existing_files_on_disk(self, fs: FakeFilesystem) -> None:
+        """regroup(dry_run=True) returns DryRunPlan(count=0) when confirmed files don't exist on disk.
+
+        Exercises the early-return path when confirmed release IDs exist in the journal but the
+        files resolved by _resolve_current_lib don't exist on disk.  This is achieved by having
+        a "tagged" entry at old_path (so _confirm_fragmentation can confirm the release) and a
+        "repathed" entry that moves the file to a path that doesn't exist on disk.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        split_tags = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Vienna PO",
+            musicbrainz_albumid="split-rel-nofile",
+        )
+        old_path = dest_root / "Brahms - Vienna PO/OldWork [2021]/01 - First movement.flac"
+        phantom_path = dest_root / "Brahms - Vienna PO/Piano Concerto No. 1 [rec 2021]/01 - First movement.flac"
+        repathed_path = dest_root / "Brahms - Vienna PO/Piano Concerto No. 1 [rec 2021]/02 - First movement.flac"
+
+        # Write a FLAC at old_path so _confirm_fragmentation can read the MUSICBRAINZ_ALBUMID tag
+        _make_library_flac(dest_root, str(old_path.relative_to(dest_root)), split_tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "split-rel-nofile",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "split-rel-nofile",
+                    "source": "/src/phantom.flac",
+                    "destination": str(phantom_path),
+                    "action": "tagged",
+                },
+                # "repathed" entry moves old_path to repathed_path (which doesn't exist on disk)
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "",
+                    "source": str(old_path),
+                    "destination": str(repathed_path),
+                    "action": "repathed",
+                },
+            ],
+        )
+
+        # old_path still exists (for _confirm_fragmentation), but _resolve_current_lib
+        # resolves it to repathed_path (which doesn't exist) → existing_files is empty
+        result = music_annotator.regroup(dest_root=dest_root, dry_run=True)
+
+        assert isinstance(result, DryRunPlan)
+        assert result.count == 0
+        assert result.entries == []
+
+    def test_regroup_dry_run_empty_plan_when_all_files_already_canonical(self, fs: FakeFilesystem) -> None:
+        """regroup(dry_run=True) returns DryRunPlan(count=0) when all confirmed files are canonical.
+
+        Exercises the early-return path when confirmed release IDs exist and files exist on disk,
+        but all files already recompute to their current paths (plan_pairs is empty).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        split_tags = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Vienna PO",
+            musicbrainz_albumid="split-rel-canonical",
+        )
+        canonical_path = build_dest_path(dest_root, MBRelease(), MBTrack(), split_tags, global_track_idx=0).with_suffix(".flac")
+        # Place the file at the canonical path (already correct)
+        _make_library_flac(dest_root, str(canonical_path.relative_to(dest_root)), split_tags)
+
+        # Two journal entries for the same release_id under different work_dirs (split scenario)
+        # but the file is already at the canonical path
+        phantom_path = dest_root / "Brahms - Vienna PO/OldWork [2021]/01 - First movement.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "split-rel-canonical",
+                    "source": "/src/01.flac",
+                    "destination": str(canonical_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "split-rel-canonical",
+                    "source": "/src/phantom.flac",
+                    "destination": str(phantom_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        result = music_annotator.regroup(dest_root=dest_root, dry_run=True)
+
+        assert isinstance(result, DryRunPlan)
+        assert result.count == 0
+        assert result.entries == []
+
+    def test_unify_dry_run_empty_plan_when_all_files_already_canonical(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify(dry_run=True) returns DryRunPlan(count=0) when fragmented files are already canonical.
+
+        Exercises the early-return path when fragmented releases are detected but all files already
+        recompute to their current paths (plan_pairs is empty after the loop).  Uses a mock to
+        inject a fragmented release where the single file is already at its canonical path.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        frag_tags = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Karajan",
+            musicbrainz_albumid="frag-rel-canonical",
+        )
+        canonical_path = build_dest_path(dest_root, MBRelease(), MBTrack(), frag_tags, global_track_idx=0).with_suffix(".flac")
+        _make_library_flac(dest_root, str(canonical_path.relative_to(dest_root)), frag_tags)
+
+        # Mock detect_fragmented_releases to return the file as fragmented (even though it's canonical)
+        # This simulates the case where fragmentation is detected but all files are already canonical.
+        mocker.patch(
+            "music_annotator._pipeline_maint.detect_fragmented_releases",
+            return_value={"frag-rel-canonical": [canonical_path]},
+        )
+
+        result = music_annotator.unify(dest_root=dest_root, dry_run=True)
+
+        assert isinstance(result, DryRunPlan)
+        assert result.count == 0
+        assert result.entries == []
+
+    def test_enrich_dry_run_empty_plan_no_existing_files(self, fs: FakeFilesystem) -> None:
+        """enrich(dry_run=True) returns DryRunPlan(count=0) when no files exist in the journal.
+
+        Exercises the early-return path when the journal is empty (no existing files on disk).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        _write_library_journal(dest_root, [])
+
+        result = music_annotator.enrich(dest_root=dest_root, dry_run=True)
+
+        assert isinstance(result, DryRunPlan)
+        assert result.count == 0
+        assert result.entries == []
+
+    def test_repatch_catalogue_colon_dry_run_empty_plan_no_existing_files(self, fs: FakeFilesystem) -> None:
+        """repatch_catalogue_colon(dry_run=True) returns DryRunPlan(count=0) when no files exist.
+
+        Exercises the early-return path when the journal is empty (no existing files on disk).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        _write_library_journal(dest_root, [])
+
+        result = music_annotator.repatch_catalogue_colon(dest_root=dest_root, dry_run=True)
+
+        assert isinstance(result, DryRunPlan)
+        assert result.count == 0
+        assert result.entries == []
+
+    def test_repatch_catalogue_colon_dry_run_empty_groupheading(self, fs: FakeFilesystem) -> None:
+        """repatch_catalogue_colon(dry_run=True) handles corrupt file with empty new_groupheading.
+
+        When a corrupt CWP_PART label is corrected but the rebuilt CWP_GROUPHEADING is empty
+        (because CWP_WORK_TOP is absent and CWP_PART_0 is absent), the tag_delta omits
+        CWP_GROUPHEADING.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Build a corrupt file where CWP_WORK_TOP is empty and CWP_PART_0 is empty,
+        # so new_groupheading will be empty.
+        # CWP_PART_1 = "31" (corrupt), CWP_WORK_1 = "Hob. III:31" (triggers correction),
+        # CWP_WORK_TOP = "" (empty), CWP_PART_0 = "" (empty) → new_groupheading = ""
+        tags = TrackTags(
+            cwp_work_top="",
+            cwp_groupheading="31",
+            cwp_part="",
+            cwp_part_levels="1",
+            cwp_work_part_levels="1",
+            cwp_movt_num="1",
+            movementtotal="4",
+            title="I. Allegro moderato",
+            artist="Angeles Quartet",
+            cwp_composer_lastnames="Haydn",
+            recording_date="1980",
+        )
+        if tags.model_extra is not None:
+            tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
+            tags.model_extra["cwp_part_0"] = ""
+            tags.model_extra["cwp_work_1"] = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
+            tags.model_extra["cwp_part_1"] = "31"
+            tags.model_extra["cwp_work_2"] = ""
+            tags.model_extra["cwp_part_2"] = ""
+
+        path = _make_library_flac(dest_root, "Classical/Haydn/01 - I. Allegro moderato.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "haydn-rel-nogh",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repatch_catalogue_colon(dest_root=dest_root, dry_run=True)
+
+        assert isinstance(result, DryRunPlan)
+        assert result.count == 1
+        assert "CWP_PART_1" in result.entries[0].tag_delta
+        # CWP_GROUPHEADING must NOT be in tag_delta when new_groupheading is empty
+        assert "CWP_GROUPHEADING" not in result.entries[0].tag_delta
+
+    def test_repatch_acoustid_tags_dry_run_empty_plan_no_existing_files(self, fs: FakeFilesystem) -> None:
+        """repatch_acoustid_tags(dry_run=True) returns DryRunPlan(count=0) when no files exist.
+
+        Exercises the early-return path when the journal is empty (no existing files on disk).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(dest_root, [])
+
+        result = music_annotator.repatch_acoustid_tags(journal=journal_path, dest_root=dest_root, dry_run=True)
+
+        assert isinstance(result, DryRunPlan)
+        assert result.count == 0
+        assert result.entries == []
+
+    def test_repatch_acoustid_tags_dry_run_empty_fingerprint(self, fs: FakeFilesystem) -> None:
+        """repatch_acoustid_tags(dry_run=True) handles legacy key with empty fingerprint value.
+
+        When the legacy CHROMAPRINT_FP key is present but its value is empty, the tag_delta
+        omits ACOUSTID_FINGERPRINT (no value to migrate).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Allegro", artist="Karajan")
+        path = _make_library_flac(dest_root, "Classical/Beethoven/01 - Allegro.flac", tags)
+
+        # Write legacy key with empty value
+        audio = MutagenFLAC(str(path))
+        audio["chromaprint_fp"] = [""]
+        audio.save()
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-empty-fp",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repatch_acoustid_tags(journal=journal_path, dest_root=dest_root, dry_run=True)
+
+        assert isinstance(result, DryRunPlan)
+        assert result.count == 1
+        # Empty fingerprint → ACOUSTID_FINGERPRINT not in tag_delta
+        assert "ACOUSTID_FINGERPRINT" not in result.entries[0].tag_delta
+
+    def test_repatch_acoustid_tags_dry_run_with_acoustid_key(self, fs: FakeFilesystem) -> None:
+        """repatch_acoustid_tags(dry_run=True) includes ACOUSTID_ID in tag_delta when key is set.
+
+        When acoustid_key is set and fingerprint is non-empty, the tag_delta includes
+        ACOUSTID_ID with a placeholder value indicating re-resolution would occur.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Allegro", artist="Karajan")
+        path = _make_library_flac(dest_root, "Classical/Beethoven/01 - Allegro.flac", tags)
+        _write_legacy_flac_fingerprint(path, "AQADtNSibcmS5EiS_key")
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-with-key",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = music_annotator.repatch_acoustid_tags(
+            journal=journal_path, dest_root=dest_root, acoustid_key="test-api-key", dry_run=True
+        )
+
+        assert isinstance(result, DryRunPlan)
+        assert result.count == 1
+        entry = result.entries[0]
+        assert "ACOUSTID_FINGERPRINT" in entry.tag_delta
+        assert "ACOUSTID_ID" in entry.tag_delta

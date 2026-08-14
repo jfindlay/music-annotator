@@ -79,6 +79,8 @@ from music_annotator._works import (
 from music_annotator.models import (
     ArtistEntry,
     CopyPlanEntry,
+    DryRunEntry,
+    DryRunPlan,
     MBRelease,
     MBTrack,
     TrackTags,
@@ -418,7 +420,7 @@ def _move_verify_journal(
     return moved_count
 
 
-def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None:
+def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryRunPlan | None:  # pylint: disable=too-many-return-statements
     """Re-path all verified library files under ``dest_root`` to their corrected destinations.
 
     Walks the already-annotated library at ``dest_root``, reads the transaction journal to
@@ -482,7 +484,9 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
 
     if not existing_files:
         log.info("repath_nothing_to_move", dest_root=str(dest_root))
-        return
+        if dry_run:
+            return DryRunPlan(pass_name="repath", entries=[], count=0)
+        return None
 
     # --- Pass 1: read tags for all existing files ---
     # Collect (path, tags, file_dict, ext) tuples so that the work-group modal depth can be
@@ -580,7 +584,9 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
 
     if not plan_pairs:
         log.info("repath_all_current", dest_root=str(dest_root))
-        return
+        if dry_run:
+            return DryRunPlan(pass_name="repath", entries=[], count=0)
+        return None
 
     # --- Intra-plan collision guard (legitimate partial-performance collisions) ---
     # When two or more files in the plan recompute to the same clean destination, they are
@@ -613,7 +619,9 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
         plan_pairs = [pair for _i, pair in enumerate(plan_pairs) if _i not in _intra_collision_indices]
         if not plan_pairs:
             log.info("repath_all_current", dest_root=str(dest_root))
-            return
+            if dry_run:
+                return DryRunPlan(pass_name="repath", entries=[], count=0)
+            return None
 
     # --- Collision detection and resolution ---
     collision_results = _assess_collisions(plan_pairs)
@@ -632,13 +640,15 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
         log.warning("repath_collision_suffix_applied", count=len(confirmed_nonmatches))
 
     if dry_run:
+        dry_run_entries: list[DryRunEntry] = []
         for current_path, new_dest, _, _ in plan_pairs:
             log.info(
                 "repath_dry_run",
                 old=str(current_path.relative_to(dest_root)),
                 new=str(new_dest.relative_to(dest_root)),
             )
-        return
+            dry_run_entries.append(DryRunEntry(current_path=str(current_path), planned_path=str(new_dest)))
+        return DryRunPlan(pass_name="repath", entries=dry_run_entries, count=len(dry_run_entries))
 
     # --- Confirmation prompt ---
     if not yes:
@@ -653,7 +663,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
         answer = input("").strip().lower()
         if answer not in {"y", "yes"}:
             log.info("repath_aborted", dest_root=str(dest_root))
-            return
+            return None
 
     # --- Perform moves, verify, journal ---
     now = datetime.datetime.now(datetime.UTC)
@@ -667,9 +677,10 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> None
         release_id="",
     )
     log.info("repath_complete", dest_root=str(dest_root), moved=moved)
+    return None
 
 
-def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
+def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRunPlan | None:  # pylint: disable=too-many-return-statements
     """Consolidate confirmed split-release files into their canonical destinations.
 
     Reads the transaction journal, runs the tag-confirmation fragmentation audit
@@ -729,7 +740,9 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
 
     if not confirmed_release_ids:
         log.info("regroup_nothing_to_regroup", dest_root=str(dest_root))
-        return
+        if dry_run:
+            return DryRunPlan(pass_name="regroup", entries=[], count=0)
+        return None
 
     # --- Identify affected files from journal entries ---
     # _resolve_current_lib resolves the full library lineage; filter to confirmed release IDs.
@@ -741,7 +754,9 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
 
     if not existing_files:
         log.info("regroup_nothing_to_regroup", dest_root=str(dest_root))
-        return
+        if dry_run:
+            return DryRunPlan(pass_name="regroup", entries=[], count=0)
+        return None
 
     # --- Pass 1: read tags for all existing files ---
     # Collect (path, tags, file_dict, ext, release_id) tuples so that the work-group modal
@@ -828,7 +843,9 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
 
     if not plan_pairs:
         log.info("regroup_nothing_to_regroup", dest_root=str(dest_root))
-        return
+        if dry_run:
+            return DryRunPlan(pass_name="regroup", entries=[], count=0)
+        return None
 
     # --- Collision detection and resolution ---
     collision_pairs = [(src, dest, acust, length) for src, dest, acust, length, _ in plan_pairs]
@@ -845,6 +862,7 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
         log.warning("regroup_collision_suffix_applied", count=len(confirmed_nonmatches))
 
     if dry_run:
+        regroup_dry_run_entries: list[DryRunEntry] = []
         for current_path, new_dest, _, _, release_id in plan_pairs:
             log.info(
                 "regroup_dry_run",
@@ -852,7 +870,8 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
                 new=str(new_dest.relative_to(dest_root)),
                 release_id=release_id,
             )
-        return
+            regroup_dry_run_entries.append(DryRunEntry(current_path=str(current_path), planned_path=str(new_dest)))
+        return DryRunPlan(pass_name="regroup", entries=regroup_dry_run_entries, count=len(regroup_dry_run_entries))
 
     # --- Confirmation prompt ---
     if not yes:
@@ -868,7 +887,7 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
         answer = input("").strip().lower()
         if answer not in {"y", "yes"}:
             log.info("regroup_aborted", dest_root=str(dest_root))
-            return
+            return None
 
     # --- Perform moves, verify, journal ---
     # regroup is release-driven: each file may belong to a different release_id, so we call
@@ -890,6 +909,7 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Non
             release_id=rid,
         )
     log.info("regroup_complete", dest_root=str(dest_root), moved=total_moved)
+    return None
 
 
 def _is_composer_split_release(group_tags: list[tuple[Path, TrackTags, dict[str, str]]]) -> bool:
@@ -1034,7 +1054,7 @@ def _unify_classical_composer_groups(group_tags: list[tuple[Path, TrackTags, dic
                 tags.cwp_composer_lastnames = canonical
 
 
-def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
+def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRunPlan | None:  # pylint: disable=too-many-return-statements
     """Consolidate performer-split and composer-split fragmented releases into their canonical top_dirs.
 
     Scans ``dest_root`` for releases whose tracks are spread across ≥2 distinct top_dirs due to
@@ -1105,7 +1125,9 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
 
     if not fragmented:
         log.info("unify_nothing_to_unify", dest_root=str(dest_root))
-        return
+        if dry_run:
+            return DryRunPlan(pass_name="unify", entries=[], count=0)
+        return None
 
     # --- Build unify plan: (current_path, new_dest, acoustid, length_ms, release_id) ---
     plan_pairs: list[tuple[Path, Path, str, int, str]] = []
@@ -1203,7 +1225,9 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
 
     if not plan_pairs:
         log.info("unify_nothing_to_unify", dest_root=str(dest_root))
-        return
+        if dry_run:
+            return DryRunPlan(pass_name="unify", entries=[], count=0)
+        return None
 
     # --- Collision detection and resolution ---
     collision_pairs = [(src, dest, acust, length) for src, dest, acust, length, _ in plan_pairs]
@@ -1220,6 +1244,7 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
         log.warning("unify_collision_suffix_applied", count=len(confirmed_nonmatches))
 
     if dry_run:
+        unify_dry_run_entries: list[DryRunEntry] = []
         for current_path, new_dest, _, _, release_id in plan_pairs:
             log.info(
                 "unify_dry_run",
@@ -1227,7 +1252,8 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
                 new=str(new_dest.relative_to(dest_root)),
                 release_id=release_id,
             )
-        return
+            unify_dry_run_entries.append(DryRunEntry(current_path=str(current_path), planned_path=str(new_dest)))
+        return DryRunPlan(pass_name="unify", entries=unify_dry_run_entries, count=len(unify_dry_run_entries))
 
     # --- Confirmation prompt ---
     if not yes:
@@ -1243,7 +1269,7 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
         answer = input("").strip().lower()
         if answer not in {"y", "yes"}:
             log.info("unify_aborted", dest_root=str(dest_root))
-            return
+            return None
 
     # --- Perform moves, verify, journal ---
     # unify is release-driven: each file may belong to a different release_id, so we call
@@ -1264,9 +1290,10 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> None:
             release_id=rid,
         )
     log.info("unify_complete", dest_root=str(dest_root), moved=total_moved)
+    return None
 
 
-def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, acoustid_key: str = "") -> None:
+def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, acoustid_key: str = "") -> DryRunPlan | None:
     """Retroactively backfill fingerprint fields (``audio_hash``, ``acoustid_fingerprint``, ``acoustid_id``) into library files.
 
     Reads the transaction journal at ``dest_root``, resolves the current on-disk path for each
@@ -1313,7 +1340,9 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
 
     if not existing_files:
         log.info("enrich_nothing_to_enrich", dest_root=str(dest_root))
-        return
+        if dry_run:
+            return DryRunPlan(pass_name="enrich", entries=[], count=0)
+        return None
 
     # --- Per-file enrichment ---
     now = datetime.datetime.now(datetime.UTC).isoformat()
@@ -1321,6 +1350,7 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
     count_noop = 0
     count_dry_run = 0
     count_inconclusive_acoustid = 0
+    enrich_dry_run_entries: list[DryRunEntry] = []
 
     for current_path, release_id in existing_files:
         fields = _needs_enrich(current_path, re_resolve)
@@ -1367,6 +1397,7 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
                 fields=list(write_fields.keys()),
             )
             count_dry_run += 1
+            enrich_dry_run_entries.append(DryRunEntry(current_path=str(current_path), tag_delta=dict(write_fields.items())))
             continue
 
         # --- Read current tags, update enriched fields, write back ---
@@ -1441,9 +1472,12 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
         dry_run=count_dry_run,
         inconclusive_acoustid=count_inconclusive_acoustid,
     )
+    if dry_run:
+        return DryRunPlan(pass_name="enrich", entries=enrich_dry_run_entries, count=len(enrich_dry_run_entries))
+    return None
 
 
-def repatch_catalogue_colon(dest_root: Path, *, dry_run: bool = False) -> None:
+def repatch_catalogue_colon(dest_root: Path, *, dry_run: bool = False) -> DryRunPlan | None:
     """Rewrite ``CWP_PART_*`` / ``CWP_GROUPHEADING`` tags corrupted by the pre-fix bare-``":"`` split.
 
     Scans each FLAC and MP3 file in the annotated library (resolved via the journal lineage) for
@@ -1495,12 +1529,15 @@ def repatch_catalogue_colon(dest_root: Path, *, dry_run: bool = False) -> None:
 
     if not existing_files:
         log.info("repatch_catalogue_colon_nothing_to_repatch", dest_root=str(dest_root))
-        return
+        if dry_run:
+            return DryRunPlan(pass_name="repatch_catalogue_colon", entries=[], count=0)
+        return None
 
     now = datetime.datetime.now(datetime.UTC).isoformat()
     count_repatched = 0
     count_noop = 0
     count_dry_run = 0
+    cat_colon_dry_run_entries: list[DryRunEntry] = []
 
     for current_path, release_id in existing_files:
         ext = current_path.suffix.lower()
@@ -1581,6 +1618,10 @@ def repatch_catalogue_colon(dest_root: Path, *, dry_run: bool = False) -> None:
                 new_groupheading=new_groupheading,
             )
             count_dry_run += 1
+            tag_delta: dict[str, str] = {f"CWP_PART_{i}": label for i, label in corrected_parts.items()}
+            if new_groupheading:
+                tag_delta["CWP_GROUPHEADING"] = new_groupheading
+            cat_colon_dry_run_entries.append(DryRunEntry(current_path=str(current_path), tag_delta=tag_delta))
             continue
 
         # Apply corrected labels and rebuilt groupheading to the tag dict, then write back.
@@ -1629,6 +1670,13 @@ def repatch_catalogue_colon(dest_root: Path, *, dry_run: bool = False) -> None:
         noop=count_noop,
         dry_run=count_dry_run,
     )
+    if dry_run:
+        return DryRunPlan(
+            pass_name="repatch_catalogue_colon",
+            entries=cat_colon_dry_run_entries,
+            count=len(cat_colon_dry_run_entries),
+        )
+    return None
 
 
 def _has_legacy_acoustid_key(path: Path) -> bool:
@@ -1666,7 +1714,7 @@ def repatch_acoustid_tags(
     dest_root: Path,
     acoustid_key: str = "",
     dry_run: bool = False,
-) -> list[TransactionEntry]:
+) -> DryRunPlan | list[TransactionEntry]:
     """Migrate the legacy ``CHROMAPRINT_FP`` fingerprint key to the Picard-aligned ``ACOUSTID_FINGERPRINT`` key.
 
     Scans each FLAC and MP3 file in the annotated library (resolved via the journal lineage) for
@@ -1697,10 +1745,12 @@ def repatch_acoustid_tags(
         ``ACOUSTID_ID`` with the top AcoustID cluster UUID.  When empty, ``ACOUSTID_ID`` is
         left unchanged.
     :param dry_run: When ``True``, log planned migrations without writing any tags or journal
-        entries.  Returns an empty list.
-    :returns: The list of :class:`~music_annotator.models.TransactionEntry` objects appended to
-        the journal during this run.  Empty when ``dry_run=True`` or when no files needed
-        migration.
+        entries.  Returns a :class:`~music_annotator.models.DryRunPlan` capturing the change-set
+        the pass would enact (empty plan when no files need migration).
+    :returns: A :class:`~music_annotator.models.DryRunPlan` when ``dry_run=True`` (the structured
+        change-set the pass would enact); otherwise the list of
+        :class:`~music_annotator.models.TransactionEntry` objects appended to the journal during
+        this run (empty list when no files needed migration).
     """
     tx_log = read_journal(journal)
 
@@ -1717,6 +1767,8 @@ def repatch_acoustid_tags(
 
     if not existing_files:
         log.info("repatch_acoustid_tags_nothing_to_repatch", dest_root=str(dest_root))
+        if dry_run:
+            return DryRunPlan(pass_name="repatch_acoustid_tags", entries=[], count=0)
         return []
 
     now = datetime.datetime.now(datetime.UTC).isoformat()
@@ -1724,6 +1776,7 @@ def repatch_acoustid_tags(
     count_noop = 0
     count_dry_run = 0
     appended: list[TransactionEntry] = []
+    acoustid_dry_run_entries: list[DryRunEntry] = []
 
     for current_path, release_id in existing_files:
         ext = current_path.suffix.lower()
@@ -1748,6 +1801,12 @@ def repatch_acoustid_tags(
                 will_re_resolve=bool(acoustid_key and fingerprint),
             )
             count_dry_run += 1
+            acoustid_tag_delta: dict[str, str] = {}
+            if fingerprint:
+                acoustid_tag_delta["ACOUSTID_FINGERPRINT"] = fingerprint
+            if acoustid_key and fingerprint:
+                acoustid_tag_delta["ACOUSTID_ID"] = "(re-resolved)"
+            acoustid_dry_run_entries.append(DryRunEntry(current_path=str(current_path), tag_delta=acoustid_tag_delta))
             continue
 
         # Read current tags, update the fingerprint field, and write back.
@@ -1835,4 +1894,10 @@ def repatch_acoustid_tags(
         noop=count_noop,
         dry_run=count_dry_run,
     )
+    if dry_run:
+        return DryRunPlan(
+            pass_name="repatch_acoustid_tags",
+            entries=acoustid_dry_run_entries,
+            count=len(acoustid_dry_run_entries),
+        )
     return appended
