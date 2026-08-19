@@ -178,7 +178,7 @@ ledger complete.  **Planning-register anneal:**
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 ◆ | Wire `unify`'s MusicBrainz user-agent so the canonical name-form lookup can run | pending | | (no contract; pins determinate-transition invariant in NOTES) |
+| 1 ◆ | Wire `unify`'s MusicBrainz user-agent so the canonical name-form lookup can run | done | 2161dae | (no contract; pins determinate-transition invariant in NOTES) |
 
 ## Action-frame digest
 
