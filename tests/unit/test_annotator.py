@@ -41,7 +41,7 @@ from music_annotator import (
 from music_annotator._audit import _audit_tier_pass, _make_audit_counts
 from music_annotator._mb_api import _extract_session_date
 from music_annotator._pipeline_io import _write_provenance_fields
-from music_annotator._tags import _NAME_MAX, _classical_top_dir, _proposed_short, _top_level_class, _work_aliases
+from music_annotator._tags import _NAME_MAX, _proposed_short, _top_dir_component, _work_aliases
 from music_annotator._works import (
     _date_range,
     _old_bare_colon_split,
@@ -1469,9 +1469,9 @@ class TestBuildDestPathEdgeCases:
     def _make_tags_no_composer(self, **kwargs: str) -> TrackTags:
         """Build TrackTags with no composer last names and no conductors/ensembles.
 
-        Sets ``cwp_worktype_genres_top="Classical"`` so that :func:`_top_level_class` routes to
-        the ``Classical`` class (the CE-classical predicate requires both ``cwp_work_top`` non-empty
-        and ``cwp_worktype_genres_top`` containing ``"Classical"``).
+        Sets ``cwp_worktype_genres_top="Classical"`` so that ``IS_CLASSICAL`` is set to ``"1"``
+        (the CE-classical predicate requires both ``cwp_work_top`` non-empty and
+        ``cwp_worktype_genres_top`` containing ``"Classical"``).
 
         :param kwargs: Additional keyword arguments for TrackTags.
         :returns: A TrackTags instance.
@@ -1513,11 +1513,12 @@ class TestBuildDestPathEdgeCases:
         assert "Adagio" in result.name
 
     def test_no_composer_in_tags_uses_recital_shape(self, fs: FakeFilesystem) -> None:
-        """build_dest_path uses recital shape (albumartist - album) when CWP/CEA composer tags are empty.
+        """build_dest_path uses performer-led shape (albumartist - album) when CWP/CEA composer tags are empty.
 
-        C-INIT: when cwp_composer_lastnames and cea_composer_lastnames are both empty, the
-        _classical_top_dir recital branch fires and uses albumartist - album as the top_dir.
-        The release.artist_credit is not consulted (the recital branch short-circuits it).
+        When cwp_composer_lastnames and cea_composer_lastnames are both empty, the performer-led
+        branch of :func:`~music_annotator._tags._top_dir_component` fires and uses albumartist - album
+        as the top_dir.  The release.artist_credit is not consulted (the performer-led branch
+        short-circuits it).
 
         When albumartist is also empty, falls back to album title alone (or "Unknown Album").
 
@@ -1525,7 +1526,7 @@ class TestBuildDestPathEdgeCases:
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-        # No composer in tags, no albumartist → recital branch → "Unknown Album" top_dir.
+        # No composer in tags, no albumartist → performer-led branch → "Unknown Album" top_dir.
         tags = self._make_tags_no_composer(title="Track")
         result = music_annotator.build_dest_path(
             dest_root,
@@ -1534,16 +1535,16 @@ class TestBuildDestPathEdgeCases:
             tags,
         )
         rel = result.relative_to(dest_root)
-        # C-INIT recital branch: top_dir is albumartist-based (or "Unknown Album" when empty).
-        assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
-        assert rel.parts[1] == "Unknown Album", (
-            f"Expected recital top_dir 'Unknown Album' (no albumartist), got {rel.parts[1]!r}"
+        # Performer-led branch: top_dir is albumartist-based (or "Unknown Album" when empty).
+        # C-UNIVERSAL: no class prefix — parts[0] is the top_dir directly.
+        assert rel.parts[0] == "Unknown Album", (
+            f"Expected top_dir 'Unknown Album' (no albumartist, no class prefix), got {rel.parts[0]!r}"
         )
 
     def test_no_composer_in_tags_with_albumartist_uses_performer_first(self, fs: FakeFilesystem) -> None:
         """build_dest_path uses albumartist - album when CWP/CEA composer tags are empty but albumartist is set.
 
-        C-INIT: the recital branch uses albumartist as the primary attribution.
+        The performer-led branch uses albumartist as the primary attribution.
 
         :param fs: pyfakefs fixture.
         """
@@ -1559,9 +1560,9 @@ class TestBuildDestPathEdgeCases:
             tags,
         )
         rel = result.relative_to(dest_root)
-        assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
-        assert "Mitsuko Uchida" in rel.parts[1], (
-            f"Expected albumartist 'Mitsuko Uchida' in recital top_dir, got {rel.parts[1]!r}"
+        # C-UNIVERSAL: no class prefix — parts[0] is the top_dir directly.
+        assert "Mitsuko Uchida" in rel.parts[0], (
+            f"Expected albumartist 'Mitsuko Uchida' in top_dir (parts[0]), got {rel.parts[0]!r}"
         )
 
     def test_duplicate_composer_lastnames_deduplicated(self, fs: FakeFilesystem) -> None:
@@ -1590,8 +1591,8 @@ class TestBuildDestPathEdgeCases:
             tags,
         )
         # "Bach; Bach" → dedup → "Bach" (appears once)
-        # result.parts: ["/", "lib", "Classical", top_dir, work_dir, filename]
-        top_dir = result.parts[3]  # dest_root / class / top_dir / work_dir / filename
+        # result.parts: ["/", "lib", top_dir, work_dir, filename]  (no class prefix — C-UNIVERSAL)
+        top_dir = result.parts[2]  # dest_root / top_dir / work_dir / filename
         assert top_dir.count("Bach") == 1
 
     def test_no_conductors_or_ensembles_uses_fallback_performer(self, fs: FakeFilesystem) -> None:
@@ -1779,8 +1780,8 @@ class TestBuildDestPathEdgeCases:
             _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "I. Allegro"}}),
             tags,
         )
-        # result.parts: ["/", "lib", "Classical", top_dir, work_dir, filename]
-        top_dir = result.parts[3]
+        # result.parts: ["/", "lib", top_dir, work_dir, filename]  (no class prefix — C-UNIVERSAL)
+        top_dir = result.parts[2]
         assert "Karajan" in top_dir
         assert "BPO" in top_dir
 
@@ -1810,8 +1811,8 @@ class TestBuildDestPathEdgeCases:
             _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Summer Love"}}),
             tags,
         )
-        # Must have at least 4 parts: /, lib, top_dir, work_dir, leaf
-        assert len(result.parts) >= 4, "work_dir must not collapse when ALBUM is the only work tag"
+        # Must have at least 5 parts: /, lib, top_dir, work_dir, leaf (no class prefix — C-UNIVERSAL)
+        assert len(result.parts) >= 5, "work_dir must not collapse when ALBUM is the only work tag"
         assert "Liz Rhodes" in result.parts[3]
 
     def test_unknown_album_fallback_when_all_work_tags_absent(self, fs: FakeFilesystem) -> None:
@@ -1917,7 +1918,7 @@ class TestBuildDestPathConcertoNoSoloist:
         assert "Mutter" not in path_str, f"C-NOSOLO violated: soloist 'Mutter' found in path '{path_str}'"
         # Conductor must still be present — the performers component is conductors → ensembles.
         rel = result.relative_to(dest_root)
-        top_dir = rel.parts[1]  # parts: ["Classical", top_dir, ...]
+        top_dir = rel.parts[0]  # C-UNIVERSAL: parts[0] = top_dir (no class prefix)
         assert "Karajan" in top_dir, f"Expected conductor 'Karajan' in top_dir '{top_dir}' (performers component intact)"
 
     def test_multi_disc_concerto_same_top_dir_without_soloist(self, fs: FakeFilesystem) -> None:
@@ -1949,13 +1950,11 @@ class TestBuildDestPathConcertoNoSoloist:
             tags_d2,
         )
 
-        # Both paths must be under the same top_dir (Classical/<top_dir>/...).
+        # Both paths must be under the same top_dir (C-UNIVERSAL: no class prefix).
         rel_d1 = result_d1.relative_to(dest_root)
         rel_d2 = result_d2.relative_to(dest_root)
-        assert rel_d1.parts[0] == "Classical", f"Expected class 'Classical', got {rel_d1.parts[0]!r}"
-        assert rel_d2.parts[0] == "Classical", f"Expected class 'Classical', got {rel_d2.parts[0]!r}"
-        top_dir_d1 = rel_d1.parts[1]
-        top_dir_d2 = rel_d2.parts[1]
+        top_dir_d1 = rel_d1.parts[0]  # C-UNIVERSAL: parts[0] = top_dir (no class prefix)
+        top_dir_d2 = rel_d2.parts[0]
         assert top_dir_d1 == top_dir_d2, (
             f"C-NOSOLO cross-medium grouping regressed: disc-1 top_dir '{top_dir_d1}' != "
             f"disc-2 top_dir '{top_dir_d2}'.  Both should be 'Brahms - Karajan [...]'."
@@ -4376,133 +4375,22 @@ class TestAuditTierPass:
 
 
 # ---------------------------------------------------------------------------
-# C-CLASS KATs: _top_level_class routing table
+# C-UNIVERSAL KATs (a): prefix-less path witnesses — build_dest_path
 # ---------------------------------------------------------------------------
 
 
-class TestTopLevelClass:
-    """KATs for :func:`~music_annotator._tags._top_level_class` (C-CLASS).
+class TestBuildDestPathPrefixLess:
+    """KATs (a): prefix-less path witnesses for :func:`~music_annotator.build_dest_path` (C-UNIVERSAL).
 
-    Each test exercises one arm of the 6-arm routing table.  The routing table is evaluated in
-    order (first match wins); the tests are named after the arm they exercise.
+    Verifies that the catalog path is prefix-less: the first component directly under ``dest_root``
+    is the scholarship-stable first-component shape, with no top-level class directory.
     """
 
-    def _tags(self, **kwargs: str) -> TrackTags:
-        """Build a minimal :class:`~music_annotator.models.TrackTags` for routing tests.
+    def test_single_composer_classical_no_class_prefix(self, fs: FakeFilesystem) -> None:
+        """Single-composer classical release → ``dest_root / "<Composer> - <Performers>" / …`` with no class component.
 
-        :param kwargs: Tag field overrides.
-        :returns: A :class:`~music_annotator.models.TrackTags` instance.
-        """
-        return TrackTags(**kwargs)  # type: ignore[arg-type]
-
-    def test_top_level_class_classical(self) -> None:
-        """CE-classical predicate (cwp_work_top non-empty AND cwp_worktype_genres_top contains 'Classical') → 'Classical'.
-
-        :returns: None.
-        """
-        tags = self._tags(cwp_work_top="Symphony No. 9", cwp_worktype_genres_top="Classical")
-        assert _top_level_class(tags) == "Classical"
-
-    def test_top_level_class_audiobook(self) -> None:
-        """releasetype_secondary contains 'Audiobook' → 'Spoken Word' (arm 1, highest priority).
-
-        :returns: None.
-        """
-        tags = self._tags(releasetype_secondary="Audiobook", cwp_work_top="", cwp_worktype_genres_top="")
-        assert _top_level_class(tags) == "Spoken Word"
-
-    def test_top_level_class_spokenword(self) -> None:
-        """releasetype_secondary contains 'Spokenword' → 'Spoken Word'.
-
-        :returns: None.
-        """
-        tags = self._tags(releasetype_secondary="Spokenword")
-        assert _top_level_class(tags) == "Spoken Word"
-
-    def test_top_level_class_audio_drama(self) -> None:
-        """releasetype_secondary contains 'Audio drama' → 'Spoken Word'.
-
-        :returns: None.
-        """
-        tags = self._tags(releasetype_secondary="Audio drama")
-        assert _top_level_class(tags) == "Spoken Word"
-
-    def test_top_level_class_interview(self) -> None:
-        """releasetype_secondary contains 'Interview' → 'Spoken Word'.
-
-        :returns: None.
-        """
-        tags = self._tags(releasetype_secondary="Interview")
-        assert _top_level_class(tags) == "Spoken Word"
-
-    def test_top_level_class_soundtrack(self) -> None:
-        """releasetype_secondary contains 'Soundtrack' → 'Soundtracks' (arm 2).
-
-        :returns: None.
-        """
-        tags = self._tags(releasetype_secondary="Soundtrack")
-        assert _top_level_class(tags) == "Soundtracks"
-
-    def test_top_level_class_compilation_nonclassical(self) -> None:
-        """releasetype_secondary contains 'Compilation' (not classical) → 'Compilations' (arm 4).
-
-        :returns: None.
-        """
-        tags = self._tags(releasetype_secondary="Compilation", cwp_work_top="", cwp_worktype_genres_top="")
-        assert _top_level_class(tags) == "Compilations"
-
-    def test_top_level_class_popular(self) -> None:
-        """releasetype in {Album, Single, EP, Broadcast, Other} (no other signal) → 'Popular' (arm 5).
-
-        :returns: None.
-        """
-        tags = self._tags(releasetype="Album", cwp_work_top="", cwp_worktype_genres_top="")
-        assert _top_level_class(tags) == "Popular"
-
-    def test_top_level_class_default_fallback(self) -> None:
-        """No usable signal (empty releasetype and releasetype_secondary, predicate false) → 'Unsorted' (arm 6).
-
-        :returns: None.
-        """
-        tags = self._tags(releasetype="", releasetype_secondary="", cwp_work_top="", cwp_worktype_genres_top="")
-        assert _top_level_class(tags) == "Unsorted"
-
-    def test_top_level_class_spoken_word_short_circuits_classical(self) -> None:
-        """Spoken-word secondary type short-circuits before the classical predicate (arm 1 > arm 3).
-
-        A release with both Audiobook secondary type AND classical work structure routes to
-        'Spoken Word', not 'Classical'.
-
-        :returns: None.
-        """
-        tags = self._tags(
-            releasetype_secondary="Audiobook",
-            cwp_work_top="Some Work",
-            cwp_worktype_genres_top="Classical",
-        )
-        assert _top_level_class(tags) == "Spoken Word"
-
-    def test_top_level_class_soundtrack_short_circuits_classical(self) -> None:
-        """Soundtrack secondary type short-circuits before the classical predicate (arm 2 > arm 3).
-
-        :returns: None.
-        """
-        tags = self._tags(
-            releasetype_secondary="Soundtrack",
-            cwp_work_top="Some Work",
-            cwp_worktype_genres_top="Classical",
-        )
-        assert _top_level_class(tags) == "Soundtracks"
-
-
-class TestBuildDestPathClassPrefix:
-    """KATs for the C-CLASS prefix insertion in :func:`~music_annotator.build_dest_path`."""
-
-    def test_build_dest_path_nests_composer_under_class(self, fs: FakeFilesystem) -> None:
-        """Classical top_dir is unchanged beneath the 'Classical' class prefix (C-CLASS).
-
-        The path becomes ``dest_root / Classical / <composer> - <performers> / <work_dir> / …``.
-        The classical top_dir shape is unchanged from the pre-C-CLASS layout.
+        The path was previously ``dest_root / "Classical" / "<Composer> - <Performers>" / …``.
+        Under C-UNIVERSAL the class prefix is absent; the first component is the composer-first shape.
 
         :param fs: pyfakefs fixture.
         """
@@ -4529,49 +4417,27 @@ class TestBuildDestPathClassPrefix:
             tags,
         )
         rel = result.relative_to(dest_root)
-        # parts[0] = class, parts[1] = top_dir, parts[2] = work_dir, parts[3] = leaf
-        assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
-        assert rel.parts[1].startswith("Beethoven"), f"Expected top_dir to start with 'Beethoven', got {rel.parts[1]!r}"
-        assert "Karajan" in rel.parts[1], f"Expected 'Karajan' in top_dir, got {rel.parts[1]!r}"
+        # parts[0] = top_dir (composer-first), parts[1] = work_dir, parts[2] = leaf — no class prefix.
+        assert rel.parts[0].startswith("Beethoven"), (
+            f"Expected top_dir to start with 'Beethoven' (no class prefix), got {rel.parts[0]!r}"
+        )
+        assert "Karajan" in rel.parts[0], f"Expected 'Karajan' in top_dir, got {rel.parts[0]!r}"
+        assert "Classical" not in rel.parts, f"Expected no 'Classical' class prefix in path, got parts={rel.parts!r}"
 
-    def test_build_dest_path_soundtracks_uses_album_as_top_dir(self, fs: FakeFilesystem) -> None:
-        """Soundtracks class uses ALBUM as top_dir (no composer-performers shape).
+    def test_pop_album_no_class_prefix(self, fs: FakeFilesystem) -> None:
+        """Pop album → ``dest_root / "<Artist> - <Album>" / …`` with no class component.
+
+        A pop album (no linked composer) routes through the performer-led branch of
+        :func:`~music_annotator._tags._top_dir_component`.
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
         tags = TrackTags(
-            title="Main Theme",
+            title="Come Together",
             movementnumber="1",
-            movementtotal="1",
-            releasetype_secondary="Soundtrack",
-            album="Star Wars",
-            albumartist="John Williams",
-            cwp_work_top="",
-            cwp_worktype_genres_top="",
-        )
-        result = music_annotator.build_dest_path(
-            dest_root,
-            _rel({"id": "r1", "title": "Star Wars", "artist-credit": [], "medium-list": []}),
-            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Main Theme"}}),
-            tags,
-        )
-        rel = result.relative_to(dest_root)
-        assert rel.parts[0] == "Soundtracks", f"Expected class 'Soundtracks', got {rel.parts[0]!r}"
-        assert rel.parts[1] == "Star Wars", f"Expected top_dir 'Star Wars', got {rel.parts[1]!r}"
-
-    def test_build_dest_path_popular_uses_artist_album_as_top_dir(self, fs: FakeFilesystem) -> None:
-        """Popular class uses '<ALBUMARTIST> - <ALBUM>' as top_dir.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-        tags = TrackTags(
-            title="Track 1",
-            movementnumber="1",
-            movementtotal="10",
+            movementtotal="17",
             releasetype="Album",
             album="Abbey Road",
             albumartist="The Beatles",
@@ -4581,86 +4447,65 @@ class TestBuildDestPathClassPrefix:
         result = music_annotator.build_dest_path(
             dest_root,
             _rel({"id": "r1", "title": "Abbey Road", "artist-credit": [], "medium-list": []}),
-            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Track 1"}}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Come Together"}}),
             tags,
         )
         rel = result.relative_to(dest_root)
-        assert rel.parts[0] == "Popular", f"Expected class 'Popular', got {rel.parts[0]!r}"
-        assert rel.parts[1] == "The Beatles - Abbey Road", f"Expected top_dir 'The Beatles - Abbey Road', got {rel.parts[1]!r}"
+        assert rel.parts[0] == "The Beatles - Abbey Road", f"Expected top_dir 'The Beatles - Abbey Road', got {rel.parts[0]!r}"
+        assert "Popular" not in rel.parts, f"Expected no 'Popular' class prefix in path, got parts={rel.parts!r}"
 
-    def test_build_dest_path_popular_album_only_when_no_albumartist(self, fs: FakeFilesystem) -> None:
-        """Popular class uses ALBUM alone as top_dir when ALBUMARTIST is absent.
+    def test_compilation_no_class_prefix(self, fs: FakeFilesystem) -> None:
+        """Compilation → ``dest_root / "<Various or last> - <Album>" / …`` with no class component.
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
         tags = TrackTags(
-            title="Track 1",
+            title="Piano Concerto No. 1",
             movementnumber="1",
             movementtotal="1",
-            releasetype="Album",
-            album="Unknown Artist Album",
-            albumartist="",
+            releasetype_secondary="Compilation",
+            albumartist="Various Artists",
+            albumartistsort="Various Artists",
+            album="Great Piano Concertos",
             cwp_work_top="",
             cwp_worktype_genres_top="",
         )
         result = music_annotator.build_dest_path(
             dest_root,
-            _rel({"id": "r1", "title": "Unknown Artist Album", "artist-credit": [], "medium-list": []}),
-            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Track 1"}}),
+            _rel({"id": "r1", "title": "Great Piano Concertos", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Piano Concerto No. 1"}}),
             tags,
         )
         rel = result.relative_to(dest_root)
-        assert rel.parts[0] == "Popular", f"Expected class 'Popular', got {rel.parts[0]!r}"
-        assert rel.parts[1] == "Unknown Artist Album", f"Expected top_dir 'Unknown Artist Album', got {rel.parts[1]!r}"
-
-    def test_build_dest_path_popular_unknown_when_no_album_or_artist(self, fs: FakeFilesystem) -> None:
-        """Popular class uses 'Unknown' as top_dir when both ALBUMARTIST and ALBUM are absent.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-        tags = TrackTags(
-            title="Track 1",
-            movementnumber="1",
-            movementtotal="1",
-            releasetype="Album",
-            album="",
-            albumartist="",
-            cwp_work_top="",
-            cwp_worktype_genres_top="",
-        )
-        result = music_annotator.build_dest_path(
-            dest_root,
-            _rel({"id": "r1", "title": "A", "artist-credit": [], "medium-list": []}),
-            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Track 1"}}),
-            tags,
-        )
-        rel = result.relative_to(dest_root)
-        assert rel.parts[0] == "Popular", f"Expected class 'Popular', got {rel.parts[0]!r}"
-        assert rel.parts[1] == "Unknown", f"Expected top_dir 'Unknown', got {rel.parts[1]!r}"
+        assert "Various" in rel.parts[0], f"Expected 'Various' in top_dir, got {rel.parts[0]!r}"
+        assert "Great Piano Concertos" in rel.parts[0], f"Expected album title in top_dir, got {rel.parts[0]!r}"
+        assert "Compilations" not in rel.parts, f"Expected no 'Compilations' class prefix in path, got parts={rel.parts!r}"
 
 
 # ---------------------------------------------------------------------------
-# C-INIT KATs: _classical_top_dir within-classical initial component
+# C-UNIVERSAL KATs (b): first-component-rule witnesses — _top_dir_component
 # ---------------------------------------------------------------------------
 
 
-class TestClassicalTopDir:
-    """KATs for :func:`~music_annotator._tags._classical_top_dir` (C-INIT).
+class TestTopDirComponent:
+    """KATs (b): first-component-rule witnesses for :func:`~music_annotator._tags._top_dir_component` (C-UNIVERSAL).
 
-    Each test exercises one branch of the three-case C-INIT rule:
-    1. Multi-composer classical compilation → albumartist-based shape.
-    2. Recital (no single composer) → performer-first shape.
-    3. Single-composer (dominant population) → None (caller uses <composer> - <performers>).
+    Each test exercises one branch of the three-case universal first-component rule:
+    1. Compilation gate → ``<albumartist-last or "Various"> - <album>``.
+    2. Performer-led (no linked composer) → ``<albumartist> - <album>`` (or bare ``<album>`` when empty).
+    3. Single-composer (dominant population) → ``None`` (caller uses ``<composer> - <performers>``).
+
+    The branches are universal: a pop album routes through case 2 exactly as a classical recital does.
+    All three read only scholarship-stable data (release facts + composer-convergent MB data), never
+    free-classification parameters.
     """
 
-    def test_classical_top_dir_single_composer(self) -> None:
-        """Single-composer classical → None (caller uses <composer> - <performers> unchanged).
+    def test_single_composer_returns_none(self) -> None:
+        """Single-composer → None (caller uses <composer> - <performers> unchanged).
 
-        The dominant population: a work with a single composer linked in MB.  _classical_top_dir
+        The dominant population: a work with a single composer linked in MB.  _top_dir_component
         returns None to signal the caller should use the default composer-first shape.
 
         :returns: None.
@@ -4674,14 +4519,14 @@ class TestClassicalTopDir:
             albumartistsort="Karajan, Herbert von",
             album="Beethoven: Symphony No. 9",
         )
-        result = _classical_top_dir(tags)
-        assert result is None, f"Expected None for single-composer classical, got {result!r}"
+        result = _top_dir_component(tags)
+        assert result is None, f"Expected None for single-composer, got {result!r}"
 
-    def test_classical_top_dir_recital(self) -> None:
-        """Recital (performer-led, no single composer) → performer-first component.
+    def test_performer_led_returns_albumartist_album(self) -> None:
+        """Performer-led (no linked composer) → ``<albumartist> - <album>``.
 
         Signal: CWP_COMPOSER_LASTNAMES and CEA_COMPOSER_LASTNAMES are both empty.
-        The album artist is the canonical identity for a recital.
+        Universal: a pop album routes here exactly as a classical recital does.
 
         :returns: None.
         """
@@ -4694,13 +4539,35 @@ class TestClassicalTopDir:
             albumartistsort="Uchida, Mitsuko",
             album="Schubert: Piano Sonatas",
         )
-        result = _classical_top_dir(tags)
-        assert result is not None, "Expected a non-None result for recital"
-        assert "Mitsuko Uchida" in result, f"Expected albumartist 'Mitsuko Uchida' in recital top_dir, got {result!r}"
-        assert "Schubert" in result or "Piano Sonatas" in result, f"Expected album title in recital top_dir, got {result!r}"
+        result = _top_dir_component(tags)
+        assert result is not None, "Expected a non-None result for performer-led"
+        assert "Mitsuko Uchida" in result, f"Expected albumartist 'Mitsuko Uchida' in top_dir, got {result!r}"
+        assert "Schubert" in result or "Piano Sonatas" in result, f"Expected album title in top_dir, got {result!r}"
 
-    def test_classical_top_dir_compilation(self) -> None:
-        """Multi-composer classical compilation → albumartist-based shape.
+    def test_performer_led_pop_album_returns_albumartist_album(self) -> None:
+        """Pop album (no linked composer) → ``<albumartist> - <album>`` (performer-led branch).
+
+        Demonstrates the universal nature of the performer-led branch: a pop album routes here
+        exactly as a classical recital does.
+
+        :returns: None.
+        """
+        tags = TrackTags(
+            releasetype="Album",
+            cwp_work_top="",
+            cwp_worktype_genres_top="",
+            cwp_composer_lastnames="",
+            cea_composer_lastnames="",
+            albumartist="The Beatles",
+            albumartistsort="Beatles, The",
+            album="Abbey Road",
+        )
+        result = _top_dir_component(tags)
+        assert result is not None, "Expected a non-None result for pop album"
+        assert result == "The Beatles - Abbey Road", f"Expected 'The Beatles - Abbey Road', got {result!r}"
+
+    def test_compilation_returns_albumartist_last_album(self) -> None:
+        """Compilation gate → ``<albumartist-last or "Various"> - <album>``.
 
         Signal: releasetype_secondary contains 'Compilation'.
         Uses albumartistsort → last_name derivation (aligned with _canonical_composer_component).
@@ -4717,13 +4584,13 @@ class TestClassicalTopDir:
             albumartistsort="Various Artists",
             album="Great Piano Concertos",
         )
-        result = _classical_top_dir(tags)
+        result = _top_dir_component(tags)
         assert result is not None, "Expected a non-None result for compilation"
         assert "Various" in result, f"Expected 'Various' in compilation top_dir, got {result!r}"
         assert "Great Piano Concertos" in result, f"Expected album title in compilation top_dir, got {result!r}"
 
-    def test_classical_top_dir_compilation_named_artist(self) -> None:
-        """Multi-composer compilation with a named albumartist → last_name of albumartistsort.
+    def test_compilation_named_artist_returns_last_name_album(self) -> None:
+        """Compilation with a named albumartist → last_name of albumartistsort.
 
         When albumartistsort is not 'Various Artists', uses last_name(albumartistsort) as the
         artist component (aligned with _canonical_composer_component in _pipeline_maint.py).
@@ -4740,13 +4607,13 @@ class TestClassicalTopDir:
             albumartistsort="Perlman, Itzhak",
             album="Perlman Plays Concertos",
         )
-        result = _classical_top_dir(tags)
+        result = _top_dir_component(tags)
         assert result is not None, "Expected a non-None result for named-artist compilation"
         assert "Perlman" in result, f"Expected 'Perlman' (last_name of albumartistsort) in top_dir, got {result!r}"
         assert "Perlman Plays Concertos" in result, f"Expected album title in compilation top_dir, got {result!r}"
 
-    def test_classical_top_dir_recital_no_albumartist(self) -> None:
-        """Recital with no albumartist → album-only shape (no performer prefix).
+    def test_performer_led_no_albumartist_returns_album_only(self) -> None:
+        """Performer-led with no albumartist → album-only shape (no performer prefix).
 
         Edge case: both ALBUMARTIST and ARTIST are empty.  Falls back to album title alone.
 
@@ -4761,14 +4628,14 @@ class TestClassicalTopDir:
             artist="",
             album="Unknown Recital",
         )
-        result = _classical_top_dir(tags)
-        assert result is not None, "Expected a non-None result for recital with no albumartist"
+        result = _top_dir_component(tags)
+        assert result is not None, "Expected a non-None result for performer-led with no albumartist"
         assert result == "Unknown Recital", f"Expected 'Unknown Recital', got {result!r}"
 
-    def test_build_dest_path_classical_recital_uses_performer_first(self, fs: FakeFilesystem) -> None:
-        """build_dest_path for a recital routes to Classical/<albumartist> - <album>/….
+    def test_build_dest_path_recital_uses_performer_first(self, fs: FakeFilesystem) -> None:
+        """build_dest_path for a recital → ``dest_root / "<albumartist> - <album>" / …``.
 
-        Verifies the C-INIT recital branch end-to-end through build_dest_path.
+        Verifies the performer-led branch end-to-end through build_dest_path (no class prefix).
 
         :param fs: pyfakefs fixture.
         """
@@ -4793,15 +4660,15 @@ class TestClassicalTopDir:
             tags,
         )
         rel = result.relative_to(dest_root)
-        assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
-        assert "Mitsuko Uchida" in rel.parts[1], (
-            f"Expected albumartist 'Mitsuko Uchida' in recital top_dir, got {rel.parts[1]!r}"
+        assert "Mitsuko Uchida" in rel.parts[0], (
+            f"Expected albumartist 'Mitsuko Uchida' in top_dir (parts[0]), got {rel.parts[0]!r}"
         )
+        assert "Classical" not in rel.parts, f"Expected no 'Classical' class prefix in path, got parts={rel.parts!r}"
 
-    def test_build_dest_path_classical_compilation_uses_various(self, fs: FakeFilesystem) -> None:
-        """build_dest_path for a classical compilation routes to Classical/Various - <album>/….
+    def test_build_dest_path_compilation_uses_various(self, fs: FakeFilesystem) -> None:
+        """build_dest_path for a compilation → ``dest_root / "Various - <album>" / …``.
 
-        Verifies the C-INIT compilation branch end-to-end through build_dest_path.
+        Verifies the compilation branch end-to-end through build_dest_path (no class prefix).
 
         :param fs: pyfakefs fixture.
         """
@@ -4827,9 +4694,9 @@ class TestClassicalTopDir:
             tags,
         )
         rel = result.relative_to(dest_root)
-        assert rel.parts[0] == "Classical", f"Expected class 'Classical', got {rel.parts[0]!r}"
-        assert "Various" in rel.parts[1], f"Expected 'Various' in compilation top_dir, got {rel.parts[1]!r}"
-        assert "Great Piano Concertos" in rel.parts[1], f"Expected album title in compilation top_dir, got {rel.parts[1]!r}"
+        assert "Various" in rel.parts[0], f"Expected 'Various' in top_dir (parts[0]), got {rel.parts[0]!r}"
+        assert "Great Piano Concertos" in rel.parts[0], f"Expected album title in top_dir, got {rel.parts[0]!r}"
+        assert "Classical" not in rel.parts, f"Expected no 'Classical' class prefix in path, got parts={rel.parts!r}"
 
 
 # ---------------------------------------------------------------------------

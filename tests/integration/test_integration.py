@@ -199,7 +199,7 @@ def _make_work_detail() -> MBWork:
     """Return a minimal work model for Fontane di Roma.
 
     Uses ``"type": "Classical"`` so that ``cwp_worktype_genres_top`` contains ``"Classical"``
-    and the C-CLASS predicate routes the release to the ``Classical`` library class.
+    and the CE-classical predicate sets ``IS_CLASSICAL = "1"``.
 
     :returns: An :class:`~music_annotator.models.MBWork` instance.
     """
@@ -2979,20 +2979,26 @@ def _patch_mb_audiobook(mocker: MockerFixture, release: MBRelease) -> None:
     mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
 
 
-class TestCClassIntegration:
-    """C-CLASS integration KATs: classical and audiobook class routing.
+# ---------------------------------------------------------------------------
+# C-UNIVERSAL integration KATs (a): prefix-less path witnesses
+# ---------------------------------------------------------------------------
+
+
+class TestCUniversalIntegration:
+    """C-UNIVERSAL integration KATs (a): prefix-less path witnesses.
 
     These tests exercise the full pipeline end-to-end (no internal helpers patched) and verify
-    that the C-CLASS routing produces the correct path structure for classical and audiobook releases.
+    that the catalog path is prefix-less: the first component directly under ``dest_root`` is
+    the scholarship-stable first-component shape, with no top-level class directory.
     """
 
-    def test_classical_release_paths_under_classical_class(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Classical release → path under Classical/<composer-first top_dir>/… with sidecars in correct work dir.
+    def test_classical_release_paths_prefix_less(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Classical release → ``dest_root / "<Composer> - <Performers>" / …`` with no class prefix.
 
         Exercises the full pipeline with a classical release (work type "Classical" so
         cwp_worktype_genres_top contains "Classical").  Verifies:
-        - All FLAC files land under ``Classical/``.
-        - The top_dir uses the composer-first shape (``<composer> - <performers>``).
+        - All FLAC files land directly under ``dest_root`` with a composer-first top_dir.
+        - No ``Classical/`` class prefix appears in the path.
         - The provenance sidecar is written to the correct work_top_dir.
 
         :param mocker: pytest-mock fixture.
@@ -3020,14 +3026,15 @@ class TestCClassIntegration:
         flac_files = sorted(dest.rglob("*.flac"))
         assert len(flac_files) == 2, f"expected 2 FLAC files, got {len(flac_files)}"
 
-        # All files must be under the Classical class.
+        # All files must use the composer-first shape directly under dest_root (no class prefix).
         for f in flac_files:
             rel = f.relative_to(dest)
-            assert rel.parts[0] == "Classical", (
-                f"Expected class 'Classical' for classical release, got {rel.parts[0]!r} for {f}"
+            assert "Respighi" in rel.parts[0], (
+                f"Expected composer 'Respighi' in top_dir (parts[0]), got {rel.parts[0]!r} for {f}"
             )
-            # top_dir (parts[1]) must use the composer-first shape.
-            assert "Respighi" in rel.parts[1], f"Expected composer 'Respighi' in top_dir, got {rel.parts[1]!r}"
+            assert "Classical" not in rel.parts, (
+                f"Expected no 'Classical' class prefix in path, got parts={rel.parts!r} for {f}"
+            )
 
         # Provenance sidecar must be in the correct work_top_dir.
         work_top = _work_top_dir(flac_files[0], dest)
@@ -3035,10 +3042,11 @@ class TestCClassIntegration:
         assert prov_path.exists(), f"provenance sidecar must be written at {prov_path}"
 
     def test_classical_single_composer_regression_guard(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Single-composer classical release → path under Classical/<composer-first top_dir>/… (C-INIT regression guard).
+        """Single-composer classical release → ``dest_root / "<Composer> - <Performers>" / …`` (C-UNIVERSAL regression guard).
 
-        Verifies that the C-INIT change does not regress the dominant single-composer population.
-        The existing Respighi/Karajan release must still produce a composer-first top_dir.
+        Verifies that the prefix-less policy does not regress the dominant single-composer population.
+        The Respighi/Karajan release must still produce a composer-first top_dir, just without the
+        ``Classical/`` class prefix.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs filesystem fixture.
@@ -3067,20 +3075,21 @@ class TestCClassIntegration:
 
         for f in flac_files:
             rel = f.relative_to(dest)
-            assert rel.parts[0] == "Classical", (
-                f"Expected class 'Classical' for single-composer classical, got {rel.parts[0]!r}"
+            # C-UNIVERSAL: single-composer → composer-first top_dir, no class prefix.
+            assert "Respighi" in rel.parts[0], (
+                f"Expected composer 'Respighi' in top_dir (C-UNIVERSAL single-composer), got {rel.parts[0]!r}"
             )
-            # C-INIT: single-composer → composer-first top_dir (Respighi is the composer).
-            assert "Respighi" in rel.parts[1], (
-                f"Expected composer 'Respighi' in top_dir (C-INIT single-composer), got {rel.parts[1]!r}"
-            )
+            assert "Classical" not in rel.parts, f"Expected no 'Classical' class prefix in path, got parts={rel.parts!r}"
 
-    def test_audiobook_release_paths_under_spoken_word_class(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Audiobook release → path under Spoken Word/… with sidecars in correct work dir.
+    def test_audiobook_release_paths_prefix_less(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Audiobook release → ``dest_root / "<Artist> - <Album>" / …`` with no class prefix.
 
         Exercises the full pipeline with an audiobook release (secondary-type 'Audiobook').
+        Under C-UNIVERSAL, the audiobook routes through the performer-led branch (no linked
+        composer) and produces an ``<albumartist> - <album>`` top_dir with no class prefix.
         Verifies:
-        - All FLAC files land under ``Spoken Word/``.
+        - All FLAC files land directly under ``dest_root`` with a performer-first top_dir.
+        - No ``Spoken Word/`` class prefix appears in the path.
         - The provenance sidecar is written to the correct work_top_dir.
 
         :param mocker: pytest-mock fixture.
@@ -3108,11 +3117,11 @@ class TestCClassIntegration:
         flac_files = sorted(dest.rglob("*.flac"))
         assert len(flac_files) == 2, f"expected 2 FLAC files, got {len(flac_files)}"
 
-        # All files must be under the Spoken Word class.
+        # All files must land directly under dest_root with a performer-first top_dir (no class prefix).
         for f in flac_files:
             rel = f.relative_to(dest)
-            assert rel.parts[0] == "Spoken Word", (
-                f"Expected class 'Spoken Word' for audiobook release, got {rel.parts[0]!r} for {f}"
+            assert "Spoken Word" not in rel.parts, (
+                f"Expected no 'Spoken Word' class prefix in path, got parts={rel.parts!r} for {f}"
             )
 
         # Provenance sidecar must be in the correct work_top_dir.
@@ -3122,7 +3131,7 @@ class TestCClassIntegration:
 
 
 # ---------------------------------------------------------------------------
-# C-INIT integration KATs: within-classical initial component
+# C-UNIVERSAL integration KATs (b): performer-led and compilation witnesses
 # ---------------------------------------------------------------------------
 
 
@@ -3130,9 +3139,9 @@ def _make_recital_release() -> MBRelease:
     """Return a minimal recital release model (performer-led, no single composer).
 
     The release artist is "Mitsuko Uchida" (pianist).  The work has type "Classical" so that
-    the C-CLASS predicate routes to the Classical class, but has NO composer relation so that
-    cwp_composer_lastnames is empty and _classical_top_dir returns the recital (performer-first)
-    shape.
+    ``cwp_worktype_genres_top`` contains ``"Classical"`` and ``IS_CLASSICAL = "1"``, but has NO
+    composer relation so that ``cwp_composer_lastnames`` is empty and :func:`_top_dir_component`
+    returns the performer-led (performer-first) shape.
 
     :returns: An :class:`~music_annotator.models.MBRelease` instance.
     """
@@ -3213,9 +3222,9 @@ def _make_recital_work_detail() -> MBWork:
     """Return a minimal work model for a recital track with NO composer relation.
 
     Uses ``"type": "Classical"`` so that ``cwp_worktype_genres_top`` contains ``"Classical"``
-    and the C-CLASS predicate routes the release to the ``Classical`` library class.  The
-    ``artist-relation-list`` is empty (no composer linked) so that ``cwp_composer_lastnames``
-    is empty and ``_classical_top_dir`` returns the recital (performer-first) shape.
+    and ``IS_CLASSICAL = "1"``.  The ``artist-relation-list`` is empty (no composer linked) so
+    that ``cwp_composer_lastnames`` is empty and :func:`_top_dir_component` returns the
+    performer-led (performer-first) shape.
 
     :returns: An :class:`~music_annotator.models.MBWork` instance.
     """
@@ -3288,19 +3297,20 @@ def _patch_mb_recital(mocker: MockerFixture, release: MBRelease) -> None:
 
 
 class TestCInitIntegration:
-    """C-INIT integration KATs: within-classical initial component.
+    """C-UNIVERSAL integration KATs (b): performer-led and compilation witnesses.
 
     These tests exercise the full pipeline end-to-end (no internal helpers patched) and verify
-    that the C-INIT routing produces the correct within-classical path structure for recital
-    and single-composer releases.
+    that the performer-led branch of the universal first-component rule produces the correct
+    prefix-less path structure.
     """
 
-    def test_recital_release_paths_under_classical_performer_first(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Recital release → path under Classical/<performer-first top_dir>/… (C-INIT recital branch).
+    def test_recital_release_paths_performer_first(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Recital release → ``dest_root / "<albumartist> - <album>" / …`` (performer-led branch, no class prefix).
 
         Exercises the full pipeline with a recital release (work type "Classical" but no composer
         relation → cwp_composer_lastnames empty).  Verifies:
-        - All FLAC files land under ``Classical/``.
+        - All FLAC files land directly under ``dest_root`` with a performer-first top_dir.
+        - No ``Classical/`` class prefix appears in the path.
         - The top_dir uses the performer-first shape (albumartist - album).
         - The provenance sidecar is written to the correct work_top_dir.
 
@@ -3329,13 +3339,15 @@ class TestCInitIntegration:
         flac_files = sorted(dest.rglob("*.flac"))
         assert len(flac_files) == 2, f"expected 2 FLAC files, got {len(flac_files)}"
 
-        # All files must be under the Classical class.
+        # All files must use the performer-first shape directly under dest_root (no class prefix).
         for f in flac_files:
             rel = f.relative_to(dest)
-            assert rel.parts[0] == "Classical", f"Expected class 'Classical' for recital release, got {rel.parts[0]!r} for {f}"
-            # C-INIT recital branch: top_dir must be performer-first (albumartist - album).
-            assert "Mitsuko Uchida" in rel.parts[1], (
-                f"Expected albumartist 'Mitsuko Uchida' in recital top_dir (C-INIT), got {rel.parts[1]!r}"
+            # C-UNIVERSAL performer-led branch: top_dir is albumartist-based, no class prefix.
+            assert "Mitsuko Uchida" in rel.parts[0], (
+                f"Expected albumartist 'Mitsuko Uchida' in top_dir (C-UNIVERSAL), got {rel.parts[0]!r}"
+            )
+            assert "Classical" not in rel.parts, (
+                f"Expected no 'Classical' class prefix in path, got parts={rel.parts!r} for {f}"
             )
 
         # Provenance sidecar must be in the correct work_top_dir.

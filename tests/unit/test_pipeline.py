@@ -2739,10 +2739,8 @@ class TestRunFullPipeline:
 
         assert len(captured_dests) == 2
         # Both movements must share the same top-level directory.
-        # With C-CLASS: parts[0] = class ("Classical"), parts[1] = top_dir (<composer> - <performers>).
-        classes = {p.relative_to(dest).parts[0] for p in captured_dests}
-        tops = {p.relative_to(dest).parts[1] for p in captured_dests}
-        assert len(classes) == 1, f"Movements landed in different classes: {sorted(classes)}"
+        # C-UNIVERSAL: parts[0] = top_dir (<composer> - <performers>), no class prefix.
+        tops = {p.relative_to(dest).parts[0] for p in captured_dests}
         assert len(tops) == 1, f"Movements landed in different top dirs: {sorted(tops)}"
         # The shared top-level directory must be Mozart's, not Süßmayr's.
         assert "Mozart" in tops.pop()
@@ -4319,24 +4317,25 @@ class TestBuildTrackTagsArrangerDedup:
 
 
 # ---------------------------------------------------------------------------
-# build_track_tags — IS_CLASSICAL conditionalisation (REND-21)
+# build_track_tags — IS_CLASSICAL from work-type predicate (REND-21/SEL-14)
 # ---------------------------------------------------------------------------
 
 
 class TestBuildTrackTagsIsClassical:
-    """KAT for REND-21: IS_CLASSICAL reflects the actual _top_level_class result.
+    """KATs (c): IS_CLASSICAL-from-work-type witnesses (REND-21/SEL-14).
 
-    Both branches (classical → "1"; non-classical → "0") are covered even though the non-classical
-    branch is presently unreachable in the live pipeline (build_track_tags is only called for
-    classical releases).  The unit tests construct each case directly.
+    IS_CLASSICAL derives from compositional identity: the CE-classical predicate is
+    ``cwp_work_top`` non-empty AND ``cwp_worktype_genres_top`` contains ``"Classical"``.
+    Tag layer ≠ path layer: this flag is independent of any path component.
+    Both branches (classical → "1"; non-classical → "0") are covered.
     """
 
     def test_is_classical_one_for_classical_release(self) -> None:
-        """KAT REND-21a: IS_CLASSICAL is "1" when _top_level_class returns "Classical".
+        """KAT REND-21a: IS_CLASSICAL is "1" when the CE-classical predicate is satisfied.
 
         A work hierarchy whose top work has type "Classical" satisfies the CE-classical predicate
         (cwp_work_top non-empty AND cwp_worktype_genres_top contains "Classical"), so
-        _top_level_class returns "Classical" and IS_CLASSICAL must be "1".
+        IS_CLASSICAL must be "1".  Independent of any path component.
         """
         work = _w(
             {
@@ -4369,11 +4368,11 @@ class TestBuildTrackTagsIsClassical:
         assert tags.is_classical == "1", f"Expected IS_CLASSICAL='1' for classical release, got '{tags.is_classical}'"
 
     def test_is_classical_zero_for_non_classical_release(self) -> None:
-        """KAT REND-21b: IS_CLASSICAL is "0" when _top_level_class does not return "Classical".
+        """KAT REND-21b: IS_CLASSICAL is "0" when the CE-classical predicate is not satisfied.
 
-        A release with no work link (cwp_work_top empty) and primary_type "Album" causes
-        _top_level_class to return "Popular", so IS_CLASSICAL must be "0".  This is the branch
-        REND-21 flagged as the latent bug — previously the hardcoded "1" would have been wrong here.
+        A release with no work link (cwp_work_top empty) does not satisfy the CE-classical
+        predicate, so IS_CLASSICAL must be "0".  The flag derives from compositional identity,
+        not from any path component.
         """
         rec = _rec(
             {
@@ -4381,18 +4380,63 @@ class TestBuildTrackTagsIsClassical:
                 "title": "Pop Track",
                 "artist-credit": [],
                 "artist-relation-list": [],
-                "work-relation-list": [],  # no work link → cwp_work_top empty → not classical
+                "work-relation-list": [],  # no work link → cwp_work_top empty → predicate false
             }
         )
         track = _trk({"id": "t1", "position": 1, "recording": {"id": "rec-pop", "title": "Pop Track", "artist-credit": []}})
         tags = build_track_tags(
-            _make_release(),  # primary_type="Album", no secondary types → "Popular"
+            _make_release(),
             track,
             1,
             rec,
-            [],  # empty work hierarchy
+            [],  # empty work hierarchy → cwp_work_top empty → IS_CLASSICAL "0"
         )
         assert tags.is_classical == "0", f"Expected IS_CLASSICAL='0' for non-classical release, got '{tags.is_classical}'"
+
+    def test_is_classical_one_independent_of_path(self) -> None:
+        """KAT REND-21c: IS_CLASSICAL is "1" for a classical work even though the path is prefix-less.
+
+        Proves the decouple: a classical work whose path has no class prefix still gets
+        IS_CLASSICAL == "1" because the flag derives from the work-type predicate, not the path.
+        """
+        work = _w(
+            {
+                "id": "w-sonata",
+                "title": "Sonata in B minor",
+                "type": "Classical",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-schubert", "name": "Schubert", "sort-name": "Schubert, Franz"},
+                        "attribute-list": [],
+                    }
+                ],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        rec = _rec(
+            {
+                "id": "rec-sonata",
+                "title": "Sonata in B minor",
+                "artist-credit": [],
+                "artist-relation-list": [],
+                "work-relation-list": [{"type": "performance", "work": {"id": "w-sonata", "title": "Sonata in B minor"}}],
+            }
+        )
+        track = _trk(
+            {"id": "t1", "position": 1, "recording": {"id": "rec-sonata", "title": "Sonata in B minor", "artist-credit": []}}
+        )
+        tags = build_track_tags(_make_release(), track, 1, rec, [work])
+        # The path is prefix-less (C-UNIVERSAL) — no "Classical" directory component.
+        # IS_CLASSICAL must still be "1" because it derives from the work-type predicate.
+        assert tags.is_classical == "1", (
+            f"Expected IS_CLASSICAL='1' for classical work with prefix-less path, got '{tags.is_classical}'"
+        )
+        # Verify the path is indeed prefix-less (no "Classical" class component).
+        assert tags.cwp_work_top == "Sonata in B minor", "cwp_work_top must be set for the predicate to fire"
+        assert "Classical" in tags.cwp_worktype_genres_top, "cwp_worktype_genres_top must contain 'Classical'"
 
 
 # ---------------------------------------------------------------------------
@@ -12838,13 +12882,12 @@ class TestRunWorkGroupModalDepth:
         assert len(dest_files) == 3, f"Expected 3 FLAC files, got {len(dest_files)}"
 
         # All three tracks must land at depth 2 (one intermediate directory below work_dir).
-        # Relative path structure: Classical/top_dir/work_dir/intermediate/leaf.flac
-        # That is 5 parts (including the filename).  Depth 3 would be 6 parts.
+        # Relative path structure: top_dir/work_dir/intermediate/leaf.flac (no class prefix — C-UNIVERSAL)
+        # That is 4 parts (including the filename).  Depth 3 would be 5 parts.
         for f in dest_files:
             rel_parts = f.relative_to(dest).parts
-            assert len(rel_parts) == 5, (  # noqa: PLR2004
-                f"Expected 5 path parts (Classical/top/work/act/leaf) for {f.relative_to(dest)}, "
-                f"got {len(rel_parts)}: {rel_parts}"
+            assert len(rel_parts) == 4, (  # noqa: PLR2004
+                f"Expected 4 path parts (top/work/act/leaf) for {f.relative_to(dest)}, got {len(rel_parts)}: {rel_parts}"
             )
 
     def test_run_uniform_depth_group_unchanged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -12893,12 +12936,11 @@ class TestRunWorkGroupModalDepth:
         assert len(dest_files) == 2, f"Expected 2 FLAC files, got {len(dest_files)}"
 
         # Both tracks must land at depth 2 (one intermediate directory below work_dir).
-        # Relative path structure: Classical/top_dir/work_dir/intermediate/leaf.flac = 5 parts.
+        # Relative path structure: top_dir/work_dir/intermediate/leaf.flac = 4 parts (no class prefix — C-UNIVERSAL).
         for f in dest_files:
             rel_parts = f.relative_to(dest).parts
-            assert len(rel_parts) == 5, (  # noqa: PLR2004
-                f"Expected 5 path parts (Classical/top/work/act/leaf) for {f.relative_to(dest)}, "
-                f"got {len(rel_parts)}: {rel_parts}"
+            assert len(rel_parts) == 4, (  # noqa: PLR2004
+                f"Expected 4 path parts (top/work/act/leaf) for {f.relative_to(dest)}, got {len(rel_parts)}: {rel_parts}"
             )
 
     def test_run_repath_parity_same_group_same_path(self, fs: FakeFilesystem) -> None:
