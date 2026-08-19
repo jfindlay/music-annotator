@@ -187,7 +187,7 @@ ledger complete.  **Planning-register anneal:**
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 ◆ | Sync durable prose (code comments + styleguide + impl census) to the C-UNIVERSAL freeze | pending | | (none — documentary re-alignment; no new contract) |
+| 1 ◆ | Sync durable prose (code comments + styleguide + impl census) to the C-UNIVERSAL freeze | done | 02a9c83 | (none — documentary re-alignment; no new contract) |
 
 ## Action-frame digest
 
