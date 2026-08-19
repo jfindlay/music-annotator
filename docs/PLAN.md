@@ -250,11 +250,15 @@ green, ledger complete.  **Planning-register anneal:**
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 ◆ | Re-freeze the catalog naming policy: delete the class prefix, generalise the first-component rule, decouple `IS_CLASSICAL` | pending | — | C-UNIVERSAL + epistemic-criterion prose contract |
+| 1 ◆ | Re-freeze the catalog naming policy: delete the class prefix, generalise the first-component rule, decouple `IS_CLASSICAL` | done | bec261d | C-UNIVERSAL + epistemic-criterion prose contract (already in NOTES from architect session; no code change needed). Extra file allowed: `tests/unit/test_pipeline_maint.py` (contains KAT (d) — discriminator-still-works witness for `_work_top_dir`; plainly within session scope). |
 
 ## Action-frame digest
 
-*(none yet)*
+### S1 ◆ — 2026-08-19
+Discovery/flex: D-2 collapse-equivalence resolved as intended behaviour change (Soundtracks bare-`<album>` → performer-led `<albumartist> - <album>`); editorial-class distinctions relocate to playlist lens per design intent.
+Affected: none (reconciled against Purpose; no contract broken)
+Deferred: no
+Texture: Boundary fork flagged two stale comments (`models.py:1385` references deleted `_top_level_class`; `_tags.py:1156` references renamed `_classical_top_dir`) — non-blocking accuracy defects for the deferred styleguide-sync follow-on. `models.py:1385` most material (misstates the just-frozen IS_CLASSICAL basis). ◆ verdict: still-on-intent.
 
 ## Discoveries & risks
 
