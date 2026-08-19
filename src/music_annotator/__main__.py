@@ -80,6 +80,7 @@ Usage::
 
     music-annotator unify \\
         <dest_dir> \\
+        [--user-agent-app "AppName/Version"] [--user-agent-email contact@example.com] \\
         [--dry-run] [-y/--yes]
 
     music-annotator repatch-acoustid \\
@@ -735,8 +736,13 @@ def _build_parser() -> argparse.ArgumentParser:
             using build_dest_path over the full release group, and moves fragments to the
             canonical path.
 
-            The join key is the embedded MUSICBRAINZ_ALBUMID tag, not the journal (C-W2).
-            No MusicBrainz network calls are made.
+            The join key is the embedded MUSICBRAINZ_ALBUMID tag, not the journal.  unify
+            reads the embedded MUSICBRAINZ_ALBUMID join key and effects a determinate re-layout
+            of the current library state.  For each file with a MUSICBRAINZ_ARTISTID tag, it
+            dereferences the embedded artist MBID for its stable, primary-flagged canonical
+            name-form (a narrow, cached, fixed-MBID lookup — never a MusicBrainz search or
+            re-identification), so it makes no wildcard MB call but does require the user-agent
+            when the library contains files with MUSICBRAINZ_ARTISTID tags.
 
             Use --dry-run first to preview all planned moves.  Use -y/--yes to skip the
             confirmation prompt.
@@ -763,6 +769,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         help="Skip the confirmation prompt and move files immediately.",
+    )
+    unify_parser.add_argument(
+        "--user-agent-app",
+        default=_DEFAULT_USER_AGENT_APP,
+        metavar="STRING",
+        help='MusicBrainz user-agent app token in the form "AppName/Version" (default: %(default)s).',
+    )
+    unify_parser.add_argument(
+        "--user-agent-email",
+        default="",
+        metavar="EMAIL",
+        help=(
+            "Contact e-mail address included in the MusicBrainz user-agent string.  "
+            "Required when the library contains files with MUSICBRAINZ_ARTISTID tags, "
+            "because unify calls fetch_artist_aliases for canonical name-forms."
+        ),
     )
 
     # ------------------------------------------------------------------
@@ -924,7 +946,10 @@ def main() -> None:
     :func:`~music_annotator.enrich_origin_time` with ``dry_run`` forwarded.  The ``rebuild``
     subcommand dispatches to :func:`~music_annotator.rebuild_journal` with ``dry_run=True``
     (default) or ``dry_run=False`` when ``--apply`` is passed.  The ``unify`` subcommand
-    dispatches to :func:`~music_annotator.unify`.  The ``repatch-acoustid`` subcommand dispatches
+    initialises the MusicBrainz user-agent via :func:`~music_annotator.init_mb` (required because
+    the unify pass dereferences each embedded artist MBID for its stable, primary-flagged canonical
+    name-form via :func:`~music_annotator._mb_api.fetch_artist_aliases`), then dispatches to
+    :func:`~music_annotator.unify`.  The ``repatch-acoustid`` subcommand dispatches
     to :func:`~music_annotator.repatch_acoustid_tags` with ``acoustid_key`` and ``dry_run``
     forwarded.  The ``repatch-catalogue-colon`` subcommand dispatches to
     :func:`~music_annotator.repatch_catalogue_colon` with ``dry_run`` forwarded.  The
@@ -1069,11 +1094,20 @@ def main() -> None:
             )
 
         case "unify":
-            _dispatch(
-                lambda: music_annotator.unify(dest_root=args.dest_dir, yes=args.yes, dry_run=args.dry_run),
-                "unify_error",
-                dest_root=str(args.dest_dir),
-            )
+
+            def _run_unify() -> None:
+                """Initialise the MusicBrainz user-agent and run the unify pass.
+
+                Calls :func:`~music_annotator.init_mb` before dispatching to
+                :func:`~music_annotator.unify`, because the unify pass dereferences each
+                embedded artist MBID for its stable, primary-flagged canonical name-form via
+                :func:`~music_annotator._mb_api.fetch_artist_aliases`, which requires the
+                user-agent to be set.
+                """
+                music_annotator.init_mb(f"{args.user_agent_app} {args.user_agent_email}".strip())
+                music_annotator.unify(dest_root=args.dest_dir, yes=args.yes, dry_run=args.dry_run)
+
+            _dispatch(_run_unify, "unify_error", dest_root=str(args.dest_dir))
 
         case "repatch-acoustid":
             _dispatch(

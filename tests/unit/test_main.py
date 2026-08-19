@@ -736,6 +736,52 @@ class TestBuildParser:
         ns = parser.parse_args([*self._PREFLIGHT_BASE, "--user-agent-email", "me@example.com"])
         assert ns.user_agent_email == "me@example.com"
 
+    # ------------------------------------------------------------------
+    # unify parser user-agent tests (KAT a)
+    # ------------------------------------------------------------------
+
+    _UNIFY_BASE = ["unify", "/dest"]
+
+    def test_unify_user_agent_email_stored(self) -> None:
+        """unify --user-agent-email is stored on the namespace.
+
+        Verifies that the --user-agent-email argument is accepted and stored correctly by the
+        unify parser.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args([*self._UNIFY_BASE, "--user-agent-email", "t@x.com"])
+        assert ns.user_agent_email == "t@x.com"
+
+    def test_unify_user_agent_app_stored(self) -> None:
+        """unify --user-agent-app is stored on the namespace.
+
+        Verifies that the --user-agent-app argument is accepted and stored correctly by the
+        unify parser.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args([*self._UNIFY_BASE, "--user-agent-app", "MyApp/2.0"])
+        assert ns.user_agent_app == "MyApp/2.0"
+
+    def test_unify_user_agent_app_default_contains_version(self) -> None:
+        """unify user_agent_app default includes the package version.
+
+        Verifies that the default value for --user-agent-app is _DEFAULT_USER_AGENT_APP and
+        contains the package version string.
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(self._UNIFY_BASE)
+        assert ns.user_agent_app == _DEFAULT_USER_AGENT_APP
+        assert _VERSION in ns.user_agent_app
+
+    def test_unify_user_agent_email_default_empty(self) -> None:
+        """unify user_agent_email defaults to empty string when not supplied.
+
+        Verifies that omitting --user-agent-email leaves the namespace attribute as "".
+        """
+        parser = _build_parser()
+        ns = parser.parse_args(self._UNIFY_BASE)
+        assert ns.user_agent_email == ""
+
 
 # ---------------------------------------------------------------------------
 # main()
@@ -1808,6 +1854,70 @@ class TestMain:
         mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
         main()
         # With no --user-agent-email, the assembled string is just the app token (stripped).
+        call_args = mock_init_mb.call_args
+        assert call_args is not None
+        user_agent_arg = call_args.args[0]
+        assert _DEFAULT_USER_AGENT_APP in user_agent_arg
+        assert not user_agent_arg.endswith(" ")  # trailing space stripped
+
+    # ------------------------------------------------------------------
+    # unify dispatch tests (KAT b and c)
+    # ------------------------------------------------------------------
+
+    _UNIFY_ARGV = ["music-annotator", "unify", "/dest"]
+
+    # pylint: disable-next=unused-argument
+    def test_unify_init_mb_called_before_unify(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() unify calls init_mb with the assembled user-agent string before music_annotator.unify.
+
+        The unify pass dereferences each embedded artist MBID for its stable, primary-flagged
+        canonical name-form via fetch_artist_aliases, which requires the MusicBrainz user-agent
+        to be initialised.  Verifies that init_mb is called once with the combined app+email
+        string before unify is invoked, and that the trailing space is stripped when email is
+        empty.  Also verifies that unify receives dest_root, yes, and dry_run forwarded correctly
+        (closes the pre-existing coverage gap on the case "unify": dispatch arm).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        call_order: list[str] = []
+        mock_init_mb = mocker.patch("music_annotator.init_mb", side_effect=lambda _ua: call_order.append("init_mb"))
+        mock_unify = mocker.patch("music_annotator.unify", side_effect=lambda **_kw: call_order.append("unify"))
+        mocker.patch.object(
+            sys,
+            "argv",
+            new=[
+                "music-annotator",
+                "unify",
+                "/dest",
+                "--user-agent-app",
+                "MyApp/2.0",
+                "--user-agent-email",
+                "me@example.com",
+            ],
+        )
+        main()
+        # init_mb must be called before unify.
+        assert call_order == ["init_mb", "unify"]
+        mock_init_mb.assert_called_once_with("MyApp/2.0 me@example.com")
+        mock_unify.assert_called_once_with(dest_root=Path("/dest"), yes=False, dry_run=False)
+
+    # pylint: disable-next=unused-argument
+    def test_unify_init_mb_strips_trailing_space_when_email_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() unify strips the trailing space from the user-agent when email is omitted.
+
+        When --user-agent-email is not supplied (defaults to ""), the assembled
+        "{app} {email}".strip() must not end with a trailing space.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        self._patch_common(mocker)
+        mock_init_mb = mocker.patch("music_annotator.init_mb")
+        mocker.patch("music_annotator.unify")
+        mocker.patch.object(sys, "argv", new=self._UNIFY_ARGV)
+        main()
         call_args = mock_init_mb.call_args
         assert call_args is not None
         user_agent_arg = call_args.args[0]

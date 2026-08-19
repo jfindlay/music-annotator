@@ -93,6 +93,27 @@ join key that goes stale the moment you act on it is the wrong *authority* for a
 purpose is to act — but it is fine as the *trigger*.  Corollary: any maintenance action that moves a
 directory must append its own journal entry, or the detector decays with use.
 
+## Determinate-transition invariant for offline maintenance passes
+
+Offline maintenance passes (`unify`, `repath`, `regroup`) effect a **determinate A → A′ transition**
+over the *current* library state: the outcome is fully specified by what the pass defines over the
+embedded tags and local filesystem at the moment it runs.  What is forbidden is folding in a wildcard
+`MB(*)` call — a MusicBrainz search, re-identification, or relationship refetch whose answer drifts
+with MB's catalog — because that would make A → A′ non-deterministic with respect to local state.
+
+A **narrow, fixed-MBID dereference** of a stable, primary-flagged canonical name-form is *not* a
+wildcard: it is a well-defined, two-layer-cached lookup of stable data (the entity's own canonical
+alias, keyed by an MBID already embedded in the file) that simply isn't local yet.  Such lookups are
+permitted in offline maintenance passes.  Concretely: `unify` calls `fetch_artist_aliases(mbid)` for
+each embedded `MUSICBRAINZ_ARTISTID` to resolve the canonical name-form used in path construction.
+This lookup is bounded by distinct artist MBIDs (not file count), cached in-process and on-disk, and
+operates on stable data — it is not a search and does not re-identify the recording.
+
+The practical consequence: offline maintenance passes that perform fixed-MBID name-form lookups
+require the MusicBrainz user-agent to be initialised (`init_mb()`), exactly as `apply`/`search`/
+`preflight` do.  The `unify` subcommand carries `--user-agent-app` / `--user-agent-email` flags for
+this reason.
+
 ## Database-as-infrastructure: tracks are authority, the journal is a regenerable cache
 
 "Tag adjudicates, journal detects" (above) taken to its endpoint: if the tag is *always* the
