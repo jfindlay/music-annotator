@@ -1,64 +1,81 @@
 <!-- juncture-tier: opus -->
-<!-- sub-track: pre-R6d unify-invocation fix — library-completion arc (docs/ROADMAP.md), Act III-a.
-     A discovered latent defect blocking R6d's destructive unify pass: the standalone `unify`
-     subcommand cannot be invoked because it lacks the `--user-agent-app`/`--user-agent-email`
-     plumbing + the `init_mb()` call that `apply`/`search`/`preflight` carry, and dies with a
-     musicbrainzngs.UsageError on the first artist.  Root cause: C-CANON (canonical name-forms)
-     added a fetch_artist_aliases(mbid) call inside build_dest_path, so unify/repath/regroup now
-     dereference each embedded artist MBID for its stable primary canonical alias.  Operator ruling
-     (2026-08-19): this narrow, fixed-MBID, cached name-form dereference is a permitted determinate
-     lookup, NOT a forbidden MB(*) wildcard (search / re-identification).  So the fix is plumbing +
-     a docstring correction that pins the determinate-transition invariant — NOT an offline rewrite
-     and NOT a C-CANON re-freeze.  One session, Sonnet, no contract freeze.  Analogous to the
-     pre-R3 hardening node: a discovered pre-condition fix that lands before the gated pass. -->
+<!-- sub-track: naming-policy re-freeze — library-completion arc (docs/ROADMAP.md), J2-reopening
+     freeze.  The top-level class scheme (Classical/Popular/Compilations/…) rendered by
+     _top_level_class was refuted by operator judgment 2026-08-19 (ROADMAP Discoveries appendix): it
+     derived the topmost, most topology-defining path component from MusicBrainz's entropic
+     free-classification parameters (release-group primary/secondary types, is-classical predicate),
+     which are crowd-set and unanchored — scrambling library topology.  This sub-track re-freezes the
+     catalog naming policy under the operator's decided direction: a universal (prefix-less) top dir
+     over scholarship-stable components; all editorial categorization relocates to the playlist lens
+     (docs/ROADMAP-playlists.md).  The adjudication is complete (architect session 2026-08-19; Q1–Q3
+     resolved); this shard is the implementation handoff.  Freezes C-UNIVERSAL (replaces the refuted
+     C-CLASS; absorbs and generalises C-INIT) + the epistemic-criterion prose contract (NOTES). -->
 
-# PLAN — pre-R6d fix: enable `unify` invocation + pin the determinate-transition invariant
+# PLAN — naming-policy re-freeze: universal top dir (C-UNIVERSAL)
 
 ## Purpose (design intent)
 
 *(Re-read at every ◆ boundary — anti-defocus anchor.)*
 
-R6d's destructive "more-like-itself" one-pass is `unify`-dominated (preflight evidence 2026-08-14:
-9,009 `unify` moves, 0 for every other pass).  But the standalone `unify` subcommand **cannot be
-run**: it has no `--user-agent-email` flag and never calls `init_mb()`, so its
-`build_dest_path` → `_canonical_name` → `fetch_artist_aliases(mbid)` call — added by C-CANON to
-render canonical entity name-forms — raises `musicbrainzngs.UsageError` on the first artist with an
-MBID.  `apply`/`search`/`preflight` all carry this plumbing; `unify` was left behind, and its epilog
-still falsely asserts "No MusicBrainz network calls are made."
+The refuted policy built the library's **topmost, most topology-defining** path component
+(`Classical/`, `Popular/`, `Compilations/`, `Soundtracks/`, `Spoken Word/`, `Unsorted/`) from
+MusicBrainz's **free-classification parameters** — release-group primary/secondary types and the
+is-classical predicate — which are crowd-set, inconsistently applied, and unanchored.  The same
+programme lands under different classes by MB editor whim, scrambling the library topology and
+baking an editorial view into the *catalog* lens in violation of the arc's two-lens principle
+(filesystem = catalog, playlists = reading room).
 
-**The determinate-transition principle (operator ruling 2026-08-19).**  `unify` must effect a
-determinate transition A → A′, fully specified by what `unify` defines over the *current* library
-state.  What is forbidden is folding in `MB(*)` — a wildcard of new/volatile MB data whose answer
-drifts with MB's catalog (release search, re-identification, relationship refetch).  A fixed-MBID
-dereference of an entity's own stable, primary-flagged canonical name-form is **not** a wildcard: it
-is a narrow, well-defined, two-layer-cached lookup of stable data that simply isn't local yet.  So
-the correct fix is to **enable the lookup** (wire the user-agent plumbing) and **document the
-invariant** (correct the false epilog to state the A → A′ posture), not to make `unify` offline and
-not to re-open C-CANON.
+**The re-frozen policy.**  The catalog path is **prefix-less** — a universal top dir.  The
+first component directly under `dest_root` is the scholarship-stable first-component shape
+(composer-first / performer-led / compilation), which reads only release facts and MB
+scholarship-convergent data (composer linkage, albumartist, album), never free-classification
+parameters.  All editorial organization (the pop/classical split, genre views, curated sets) moves
+to the playlist lens (`docs/ROADMAP-playlists.md`).
 
-**This sub-track delivers the plumbing fix + the epilog correction, in one session.**  No new pass
-logic, no model change, no contract freeze — it *reaffirms* C-CANON's network posture and pins the
-determinate-transition invariant in durable prose.
+**The epistemic criterion (operator ruling 2026-08-19; pinned in NOTES this shard).**  Defer to MB
+where variation is *scholarship-driven* and converges under editorial pressure — composer identity,
+recording dates, catalogue facts.  Never let MB's *free-classification parameters* define library
+topology: they are entropy, not signal.
+
+**This sub-track delivers the C-UNIVERSAL re-freeze in code+tests+durable prose, code-only.**  The
+destructive library-wide migration (every existing 3-level class-prefixed dir → prefix-less
+2-level) rides R6d's one J3-gated pass — this shard changes only newly-computed paths and freezes
+the policy; it does not run a destructive pass.
+
+**Status note (2026-08-19).**  This shard supersedes the completed `unify`-plumbing fix (committed
+`2161dae`, ledger closed).  It unblocks the halted J3/R6d line: after this freeze lands, the J3
+preflight re-runs against the new policy (the 2026-08-14 evidence was stale by construction — every
+one of the 9,009 `unify` destinations embedded a class dir).
 
 **The structural facts that shape this shard (survey 2026-08-19).**
 
-- **`unify`'s only network dependency is `_canonical_name`** (`_tags.py:1263`): for any performer
-  `ArtistEntry` with an MBID, it calls `canonical_artist_form(fetch_artist_aliases(entry.mbid))`.
-  MBID-less entries return `entry.name` with no call.
-- **`fetch_artist_aliases` is two-layer cached** (`_mb_api.py:1047` L1 in-process, `:1053` L2
-  on-disk JSON) — live traffic is bounded by *distinct artist MBIDs*, not file count, and is
-  effectively local after warm-up.
-- **The plumbing pattern is established three times** — `apply` (`__main__.py:957`), `search`
-  (`:980`), and `preflight` (`:1120`) all assemble `f"{args.user_agent_app} {args.user_agent_email}"`
-  and pass it to `init_mb()` / `run()`.  `preflight`'s `_run_preflight` (`:1106`) is the exact model:
-  it calls `init_mb(...)` *because the unify pass needs it*.
-- **`unify_parser` (`:750`) has only `dest_dir` / `--dry-run` / `--yes`;** the `case "unify":`
-  dispatch (`:1071`) calls `music_annotator.unify(...)` with no `init_mb()`.
-- **The `unify` epilog (`:739`) falsely asserts "No MusicBrainz network calls are made"** — true
-  before C-CANON, false now.
-- **There is currently no `unify` dispatch test in `test_main.py`** (only a docstring mention at
-  `:1768`).  The new `init_mb` branch must be covered; verify the pre-existing `case "unify":` arm's
-  coverage source so the added call does not open an uncovered branch.
+- **The refuted mechanism is three functions in `_tags.py`:** `_top_level_class` (`:228`, the
+  C-CLASS routing table over free-classification params — **deleted**), `_classical_top_dir`
+  (`:279`, the within-classical first-component rule, C-INIT — **generalised + renamed**, logic
+  unchanged), and the class-prefix assembly in `build_dest_path` (`:1371`–`:1447`, the
+  `class_dir = safe_name(_top_level_class(tags))` line + the `match class_dir:` block — **collapsed**
+  to the prefix-less first-component computation).
+- **C-INIT's three branches read only scholarship-stable data** (`releasetype_secondary` for the
+  compilation gate; `albumartist`/`albumartistsort`/`album`; `CWP_COMPOSER_LASTNAMES`/
+  `CEA_COMPOSER_LASTNAMES` for composer linkage).  None reads a free-classification param, so the
+  epistemic criterion leaves them intact.  A pop album (no linked composer) routes naturally through
+  the performer-led branch → `<albumartist> - <album>`.
+- **`IS_CLASSICAL` is currently derived from the dying path layer** (`_tags.py:1005`:
+  `tags.is_classical = "1" if _top_level_class(tags) == "Classical" else "0"`).  It must be rewired
+  to derive from **compositional identity** (the CE-classical predicate: `cwp_work_top` non-empty
+  AND `"Classical" in cwp_worktype_genres_top`) per REND-21/SEL-14 — tag layer ≠ path layer.
+- **The legacy/class-prefixed path discriminator** (`_CLASS_VOCAB` at `_tags.py:225`, consumed by
+  `_work_top_dir` `:359` and `_work_dir_component` `:344`, and imported in `_audit.py`,
+  `_pipeline_io.py`, `_pipeline.py`) tests `parts[0] in _CLASS_VOCAB` to tell 3-level class-prefixed
+  paths from 2-level legacy paths.  **It must stay for the transition** — the live library still
+  holds 3-level class-prefixed dirs until R6d migrates them.  Removing the discriminator is a
+  **post-R6d** cleanup, NOT this shard.  (After the freeze, newly-written paths are 2-level again;
+  the discriminator's "legacy 2-level" arm is the new-path arm.)
+- **The styleguide describes, does not define, this policy** (STYLEGUIDE 4.5; REND-22 explicitly:
+  "an apparent conflict is a finding for that arc's boundary").  So the freeze needs only a **status
+  correction** to 4.5 (drop "class directory;" from the path-component list) and REND-21/22/23 —
+  NOT a reauthoring.  Deferred to a thin styleguide-sync follow-on (Deferrals); the code freeze does
+  not block on it.
 
 ## Verify gate
 
@@ -74,111 +91,166 @@ Discovered from `pyproject.toml` (tox envs; do not assume `make`).  Binding — 
 
 | # | Session | Cat | Tier | Consumes | Expected files |
 |---|---------|-----|------|----------|----------------|
-| 1 ◆ | Wire `unify`'s MusicBrainz user-agent so the canonical name-form lookup can run | I | Sonnet | C-CANON (validate-only), the `apply`/`search`/`preflight` user-agent-plumbing convention | `src/music_annotator/__main__.py`, `tests/unit/test_main.py`, `docs/NOTES.md` |
+| 1 ◆ | Re-freeze the catalog naming policy: delete the class prefix, generalise the first-component rule, decouple `IS_CLASSICAL` from the path | I | Sonnet | the refuted C-CLASS (delete), C-INIT (generalise+absorb), REND-21/SEL-14 (IS_CLASSICAL basis), the epistemic criterion | `src/music_annotator/_tags.py`, `tests/unit/test_annotator.py`, `tests/unit/test_pipeline.py`, `tests/integration/test_integration.py`, `docs/NOTES.md` |
 
-`Cat`: **I (integrative)** — the CLI is where `unify`'s public form is completed; the fix gives the
-already-built pass its operator-visible invocation surface and pins the determinate-transition
-invariant in durable prose.  Single-session sub-track, so the one row is the ◆ boundary.
+`Cat`: **I (integrative)** — the path grammar is where the catalog lens's topology is defined; this
+row re-freezes it under the scholarship-stable direction and pins the epistemic criterion in durable
+prose.  Single-session sub-track, so the one row is the ◆ boundary.
 
-`Tier`: **Sonnet.**  Mechanical over three established precedents (`apply`/`search`/`preflight`
-plumbing), no contract freeze, strong inner loop (100% branch + strict mypy).  Lever 3/4 (design-error
-cost / correctness-crit) is low: the posture decision is already made (operator ruling); this only
-enacts it.  `juncture-tier: opus` — kept (arc default), but no juncture fires in a one-row shard.
+`Tier`: **Sonnet.**  The design decisions are frozen (architect adjudication 2026-08-19, Q1–Q3
+resolved); this row *enacts* them.  Mechanical over an existing structure (delete one function,
+ungate+rename a second, collapse a `match` block, rewire one assignment), strong inner loop (100%
+branch + strict mypy).  Lever 3/4 (design-error cost / correctness-crit) is discharged upstream: the
+posture is decided; the risk that remains is coverage/round-trip regression, which the gate catches.
+`juncture-tier: opus` — kept (arc default); no juncture fires in a one-row shard.
 
 **Sizing (levers named).**  Default band ~150–400 LOC / 2–4 files.
 
-- **S1 ≈ 40–90 LOC, 3 files** (two `add_argument` calls + the `init_mb` dispatch line + the epilog
-  rewrite + the NOTES invariant prose + the CLI tests).  **Under band by design** — the change is a
-  plumbing-symmetry fix, not a build.  **Irreducible unit (lever 2, floor):** the flags, the
-  `init_mb` call, and the epilog correction are one conceptual unit ("make `unify` invocable and
-  honestly documented") — splitting them would leave a half-wired subcommand or a still-false epilog.
-  Kept whole.  One-line commit-title passes.
+- **S1 ≈ 120–250 LOC across 5 files** (net-negative in `_tags.py`: `_top_level_class` deleted, the
+  `match class_dir:` block collapsed; the churn is in tests — the C-CLASS KAT class is deleted, the
+  C-INIT KATs re-home under the universal rule, and every integration/pipeline test that expected a
+  class-prefixed path drops the prefix).  **Irreducible unit (lever 2, floor):** the deletion, the
+  generalisation, the `IS_CLASSICAL` rewire, and the test realignment are one conceptual unit
+  ("re-freeze the catalog topology") — splitting them leaves the tree red (a deleted
+  `_top_level_class` with callers, or a class-prefix `build_dest_path` with class-less tests).  Kept
+  whole.  One-line commit-title passes.
 
 ## Session detail
 
-### S1 ◆ — Wire `unify`'s MusicBrainz user-agent so the canonical name-form lookup can run
+### S1 ◆ — Re-freeze the catalog naming policy (C-UNIVERSAL)
 
-**Deliverable.**  Enable and honestly document `unify` invocation:
-- **Add `--user-agent-app` + `--user-agent-email` to `unify_parser`** (`__main__.py:750`), mirroring
-  the `preflight_parser` definitions (`:875`–`:890`) verbatim: `--user-agent-app` defaults to
-  `_DEFAULT_USER_AGENT_APP`; `--user-agent-email` defaults to `""`, help text stating it is required
-  when the library contains files with `MUSICBRAINZ_ARTISTID` tags because `unify` calls
-  `fetch_artist_aliases` for canonical name-forms.
-- **Call `init_mb()` in the `case "unify":` dispatch** (`:1071`), assembling
-  `f"{args.user_agent_app} {args.user_agent_email}".strip()` exactly as `preflight`'s
-  `_run_preflight` does (`:1120`), before `music_annotator.unify(...)`.
-- **Correct the false epilog** (`:739`).  Replace "The join key is the embedded MUSICBRAINZ_ALBUMID
-  tag, not the journal (C-W2).  No MusicBrainz network calls are made." with prose that states the
-  true posture: `unify` reads the embedded `MUSICBRAINZ_ALBUMID` join key and effects a determinate
-  re-layout of the *current* library state; it dereferences each embedded artist MBID for its stable,
-  primary-flagged canonical name-form (a narrow, cached, fixed-MBID lookup — never a MusicBrainz
-  *search* or re-identification), so it makes no wildcard MB call and requires the user-agent.
-- **Pin the determinate-transition invariant in `docs/NOTES.md`** as a prose contract (alongside the
-  existing "path is a handle, not a manifest" / "journal detects, tag adjudicates" prose contracts):
-  offline maintenance passes effect a determinate A → A′ over current library state and may perform
-  narrow, stable, fixed-MBID MB dereferences (canonical name-forms), but never a wildcard `MB(*)`
-  call (search / re-identification / relationship refetch) — those are separate, deliberate actions.
+**Deliverable.**  Enact the frozen re-freeze:
 
-**KAT (the row's behavioural witnesses).**  In `test_main.py`, modelled on the `preflight`
-init_mb/arg tests (`:1714`–`:1815`):
-(a) **arg-parse witnesses** — `unify --user-agent-email t@x.com` stores `user_agent_email == "t@x.com"`;
-`--user-agent-app MyApp/2.0` stores it; the app default contains `_VERSION`; email defaults to `""`
-(mirrors `test_preflight_user_agent_*`).
-(b) **init_mb-called witness** — a `unify` dispatch test (patching `music_annotator.init_mb` and
-`music_annotator.unify`, argv-driven, per `test_preflight_dispatches_*`) asserts `init_mb` is called
-once with the assembled `"{app} {email}"` string **before** `unify` is invoked, and that the
-trailing space is stripped when email is empty (mirrors
-`test_preflight_init_mb_called_with_default_user_agent`).
-(c) **dispatch-forwarding witness** — the same test asserts `unify` receives `dest_root` / `yes` /
-`dry_run` forwarded correctly (this is also the first explicit `case "unify":` dispatch test — it
-closes the pre-existing coverage gap).
+- **Delete `_top_level_class`** (`_tags.py:228`) and the `_CLASS_VOCAB`-based routing it drives *from
+  the path layer*.  **Keep `_CLASS_VOCAB`** and the `_work_top_dir`/`_work_dir_component`
+  discriminator — they are needed for the transition (live library still holds 3-level paths until
+  R6d).  Update `_CLASS_VOCAB`'s docstring: it is now a *legacy-path-recognition* vocabulary (reads
+  historical class-prefixed dirs), no longer a *live routing* vocabulary.
+- **Generalise + rename `_classical_top_dir`** (`_tags.py:279`) to a universal first-component
+  helper (suggested `_top_dir_component`; the executor picks a register-clean name — the point is it
+  no longer says "classical"/"recital").  **Logic unchanged**: compilation → `<albumartist-last or
+  "Various"> - <album>`; performer-led (no linked composer) → `<albumartist> - <album>`;
+  single-composer → `None` (caller uses `<composer> - <performers>`).  Update the docstring to state
+  the branches are universal (a pop album is the performer-led branch), and that all three read
+  scholarship-stable data (release facts + composer-convergent MB data), never free-classification
+  params.
+- **Collapse the class-prefix assembly in `build_dest_path`** (`_tags.py:1371`–`:1447`).  Remove
+  `class_dir = safe_name(_top_level_class(tags))` and the `match class_dir:` block.  The first
+  component becomes: call the generalised first-component helper; when it returns `None`
+  (single-composer) use `safe_name(f"{composer} - {performers}")`.  Every `dest_root / class_dir /
+  top_dir / …` path build drops the `class_dir` segment → `dest_root / top_dir / …`.  The
+  Soundtracks/Unsorted/Spoken-Word/Popular/Compilations arms of the old `match` fold away: their
+  distinctions were the editorial class split (now playlist-lens); their *shape* (`<artist> -
+  <album>` or `<album>`) is already the performer-led/compilation branch of the generalised helper.
+  **Confirm no non-classical shape is silently lost** — the old Soundtracks arm used bare `<album>`;
+  verify the generalised helper's performer-led branch (which uses `<albumartist> - <album>`, or
+  bare `<album>` when albumartist is empty) covers it, or add an explicit branch.  This is the one
+  place the collapse could drop behaviour — the executor must diff the old `match` arms against the
+  generalised helper's outputs and either confirm equivalence or preserve the arm.
+- **Rewire `IS_CLASSICAL`** (`_tags.py:1005`).  Replace `_top_level_class(tags) == "Classical"` with
+  the CE-classical predicate directly: `tags.is_classical = "1" if (tags.cwp_work_top and
+  "Classical" in tags.cwp_worktype_genres_top) else "0"` (REND-21/SEL-14 — classification derives
+  from compositional identity, never the code path).  Tag layer ≠ path layer: the flag survives as a
+  work-type tag and a future playlist input; it no longer defines topology.
+- **Pin the epistemic criterion in `docs/NOTES.md`** as a prose contract (alongside the two-lens,
+  "path is a handle", layer-routing, "journal detects, tag adjudicates" contracts): defer to MB
+  where variation is scholarship-driven and converges (composer identity, dates, catalogue facts);
+  never let MB's free-classification parameters (release-group types, is-classical predicates)
+  define library topology.  Name it as the basis for the universal-top-dir catalog shape and the
+  playlist-lens relocation of editorial views.
+
+**KAT (the row's behavioural witnesses).**
+
+(a) **prefix-less path witnesses** — `build_dest_path` for a single-composer classical release
+returns `dest_root / "<Composer> - <Performers>" / "<Work> [YYYY]" / "<nn> - <title>"` with **no**
+class component (was `dest_root / "Classical" / …`).  A pop album returns `dest_root / "<Artist> -
+<Album>" / …`.  A compilation returns `dest_root / "<Various or last> - <Album>" / …`.  Replaces
+every existing test that asserted a `"Classical"`/`"Popular"`/etc. first component.
+(b) **first-component-rule witnesses** — the generalised helper: compilation gate →
+`<albumartist-last> - <album>`; empty-composer → `<albumartist> - <album>` (and bare `<album>` when
+albumartist empty); linked-composer → `None`.  Re-homes the C-INIT KATs (`test_annotator.py:4652+`)
+under the universal name; **deletes the C-CLASS KAT class** (`test_annotator.py:4384+`) — the routed
+vocabulary no longer exists.
+(c) **`IS_CLASSICAL`-from-work-type witnesses** — `IS_CLASSICAL == "1"` iff `cwp_work_top` non-empty
+AND `"Classical" in cwp_worktype_genres_top`, **independent of any path component** (the REND-21 KATs
+at `test_pipeline.py:4327+` re-key off the predicate, not `_top_level_class`).  Add a witness that a
+classical work whose path is prefix-less still gets `IS_CLASSICAL == "1"` (proves the decouple).
+(d) **discriminator-still-works witness** — `_work_top_dir` / `_work_dir_component` still correctly
+read a *legacy* 3-level class-prefixed path (transition safety) AND a new 2-level prefix-less path.
+Both arms covered (the class-prefixed arm is now legacy-only, still live until R6d).
 
 **Subtleties.**
-- **No offline rewrite, no C-CANON change.**  `_canonical_name` / `build_dest_path` /
-  `fetch_artist_aliases` are untouched.  The fix is CLI plumbing + docstring + NOTES prose only.
-- **Coverage of the new `init_mb` line.**  There is no existing `unify` dispatch test; confirm the
-  `case "unify":` arm's current coverage source and ensure the added `init_mb` call is covered by KAT
-  (b)/(c) so branch coverage stays 100%.
-- **Register discipline.**  The epilog and NOTES prose state the *property/invariant*
-  (determinate A → A′; stable fixed-MBID lookup vs wildcard `MB(*)`), never a plan coordinate — no
-  "pre-R6d", no "S1", no "R6d".
+- **Coverage: the deleted routing.**  Deleting `_top_level_class` removes 6 match arms' worth of
+  branches; deleting its KAT class removes their tests in lockstep — net coverage-neutral, but the
+  executor must confirm no *other* caller of `_top_level_class` survives (grep: `models.py:1385`
+  comment reference is docstring-only; the live callers are `_tags.py:1005` and `:1374`, both
+  rewritten here).
+- **The collapse-equivalence check is the one real risk.**  The old `match class_dir:` had
+  class-specific shapes (Soundtracks = bare `<album>`).  The generalised helper must reproduce every
+  shape or the collapse silently re-paths a population.  Diff the arms; confirm or preserve.
+- **No R6d run, no migration machinery.**  This shard changes newly-computed paths only.  The
+  destructive migration of existing class-prefixed dirs rides R6d (D-A5 precedent); `repath`/`unify`
+  re-derive the prefix-less shape on demand from embedded tags.
+- **Register discipline.**  NOTES prose and docstrings state the *property/invariant* (scholarship-
+  stable topology; free-classification params never define topology; tag layer ≠ path layer) — never
+  a plan coordinate (no "C-CLASS-refutation", no "J2", no "R6d", no "S1").  Contract names
+  (C-UNIVERSAL, C-INIT, REND-21) are legitimate durable vocabulary.
 
-**Deferrals.**  No strict-determinism tag persistence (the residual reopen trigger — persist the
-canonical form at ingest, read offline — is deferred; only fires if an MB primary-alias drift
-between ingest and `unify` is observed to re-path a dir).  No `repath`/`regroup` change (they share
-the same posture but were not the invocation defect; the NOTES invariant covers them by property).
+**Deferrals.**
+- **Styleguide sync** (thin follow-on, not this shard): STYLEGUIDE 4.5 drop "class directory;" from
+  the path-component list; REND-22 status → "C-CLASS refuted; superseded by C-UNIVERSAL (prefix-less
+  universal top dir)"; REND-23 status → "C-INIT absorbed into C-UNIVERSAL, generalised"; REND-21
+  gloss → note the flag now derives from the predicate directly (the "must derive from
+  classification, never the code path" caveat is now satisfied).  Deferred because the styleguide
+  *describes* the policy (REND-22) and the code freeze does not block on the prose sync.
+- **Discriminator removal** (post-R6d): once R6d migrates every 3-level class-prefixed dir,
+  `_CLASS_VOCAB` and the two-arm discriminator in `_work_top_dir`/`_work_dir_component` collapse to
+  the single 2-level form.  Sequenced after the destructive pass; a reopen trigger, not this shard.
+- **J3 preflight re-run** (post-freeze, separate): the go/no-go evidence re-runs against the new
+  policy; not this shard's scope.
 
-**◆ boundary (register anneal).**  Re-read Purpose.  Confirm the row enacted, `tox -m analyze` green,
-ledger complete.  **Planning-register anneal:**
-- Durable files (`__main__.py` epilog/dispatch, `test_main.py`, `NOTES.md`) carry **no plan
-  coordinates** — state the property/invariant (the determinate-transition posture), never
-  "S1"/"pre-R6d"/"R6d".
+**◆ boundary (register anneal).**  Re-read Purpose.  Confirm the row enacted, `tox -m analyze`
+green, ledger complete.  **Planning-register anneal:**
+- Durable files (`_tags.py`, the three test files, `NOTES.md`) carry **no plan coordinates** — state
+  the property/invariant (scholarship-stable topology; tag layer ≠ path layer), never
+  "C-CLASS-refutation"/"S1"/"J2"/"R6d".
 - Grep durable files against the anneal denylist (Notes for executors); translate any leaked
   coordinate to standalone prose.
-- Report to the roadmap: `unify` is now invocable; the determinate-transition invariant is pinned in
-  NOTES; C-CANON's network posture reaffirmed (refined R6a property: no *wildcard* MB call, stable
-  fixed-MBID dereference permitted).  R6d's destructive `unify` run can now supply the user-agent.
+- Report to the roadmap: C-CLASS refuted-and-deleted; **C-UNIVERSAL frozen** (prefix-less universal
+  top dir; generalised first-component rule absorbing C-INIT); `IS_CLASSICAL` decoupled to the
+  work-type predicate; epistemic criterion pinned in NOTES.  J2's taxonomy half re-freezes here; J3
+  preflight re-run unblocks.
 
 ## Cross-session contracts
 
-*(No contract frozen this sub-track.)*
+### Produced (frozen this sub-track)
+
+- **C-UNIVERSAL** — the re-frozen catalog naming policy.  The catalog path is prefix-less (no
+  top-level class component); the first component under `dest_root` is the scholarship-stable
+  first-component shape (compilation → `<albumartist-last or "Various"> - <album>`; performer-led →
+  `<albumartist> - <album>`; single-composer → `<composer> - <performers>`), reading only release
+  facts and composer-convergent MB data, never free-classification parameters.  Replaces the refuted
+  **C-CLASS**; absorbs and generalises **C-INIT**.
+- **The epistemic-criterion prose contract** (pinned in NOTES this shard) — defer to MB where
+  variation is scholarship-driven and converges; never let MB free-classification parameters define
+  library topology.
 
 ### Consumed (frozen upstream — validate-only)
 
-- **C-CANON** — canonical entity name-forms via `canonical_artist_form` over MB primary-flagged
-  aliases (STYLEGUIDE 3.1/NORM-2).  This shard **enables** the lookup C-CANON requires and reaffirms
-  its network posture; it does not modify or re-freeze it.
-- **The `apply`/`search`/`preflight` user-agent-plumbing convention** — `f"{app} {email}".strip()`
-  → `init_mb()`.  `unify` is made symmetric with it.  Validate-only.
-- **The determinate-transition prose invariant** (pinned in NOTES this shard) — offline maintenance
-  effects A → A′ and may perform stable fixed-MBID MB dereferences, never a wildcard `MB(*)`.
-- **C-PROV / C-MOVE + confirmation-provenance** — untouched; `unify`'s mutating path is not modified.
+- **REND-21 / SEL-14** — `IS_CLASSICAL` derives from compositional identity (work-type predicate),
+  not the code path.  This shard satisfies the caveat REND-21 flagged.
+- **The two-lens principle + "path is a handle, not a manifest"** (NOTES) — the catalog lens is
+  uniform and fact-anchored; editorial views live in the playlist lens (`docs/ROADMAP-playlists.md`).
+- **C-PROV / C-MOVE + confirmation-provenance** — untouched; this shard changes path computation
+  only, not the move/verify/journal chain.
+- **C-CANON** — canonical name-forms in the performers component; untouched (the `<composer> -
+  <performers>` shape still renders canonical forms).
 
 ## Progress ledger
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 ◆ | Wire `unify`'s MusicBrainz user-agent so the canonical name-form lookup can run | done | 2161dae | (no contract; pins determinate-transition invariant in NOTES) |
+| 1 ◆ | Re-freeze the catalog naming policy: delete the class prefix, generalise the first-component rule, decouple `IS_CLASSICAL` | pending | — | C-UNIVERSAL + epistemic-criterion prose contract |
 
 ## Action-frame digest
 
@@ -186,56 +258,55 @@ ledger complete.  **Planning-register anneal:**
 
 ## Discoveries & risks
 
-- **D-1 (the invocation defect — this shard's reason).**  Standalone `unify` cannot run: no
-  `--user-agent-email` flag, no `init_mb()` in dispatch, so C-CANON's `fetch_artist_aliases` call
-  raises `UsageError`.  Resolution: wire the plumbing (mirrors `apply`/`search`/`preflight`).
-  *internal-continue.*
-- **D-2 (posture ruling — the name-form lookup is not `MB(*)`).**  Operator ruling 2026-08-19: a
-  fixed-MBID dereference of a stable primary canonical name-form is a permitted determinate lookup,
-  not a forbidden wildcard.  So the fix enables + documents, never makes `unify` offline.  Refines
-  the R6a "offline passes make no MB call" property to "no *wildcard* MB call."  *internal-continue.*
-- **D-3 (strict-determinism residual — reopen trigger, deferred).**  If an MB primary alias drifts
-  between ingest and a `unify` run, `unify` would re-path that dir — the one place A → A′ isn't a
-  pure function of local state.  Rare and arguably correct.  If strict determinism is later required,
-  persist the canonical form as an embedded tag at ingest and read it offline.  Deferred; not this
-  shard's scope.  *internal-continue.*
-- **D-4 (pre-existing `unify` dispatch coverage gap).**  No `case "unify":` dispatch test exists,
-  yet coverage is 100% — verify the current coverage source before adding `init_mb`, so the new call
-  does not open an uncovered branch.  KAT (b)/(c) close the gap.  *internal-continue.*
+- **D-1 (the refutation — this shard's reason).**  The top-level class scheme derived the topmost
+  path component from MB free-classification parameters; operator refutation 2026-08-19.  Resolution:
+  delete the class layer; freeze C-UNIVERSAL (prefix-less universal top dir).  *internal-continue.*
+- **D-2 (collapse-equivalence risk — the one real risk).**  The old `match class_dir:` block had
+  class-specific first-component shapes (Soundtracks = bare `<album>`); the generalised helper must
+  reproduce each or the collapse silently re-paths a population.  Executor must diff the arms and
+  confirm/preserve.  KAT (a)/(b) witness the shapes.  *internal-continue.*
+- **D-3 (transition-safety — keep the discriminator).**  The live library holds 3-level
+  class-prefixed dirs until R6d migrates them, so `_CLASS_VOCAB` + the `_work_top_dir` discriminator
+  must stay this shard (removal is post-R6d).  KAT (d) witnesses both arms.  *internal-continue.*
+- **D-4 (`IS_CLASSICAL` wiring dies with the class layer).**  The flag currently reads
+  `_top_level_class(tags) == "Classical"`; deleting that function requires the rewire to the
+  work-type predicate (REND-21/SEL-14).  Not optional — the current wiring is unavailable post-delete.
+  KAT (c) witnesses.  *internal-continue.*
+- **D-5 (styleguide describes, does not define — sync deferred).**  STYLEGUIDE 4.5/REND-22 point at
+  this policy by reference (REND-22 anticipated the conflict).  The prose sync is a thin follow-on,
+  not a code-freeze blocker.  Deferred.  *internal-continue.*
 
 ## Notes for executors
 
-- **Tier routing.**  S1 is **Sonnet** (mechanical CLI plumbing over three precedents; no contract
-  freeze).  `juncture-tier: opus` kept (arc default); no juncture fires in a one-row shard.
-- **Enable, don't rewrite.**  Do **not** make `unify` offline, add a resolver param, or change
-  `build_dest_path`/`_canonical_name`/`fetch_artist_aliases`.  The fix is CLI plumbing + epilog +
-  NOTES prose.
-- **Mirror `preflight` exactly.**  `unify_parser`'s two new args mirror `preflight_parser:875–890`;
-  the dispatch `init_mb` mirrors `_run_preflight:1120` (`.strip()` on the assembled string).
-- **REGISTER rule (durable-file discipline).**  In source/tests/NOTES, state the
-  *property/invariant* — the determinate A → A′ posture; stable fixed-MBID lookup vs wildcard
-  `MB(*)` — never a plan coordinate.  Plan vocabulary (S1, pre-R6d, R6d, sub-track, `/plan-run`)
-  lives only in `PLAN.md`/`ROADMAP*.md`/ledger/commit messages.  See the repo `AGENTS.md` "Register
-  rule" block.
-- **Anneal denylist (◆ gate greps durable files for these).**  Seeded from `/plan-run` default,
-  tuned for this project:
+- **Tier routing.**  S1 is **Sonnet** (the design is frozen upstream; this enacts it).  `juncture-tier:
+  opus` kept (arc default); no juncture fires in a one-row shard.
+- **Delete, generalise, collapse, rewire — in that order.**  (1) delete `_top_level_class`; (2)
+  generalise+rename `_classical_top_dir`; (3) collapse the `match class_dir:` block in
+  `build_dest_path` (with the equivalence diff, D-2); (4) rewire `IS_CLASSICAL` (D-4).  Keep
+  `_CLASS_VOCAB`/discriminator (D-3).
+- **The equivalence diff is mandatory (D-2).**  Before collapsing, enumerate the old `match` arms'
+  first-component outputs and confirm the generalised helper reproduces each, or preserve the arm.
+- **REGISTER rule (durable-file discipline).**  In source/tests/NOTES, state the *property/invariant*
+  — scholarship-stable topology; MB free-classification params never define topology; tag layer ≠
+  path layer — never a plan coordinate.  Plan vocabulary (S1, J2, J3, R6d, C-CLASS-refutation,
+  sub-track, `/plan-run`) lives only in `PLAN.md`/`ROADMAP*.md`/ledger/commit messages.
+- **Anneal denylist (◆ gate greps durable files for these).**
   - `\bS[1-9]\b` (plan session coordinates) — **but** allow STYLEGUIDE rule-section forms
-    (`\b[1-5]\.[0-9]\b` like "3.1", "4.5" are register cites, not plan coordinates — do **not** flag).
+    (`\b[1-5]\.[0-9]\b` like "4.5", "3.1" are register cites — do **not** flag).
   - `\bR6[a-e]\b`, `\bR[0-9]\b`, `\bJ[1-3]\b` (roadmap node + juncture coordinates) — flag in durable
     source/tests; legitimate only in PLAN/ROADMAP/ledger/commit messages.
-  - `pre-R6d`, `sub-track`, `plan-run`, `plan-shard`, `halt-at-boundaries`, `run-to-boundary` — flag
-    as plan coordinates.
-  - `juncture`, `inflection`, `action-frame`, `◆`
-  - Do **not** add `unify`, `repath`, `regroup`, `build_dest_path`, `fetch_artist_aliases`,
-    `canonical_artist_form`, `init_mb`, `user-agent`, `MUSICBRAINZ_ALBUMID`, `MUSICBRAINZ_ARTISTID`,
-    `C-CANON`, `MB(*)` — these are legitimate domain/API/contract vocabulary this shard renders.
-  - Contract names in docstrings (`C-CANON`) are the intended durable form; flag bare "S1 freeze"-
-    style prose, not the contract name.
-- **Invariants to preserve:** the determinate-transition invariant (offline maintenance = A → A′ +
-  stable fixed-MBID dereference, never wildcard `MB(*)`); C-CANON's canonical name-form posture
-  (validate-only); the `unify` mutating-path provenance chain (untouched).
+  - `sub-track`, `plan-run`, `plan-shard`, `halt-at-boundaries`, `run-to-boundary`, `juncture`,
+    `inflection`, `action-frame`, `◆`, `C-CLASS-refutation`, `naming-policy re-freeze` (as a coordinate).
+  - Do **not** flag: `C-UNIVERSAL`, `C-INIT`, `C-CLASS` (as a superseded-contract *name* in a
+    docstring status note), `REND-21`/`REND-22`/`REND-23`, `SEL-14`, `IS_CLASSICAL`, `_CLASS_VOCAB`,
+    `build_dest_path`, `cwp_work_top`, `cwp_worktype_genres_top`, `MUSICBRAINZ_*` — legitimate
+    domain/API/contract vocabulary this shard renders.
+- **Invariants to preserve:** C-UNIVERSAL (prefix-less scholarship-stable topology); the epistemic
+  criterion (MB free-classification params never define topology); tag layer ≠ path layer
+  (`IS_CLASSICAL` from work-type); the two-lens principle; C-PROV/C-MOVE provenance (untouched);
+  transition-safety (discriminator kept until R6d).
 - **Every row runs `~/.local/bin/tox -m analyze` before ledger-done.**  Import order via
   `~/.local/bin/tox -m edit`, never hand-edited.
-- **Suggested first `/plan-run` invocation:** `run-to-boundary` — a single-row shard with no
-  contract freeze and an already-decided posture; run the row through its ◆ in one pass.  (No
-  `halt-at-boundaries` step is needed: there is no unproven substrate judgment to check mid-shard.)
+- **Suggested first `/plan-run` invocation:** `run-to-boundary` — a single-row shard with the design
+  frozen upstream; run the row through its ◆ in one pass.  Watch item: the D-2 collapse-equivalence
+  diff is the one place to slow down before committing.

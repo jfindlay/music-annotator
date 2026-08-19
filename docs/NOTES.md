@@ -19,6 +19,29 @@ release membership and track order are tag-held (`MUSICBRAINZ_ALBUMID` + positio
 playlists are regenerable artifacts under database-as-infrastructure; only human-curated sequences
 are authored data.
 
+## The epistemic criterion: scholarship-stable data defines topology, not free classification
+
+Defer to MusicBrainz where variation is **scholarship-driven** and converges under editorial pressure
+— composer identity, recording dates, catalogue facts, work identity.  **Never** let MB's *free
+classification parameters* — release-group primary/secondary types, the is-classical predicate — define
+library topology (operator, 2026-08-19).  These parameters are crowd-set, inconsistently applied, and
+unanchored: the same programme lands under different classes by editor whim.  Building a path component
+— least of all the topmost, most topology-defining one — on that data scrambles the catalog and bakes an
+editorial view into the wrong lens.
+
+The consequence for the catalog path is a **universal (prefix-less) top dir** over scholarship-stable
+components (the composer-first / performer-led / compilation first-component shape, then work, dates,
+performers).  Editorial organization — the pop/classical split, genre and curated views — is precisely
+what MB's free parameters were being (mis)used to express; it belongs in the **playlist lens**
+(`docs/ROADMAP-playlists.md`), authored by deliberate editorial judgment, not inferred from entropy.
+This is the two-lens principle (above) enforced at the point where it is easiest to violate: the catalog
+lens stays fact-anchored; the reading-room lens carries the judgment MB cannot supply.
+
+A corollary at the tag/path boundary: a signal may derive from softer MB data as a **tag** (a revisable
+claim, and a playlist input) while being forbidden as a **path component**.  `IS_CLASSICAL` is the
+worked case — it derives from compositional identity (the work-type predicate, REND-21/SEL-14) and lives
+as a tag, but it must never define a directory.  Tag layer ≠ path layer.  Contract: C-UNIVERSAL.
+
 ## Coverage before quality (provisional inclusion)
 
 "Library complete" means **nothing left outside**, not everything perfectly annotated.  Every source

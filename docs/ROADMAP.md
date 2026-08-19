@@ -358,8 +358,8 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
 | Juncture | When | Adjudicates |
 |----------|------|-------------|
 | **J1** *(FIRED 2026-07-20)* | end of R0 | Census distribution → R3 order/pruning; rung-ladder shape for R2; not-in-MB default posture.  Verdict `still-on-intent` + `additive-reshard`; no destructive-HALT.  Outputs folded into R2/R3/pre-R3 nodes above and recorded in the appendix.  R2 shard proceeds against C-TIER. |
-| **J2** *(FIRED 2026-07-30)* | end of R4 + **styleguide v1** | Naming-policy freeze: taxonomy, depth policy, editorial signals.  Verdict `still-on-intent` + **freeze granted**: C-CLASS/C-INIT ratified final; **C-W3b graduated from provisional**; editorial half defined by styleguide v1 (layer 4) by reference.  C-S0 finding ruled (operator): release-scoped aggregation retained; rg-multi-release consolidates via the III-b regroup folded into R6d planning (live hades scan prerequisite).  A-b/A-c close; **Act II is done**.  R6 unblocks for PLAN derivation (R6d still gated on J3 + R5 exit).  Full adjudication in the Discoveries appendix. |
-| **J3** | before R6d | Go/no-go on the destructive-scale full-library repath: `Reference/` retention decision, journal capacity, dry-run evidence. |
+| **J2** *(FIRED 2026-07-30; PARTIALLY REOPENED 2026-08-19)* | end of R4 + **styleguide v1** | **C-CLASS refuted by operator 2026-08-19 (Discoveries appendix) — the taxonomy half is reopened for a universal-top-dir re-freeze; C-INIT fate open; depth policy and the editorial half (styleguide v1) stand.**  Naming-policy freeze: taxonomy, depth policy, editorial signals.  Verdict `still-on-intent` + **freeze granted**: C-CLASS/C-INIT ratified final; **C-W3b graduated from provisional**; editorial half defined by styleguide v1 (layer 4) by reference.  C-S0 finding ruled (operator): release-scoped aggregation retained; rg-multi-release consolidates via the III-b regroup folded into R6d planning (live hades scan prerequisite).  A-b/A-c close; **Act II is done**.  R6 unblocks for PLAN derivation (R6d still gated on J3 + R5 exit).  Full adjudication in the Discoveries appendix. |
+| **J3** *(HALTED 2026-08-19)* | before R6d | Go/no-go on the destructive-scale full-library repath: `Reference/` retention decision, journal capacity, dry-run evidence.  **Halted pending the naming-policy re-freeze (C-CLASS refuted — Discoveries appendix 2026-08-19); the 2026-08-14 preflight evidence is stale by construction and re-runs after the re-freeze.** |
 
 Post-R3, the **structural-audit trigger** fires (BACKLOG "Codebase maintenance cadence"): review the
 coherence of the new module boundaries (adapters, rung substrate, `_net`) once settled.  Trigger-based;
@@ -378,6 +378,9 @@ naming policy froze at J2 (2026-07-30)** — C-CLASS/C-INIT ratified final, C-W3
 provisional (rule + sub-shape routing; interface mechanics resolve at R6a PLAN derivation), editorial
 half = styleguide v1 by reference; R6 freezes the final path policy and externalises it as the
 conventions spec.  Each sub-track PLAN names its own C-* contracts per existing convention.
+**Amendment 2026-08-19: C-CLASS is refuted and un-ratified (Discoveries appendix); C-INIT's fate is
+open; the taxonomy half of the naming policy awaits re-freeze under the universal-top-dir
+direction.**
 
 **Prose contracts:** the lossless principle (failure ≠ no-data), "path is a handle, not a manifest",
 the layer-routing rule, "journal detects, tag adjudicates" — all in `docs/NOTES.md`; every PLAN
@@ -656,3 +659,33 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   determinism is later required (an MB primary alias drifting between ingest and `unify` re-paths a
   dir), persist the canonical form as an embedded tag at ingest and read it offline — deferred, not
   this shard's scope.
+
+- **Operator refutation (2026-08-19) — C-CLASS refuted; destructive-HALT; J3/R6d halted pending a
+  naming-policy re-freeze.**  The top-level class dirs (`Classical/`, `Popular/`, `Compilations/`,
+  `Soundtracks/`, `Spoken Word/`, `Unsorted/`) rendered by `_top_level_class` (C-CLASS, frozen at
+  R4a, ratified final at J2) are refuted by operator judgment: they are derived from MB's
+  **entropic free classification parameters** (release-group primary/secondary types, the
+  is-classical predicate), which are crowd-set, inconsistently applied, and unanchored — so the
+  topmost, most topology-defining path component was built on MB's *noisiest* data, scrambling the
+  library topology (the same programme lands under different classes by MB editor whim).  **The
+  epistemic criterion (operator, to be pinned as a NOTES prose contract at the re-freeze):** defer
+  to MB where variation is *scholarship-driven* and converges (composer identity, recording dates,
+  catalogue facts); never let MB's free classification parameters define library topology.  The
+  class partition also violated the arc's own two-lens principle (filesystem = catalog, playlists =
+  reading room) by baking editorial categorization into the catalog lens — all editorial views
+  belong in the playlist lens (charter: `docs/ROADMAP-playlists.md`, 2026-08-19).  **Replacement
+  direction (to be adjudicated, not yet frozen):** a universal top dir; scholarship-stable path
+  components (composer, work, dates, performers); C-INIT's initial-component rules may survive
+  generalised — its fate, the `IS_CLASSICAL` tag's fate (tag layer ≠ path layer), and the migration
+  of already-enacted class dirs in the live library are the re-freeze session's scope.
+  **Consequences:** (1) **J2 is partially reopened** — C-CLASS un-ratified; C-INIT open; the
+  editorial half (styleguide v1) is untouched.  (2) **J3 and R6d's destructive pass are HALTED** —
+  the 2026-08-14 preflight evidence is stale by construction (the 9,009 `unify` destinations embed
+  class dirs; the re-frozen policy's change-set will be strictly larger since every class-dir file
+  moves), and running now would enact dead policy and force a second library-wide re-derivation,
+  violating the re-derive-once intent.  Preflight re-runs after the re-freeze.  (3) The pre-R6d
+  unify-plumbing fix (`docs/PLAN.md`) remains valid and queued — policy-neutral invocability.
+  (4) The **playlist library graduates** to its own roadmap now (its trigger effectively fired; the
+  operator delivered its charter).  Next agent-shardable step: the **naming-policy re-freeze
+  adjudication** (a dedicated interactive session; J2-reopening freeze — fresh deliberate act, not
+  a session-tail decision).
