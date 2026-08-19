@@ -325,7 +325,11 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   `CEA_RECORDING_ARTIST`, no rename).  ◆ boundary `still-on-intent`.  **R6d planning caveat (stale docs):**
   `census-impl.md` / `NOTES.md` still describe the now-deleted `cea_album_soloists_unified`
   concerto-injection path rule — refresh before R6d consumes the census so R6d planning does not
-  read a superseded rule.  **R6d planning caveat (paths-only vs tag-content — surfaced 2026-08-12,
+  read a superseded rule.  **R6d unify-invocation caveat (2026-08-19):** the destructive `unify`
+  pass requires the `--user-agent-email` plumbing landed by the pre-R6d fix session (Discoveries
+  appendix, 2026-08-19); `unify`'s canonical name-form dereference is a permitted stable fixed-MBID
+  lookup, not a `MB(*)` wildcard.  R6d's destructive run must supply the user-agent.  **R6d planning
+  caveat (paths-only vs tag-content — surfaced 2026-08-12,
   R6a shard):** the offline maintenance engine `repath`/`regroup`/`unify` re-derives **paths only**,
   from *embedded tags*, with **no MB network call** (`_pipeline_maint.py`).  So R6d's "one-pass
   re-derivation" as currently built re-paths the library under the latest `build_dest_path` policy
@@ -628,3 +632,27 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   are runnable now on `Done/` (operator-confirmed 2026-08-12) — only R6d is J3-gated.  R6a (depth
   normalisation) is **done** (2026-08-12); R6b (catalogue-colon retro-fix) is **done** (2026-08-13);
   **R6c (AcoustID Picard alignment) is sharded next** (`docs/PLAN.md`, 2026-08-13).
+
+- **R6d-preflight ◆ boundary (2026-08-19) — `unify` makes a narrow, stable MB name-form lookup;
+  the "offline passes make no MB call" property is refined, not restored (pre-R6d fix input).**
+  Running the `unify` dry-run surfaced that the standalone `unify` subcommand cannot be invoked:
+  it lacks the `--user-agent-app`/`--user-agent-email` flags and the `init_mb()` call that
+  `apply`/`search`/`preflight` carry, and dies with a `musicbrainzngs.UsageError` on the first
+  artist.  Root cause: C-CANON (canonical name-forms) added a `fetch_artist_aliases(mbid)` call
+  inside `build_dest_path`, so `unify`/`repath`/`regroup` — which the R6a node recorded as making
+  "no MB network call" — now dereference each embedded artist MBID for its primary-flagged canonical
+  alias.  **Operator ruling (2026-08-19):** this is acceptable and does *not* violate the
+  determinate-transition principle.  `unify` must effect a determinate A → A′ specified over the
+  current library state; what is forbidden is folding in `MB(*)` — a wildcard of new/volatile MB
+  data whose answer drifts with MB's catalog (search, re-identification, relationship refetch).  A
+  fixed-MBID dereference of an entity's own stable primary name-form is a narrow, well-defined,
+  cached lookup of data that simply isn't local yet — not a wildcard.  Static-frame consequence:
+  the R6a "offline maintenance passes make no MB call" property is **refined** to "make no
+  *wildcard* MB call (no search / no re-identification); a stable fixed-MBID name-form dereference
+  is permitted."  Resolution: a **pre-R6d fix session** (`docs/PLAN.md`) wires `unify`'s `init_mb`
+  plumbing and corrects the subcommand's false "No MusicBrainz network calls are made" epilog to
+  state the true A → A′ posture.  No frozen contract invalidated (reaffirms C-CANON's network
+  posture; does not re-freeze it).  No destructive-HALT.  **Residual reopen trigger:** if strict
+  determinism is later required (an MB primary alias drifting between ingest and `unify` re-paths a
+  dir), persist the canonical form as an embedded tag at ingest and read it offline — deferred, not
+  this shard's scope.
