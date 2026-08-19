@@ -358,8 +358,8 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
 | Juncture | When | Adjudicates |
 |----------|------|-------------|
 | **J1** *(FIRED 2026-07-20)* | end of R0 | Census distribution → R3 order/pruning; rung-ladder shape for R2; not-in-MB default posture.  Verdict `still-on-intent` + `additive-reshard`; no destructive-HALT.  Outputs folded into R2/R3/pre-R3 nodes above and recorded in the appendix.  R2 shard proceeds against C-TIER. |
-| **J2** *(FIRED 2026-07-30; PARTIALLY REOPENED 2026-08-19)* | end of R4 + **styleguide v1** | **C-CLASS refuted by operator 2026-08-19 (Discoveries appendix) — the taxonomy half is reopened for a universal-top-dir re-freeze; C-INIT fate open; depth policy and the editorial half (styleguide v1) stand.**  Naming-policy freeze: taxonomy, depth policy, editorial signals.  Verdict `still-on-intent` + **freeze granted**: C-CLASS/C-INIT ratified final; **C-W3b graduated from provisional**; editorial half defined by styleguide v1 (layer 4) by reference.  C-S0 finding ruled (operator): release-scoped aggregation retained; rg-multi-release consolidates via the III-b regroup folded into R6d planning (live hades scan prerequisite).  A-b/A-c close; **Act II is done**.  R6 unblocks for PLAN derivation (R6d still gated on J3 + R5 exit).  Full adjudication in the Discoveries appendix. |
-| **J3** *(HALTED 2026-08-19)* | before R6d | Go/no-go on the destructive-scale full-library repath: `Reference/` retention decision, journal capacity, dry-run evidence.  **Halted pending the naming-policy re-freeze (C-CLASS refuted — Discoveries appendix 2026-08-19); the 2026-08-14 preflight evidence is stale by construction and re-runs after the re-freeze.** |
+| **J2** *(FIRED 2026-07-30; REOPENED 2026-08-19; RE-FROZEN 2026-08-19)* | end of R4 + **styleguide v1** | **Taxonomy half re-frozen: C-CLASS refuted-and-deleted, superseded by C-UNIVERSAL (prefix-less universal top dir; the first path component is the scholarship-stable first-component shape, absorbing+generalising C-INIT); `IS_CLASSICAL` decoupled to the work-type predicate; the epistemic criterion pinned in NOTES.  Depth policy and the editorial half (styleguide v1) stand unchanged.**  Original freeze (2026-07-30): naming-policy `still-on-intent`, C-W3b graduated, editorial half = styleguide v1 by reference, C-S0 release-scoped.  A-b/A-c close; **Act II is done**.  Full adjudication + re-freeze in the Discoveries appendix. |
+| **J3** *(UN-HALTED 2026-08-19; awaiting preflight re-run)* | before R6d | Go/no-go on the destructive-scale full-library repath: `Reference/` retention decision, journal capacity, dry-run evidence.  **The naming-policy re-freeze that halted J3 has landed (C-UNIVERSAL, commit `bec261d`).  The go/no-go input is the preflight re-run against the re-frozen policy — an operator step (`scripts/preflight_r6d.py` against live hades; the harness is built and green, C-PREFLIGHT).  The 2026-08-14 evidence is superseded; its change-set will be strictly larger (every former class-dir file now moves).** |
 
 Post-R3, the **structural-audit trigger** fires (BACKLOG "Codebase maintenance cadence"): review the
 coherence of the new module boundaries (adapters, rung substrate, `_net`) once settled.  Trigger-based;
@@ -378,9 +378,12 @@ naming policy froze at J2 (2026-07-30)** — C-CLASS/C-INIT ratified final, C-W3
 provisional (rule + sub-shape routing; interface mechanics resolve at R6a PLAN derivation), editorial
 half = styleguide v1 by reference; R6 freezes the final path policy and externalises it as the
 conventions spec.  Each sub-track PLAN names its own C-* contracts per existing convention.
-**Amendment 2026-08-19: C-CLASS is refuted and un-ratified (Discoveries appendix); C-INIT's fate is
-open; the taxonomy half of the naming policy awaits re-freeze under the universal-top-dir
-direction.**
+**Amendment 2026-08-19: C-CLASS refuted-and-deleted; the taxonomy half re-froze as C-UNIVERSAL
+(prefix-less universal top dir; the scholarship-stable first-component shape absorbs and generalises
+C-INIT), commit `bec261d`.  `IS_CLASSICAL` derives from the work-type predicate (tag layer ≠ path
+layer).  New prose contract: the epistemic criterion (defer to MB where variation is
+scholarship-driven and converges; never let MB free-classification parameters define library
+topology), pinned in NOTES.  Act II's taxonomy half is closed again.**
 
 **Prose contracts:** the lossless principle (failure ≠ no-data), "path is a handle, not a manifest",
 the layer-routing rule, "journal detects, tag adjudicates" — all in `docs/NOTES.md`; every PLAN
@@ -602,6 +605,25 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   the III-b regroup pass must handle rg-multi-release consolidation, and the **live hades scan is load-bearing**
   (the Furtwängler-style partial-ingest scenario — some discs already in `Done/` — means the documentary count
   is a floor, not the truth).  Not an in-arc contract change (D-4); an R6d-planning input.  No destructive-HALT.
+
+- **C-UNIVERSAL re-freeze ◆ boundary (2026-08-19) — taxonomy half re-frozen; styleguide-sync debt
+  queued (static-frame delta).**  The naming-policy re-freeze that the C-CLASS refutation demanded
+  landed as a single-row code sub-track (`docs/PLAN.md`, ledger done; commit `bec261d`).  Deleted
+  `_top_level_class`; generalised+renamed `_classical_top_dir` → `_top_dir_component` (logic
+  unchanged — a pop album is the performer-led branch); collapsed the class-prefix assembly in
+  `build_dest_path`; rewired `IS_CLASSICAL` to the CE-classical work-type predicate.  Froze
+  **C-UNIVERSAL** (replaces C-CLASS, absorbs+generalises C-INIT) + the **epistemic-criterion prose
+  contract** (NOTES).  Static-frame facts folded up: (1) **D-2 collapse-equivalence resolved as an
+  intended behaviour change** — the old Soundtracks bare-`<album>` arm folds into the performer-led
+  `<albumartist> - <album>` shape; editorial-class distinctions relocate to the playlist lens per the
+  two-lens principle (no shape silently lost — the executor diffed the arms).  (2) **Styleguide-sync
+  debt queued (not yet paid):** durable prose still describes the deleted C-CLASS as a live frozen
+  contract — `models.py:1385` (misstates the `IS_CLASSICAL` basis), `_tags.py:1156` (renamed helper),
+  STYLEGUIDE 4.5 / REND-21 / REND-22 / REND-23, and `census-impl.md` 5.1 / 5.2.  Deferred out of the
+  code-freeze session by design (the code gate does not block on prose sync); sharded next as a thin
+  documentary-accuracy follow-on.  No frozen contract invalidated; no destructive-HALT.  **Next
+  agent-shardable slice: the styleguide-sync follow-on** (`docs/PLAN.md`).  The J3 preflight re-run
+  is the next *operator* step (un-halted; live-library, not an agent session).
 
 - **R6b ◆ boundary (2026-08-13) — catalogue-colon retro-fix machinery landed; live-population re-check
   still owed (R6d-planning input).**  R6b froze C-CAT-INT and built the offline `repatch_catalogue_colon`

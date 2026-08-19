@@ -1,316 +1,242 @@
 <!-- juncture-tier: opus -->
-<!-- sub-track: naming-policy re-freeze — library-completion arc (docs/ROADMAP.md), J2-reopening
-     freeze.  The top-level class scheme (Classical/Popular/Compilations/…) rendered by
-     _top_level_class was refuted by operator judgment 2026-08-19 (ROADMAP Discoveries appendix): it
-     derived the topmost, most topology-defining path component from MusicBrainz's entropic
-     free-classification parameters (release-group primary/secondary types, is-classical predicate),
-     which are crowd-set and unanchored — scrambling library topology.  This sub-track re-freezes the
-     catalog naming policy under the operator's decided direction: a universal (prefix-less) top dir
-     over scholarship-stable components; all editorial categorization relocates to the playlist lens
-     (docs/ROADMAP-playlists.md).  The adjudication is complete (architect session 2026-08-19; Q1–Q3
-     resolved); this shard is the implementation handoff.  Freezes C-UNIVERSAL (replaces the refuted
-     C-CLASS; absorbs and generalises C-INIT) + the epistemic-criterion prose contract (NOTES). -->
+<!-- sub-track: styleguide-sync follow-on — library-completion arc (docs/ROADMAP.md).  The
+     C-UNIVERSAL re-freeze (prior PLAN, ledger done, commit bec261d) deleted _top_level_class,
+     renamed _classical_top_dir → _top_dir_component, and decoupled IS_CLASSICAL to the work-type
+     predicate.  It deferred the durable-prose sync out of the code-freeze session (D-5; the code
+     gate does not block on prose accuracy).  Durable files still describe the deleted C-CLASS as a
+     live frozen contract, misstating the frozen policy.  This shard pays that debt: it edits
+     comments + human docs only, freezing no new contract — it re-aligns durable prose to the
+     already-frozen C-UNIVERSAL / epistemic-criterion contracts. -->
 
-# PLAN — naming-policy re-freeze: universal top dir (C-UNIVERSAL)
+# PLAN — styleguide-sync follow-on: durable prose to the C-UNIVERSAL freeze
 
 ## Purpose (design intent)
 
 *(Re-read at every ◆ boundary — anti-defocus anchor.)*
 
-The refuted policy built the library's **topmost, most topology-defining** path component
-(`Classical/`, `Popular/`, `Compilations/`, `Soundtracks/`, `Spoken Word/`, `Unsorted/`) from
-MusicBrainz's **free-classification parameters** — release-group primary/secondary types and the
-is-classical predicate — which are crowd-set, inconsistently applied, and unanchored.  The same
-programme lands under different classes by MB editor whim, scrambling the library topology and
-baking an editorial view into the *catalog* lens in violation of the arc's two-lens principle
-(filesystem = catalog, playlists = reading room).
+The C-UNIVERSAL re-freeze changed the code (class prefix deleted, first-component rule generalised,
+`IS_CLASSICAL` decoupled to the work-type predicate) but **deliberately deferred the durable-prose
+sync** so the code gate would not block on documentation accuracy.  As a result, several durable
+files now **misstate the frozen policy** — they describe the deleted `_top_level_class` / C-CLASS
+routing as a live frozen contract:
 
-**The re-frozen policy.**  The catalog path is **prefix-less** — a universal top dir.  The
-first component directly under `dest_root` is the scholarship-stable first-component shape
-(composer-first / performer-led / compilation), which reads only release facts and MB
-scholarship-convergent data (composer linkage, albumartist, album), never free-classification
-parameters.  All editorial organization (the pop/classical split, genre views, curated sets) moves
-to the playlist lens (`docs/ROADMAP-playlists.md`).
+- `src/music_annotator/models.py:1385` — the `is_classical` field comment says the value derives
+  "from `_top_level_class`" (a deleted function).  **This is the most material defect**: it misstates
+  the just-frozen `IS_CLASSICAL` basis (the CE-classical work-type predicate).
+- `src/music_annotator/_tags.py:1156` — a comment references the renamed `_classical_top_dir`.
+- `docs/STYLEGUIDE.md` 4.5 (path grammar lists "class directory;"), REND-22 (describes C-CLASS as a
+  live frozen contract), REND-23 (describes C-INIT as separate), REND-21 (a caveat "if ever
+  generalised … noted for the application shards" that the decouple now *satisfies*).
+- `docs/census-impl.md` 5.1 / 5.2 / REND-21 / REND-22 / REND-23 — describe the deleted
+  `_top_level_class` routing and stale `_tags.py` source-line refs as live.
 
-**The epistemic criterion (operator ruling 2026-08-19; pinned in NOTES this shard).**  Defer to MB
-where variation is *scholarship-driven* and converges under editorial pressure — composer identity,
-recording dates, catalogue facts.  Never let MB's *free-classification parameters* define library
-topology: they are entropy, not signal.
+**This shard re-aligns durable prose to the already-frozen contracts.**  It freezes **no new
+contract**.  It edits **comments and human docs only** — no `.py` logic changes, no behaviour change,
+no path or tag output change.  It is the register-anneal the deferral left owed: durable files must
+state the current property/invariant, never a superseded one.
 
-**This sub-track delivers the C-UNIVERSAL re-freeze in code+tests+durable prose, code-only.**  The
-destructive library-wide migration (every existing 3-level class-prefixed dir → prefix-less
-2-level) rides R6d's one J3-gated pass — this shard changes only newly-computed paths and freezes
-the policy; it does not run a destructive pass.
+**The epistemic criterion and C-UNIVERSAL are already frozen** (prior shard, NOTES + code).  This
+shard does not re-open them; it makes the descriptive layer honest about them.
 
-**Status note (2026-08-19).**  This shard supersedes the completed `unify`-plumbing fix (committed
-`2161dae`, ledger closed).  It unblocks the halted J3/R6d line: after this freeze lands, the J3
-preflight re-runs against the new policy (the 2026-08-14 evidence was stale by construction — every
-one of the 9,009 `unify` destinations embedded a class dir).
+**Out of scope (named, not silently dropped).**
 
-**The structural facts that shape this shard (survey 2026-08-19).**
-
-- **The refuted mechanism is three functions in `_tags.py`:** `_top_level_class` (`:228`, the
-  C-CLASS routing table over free-classification params — **deleted**), `_classical_top_dir`
-  (`:279`, the within-classical first-component rule, C-INIT — **generalised + renamed**, logic
-  unchanged), and the class-prefix assembly in `build_dest_path` (`:1371`–`:1447`, the
-  `class_dir = safe_name(_top_level_class(tags))` line + the `match class_dir:` block — **collapsed**
-  to the prefix-less first-component computation).
-- **C-INIT's three branches read only scholarship-stable data** (`releasetype_secondary` for the
-  compilation gate; `albumartist`/`albumartistsort`/`album`; `CWP_COMPOSER_LASTNAMES`/
-  `CEA_COMPOSER_LASTNAMES` for composer linkage).  None reads a free-classification param, so the
-  epistemic criterion leaves them intact.  A pop album (no linked composer) routes naturally through
-  the performer-led branch → `<albumartist> - <album>`.
-- **`IS_CLASSICAL` is currently derived from the dying path layer** (`_tags.py:1005`:
-  `tags.is_classical = "1" if _top_level_class(tags) == "Classical" else "0"`).  It must be rewired
-  to derive from **compositional identity** (the CE-classical predicate: `cwp_work_top` non-empty
-  AND `"Classical" in cwp_worktype_genres_top`) per REND-21/SEL-14 — tag layer ≠ path layer.
-- **The legacy/class-prefixed path discriminator** (`_CLASS_VOCAB` at `_tags.py:225`, consumed by
-  `_work_top_dir` `:359` and `_work_dir_component` `:344`, and imported in `_audit.py`,
-  `_pipeline_io.py`, `_pipeline.py`) tests `parts[0] in _CLASS_VOCAB` to tell 3-level class-prefixed
-  paths from 2-level legacy paths.  **It must stay for the transition** — the live library still
-  holds 3-level class-prefixed dirs until R6d migrates them.  Removing the discriminator is a
-  **post-R6d** cleanup, NOT this shard.  (After the freeze, newly-written paths are 2-level again;
-  the discriminator's "legacy 2-level" arm is the new-path arm.)
-- **The styleguide describes, does not define, this policy** (STYLEGUIDE 4.5; REND-22 explicitly:
-  "an apparent conflict is a finding for that arc's boundary").  So the freeze needs only a **status
-  correction** to 4.5 (drop "class directory;" from the path-component list) and REND-21/22/23 —
-  NOT a reauthoring.  Deferred to a thin styleguide-sync follow-on (Deferrals); the code freeze does
-  not block on it.
+- **No code logic.**  The frozen behaviour stands; only comments describing it are corrected.
+- **No J3 preflight re-run.**  That is the next *operator* step (run `scripts/preflight_r6d.py`
+  against live hades under the re-frozen policy).  It is not an agent code session — the harness is
+  built and green (C-PREFLIGHT).  Noted here so the boundary hand-off names it.
+- **No `_CLASS_VOCAB` / discriminator removal.**  That is post-R6d (the live library still holds
+  3-level class-prefixed dirs until the destructive pass migrates them).
 
 ## Verify gate
 
-Discovered from `pyproject.toml` (tox envs; do not assume `make`).  Binding — this is a code shard.
+Discovered from `pyproject.toml` (tox envs; do not assume `make`).
 
-- **VERIFY_TEST**: `~/.local/bin/tox -e test` (`pytest tests/`; **100% branch coverage**, `fail_under = 100`).
-- **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` (`mypy src/ tests/`, strict).
-- Full gate before ledger-done: `~/.local/bin/tox -m analyze` (build + test + check_type +
-  check_format + check_lint 10.00/10 + check_upgrade).  Import order via `~/.local/bin/tox -m edit`,
-  never hand-edited.
+- **VERIFY_TEST**: `~/.local/bin/tox -e test` (`pytest tests/`; **100% branch coverage**).  This
+  shard touches only comments in `.py` files, so coverage is unchanged by construction — the gate
+  proves the comment edits did not disturb any line/branch structure.
+- **VERIFY_TYPES**: `~/.local/bin/tox -e check_type` (`mypy src/ tests/`, strict) — comment-only
+  `.py` edits are type-neutral; the gate confirms no accidental code disturbance.
+- Full gate before ledger-done: `~/.local/bin/tox -m analyze`.  Import order via
+  `~/.local/bin/tox -m edit`, never hand-edited.
+- **Accuracy check (this shard's real verification, standing in for a KAT — see Session detail):**
+  after the edits, **no live reference to `_top_level_class` survives in durable files** except as a
+  superseded-name mention in an explicit status note.  Verified by grep, not a runtime test — this
+  is a documentary shard whose "contract" is descriptive accuracy, not behaviour.
 
 ## Session list
 
 | # | Session | Cat | Tier | Consumes | Expected files |
 |---|---------|-----|------|----------|----------------|
-| 1 ◆ | Re-freeze the catalog naming policy: delete the class prefix, generalise the first-component rule, decouple `IS_CLASSICAL` from the path | I | Sonnet | the refuted C-CLASS (delete), C-INIT (generalise+absorb), REND-21/SEL-14 (IS_CLASSICAL basis), the epistemic criterion | `src/music_annotator/_tags.py`, `tests/unit/test_annotator.py`, `tests/unit/test_pipeline.py`, `tests/integration/test_integration.py`, `docs/NOTES.md` |
+| 1 ◆ | Sync durable prose (code comments + styleguide + impl census) to the C-UNIVERSAL freeze | I | Sonnet | C-UNIVERSAL, the epistemic criterion, REND-21 (satisfied caveat) | `src/music_annotator/models.py`, `src/music_annotator/_tags.py`, `docs/STYLEGUIDE.md`, `docs/census-impl.md` |
 
-`Cat`: **I (integrative)** — the path grammar is where the catalog lens's topology is defined; this
-row re-freezes it under the scholarship-stable direction and pins the epistemic criterion in durable
-prose.  Single-session sub-track, so the one row is the ◆ boundary.
+`Cat`: **I (integrative)** — the styleguide and impl census are where the catalog lens's policy gets
+its *public descriptive form*; this row re-aligns that description to the frozen contract.  The
+integrative session is "where contracts get their public form" — for a documentary sync that is the
+whole deliverable.  Single-session sub-track, so the one row is the ◆ boundary.
 
-`Tier`: **Sonnet.**  The design decisions are frozen (architect adjudication 2026-08-19, Q1–Q3
-resolved); this row *enacts* them.  Mechanical over an existing structure (delete one function,
-ungate+rename a second, collapse a `match` block, rewire one assignment), strong inner loop (100%
-branch + strict mypy).  Lever 3/4 (design-error cost / correctness-crit) is discharged upstream: the
-posture is decided; the risk that remains is coverage/round-trip regression, which the gate catches.
-`juncture-tier: opus` — kept (arc default); no juncture fires in a one-row shard.
+`Tier`: **Sonnet.**  Pure documentary re-alignment against a frozen contract — no design surface, no
+cost-of-wrong beyond "did we miss a reference" (the accuracy grep catches that).  Lever 3/4
+(design-error / correctness-crit) is minimal: nothing executes.  `juncture-tier: opus` kept (arc
+default); no juncture fires in a one-row shard.
 
 **Sizing (levers named).**  Default band ~150–400 LOC / 2–4 files.
 
-- **S1 ≈ 120–250 LOC across 5 files** (net-negative in `_tags.py`: `_top_level_class` deleted, the
-  `match class_dir:` block collapsed; the churn is in tests — the C-CLASS KAT class is deleted, the
-  C-INIT KATs re-home under the universal rule, and every integration/pipeline test that expected a
-  class-prefixed path drops the prefix).  **Irreducible unit (lever 2, floor):** the deletion, the
-  generalisation, the `IS_CLASSICAL` rewire, and the test realignment are one conceptual unit
-  ("re-freeze the catalog topology") — splitting them leaves the tree red (a deleted
-  `_top_level_class` with callers, or a class-prefix `build_dest_path` with class-less tests).  Kept
-  whole.  One-line commit-title passes.
+- **S1 ≈ 30–80 LOC across 4 files**, all prose (two `.py` comment blocks; ~5 STYLEGUIDE
+  paragraphs/register lines; ~4 census-impl entries).  **Below the default band by design** — this is
+  a documentary follow-on, not a conceptual unit with irreducible code complexity (lever 2 floor is
+  small).  **Not split further**: the defect is one conceptual unit ("durable prose still names the
+  deleted contract"); splitting comments from docs would fracture a single accuracy pass at a
+  non-contract-sharp boundary.  Kept whole.  One-line commit-title passes.
 
 ## Session detail
 
-### S1 ◆ — Re-freeze the catalog naming policy (C-UNIVERSAL)
+### S1 ◆ — Sync durable prose to the C-UNIVERSAL freeze
 
-**Deliverable.**  Enact the frozen re-freeze:
+**Deliverable.**  Correct every durable-file description of the deleted C-CLASS / `_top_level_class`
+routing to describe the frozen C-UNIVERSAL policy.  Concretely:
 
-- **Delete `_top_level_class`** (`_tags.py:228`) and the `_CLASS_VOCAB`-based routing it drives *from
-  the path layer*.  **Keep `_CLASS_VOCAB`** and the `_work_top_dir`/`_work_dir_component`
-  discriminator — they are needed for the transition (live library still holds 3-level paths until
-  R6d).  Update `_CLASS_VOCAB`'s docstring: it is now a *legacy-path-recognition* vocabulary (reads
-  historical class-prefixed dirs), no longer a *live routing* vocabulary.
-- **Generalise + rename `_classical_top_dir`** (`_tags.py:279`) to a universal first-component
-  helper (suggested `_top_dir_component`; the executor picks a register-clean name — the point is it
-  no longer says "classical"/"recital").  **Logic unchanged**: compilation → `<albumartist-last or
-  "Various"> - <album>`; performer-led (no linked composer) → `<albumartist> - <album>`;
-  single-composer → `None` (caller uses `<composer> - <performers>`).  Update the docstring to state
-  the branches are universal (a pop album is the performer-led branch), and that all three read
-  scholarship-stable data (release facts + composer-convergent MB data), never free-classification
-  params.
-- **Collapse the class-prefix assembly in `build_dest_path`** (`_tags.py:1371`–`:1447`).  Remove
-  `class_dir = safe_name(_top_level_class(tags))` and the `match class_dir:` block.  The first
-  component becomes: call the generalised first-component helper; when it returns `None`
-  (single-composer) use `safe_name(f"{composer} - {performers}")`.  Every `dest_root / class_dir /
-  top_dir / …` path build drops the `class_dir` segment → `dest_root / top_dir / …`.  The
-  Soundtracks/Unsorted/Spoken-Word/Popular/Compilations arms of the old `match` fold away: their
-  distinctions were the editorial class split (now playlist-lens); their *shape* (`<artist> -
-  <album>` or `<album>`) is already the performer-led/compilation branch of the generalised helper.
-  **Confirm no non-classical shape is silently lost** — the old Soundtracks arm used bare `<album>`;
-  verify the generalised helper's performer-led branch (which uses `<albumartist> - <album>`, or
-  bare `<album>` when albumartist is empty) covers it, or add an explicit branch.  This is the one
-  place the collapse could drop behaviour — the executor must diff the old `match` arms against the
-  generalised helper's outputs and either confirm equivalence or preserve the arm.
-- **Rewire `IS_CLASSICAL`** (`_tags.py:1005`).  Replace `_top_level_class(tags) == "Classical"` with
-  the CE-classical predicate directly: `tags.is_classical = "1" if (tags.cwp_work_top and
-  "Classical" in tags.cwp_worktype_genres_top) else "0"` (REND-21/SEL-14 — classification derives
-  from compositional identity, never the code path).  Tag layer ≠ path layer: the flag survives as a
-  work-type tag and a future playlist input; it no longer defines topology.
-- **Pin the epistemic criterion in `docs/NOTES.md`** as a prose contract (alongside the two-lens,
-  "path is a handle", layer-routing, "journal detects, tag adjudicates" contracts): defer to MB
-  where variation is scholarship-driven and converges (composer identity, dates, catalogue facts);
-  never let MB's free-classification parameters (release-group types, is-classical predicates)
-  define library topology.  Name it as the basis for the universal-top-dir catalog shape and the
-  playlist-lens relocation of editorial views.
+- **`models.py:1385`** — rewrite the `is_classical` field comment.  Old: "build_track_tags overrides
+  this explicitly from `_top_level_class` (STYLEGUIDE 4.7/REND-21) so the persisted value reflects
+  the actual library class."  New: the flag derives from the **CE-classical work-type predicate**
+  (`cwp_work_top` non-empty AND `"Classical" in cwp_worktype_genres_top`) — compositional identity,
+  not the code path (REND-21/SEL-14; tag layer ≠ path layer).  State the *property*, no plan
+  coordinate.
+- **`_tags.py:1156`** — update the comment referencing `_classical_top_dir` to name
+  `_top_dir_component` and describe the branch as **performer-led** (not "recital"): when
+  `raw_composer` is empty the helper returns the performer-led shape, so `composer=""` is never used
+  in the path.
+- **`STYLEGUIDE.md 4.5`** — drop "class directory;" from the path-grammar component list; change "The
+  class and top-directory routings realise the C-CLASS and C-INIT contracts" to: the first-component
+  routing realises **C-UNIVERSAL** (which superseded C-CLASS; the catalog path is prefix-less).
+- **`STYLEGUIDE.md REND-22`** — status → **C-CLASS refuted-and-deleted; superseded by C-UNIVERSAL**
+  (prefix-less universal top dir; editorial class distinctions relocated to the playlist lens).
+- **`STYLEGUIDE.md REND-23`** — status → **C-INIT absorbed and generalised into C-UNIVERSAL** (the
+  first-component rule is universal; a pop album is the performer-led branch).  Keep the CE recital
+  divergence note (still true: where MB links no composer, the album artist renders).
+- **`STYLEGUIDE.md REND-21`** (both the register line ~:593 and the CE-divergence line ~:650) — note
+  the "must derive from the classification, never the code path" caveat is now **satisfied** (the
+  flag derives from the work-type predicate directly), not "noted for the application shards."
+- **`census-impl.md` 5.1 / 5.2 / REND-21 / REND-22 / REND-23** — mark the `_top_level_class` routing
+  and its source-line refs as **superseded** (C-CLASS deleted → C-UNIVERSAL; `_classical_top_dir` →
+  `_top_dir_component`).  This is an impl-census (a point-in-time survey artifact); a light
+  superseded-status stamp suffices — do not re-author the whole census.
 
-**KAT (the row's behavioural witnesses).**
-
-(a) **prefix-less path witnesses** — `build_dest_path` for a single-composer classical release
-returns `dest_root / "<Composer> - <Performers>" / "<Work> [YYYY]" / "<nn> - <title>"` with **no**
-class component (was `dest_root / "Classical" / …`).  A pop album returns `dest_root / "<Artist> -
-<Album>" / …`.  A compilation returns `dest_root / "<Various or last> - <Album>" / …`.  Replaces
-every existing test that asserted a `"Classical"`/`"Popular"`/etc. first component.
-(b) **first-component-rule witnesses** — the generalised helper: compilation gate →
-`<albumartist-last> - <album>`; empty-composer → `<albumartist> - <album>` (and bare `<album>` when
-albumartist empty); linked-composer → `None`.  Re-homes the C-INIT KATs (`test_annotator.py:4652+`)
-under the universal name; **deletes the C-CLASS KAT class** (`test_annotator.py:4384+`) — the routed
-vocabulary no longer exists.
-(c) **`IS_CLASSICAL`-from-work-type witnesses** — `IS_CLASSICAL == "1"` iff `cwp_work_top` non-empty
-AND `"Classical" in cwp_worktype_genres_top`, **independent of any path component** (the REND-21 KATs
-at `test_pipeline.py:4327+` re-key off the predicate, not `_top_level_class`).  Add a witness that a
-classical work whose path is prefix-less still gets `IS_CLASSICAL == "1"` (proves the decouple).
-(d) **discriminator-still-works witness** — `_work_top_dir` / `_work_dir_component` still correctly
-read a *legacy* 3-level class-prefixed path (transition safety) AND a new 2-level prefix-less path.
-Both arms covered (the class-prefixed arm is now legacy-only, still live until R6d).
+**KAT — flagged: this row has no KAT, and here is why the contract is still defined.**  Per the
+sharding rule, a row whose deliverable can't be a KAT usually has an undefined contract.  This row is
+the deliberate exception: it freezes **no behavioural contract** — it is a documentary re-alignment
+to a contract frozen upstream (C-UNIVERSAL, already KAT-witnessed in the prior shard's tests
+(a)–(d)).  There is nothing new to witness at runtime.  **The verification that stands in for a KAT
+is the accuracy grep** (Verify gate): after the edits, no durable file names `_top_level_class` as a
+live routing (only as an explicit superseded-name status mention).  This is the anneal test, not a
+behaviour test — appropriate for a Cat-I documentary sync.  If, in doing the work, the executor finds
+any edit *does* change behaviour, that is a signal this was mis-scoped as documentary — halt and
+surface (it should not happen; every edit is a comment or a `.md`).
 
 **Subtleties.**
-- **Coverage: the deleted routing.**  Deleting `_top_level_class` removes 6 match arms' worth of
-  branches; deleting its KAT class removes their tests in lockstep — net coverage-neutral, but the
-  executor must confirm no *other* caller of `_top_level_class` survives (grep: `models.py:1385`
-  comment reference is docstring-only; the live callers are `_tags.py:1005` and `:1374`, both
-  rewritten here).
-- **The collapse-equivalence check is the one real risk.**  The old `match class_dir:` had
-  class-specific shapes (Soundtracks = bare `<album>`).  The generalised helper must reproduce every
-  shape or the collapse silently re-paths a population.  Diff the arms; confirm or preserve.
-- **No R6d run, no migration machinery.**  This shard changes newly-computed paths only.  The
-  destructive migration of existing class-prefixed dirs rides R6d (D-A5 precedent); `repath`/`unify`
-  re-derive the prefix-less shape on demand from embedded tags.
-- **Register discipline.**  NOTES prose and docstrings state the *property/invariant* (scholarship-
-  stable topology; free-classification params never define topology; tag layer ≠ path layer) — never
-  a plan coordinate (no "C-CLASS-refutation", no "J2", no "R6d", no "S1").  Contract names
-  (C-UNIVERSAL, C-INIT, REND-21) are legitimate durable vocabulary.
+
+- **Comment-only `.py` edits must stay comment-only.**  `models.py:1385` and `_tags.py:1156` are
+  inside docstrings/comments.  Editing them must not touch the adjacent code (the `is_classical: str =
+  "1"` default stays; the `raw_composer` logic stays).  `tox -e test` at 100% branch coverage
+  confirms no structural disturbance.
+- **`census-impl.md` is a survey artifact, not a spec.**  It records what the code was at survey time.
+  The honest fix is a superseded-status stamp ("C-CLASS deleted 2026-08-19; see C-UNIVERSAL"), not a
+  rewrite that would falsify its point-in-time nature.  Weigh whether a census artifact should be
+  touched at all versus a single dated superseded-header — the executor picks the lighter honest
+  option and states which.
+- **Register discipline.**  All edited prose states the *property/invariant* (the flag derives from
+  compositional identity; the catalog path is prefix-less; C-UNIVERSAL superseded C-CLASS) — never a
+  plan coordinate.  Contract names (C-UNIVERSAL, C-INIT, C-CLASS-as-superseded-name, REND-21/22/23,
+  SEL-14) are legitimate durable vocabulary.
 
 **Deferrals.**
-- **Styleguide sync** (thin follow-on, not this shard): STYLEGUIDE 4.5 drop "class directory;" from
-  the path-component list; REND-22 status → "C-CLASS refuted; superseded by C-UNIVERSAL (prefix-less
-  universal top dir)"; REND-23 status → "C-INIT absorbed into C-UNIVERSAL, generalised"; REND-21
-  gloss → note the flag now derives from the predicate directly (the "must derive from
-  classification, never the code path" caveat is now satisfied).  Deferred because the styleguide
-  *describes* the policy (REND-22) and the code freeze does not block on the prose sync.
-- **Discriminator removal** (post-R6d): once R6d migrates every 3-level class-prefixed dir,
-  `_CLASS_VOCAB` and the two-arm discriminator in `_work_top_dir`/`_work_dir_component` collapse to
-  the single 2-level form.  Sequenced after the destructive pass; a reopen trigger, not this shard.
-- **J3 preflight re-run** (post-freeze, separate): the go/no-go evidence re-runs against the new
-  policy; not this shard's scope.
 
-**◆ boundary (register anneal).**  Re-read Purpose.  Confirm the row enacted, `tox -m analyze`
-green, ledger complete.  **Planning-register anneal:**
-- Durable files (`_tags.py`, the three test files, `NOTES.md`) carry **no plan coordinates** — state
-  the property/invariant (scholarship-stable topology; tag layer ≠ path layer), never
-  "C-CLASS-refutation"/"S1"/"J2"/"R6d".
+- **J3 preflight re-run** (operator, live library) — the next step *after* this shard, not in it.
+- **`_CLASS_VOCAB` / discriminator removal** (post-R6d) — the live library still holds 3-level dirs.
+- **`census-impl.md` full re-survey** — only if a future arc needs a fresh impl census; a
+  superseded-stamp is sufficient now.
+
+**◆ boundary (register anneal).**  Re-read Purpose.  Confirm the row enacted, `tox -m analyze` green,
+ledger complete.  **Planning-register anneal:**
+
+- Durable files carry **no plan coordinates** — state the property/invariant, never "S1"/"J2"/"R6d".
 - Grep durable files against the anneal denylist (Notes for executors); translate any leaked
-  coordinate to standalone prose.
-- Report to the roadmap: C-CLASS refuted-and-deleted; **C-UNIVERSAL frozen** (prefix-less universal
-  top dir; generalised first-component rule absorbing C-INIT); `IS_CLASSICAL` decoupled to the
-  work-type predicate; epistemic criterion pinned in NOTES.  J2's taxonomy half re-freezes here; J3
-  preflight re-run unblocks.
+  coordinate to standalone prose.  **This shard's own accuracy grep** (no live `_top_level_class`
+  reference) is part of the same pass.
+- Report to the roadmap: styleguide-sync debt **paid**; durable prose now describes C-UNIVERSAL, not
+  the deleted C-CLASS.  The C-UNIVERSAL sub-track's descriptive layer is closed.
 
 ## Cross-session contracts
 
 ### Produced (frozen this sub-track)
 
-- **C-UNIVERSAL** — the re-frozen catalog naming policy.  The catalog path is prefix-less (no
-  top-level class component); the first component under `dest_root` is the scholarship-stable
-  first-component shape (compilation → `<albumartist-last or "Various"> - <album>`; performer-led →
-  `<albumartist> - <album>`; single-composer → `<composer> - <performers>`), reading only release
-  facts and composer-convergent MB data, never free-classification parameters.  Replaces the refuted
-  **C-CLASS**; absorbs and generalises **C-INIT**.
-- **The epistemic-criterion prose contract** (pinned in NOTES this shard) — defer to MB where
-  variation is scholarship-driven and converges; never let MB free-classification parameters define
-  library topology.
+- **None.**  This is a documentary sync; it freezes no new contract.  (A Cat-I row that freezes no
+  contract is legitimate only when it is a re-alignment to an already-frozen contract — which this
+  is.)
 
-### Consumed (frozen upstream — validate-only)
+### Consumed (frozen upstream — validate-and-describe only)
 
-- **REND-21 / SEL-14** — `IS_CLASSICAL` derives from compositional identity (work-type predicate),
-  not the code path.  This shard satisfies the caveat REND-21 flagged.
-- **The two-lens principle + "path is a handle, not a manifest"** (NOTES) — the catalog lens is
-  uniform and fact-anchored; editorial views live in the playlist lens (`docs/ROADMAP-playlists.md`).
-- **C-PROV / C-MOVE + confirmation-provenance** — untouched; this shard changes path computation
-  only, not the move/verify/journal chain.
-- **C-CANON** — canonical name-forms in the performers component; untouched (the `<composer> -
-  <performers>` shape still renders canonical forms).
+- **C-UNIVERSAL** (prior shard, commit `bec261d`) — the prefix-less universal-top-dir catalog policy.
+  This shard makes durable prose describe it accurately.
+- **The epistemic-criterion prose contract** (NOTES, prior shard) — defer to MB where variation is
+  scholarship-driven; never let free-classification parameters define topology.  The corrected
+  STYLEGUIDE/census prose is consistent with it.
+- **REND-21 / SEL-14** — `IS_CLASSICAL` derives from compositional identity (the work-type
+  predicate).  This shard records that REND-21's caveat is now satisfied.
 
 ## Progress ledger
 
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
-| 1 ◆ | Re-freeze the catalog naming policy: delete the class prefix, generalise the first-component rule, decouple `IS_CLASSICAL` | done | bec261d | C-UNIVERSAL + epistemic-criterion prose contract (already in NOTES from architect session; no code change needed). Extra file allowed: `tests/unit/test_pipeline_maint.py` (contains KAT (d) — discriminator-still-works witness for `_work_top_dir`; plainly within session scope). |
+| 1 ◆ | Sync durable prose (code comments + styleguide + impl census) to the C-UNIVERSAL freeze | pending | | (none — documentary re-alignment; no new contract) |
 
 ## Action-frame digest
 
-### S1 ◆ — 2026-08-19
-Discovery/flex: D-2 collapse-equivalence resolved as intended behaviour change (Soundtracks bare-`<album>` → performer-led `<albumartist> - <album>`); editorial-class distinctions relocate to playlist lens per design intent.
-Affected: none (reconciled against Purpose; no contract broken)
-Deferred: no
-Texture: Boundary fork flagged two stale comments (`models.py:1385` references deleted `_top_level_class`; `_tags.py:1156` references renamed `_classical_top_dir`) — non-blocking accuracy defects for the deferred styleguide-sync follow-on. `models.py:1385` most material (misstates the just-frozen IS_CLASSICAL basis). ◆ verdict: still-on-intent.
+*(none yet)*
 
 ## Discoveries & risks
 
-- **D-1 (the refutation — this shard's reason).**  The top-level class scheme derived the topmost
-  path component from MB free-classification parameters; operator refutation 2026-08-19.  Resolution:
-  delete the class layer; freeze C-UNIVERSAL (prefix-less universal top dir).  *internal-continue.*
-- **D-2 (collapse-equivalence risk — the one real risk).**  The old `match class_dir:` block had
-  class-specific first-component shapes (Soundtracks = bare `<album>`); the generalised helper must
-  reproduce each or the collapse silently re-paths a population.  Executor must diff the arms and
-  confirm/preserve.  KAT (a)/(b) witness the shapes.  *internal-continue.*
-- **D-3 (transition-safety — keep the discriminator).**  The live library holds 3-level
-  class-prefixed dirs until R6d migrates them, so `_CLASS_VOCAB` + the `_work_top_dir` discriminator
-  must stay this shard (removal is post-R6d).  KAT (d) witnesses both arms.  *internal-continue.*
-- **D-4 (`IS_CLASSICAL` wiring dies with the class layer).**  The flag currently reads
-  `_top_level_class(tags) == "Classical"`; deleting that function requires the rewire to the
-  work-type predicate (REND-21/SEL-14).  Not optional — the current wiring is unavailable post-delete.
-  KAT (c) witnesses.  *internal-continue.*
-- **D-5 (styleguide describes, does not define — sync deferred).**  STYLEGUIDE 4.5/REND-22 point at
-  this policy by reference (REND-22 anticipated the conflict).  The prose sync is a thin follow-on,
-  not a code-freeze blocker.  Deferred.  *internal-continue.*
+- **D-1 (why this shard exists).**  The C-UNIVERSAL re-freeze deferred the durable-prose sync out of
+  the code-freeze session (prior PLAN D-5); durable files still describe the deleted C-CLASS as live.
+  Resolution: this documentary follow-on.  *internal-continue.*
+- **D-2 (the one risk — a "documentary" edit that isn't).**  If any planned edit turns out to change
+  behaviour (e.g. a comment that a test string-matches, or a doc that a doctest executes), the row is
+  mis-scoped.  Guard: `tox -e test` at 100% branch coverage; every edit is a comment or `.md`.  If it
+  fires, halt and surface — do not force a behavioural change through a documentary shard.
+  *internal-continue (destructive-HALT if behaviour changes).*
+- **D-3 (census-impl is a point-in-time artifact).**  Rewriting it would falsify its survey nature; a
+  dated superseded-status stamp is the honest fix.  Executor picks the lighter honest option.
+  *internal-continue.*
 
 ## Notes for executors
 
-- **Tier routing.**  S1 is **Sonnet** (the design is frozen upstream; this enacts it).  `juncture-tier:
+- **Tier routing.**  S1 is **Sonnet** (documentary re-alignment to a frozen contract).  `juncture-tier:
   opus` kept (arc default); no juncture fires in a one-row shard.
-- **Delete, generalise, collapse, rewire — in that order.**  (1) delete `_top_level_class`; (2)
-  generalise+rename `_classical_top_dir`; (3) collapse the `match class_dir:` block in
-  `build_dest_path` (with the equivalence diff, D-2); (4) rewire `IS_CLASSICAL` (D-4).  Keep
-  `_CLASS_VOCAB`/discriminator (D-3).
-- **The equivalence diff is mandatory (D-2).**  Before collapsing, enumerate the old `match` arms'
-  first-component outputs and confirm the generalised helper reproduces each, or preserve the arm.
-- **REGISTER rule (durable-file discipline).**  In source/tests/NOTES, state the *property/invariant*
-  — scholarship-stable topology; MB free-classification params never define topology; tag layer ≠
-  path layer — never a plan coordinate.  Plan vocabulary (S1, J2, J3, R6d, C-CLASS-refutation,
-  sub-track, `/plan-run`) lives only in `PLAN.md`/`ROADMAP*.md`/ledger/commit messages.
+- **Order.**  (1) `models.py:1385` (most material — the misstated `IS_CLASSICAL` basis); (2)
+  `_tags.py:1156`; (3) STYLEGUIDE 4.5 + REND-21/22/23; (4) census-impl superseded-stamps.
+- **The accuracy grep is mandatory and stands in for a KAT.**  Before ledger-done, grep all durable
+  files for `_top_level_class`: the only permitted survivors are explicit superseded-name status
+  mentions.  Grep for "class directory" in STYLEGUIDE 4.5: must be gone from the component list.
+- **REGISTER rule (durable-file discipline).**  In source/tests/docs, state the
+  *property/invariant* — the flag derives from compositional identity; the catalog path is
+  prefix-less; C-UNIVERSAL superseded C-CLASS — never a plan coordinate.  Plan vocabulary (S1, J2,
+  J3, R6d, sub-track, `/plan-run`) lives only in `PLAN.md`/`ROADMAP*.md`/ledger/commit messages.
 - **Anneal denylist (◆ gate greps durable files for these).**
   - `\bS[1-9]\b` (plan session coordinates) — **but** allow STYLEGUIDE rule-section forms
-    (`\b[1-5]\.[0-9]\b` like "4.5", "3.1" are register cites — do **not** flag).
+    (`\b[1-5]\.[0-9]\b` like "4.5", "4.7" are register cites — do **not** flag).
   - `\bR6[a-e]\b`, `\bR[0-9]\b`, `\bJ[1-3]\b` (roadmap node + juncture coordinates) — flag in durable
-    source/tests; legitimate only in PLAN/ROADMAP/ledger/commit messages.
+    source/docs; legitimate only in PLAN/ROADMAP/ledger/commit messages.
   - `sub-track`, `plan-run`, `plan-shard`, `halt-at-boundaries`, `run-to-boundary`, `juncture`,
-    `inflection`, `action-frame`, `◆`, `C-CLASS-refutation`, `naming-policy re-freeze` (as a coordinate).
-  - Do **not** flag: `C-UNIVERSAL`, `C-INIT`, `C-CLASS` (as a superseded-contract *name* in a
-    docstring status note), `REND-21`/`REND-22`/`REND-23`, `SEL-14`, `IS_CLASSICAL`, `_CLASS_VOCAB`,
-    `build_dest_path`, `cwp_work_top`, `cwp_worktype_genres_top`, `MUSICBRAINZ_*` — legitimate
-    domain/API/contract vocabulary this shard renders.
+    `inflection`, `action-frame`, `◆`, `naming-policy re-freeze` (as a coordinate).
+  - Do **not** flag: `C-UNIVERSAL`, `C-INIT`, `C-CLASS` (as a superseded-contract *name* in a status
+    note), `REND-21`/`REND-22`/`REND-23`, `SEL-14`, `IS_CLASSICAL`, `_CLASS_VOCAB`,
+    `_top_level_class` (as a superseded-name mention), `_top_dir_component`, `build_dest_path`,
+    `cwp_work_top`, `cwp_worktype_genres_top` — legitimate domain/contract vocabulary this shard
+    renders.
 - **Invariants to preserve:** C-UNIVERSAL (prefix-less scholarship-stable topology); the epistemic
-  criterion (MB free-classification params never define topology); tag layer ≠ path layer
-  (`IS_CLASSICAL` from work-type); the two-lens principle; C-PROV/C-MOVE provenance (untouched);
-  transition-safety (discriminator kept until R6d).
+  criterion; tag layer ≠ path layer (`IS_CLASSICAL` from the work-type predicate); the two-lens
+  principle.  This shard touches none of them in code — only their descriptions.
 - **Every row runs `~/.local/bin/tox -m analyze` before ledger-done.**  Import order via
-  `~/.local/bin/tox -m edit`, never hand-edited.
-- **Suggested first `/plan-run` invocation:** `run-to-boundary` — a single-row shard with the design
-  frozen upstream; run the row through its ◆ in one pass.  Watch item: the D-2 collapse-equivalence
-  diff is the one place to slow down before committing.
+  `~/.local/bin/tox -m edit`, never hand-edited (no import changes expected — comment/doc only).
+- **Suggested first `/plan-run` invocation:** `run-to-boundary` — a single-row documentary shard;
+  run it through its ◆ in one pass.  Watch item: the accuracy grep (no live `_top_level_class`
+  reference) is the gate to slow down on before committing.
