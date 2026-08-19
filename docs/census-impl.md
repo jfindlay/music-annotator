@@ -359,7 +359,13 @@ Deliberate CE convention. V1b: ratify.
 
 ### 4.5 `IS_CLASSICAL` flag
 
-**Source:** `_tags.py:906` (`build_track_tags`: `is_classical="1"`); `models.py:1358`
+> **Status updated 2026-08-19 — REND-21 caveat satisfied.**  The flag now derives from the
+> CE-classical work-type predicate (`cwp_work_top` non-empty AND `"Classical" in
+> cwp_worktype_genres_top`) — compositional identity, not the code path.  The latent-bug concern
+> about `_top_level_class` is resolved: C-CLASS was deleted and the flag is decoupled from path
+> routing.  Source-line refs below are point-in-time survey data.
+
+**Source (survey-time):** `_tags.py:906` (`build_track_tags`: `is_classical="1"`); `models.py:1358`
 (`TrackTags.is_classical: str = "1"` — default value).
 
 **Enacted rule:** `IS_CLASSICAL` is always `"1"` for all tracks processed by `build_track_tags`.
@@ -380,7 +386,11 @@ because `build_track_tags` is only called for classical releases. V1b: note the 
 
 ### 5.1 Top-level class component (C-CLASS)
 
-**Source:** `_tags.py:227–275` (`_top_level_class`); `_tags.py:1280` (`class_dir = safe_name(_top_level_class(tags))`).
+> **Superseded 2026-08-19 — C-CLASS deleted; see C-UNIVERSAL.**  The `_top_level_class` function and
+> the `class_dir` path prefix were removed.  The catalog path is now prefix-less.  Source-line refs
+> below are point-in-time survey data; they no longer reflect the live codebase.
+
+**Source (survey-time):** `_tags.py:227–275` (`_top_level_class`); `_tags.py:1280` (`class_dir = safe_name(_top_level_class(tags))`).
 
 **Enacted rule (C-CLASS, frozen at S1):** Six-way routing from embedded tags:
 1. `releasetype_secondary` contains Audiobook/Spokenword/Audio drama/Interview → `"Spoken Word"`
@@ -401,7 +411,13 @@ V1b: validate only; any apparent conflict is a C-CLASS/C-INIT finding (see Disco
 
 ### 5.2 Within-classical top-dir component (C-INIT)
 
-**Source:** `_tags.py:278–340` (`_classical_top_dir`); `_tags.py:1291–1292` (caller).
+> **Superseded 2026-08-19 — C-INIT absorbed and generalised into C-UNIVERSAL.**  The
+> `_classical_top_dir` function was renamed `_top_dir_component` and its first-component rule
+> generalised to all releases (not classical-only).  The performer-led branch (formerly "recital")
+> now applies universally when no composer is linked.  Source-line refs below are point-in-time
+> survey data; they no longer reflect the live codebase.
+
+**Source (survey-time):** `_tags.py:278–340` (`_classical_top_dir`); `_tags.py:1291–1292` (caller).
 
 **Enacted rule (C-INIT, frozen at S2):** Three cases evaluated in order:
 1. **Compilation** (`releasetype_secondary` contains `"Compilation"`): `<albumartist_last_name or "Various"> - <album>`.
@@ -506,7 +522,11 @@ symphony-with-obbligato, and other cases — but the implementation only acts on
 
 ### 7.1 C-CLASS vocabulary
 
-**Source:** `_tags.py:222–224` (`_CLASS_VOCAB: frozenset[str] = frozenset({"Spoken Word", "Soundtracks",
+> **Superseded 2026-08-19 — C-CLASS deleted; `_top_level_class` removed.**  `_CLASS_VOCAB` may
+> remain in the codebase for other uses (collision-suffix, pipeline-io); the class-prefix path
+> component is gone.  Source-line refs below are point-in-time survey data.
+
+**Source (survey-time):** `_tags.py:222–224` (`_CLASS_VOCAB: frozenset[str] = frozenset({"Spoken Word", "Soundtracks",
 "Classical", "Compilations", "Popular", "Unsorted"})`).
 
 **Enacted shape:** Six closed values. Used by `_top_level_class`, `_work_dir_component`,
@@ -519,7 +539,10 @@ C-CLASS contract. Evidence recorded.
 
 ### 7.2 C-INIT shapes
 
-**Source:** `_tags.py:278–340` (`_classical_top_dir`).
+> **Superseded 2026-08-19 — C-INIT absorbed into C-UNIVERSAL; `_classical_top_dir` renamed
+> `_top_dir_component`.**  Source-line refs below are point-in-time survey data.
+
+**Source (survey-time):** `_tags.py:278–340` (`_classical_top_dir`).
 
 **Enacted shapes:**
 - Compilation: `<albumartist_last_name or "Various"> - <album>`
@@ -726,9 +749,9 @@ summary, monotonically upgradeable. Deliberate. V1b: ratify as the library-level
 | REND-18 | Rendering | Work-hierarchy separator `" :: "` | minted |
 | REND-19 | Rendering | `ALBUMARTIST` source (MB release credit verbatim) | minted |
 | REND-20 | Rendering | `GENRE` source (WORKTYPE_GENRES map → `"Classical"` default) | minted |
-| REND-21 | Rendering | `IS_CLASSICAL` hardcoded to `"1"` (latent bug) | minted |
-| REND-22 | Rendering | Top-level class routing (C-CLASS, validate-only) | minted |
-| REND-23 | Rendering | Within-classical top-dir (C-INIT, validate-only) | minted |
+| REND-21 | Rendering | `IS_CLASSICAL` hardcoded to `"1"` (latent bug) | minted; caveat satisfied 2026-08-19 (flag decoupled from path routing; derives from work-type predicate) |
+| REND-22 | Rendering | Top-level class routing (C-CLASS, validate-only) | minted; C-CLASS deleted 2026-08-19; see C-UNIVERSAL |
+| REND-23 | Rendering | Within-classical top-dir (C-INIT, validate-only) | minted; C-INIT absorbed into C-UNIVERSAL 2026-08-19; `_classical_top_dir` → `_top_dir_component` |
 | REND-24 | Rendering | Work-dir year suffix (`[rec YYYY]` vs `[rel YYYY]`) | minted |
 | REND-25 | Rendering | Leaf `nn` fallback chain | minted |
 | REND-26 | Rendering | Intermediate `nn` fallback chain (C-L1) | minted |
@@ -761,8 +784,10 @@ J-E1 as a coherence-violation candidate.
 `IS_CLASSICAL="1"` is hardcoded in `build_track_tags` and defaults to `"1"` in `TrackTags`. This
 is currently harmless because `build_track_tags` is only called for classical releases in the
 pipeline. However, if `build_track_tags` is ever called for non-classical releases, the flag will
-be wrong. V1b: note the latent bug; recommend making `IS_CLASSICAL` conditional on `_top_level_class`
-or removing the default from the model.
+be wrong. V1b: note the latent bug; recommend making `IS_CLASSICAL` conditional on the work-type
+predicate or removing the default from the model.  *Updated 2026-08-19: C-CLASS deleted; the flag
+is now decoupled from path routing and derives from the CE-classical work-type predicate directly —
+the latent-bug concern is resolved.*
 
 **D-S2-3 (SEL-18 writer divergence — CE-continuity question).**
 At work level, `"writer"` relations go to `role_buckets.writers` (own bucket). At recording level
@@ -776,9 +801,11 @@ styleguide.
 The enacted C-CLASS vocabulary and C-INIT routing are consistent with their frozen contracts. No
 apparent conflict. The CE divergence in the recital case (C-INIT case 2: implementation uses album
 artist when no composer is linked in MB; CE uses composer-first even for recitals when a composer
-can be inferred) is documented in the `_classical_top_dir` docstring and is a known, deliberate
-divergence. This is not a conflict with the C-INIT contract (which was frozen with this behaviour);
-it is evidence for V1b's adjudication of the recital-path question.
+can be inferred) is documented in the `_top_dir_component` docstring (formerly `_classical_top_dir`)
+and is a known, deliberate divergence. This is not a conflict with the C-INIT contract (which was
+frozen with this behaviour); it is evidence for V1b's adjudication of the recital-path question.
+*Updated 2026-08-19: C-CLASS deleted; C-INIT absorbed into C-UNIVERSAL; `_classical_top_dir`
+renamed `_top_dir_component`.*
 
 **D-S2-5 (SEL-11 concerto gate — coherence violation in miniature).**
 The concerto-soloist path injection (`_tags.py:1189`) is gated strictly on `top_work.type ==

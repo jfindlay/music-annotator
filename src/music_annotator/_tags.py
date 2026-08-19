@@ -1153,8 +1153,8 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
     file_dict = tags.to_file_dict()
 
     # Composer directory component (tag-derivable; used only for the Classical single-composer case).
-    # When raw_composer is empty, _classical_top_dir returns the recital shape (not None), so
-    # composer="" is never used in the path — the recital/compilation branch fires first.
+    # When raw_composer is empty, _top_dir_component returns the performer-led shape (not None), so
+    # composer="" is never used in the path — the performer-led branch fires first.
     raw_composer = file_dict.get("CWP_COMPOSER_LASTNAMES") or file_dict.get("CEA_COMPOSER_LASTNAMES", "")
     if raw_composer:
         seen: set[str] = set()

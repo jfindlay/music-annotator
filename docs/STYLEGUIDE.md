@@ -287,20 +287,19 @@ movement, genre, instrument, key, date, and period data is platform-configurable
 realisation — standard ID3 frames plus own-namespace TXXX descriptors — is platform machinery under the same semantics
 (REND-13).
 
-**4.5 The path grammar (library partition).**  The destination path is the compact assembled projection: class
-directory; within-classical top directory (compilation, recital, and the dominant single-composer
-`<composer> - <performers>` form — authors lead per 4.2, with `" - "` separating the author chain from performers); work
-directory `<work title> [rec YYYY]`, the date basis visible in the rendered form and `[rel YYYY]` as the labelled
-fallback (REND-24, 5.3); gap-free ordinal prefixes on intermediate levels and leaves (REND-25, REND-26).  The class and
-top-directory routings realise the C-CLASS and C-INIT contracts, which this styleguide describes and does not define
-(REND-22, REND-23).  The performers component carries the performance's stable identity signals — conductors, then
-ensembles, billing order over its occupied positions.  Soloists never enter it, however principal (1.7, SEL-11): this is
-the inclusion-policy answer to the ceiling question a six-principal opera cast poses (SEL-7) — the handle stays stable
-because it never carries the credits that vary.  Two converged rules govern the whole surface: **path is
-a handle, not a manifest** — a short, stable identifier a user locates a recording by, never a manifest of contributors;
-and **uniform ceiling, ragged floor** — over-resolved branches clamp down to the work-group's modal depth (removing
-structure the path does not need — faithful), shallow branches are never padded up (inventing structure that is not
-there — unfaithful).
+**4.5 The path grammar (library partition).**  The destination path is the compact assembled projection: top directory
+(compilation, performer-led, and the dominant single-composer `<composer> - <performers>` form — authors lead per 4.2,
+with `" - "` separating the author chain from performers); work directory `<work title> [rec YYYY]`, the date basis
+visible in the rendered form and `[rel YYYY]` as the labelled fallback (REND-24, 5.3); gap-free ordinal prefixes on
+intermediate levels and leaves (REND-25, REND-26).  The first-component routing realises C-UNIVERSAL (which superseded
+C-CLASS; the catalog path is prefix-less), described further at REND-22 and REND-23.  The performers component carries
+the performance's stable identity signals — conductors, then ensembles, billing order over its occupied positions.
+Soloists never enter it, however principal (1.7, SEL-11): this is the inclusion-policy answer to the ceiling question a
+six-principal opera cast poses (SEL-7) — the handle stays stable because it never carries the credits that vary.  Two
+converged rules govern the whole surface: **path is a handle, not a manifest** — a short, stable identifier a user
+locates a recording by, never a manifest of contributors; and **uniform ceiling, ragged floor** — over-resolved branches
+clamp down to the work-group's modal depth (removing structure the path does not need — faithful), shallow branches are
+never padded up (inventing structure that is not there — unfaithful).
 
 **4.6 Playlists.**  Playlists are full projections: complete credits in billing order.  Their detailed grammar is
 deferred to the adjudication loop until playlist machinery exists — an honest gap, not an open contest.
@@ -591,15 +590,17 @@ derives from.  The register is seed, not closure: new cases append.
 - **REND-20 (adjudicated) — `GENRE` source.**  Work-type-derived genre with a "Classical" default is ratified — the
   rendering realisation of SEL-14's work-type-primary selection.  Derives from 4.7; SEL-14.
 - **REND-21 (adjudicated) — Classical flag.**  The CE flag vocabulary (`is_classical`, value `"1"`) is ratified for
-  classical material.  The enacted flag is unconditional where the classification is already classical — harmless
-  today; the flag must derive from the classification, never from the code path, if the surface is ever generalised
-  (noted for the application shards).  Derives from 4.7; SEL-15.
-- **REND-22 (adjudicated) — Top-level class routing.**  The path grammar describes the frozen C-CLASS contract
-  (library-completion arc); this styleguide defines neither its vocabulary nor its routing.  An apparent conflict is a
-  finding for that arc's boundary.  Derives from 4.5.
-- **REND-23 (adjudicated) — Within-classical top directory.**  As REND-22, for the frozen C-INIT contract.  Its recital
-  case is a documented CE divergence: where MB links no composer, the directory renders the album artist rather than an
-  inferred composer — an inferred composer is a manufactured basis (5.2).  Derives from 4.5, 5.2.
+  classical material.  The flag derives from the CE-classical work-type predicate (`cwp_work_top` non-empty AND
+  `"Classical" in cwp_worktype_genres_top`) — compositional identity, not the code path.  The criterion "must derive
+  from the classification, never from the code path" is satisfied.  Derives from 4.7; SEL-14, SEL-15.
+- **REND-22 (C-CLASS refuted-and-deleted; superseded by C-UNIVERSAL) — Top-level class routing.**  C-CLASS (a
+  class-prefixed top-level directory) was refuted and deleted; the catalog path is now prefix-less under C-UNIVERSAL.
+  Editorial class distinctions (Classical, Popular, etc.) are relocated to the playlist lens, not the filesystem
+  topology.  Derives from 4.5.
+- **REND-23 (C-INIT absorbed and generalised into C-UNIVERSAL) — Within-classical top directory.**  C-INIT's
+  first-component rule is now universal: a pop album is the performer-led branch; a classical single-composer album is
+  the composer-led branch.  The CE recital divergence remains: where MB links no composer, the album artist renders
+  rather than an inferred composer — an inferred composer is a manufactured basis (5.2).  Derives from 4.5, 5.2.
 - **REND-24 (adjudicated) — Work-directory year suffix.**  `[rec YYYY]` preferred, `[rel YYYY]` as the labelled
   fallback — the exemplar of 5.3: the basis of the date claim is visible in the rendered form, changing form when the
   basis changes.  Derives from 4.5, 5.3; SEL-16.
@@ -648,7 +649,8 @@ extensions and platform capability differences are not divergences (standing rul
 - **REND-14.**  CE orders assembled performer composites soloists, ensembles, conductors; billing order governs here —
   one ordering authority, the spine (1.1, 4.2).
 - **REND-23.**  CE infers a composer-first form for recital directories; here the album artist renders when MB links no
-  composer — an inferred composer is a manufactured basis (5.2).  Frozen in C-INIT.
+  composer — an inferred composer is a manufactured basis (5.2).  The first-component rule is now universal under
+  C-UNIVERSAL (C-INIT absorbed); the CE divergence on the performer-led branch remains.
 
 **Capability differences (not divergences):** option/toolchain provenance persists in sidecars, not in tags (EPIST-6 —
 the library-partition realisation of the same principle CE serves in-tag); tag-only platforms apply contested-case

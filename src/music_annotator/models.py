@@ -1381,9 +1381,9 @@ class TrackTags(BaseModel):
     genre: str = "Classical"
     period: str = ""
     key: str = ""
-    # Default "1" follows CE convention for classical-only fields; build_track_tags overrides this
-    # explicitly from _top_level_class (STYLEGUIDE 4.7/REND-21) so the persisted value reflects the
-    # actual library class rather than the model default.
+    # Default "1" follows CE convention (REND-21).  The flag derives from the CE-classical work-type
+    # predicate: cwp_work_top non-empty AND "Classical" in cwp_worktype_genres_top — compositional
+    # identity, not the code path (REND-21/SEL-14; tag layer ≠ path layer).
     is_classical: str = "1"
 
     # Work dates
