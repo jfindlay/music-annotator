@@ -325,10 +325,11 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   `CEA_RECORDING_ARTIST`, no rename).  ◆ boundary `still-on-intent`.  **R6d planning caveat (stale docs):**
   `census-impl.md` / `NOTES.md` still describe the now-deleted `cea_album_soloists_unified`
   concerto-injection path rule — refresh before R6d consumes the census so R6d planning does not
-  read a superseded rule.  **R6d unify-invocation caveat (2026-08-19):** the destructive `unify`
-  pass requires the `--user-agent-email` plumbing landed by the pre-R6d fix session (Discoveries
-  appendix, 2026-08-19); `unify`'s canonical name-form dereference is a permitted stable fixed-MBID
-  lookup, not a `MB(*)` wildcard.  R6d's destructive run must supply the user-agent.  **R6d planning
+  read a superseded rule.  **R6d unify-invocation caveat (2026-08-19; RESOLVED 2026-08-19, commit
+  `2161dae`):** the destructive `unify` pass requires the `--user-agent-email` plumbing, now landed
+  by the pre-R6d fix session; `unify`'s canonical name-form dereference is a permitted stable
+  fixed-MBID lookup, not a `MB(*)` wildcard.  R6d's destructive run must supply the user-agent.
+  **R6d planning
   caveat (paths-only vs tag-content — surfaced 2026-08-12,
   R6a shard):** the offline maintenance engine `repath`/`regroup`/`unify` re-derives **paths only**,
   from *embedded tags*, with **no MB network call** (`_pipeline_maint.py`).  So R6d's "one-pass
@@ -406,7 +407,8 @@ sub-class code fork); R3c (Discogs) is pruned to BACKLOG.
 Act III-b (perpetual by definition); the **playlist library** (graduates to its own ROADMAP when Act I
 nears completion — decided 2026-07-18); MB-upstream data edits and the editorial/scholarly track
 (operator/research-paced); musicbrainzngs2 contributions (external repo, maintainer-paced); AcoustID
-seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or dependency-based).
+seeded-candidate extension, AccurateRip backfill, the local-accession ingest verb (C-LOCAL-ID;
+design pinned in NOTES "Local accession identity"), and misc items (trigger- or dependency-based).
 
 ## Discoveries appendix
 
@@ -620,10 +622,11 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   debt queued (not yet paid):** durable prose still describes the deleted C-CLASS as a live frozen
   contract — `models.py:1385` (misstates the `IS_CLASSICAL` basis), `_tags.py:1156` (renamed helper),
   STYLEGUIDE 4.5 / REND-21 / REND-22 / REND-23, and `census-impl.md` 5.1 / 5.2.  Deferred out of the
-  code-freeze session by design (the code gate does not block on prose sync); sharded next as a thin
-  documentary-accuracy follow-on.  No frozen contract invalidated; no destructive-HALT.  **Next
-  agent-shardable slice: the styleguide-sync follow-on** (`docs/PLAN.md`).  The J3 preflight re-run
-  is the next *operator* step (un-halted; live-library, not an agent session).
+  code-freeze session by design (the code gate does not block on prose sync); sharded as a thin
+  documentary-accuracy follow-on.  No frozen contract invalidated; no destructive-HALT.  **The
+  styleguide-sync follow-on is DONE (2026-08-19, commit `02a9c83`; froze no new contract) — see the
+  styleguide-sync ◆ entry below.**  The J3 preflight re-run is the next *operator* step (un-halted;
+  live-library, not an agent session).
 
 - **R6b ◆ boundary (2026-08-13) — catalogue-colon retro-fix machinery landed; live-population re-check
   still owed (R6d-planning input).**  R6b froze C-CAT-INT and built the offline `repatch_catalogue_colon`
@@ -706,8 +709,39 @@ seeded-candidate extension, AccurateRip backfill, and misc items (trigger- or de
   class dirs; the re-frozen policy's change-set will be strictly larger since every class-dir file
   moves), and running now would enact dead policy and force a second library-wide re-derivation,
   violating the re-derive-once intent.  Preflight re-runs after the re-freeze.  (3) The pre-R6d
-  unify-plumbing fix (`docs/PLAN.md`) remains valid and queued — policy-neutral invocability.
+  unify-plumbing fix is DONE (2026-08-19, commit `2161dae`) — policy-neutral invocability restored.
   (4) The **playlist library graduates** to its own roadmap now (its trigger effectively fired; the
   operator delivered its charter).  Next agent-shardable step: the **naming-policy re-freeze
   adjudication** (a dedicated interactive session; J2-reopening freeze — fresh deliberate act, not
   a session-tail decision).
+
+- **styleguide-sync ◆ boundary (2026-08-19) — durable-prose debt paid; the agent-shardable arc is
+  now operator-blocked (static-frame delta).**  The styleguide-sync follow-on (`docs/PLAN.md`, 1/1
+  row done, commit `02a9c83`) re-aligned durable prose to the C-UNIVERSAL freeze: `models.py` /
+  `_tags.py` comments, STYLEGUIDE 4.5 / REND-21/22/23, and `census-impl.md` no longer describe the
+  deleted `_top_level_class` / C-CLASS routing as live.  Froze no new contract (documentary
+  re-alignment to already-frozen C-UNIVERSAL + the epistemic criterion).  With this and the pre-R6d
+  unify-plumbing fix (`2161dae`) landed, **every agent-shardable node in the R6 code arc is done**
+  (R6a–c machinery, the J3-preflight harness, the pre-R6d fix, the C-UNIVERSAL re-freeze, this
+  sync).  Static-frame consequence: **the arc's remaining critical path is entirely operator-paced**
+  — J3's go/no-go preflight re-run against live hades under the re-frozen C-UNIVERSAL policy (not an
+  agent session), gated behind the R5 drain of `Original/` (operator loop).  R6d's destructive
+  one-pass re-derivation follows both.  **R6e (conventions spec) is deliberately held** until after
+  R6d so it describes final on-disk conventions rather than churning ones (BACKLOG timing note).
+  **Off-critical-path agent work remains available but unshelved by operator election:** the
+  structural-audit sub-track (fired-eligible since R3d) and an R6e *draft*.  No frozen contract
+  invalidated; no destructive-HALT.  **Next step is operator, not agent:** drain `Original/`, then
+  re-run the J3 preflight.
+
+- **Operator design session (2026-08-19) — local accession identity for never-external releases
+  (design pinned to NOTES; trigger-based shard).**  Full inclusion's floor is the custom album
+  that will never be in MB or any datastore.  Design decided and captured as a NOTES prose
+  contract ("Local accession identity"): a minimal required tag set at a catalog-gate ingest verb
+  (reachability is derivational, so the integrity guarantee is an input gate on the path grammar's
+  inputs), plus a locally-minted UUIDv4 in `MUSICANNOTATOR_RELEASEID` as the permanent accession
+  join key — complementary to the MBID, never minted into `MUSICBRAINZ_ALBUMID`, namespace
+  determined by provenance not inspection, C-TIER monotonic upgrade if MB identity ever arrives.
+  Closes the design half of the gap that `apply`/`search` require an MB release and `run()` cannot
+  produce `source-tags-only`; the ingest verb (working name C-LOCAL-ID) is a trigger-based shard,
+  elected when the operator chooses to catalog never-external material.  No frozen contract
+  invalidated; no destructive-HALT.

@@ -12,7 +12,7 @@
     },
     {
       "pass_name": "unify",
-      "count": 9009,
+      "count": 8311,
       "overlap_count": 0
     },
     {
@@ -35,7 +35,7 @@
   "journal_capacity": {
     "current_entry_count": 47559,
     "current_size_bytes": 48780316,
-    "projected_delta_entries": 9009
+    "projected_delta_entries": 8311
   },
   "reference_evidence": {
     "present": true,

@@ -55,6 +55,62 @@ marking is what keeps deliberate degradation consistent with the lossless princi
 churn on upgrade, which is acceptable because journalled `repath` (C-PROV/C-MOVE) already owns
 exactly that.
 
+## Local accession identity: the non-MB floor of full inclusion
+
+Full inclusion admits releases with **no external identity, ever** (operator, 2026-08-19).  The
+identity spectrum has three rungs, and the tier ladder already names them: MB identity
+(scholarship authority), sub-MB external authority (Discogs/allmusic/Wikipedia — real editorial
+process, but identity is not their primary purpose; the reserved `alternate-source` tier), and
+**never-external** — the worst case is a custom album, e.g. a self-recorded chamber performance
+that will never appear in any datastore.  `source-tags-only` is that release's *permanent* home,
+not a waiting room; any design that treats the tier as transitional debt is wrong.
+
+**Integrity is derivational, so the guarantee is an input gate.**  A track is reachable from the
+catalog taxonomy iff its embedded tags render a legal path through `build_dest_path`; the journal
+is rebuildable from tags; every maintenance pass re-derives from tags.  So the "no unreachable
+tracks" guarantee for non-MB releases requires no new index or logic — only that the tag inputs
+the path grammar consumes are present and valid at cataloging time, enforced at the same
+chokepoint every MB-sourced release flows through (the copy→tag→verify→journal chain, unchanged).
+
+**The minimal required set** (user-supplied at the catalog gate, validated non-empty):
+`ALBUMARTIST` (the performer-led first path component — without it the release has no top dir),
+`ALBUM`, `TRACKNUMBER` (unique, contiguous 1..n — the leaf-numbering invariants), per-track
+`TITLE`.  `DATE` is required-with-explicit-unknown: an honest absence beats a placeholder
+(lossless principle — never fabricate to satisfy a form).  `CWP_*` composer/work fields are
+optional-if-genuinely-known: the epistemic criterion applies to the operator too — a self-recorded
+Schubert quintet legitimately routes through the composer-led branch on knowledge the operator
+actually possesses, distinguished from commercial recordings by performers and date.  The set is
+deliberately the standard Vorbis/Picard vocabulary: no new schema, and if MB identity ever arrives
+the user-supplied values are a seed the MB data supersedes in place.
+
+**Accession identity (the complementary key).**  Renderability is not identity: `audit`, `unify`,
+`regroup`, and `prune` join on `MUSICBRAINZ_ALBUMID`, and a release without it is invisible to the
+fragmentation/consolidation integrity perimeter.  The design: mint a UUIDv4 at catalog time into a
+local-namespace tag (`MUSICANNOTATOR_RELEASEID`), embedded in every track (the journal must remain
+rebuildable from tags alone), threaded into the journal's `release_id` role through a single
+read-MB-else-local helper.  The archival framing: the local ID is the **accession number**
+(permanent, provenance-anchored, ours); the MBID is the **catalogue raisonné number**
+(scholarship identity, MB's).  Complementary, never competing:
+
+- Never mint into `MUSICBRAINZ_ALBUMID` — a provenance lie: tag-confirmation would attest a fake
+  MB identity, a fixed-MBID dereference would 404, and a later real MB entry finds its field
+  squatted.  The same epistemic discipline that forbids free-classification topology forbids this.
+- **Namespace is determined by provenance, never by inspection**: which tag the ID came from and
+  the sidecar tier answer "is this an MBID?"; ID-shape sniffing is forbidden.  MB-dereferencing
+  passes gate on the presence of the MB tag, not on `release_id`.
+- **No MB entity IDs at any level**: performers on a custom album have no artist MBIDs either, so
+  no pass may assume `MUSICBRAINZ_ARTISTID` (e.g. `unify`'s canonical name-form dereference gates
+  on the tag's presence and skips without it).
+- If MB identity later arrives (per-release operator election, never automatic), the real MBID
+  lands in `MUSICBRAINZ_ALBUMID` and the tier promotes under C-TIER's monotonic-upgrade carve-out;
+  the accession ID is retained, never reused or reassigned.
+
+**Status.**  Design pinned; unbuilt.  `apply` requires `--release-id` and `run()` cannot produce a
+`source-tags-only` entry, so there is currently no CLI ingest path to the tier the contract
+reserves.  A catalog-gate ingest verb (contract to freeze at shard time, working name C-LOCAL-ID)
+is trigger-based: sharded when the operator elects to catalog never-external material rather than
+dispose of it manually.
+
 ## Structural / physical-media disagreements are owned by the operator layer
 
 The annotator surfaces-and-defers, never guesses (operator, 2026-07-21; R3d shard boundary).  When
