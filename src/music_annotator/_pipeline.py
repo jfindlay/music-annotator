@@ -819,12 +819,17 @@ def _resolve_long_names(plan: list[CopyPlanEntry], dest_root: Path, ui: DiscUI |
     subs: dict[str, str] = {}
     for entry in plan:
         rel_parts = entry.dest_file.relative_to(dest_root).parts
+        # The audio suffix for the leaf is taken from the source file, not from Path.suffix on the
+        # leaf itself.  Path.suffix would misidentify trailing dots in work titles (e.g. "op." in
+        # "01 - Sonata op. 23.flac") as the extension.  The source suffix is always the correct one.
+        leaf_audio_suffix = entry.src_file.suffix.lower()
+        leaf_part = rel_parts[-1]
         for part in rel_parts:
-            # For the leaf, measure the stem only (the extension is not part of NAME_MAX for the stem;
-            # actually the whole filename including extension counts, but the extension is short and
-            # we store stems before adding the suffix — measure the full part).
             if len(part.encode("utf-8")) > _NAME_MAX and part not in subs:
-                proposed = _proposed_short(part)
+                # For leaf parts, reserve the audio suffix's bytes so that stem+suffix ≤ _NAME_MAX.
+                # For intermediate directory components, no suffix reservation is needed.
+                part_audio_suffix = leaf_audio_suffix if part == leaf_part else ""
+                proposed = _proposed_short(part, part_audio_suffix)
                 if ui is not None:
                     replacement = ui.confirm_shortened_name(part, proposed)
                     if replacement is None:

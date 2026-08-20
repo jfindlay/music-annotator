@@ -122,7 +122,7 @@ def safe_name(s: str) -> str:
     return s
 
 
-def _proposed_short(component: str) -> str:
+def _proposed_short(component: str, audio_suffix: str = "") -> str:
     """Return a shortened version of ``component`` that fits within :data:`_NAME_MAX` UTF-8 bytes.
 
     Applies a sequence of structure-aware strategies in order, stopping as soon as the result fits.
@@ -136,78 +136,97 @@ def _proposed_short(component: str) -> str:
        try dropping semicolon-separated performer entries from the right until it fits.
     4. **Word-boundary ellipsis**: truncate at the last space that leaves room for ``"…"`` (U+2026,
        3 bytes in UTF-8).
-    5. **Hard byte-boundary ellipsis**: encode as UTF-8, cut to ``_NAME_MAX - 3`` bytes at a valid
-       UTF-8 character boundary, then append ``"…"``.
+    5. **Hard byte-boundary ellipsis**: encode as UTF-8, cut to the budget at a valid UTF-8 character
+       boundary, then append ``"…"``.
+
+    When ``audio_suffix`` is provided (e.g. ``".flac"`` or ``".mp3"``), the byte budget for the stem
+    is reduced by ``len(audio_suffix.encode("utf-8"))`` so that stem + suffix together fit within
+    :data:`_NAME_MAX`.  The suffix is re-appended to the result after truncation.  Callers must pass
+    the known audio extension directly — never rely on ``Path.suffix`` or ``os.path.splitext`` on a
+    leaf whose stem may end in a dot (e.g. ``"op."``), as those would misidentify the extension.
 
     The returned value is always at most :data:`_NAME_MAX` bytes when encoded as UTF-8.
 
     :param component: The sanitised path component string that exceeds :data:`_NAME_MAX` bytes.
+    :param audio_suffix: The audio file extension to preserve (e.g. ``".flac"``), or ``""`` for
+        non-leaf components.  When non-empty, the stem is shortened to fit within
+        ``_NAME_MAX - len(audio_suffix.encode("utf-8"))`` bytes, and the suffix is re-appended.
     :returns: A shortened component string that fits within :data:`_NAME_MAX` UTF-8 bytes.
     """
-    limit = _NAME_MAX
+    suffix_bytes = len(audio_suffix.encode("utf-8"))
+    # The stem budget reserves space for the audio suffix so stem+suffix ≤ _NAME_MAX.
+    limit = _NAME_MAX - suffix_bytes
 
     def _fits(s: str) -> bool:
         return len(s.encode("utf-8")) <= limit
 
-    if _fits(component):
-        return component
+    # Strip the known audio suffix from the component so all strategies operate on the stem only.
+    # We strip by exact suffix match (not Path.suffix) to avoid misidentifying trailing dots in
+    # work titles (e.g. "op." in "01 - Sonata op. 23.flac") as the extension.
+    if audio_suffix and component.endswith(audio_suffix):
+        stem = component[: -len(audio_suffix)]
+    else:
+        stem = component
+
+    if _fits(stem):
+        return stem + audio_suffix
 
     ellipsis_char = "\u2026"  # "…", 3 bytes in UTF-8
 
     # Strategy 1: work-dir — protect "[rec YYYY]" / "[rel YYYY]" / "[rec YYYY-YYYY]" suffix.
-    m = _DATE_SUFFIX_RE.search(component)
+    m = _DATE_SUFFIX_RE.search(stem)
     if m:
-        suffix = m.group(1)
-        title_part = component[: m.start()]
+        date_suffix = m.group(1)
+        title_part = stem[: m.start()]
         sep_idx = title_part.rfind(" _ ")
         if sep_idx != -1:
-            candidate = title_part[:sep_idx] + suffix
+            candidate = title_part[:sep_idx] + date_suffix
             if _fits(candidate):
-                return candidate
+                return candidate + audio_suffix
 
     # Strategy 2: leaf / intermediate — protect "nn - " numeric prefix.
-    mp = _NN_PREFIX_RE.match(component)
+    mp = _NN_PREFIX_RE.match(stem)
     if mp:
         prefix = mp.group(1)
-        body = component[len(prefix) :]
+        body = stem[len(prefix) :]
         sep_idx = body.rfind(" _ ")
         if sep_idx != -1:
             candidate = prefix + body[:sep_idx]
             if _fits(candidate):
-                return candidate
+                return candidate + audio_suffix
 
     # Strategy 3: top-dir — protect everything up to and including " - " (composer separator);
     # drop performer entries from the right.
     sep = " - "
-    dash_idx = component.find(sep)
+    dash_idx = stem.find(sep)
     if dash_idx != -1:
-        composer_part = component[: dash_idx + len(sep)]
-        performers_str = component[dash_idx + len(sep) :]
+        composer_part = stem[: dash_idx + len(sep)]
+        performers_str = stem[dash_idx + len(sep) :]
         performers = performers_str.split("; ")
         while len(performers) > 1:
             performers.pop()
             candidate = composer_part + "; ".join(performers)
             if _fits(candidate):
-                return candidate
+                return candidate + audio_suffix
 
     # Strategy 4: word-boundary truncation with ellipsis.
-    encoded = component.encode("utf-8")
-    # Budget: limit bytes total; "…" is 3 bytes.
-    budget = limit - 3
+    encoded = stem.encode("utf-8")
+    # Budget: limit bytes for the stem; "…" is 3 bytes.
+    ellipsis_budget = limit - 3
     # Walk backwards through the string looking for a space whose UTF-8 offset fits in budget.
-    truncated = encoded[:budget].decode("utf-8", errors="ignore")
+    truncated = encoded[:ellipsis_budget].decode("utf-8", errors="ignore")
     last_space = truncated.rfind(" ")
     if last_space > 0:
         candidate = truncated[:last_space] + ellipsis_char
         if _fits(candidate):  # pragma: no branch — always fits: prefix ≤ budget bytes + "…" (3 bytes) = limit
-            return candidate
+            return candidate + audio_suffix
 
     # Strategy 5: hard byte-boundary cut.
-    raw = encoded[:budget]
+    raw = encoded[:ellipsis_budget]
     # Trim to valid UTF-8 boundary (drop trailing incomplete multi-byte sequences).
     while raw and (raw[-1] & 0b11000000) == 0b10000000:
         raw = raw[:-1]
-    return raw.decode("utf-8", errors="ignore") + ellipsis_char
+    return raw.decode("utf-8", errors="ignore") + ellipsis_char + audio_suffix
 
 
 def _rec_title(track: MBTrack) -> str:

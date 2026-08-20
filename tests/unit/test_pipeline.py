@@ -8508,6 +8508,90 @@ class TestRunNameTooLong:
         result = _resolve_long_names(plan, dest, ui=None)
         assert result[0].dest_file == dest_file
 
+    def test_resolve_long_names_leaf_suffix_preserved_when_stem_plus_suffix_over(self, fs: FakeFilesystem) -> None:
+        """_resolve_long_names preserves the .flac suffix when stem+suffix exceeds _NAME_MAX.
+
+        The stem fits within the limit on its own, but stem+".flac" exceeds it.  Without suffix
+        awareness the truncation would eat the extension.  The result must end with ".flac" and
+        fit within _NAME_MAX.
+
+        :param fs: pyfakefs fixture.
+        """
+        # Use real _NAME_MAX (255).  Build a stem that fits alone but not with ".flac" (5 bytes).
+        # stem = "01 - " (5) + "A" * 247 = 252 bytes ≤ 255; leaf = 252 + 5 = 257 > 255.
+        stem = "01 - " + "A" * 247
+        leaf = stem + ".flac"
+        assert len(stem.encode("utf-8")) <= 255
+        assert len(leaf.encode("utf-8")) > 255
+
+        dest = Path("/dest")
+        fs.create_dir(str(dest))
+        fs.create_file(str(dest / "dummy.flac"))
+
+        src_file = dest / "dummy.flac"
+        dest_file = dest / leaf
+        plan = [CopyPlanEntry(idx=0, src_file=src_file, dest_file=dest_file)]
+
+        result = _resolve_long_names(plan, dest, ui=None)
+        result_leaf = result[0].dest_file.name
+        assert result_leaf.endswith(".flac"), f"leaf must end with .flac, got {result_leaf!r}"
+        assert len(result_leaf.encode("utf-8")) <= 255, (
+            f"leaf must fit within 255 bytes, got {len(result_leaf.encode('utf-8'))}"
+        )
+
+    def test_resolve_long_names_leaf_suffix_preserved_when_stem_already_over(self, fs: FakeFilesystem) -> None:
+        """_resolve_long_names preserves the .flac suffix when the stem alone already exceeds _NAME_MAX.
+
+        :param fs: pyfakefs fixture.
+        """
+        stem = "01 - " + "B" * 260  # 265 bytes > 255
+        leaf = stem + ".flac"
+        assert len(stem.encode("utf-8")) > 255
+
+        dest = Path("/dest")
+        fs.create_dir(str(dest))
+        fs.create_file(str(dest / "dummy.flac"))
+
+        src_file = dest / "dummy.flac"
+        dest_file = dest / leaf
+        plan = [CopyPlanEntry(idx=0, src_file=src_file, dest_file=dest_file)]
+
+        result = _resolve_long_names(plan, dest, ui=None)
+        result_leaf = result[0].dest_file.name
+        assert result_leaf.endswith(".flac"), f"leaf must end with .flac, got {result_leaf!r}"
+        assert len(result_leaf.encode("utf-8")) <= 255, (
+            f"leaf must fit within 255 bytes, got {len(result_leaf.encode('utf-8'))}"
+        )
+
+    def test_resolve_long_names_trailing_dot_in_stem_not_mistaken_for_extension(self, fs: FakeFilesystem) -> None:
+        """_resolve_long_names does not mistake a trailing dot in the work title for the audio extension.
+
+        A leaf like "01 - Sonata op. 23.flac" has ". 23" as Path.suffix — the fix uses the source
+        file's suffix directly so "op." is preserved as part of the stem, not treated as the extension.
+
+        :param fs: pyfakefs fixture.
+        """
+        # Build a leaf whose stem ends in "op. 23" and is long enough to require truncation.
+        # "01 - " (5) + "Sonata " * 36 (252) + "op. 23" (6) = 263 bytes stem; leaf = 263 + 5 = 268 > 255.
+        stem = "01 - " + "Sonata " * 36 + "op. 23"  # ends in "op. 23", well over 255 bytes
+        leaf = stem + ".flac"
+        assert len(leaf.encode("utf-8")) > 255
+
+        dest = Path("/dest")
+        fs.create_dir(str(dest))
+        fs.create_file(str(dest / "dummy.flac"))
+
+        src_file = dest / "dummy.flac"
+        dest_file = dest / leaf
+        plan = [CopyPlanEntry(idx=0, src_file=src_file, dest_file=dest_file)]
+
+        result = _resolve_long_names(plan, dest, ui=None)
+        result_leaf = result[0].dest_file.name
+        assert result_leaf.endswith(".flac"), f"leaf must end with .flac, got {result_leaf!r}"
+        assert len(result_leaf.encode("utf-8")) <= 255, (
+            f"leaf must fit within 255 bytes, got {len(result_leaf.encode('utf-8'))}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # run() — TOC-based medium selection via 00 - disc info.yaml

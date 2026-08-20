@@ -583,6 +583,81 @@ class TestProposedShort:
         assert len(result.encode("utf-8")) <= _NAME_MAX
 
 
+class TestProposedShortSuffixAware:
+    """Tests for the audio_suffix parameter of _proposed_short — suffix-safe truncation.
+
+    Verifies that truncation always reserves the suffix's bytes so that stem+suffix ≤ _NAME_MAX,
+    and that the correct audio extension is preserved in the result.
+    """
+
+    def test_title_within_limit_but_title_plus_suffix_over(self) -> None:
+        """Stem within _NAME_MAX but stem+suffix over → shortened, ends with suffix, ≤ _NAME_MAX.
+
+        This is the primary bug case: a title that fits on its own but whose leaf (title+".flac")
+        exceeds the limit.  Without suffix awareness the ellipsis strategies cut into the suffix.
+        """
+        # Build a stem that fits within _NAME_MAX on its own but not with ".flac" appended.
+        # ".flac" is 5 bytes; stem must be > _NAME_MAX - 5 = 250 bytes and ≤ _NAME_MAX = 255 bytes.
+        stem = "01 - " + "A" * 247  # 252 bytes — fits alone, but 252 + 5 = 257 > 255
+        assert len(stem.encode("utf-8")) <= _NAME_MAX, "stem must fit alone for this test to be meaningful"
+        leaf = stem + ".flac"
+        assert len(leaf.encode("utf-8")) > _NAME_MAX, "leaf must exceed limit"
+        result = _proposed_short(leaf, audio_suffix=".flac")
+        assert result.endswith(".flac"), f"result must end with .flac, got {result!r}"
+        assert len(result.encode("utf-8")) <= _NAME_MAX, (
+            f"result must fit within _NAME_MAX, got {len(result.encode('utf-8'))} bytes"
+        )
+
+    def test_title_already_over_limit(self) -> None:
+        """Stem already over _NAME_MAX → shortened, ends with suffix, ≤ _NAME_MAX."""
+        # Stem alone exceeds _NAME_MAX; adding ".flac" makes it even longer.
+        stem = "01 - " + "B" * 260  # 265 bytes > 255
+        assert len(stem.encode("utf-8")) > _NAME_MAX
+        leaf = stem + ".flac"
+        result = _proposed_short(leaf, audio_suffix=".flac")
+        assert result.endswith(".flac"), f"result must end with .flac, got {result!r}"
+        assert len(result.encode("utf-8")) <= _NAME_MAX, (
+            f"result must fit within _NAME_MAX, got {len(result.encode('utf-8'))} bytes"
+        )
+
+    def test_short_leaf_unchanged(self) -> None:
+        """A leaf already within _NAME_MAX is returned unchanged — no gratuitous ellipsis."""
+        leaf = "01 - Sonata in C major.flac"
+        assert len(leaf.encode("utf-8")) <= _NAME_MAX
+        result = _proposed_short(leaf, audio_suffix=".flac")
+        assert result == leaf, f"short leaf must be returned unchanged, got {result!r}"
+
+    def test_trailing_dot_in_stem_not_mistaken_for_extension(self) -> None:
+        """A trailing dot in the work title (e.g. 'op.') is not mistaken for the audio extension.
+
+        Path.suffix on '01 - Sonata op. 23.flac' would return '. 23' (wrong); the fix uses the
+        known audio extension directly so 'op.' is preserved as part of the stem.
+        """
+        # Build a leaf whose stem ends in "op. 23" — the ". 23" must NOT be treated as the suffix.
+        # Make it long enough to require truncation: "01 - " (5) + "Sonata " * 36 (252) + "op. 23" (6) = 263 bytes.
+        stem = "01 - " + "Sonata " * 36 + "op. 23"  # ends in "op. 23", well over 255 bytes
+        assert len(stem.encode("utf-8")) > _NAME_MAX
+        leaf = stem + ".flac"
+        result = _proposed_short(leaf, audio_suffix=".flac")
+        assert result.endswith(".flac"), f"result must end with .flac, not with '. 23', got {result!r}"
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+
+    def test_mp3_suffix_preserved(self) -> None:
+        """The .mp3 suffix is preserved just as .flac is."""
+        stem = "01 - " + "C" * 260  # over limit
+        leaf = stem + ".mp3"
+        result = _proposed_short(leaf, audio_suffix=".mp3")
+        assert result.endswith(".mp3"), f"result must end with .mp3, got {result!r}"
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+
+    def test_no_suffix_behaves_as_before(self) -> None:
+        """Calling _proposed_short without audio_suffix (default '') behaves as the original function."""
+        component = "X" * 300  # no spaces, no suffix
+        result = _proposed_short(component)
+        assert result.endswith("…")
+        assert len(result.encode("utf-8")) <= _NAME_MAX
+
+
 # ---------------------------------------------------------------------------
 # collect_work_dates
 # ---------------------------------------------------------------------------
