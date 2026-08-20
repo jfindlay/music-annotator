@@ -35,6 +35,7 @@ from music_annotator import (
     build_track_tags,
     fetch_acoustid_id,
     find_source_files,
+    read_journal,
 )
 from music_annotator._pipeline import (
     SelectionMethod,
@@ -85,7 +86,7 @@ from music_annotator._pipeline_io import (
     rebuild_journal,
 )
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
-from music_annotator._tags import _work_top_dir, build_dest_path, collect_applied_case_ids
+from music_annotator._tags import _NAME_MAX, _work_top_dir, build_dest_path, collect_applied_case_ids
 from music_annotator._works import work_group_modal_depth
 from music_annotator.models import (
     JSON,
@@ -13089,3 +13090,278 @@ class TestRunWorkGroupModalDepth:
         assert len(unclamped_pl3.relative_to(dest).parts) > len(run_path_pl2.relative_to(dest).parts), (
             "Expected unclamped PL=3 to render deeper than PL=2 (no-clamp baseline)"
         )
+
+
+class TestRepathExtensionRepair:
+    """Tests for repath's extension-less audio file repair path.
+
+    Extension-less files arise when over-long-name truncation ate the audio suffix.  These
+    files are invisible to all maintenance passes that gate on an audio suffix.  repath detects
+    them via mutagen probing, appends the correct suffix (shortening if the repaired leaf would
+    exceed _NAME_MAX), and moves them through the C-PROV provenance chain.
+    """
+
+    # Minimal tags for a single-track classical file.  build_dest_path produces:
+    #   <dest_root>/Beethoven - Karajan/Symphony No. 5 [rec 2020]/01 - Allegro.flac
+    @staticmethod
+    def _make_tags() -> TrackTags:
+        """Build minimal TrackTags for a single-movement track.
+
+        :returns: A :class:`TrackTags` instance suitable for repath round-trip testing.
+        """
+        return TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro",
+            artist="Karajan",
+        )
+
+    @staticmethod
+    def _write_journal(dest_root: Path, entries: list[dict[str, str]]) -> None:
+        """Write a journal JSON file to ``dest_root / music_annotator_journal.json``.
+
+        :param dest_root: Destination root directory (must already exist).
+        :param entries: List of raw entry dicts to serialise.
+        """
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text(json.dumps(entries), encoding="utf-8")
+
+    def test_repath_repairs_extension_less_flac(self, fs: FakeFilesystem) -> None:
+        """repath identifies an extension-less FLAC, renames it to .flac, and journals the move.
+
+        An extension-less file that is a valid FLAC (suffix lost during over-long-name
+        truncation) must be detected via mutagen probing, renamed with the correct .flac suffix,
+        and moved through the C-PROV provenance chain (hash → rename → verify → journal).
+        No skip warning is emitted; a "repathed" journal entry records the repair.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags()
+
+        # Create a valid FLAC at the extension-less path (simulates truncation ate the suffix).
+        ext_less_path = dest_root / "Beethoven - Karajan" / "Symphony No. 5 [rec 2020]" / "01 - Allegro"
+        ext_less_path.parent.mkdir(parents=True, exist_ok=True)
+        ext_less_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(ext_less_path, tags)
+
+        # Journal the file as "tagged" at the extension-less path.
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(ext_less_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
+
+        # The repaired file must exist with the .flac suffix.
+        repaired_path = ext_less_path.parent / "01 - Allegro.flac"
+        assert repaired_path.exists(), f"Repaired file not found at {repaired_path}"
+        assert not ext_less_path.exists(), "Extension-less file should have been renamed"
+
+        # The journal must contain a "repathed" entry for the repair move.
+        journal = read_journal(dest_root / JOURNAL_FILENAME)
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) >= 1
+        repair_entry = next(e for e in repathed if e.source == str(ext_less_path))
+        assert repair_entry.destination == str(repaired_path)
+
+    def test_repath_skips_non_audio_extension_less_file(self, fs: FakeFilesystem) -> None:
+        """repath skips an extension-less file that is not a valid audio file.
+
+        When mutagen cannot identify the file as FLAC or MP3, repath logs a "not a track file"
+        warning and skips the file — no move is performed and no journal entry is written.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Create an extension-less file with non-audio content.
+        non_audio_path = dest_root / "Beethoven - Karajan" / "Symphony No. 5 [rec 2020]" / "01 - Allegro"
+        non_audio_path.parent.mkdir(parents=True, exist_ok=True)
+        non_audio_path.write_bytes(b"this is not audio data at all")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(non_audio_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
+
+        # The file must remain at its original path (no move).
+        assert non_audio_path.exists(), "Non-audio file should not have been moved"
+
+        # No "repathed" journal entry must have been written.
+        journal = read_journal(dest_root / JOURNAL_FILENAME)
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 0, f"Expected no repathed entries, got {repathed}"
+
+    def test_repath_repairs_extension_less_flac_over_name_max(self, fs: FakeFilesystem) -> None:
+        """repath shortens the repaired leaf when stem + .flac would exceed _NAME_MAX bytes.
+
+        When the extension-less filename is long enough that appending .flac would produce a
+        leaf exceeding _NAME_MAX bytes, _proposed_short is applied so that the final repaired
+        leaf fits within _NAME_MAX and still ends with .flac.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags()
+
+        # Build a stem that is exactly _NAME_MAX - 2 bytes (so stem + ".flac" = _NAME_MAX + 3,
+        # which exceeds the limit and triggers shortening).
+        long_stem = "A" * (_NAME_MAX - 2)
+        assert len(long_stem.encode("utf-8")) == _NAME_MAX - 2  # noqa: PLR2004
+        assert len((long_stem + ".flac").encode("utf-8")) > _NAME_MAX
+
+        ext_less_path = dest_root / "Beethoven - Karajan" / "Symphony No. 5 [rec 2020]" / long_stem
+        ext_less_path.parent.mkdir(parents=True, exist_ok=True)
+        ext_less_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(ext_less_path, tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(ext_less_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
+
+        # The extension-less file must no longer exist.
+        assert not ext_less_path.exists(), "Extension-less file should have been renamed"
+
+        # The repaired file must end with .flac and be within _NAME_MAX bytes.
+        repaired_files = list(ext_less_path.parent.glob("*.flac"))
+        assert len(repaired_files) >= 1, "Expected at least one .flac file after repair"
+        repaired_leaf = repaired_files[0].name
+        assert repaired_leaf.endswith(".flac"), f"Repaired leaf must end with .flac, got {repaired_leaf!r}"
+        assert len(repaired_leaf.encode("utf-8")) <= _NAME_MAX, (
+            f"Repaired leaf {repaired_leaf!r} exceeds _NAME_MAX ({len(repaired_leaf.encode('utf-8'))} > {_NAME_MAX})"
+        )
+
+        # A "repathed" journal entry must record the repair.
+        journal = read_journal(dest_root / JOURNAL_FILENAME)
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) >= 1
+        repair_entry = next(e for e in repathed if e.source == str(ext_less_path))
+        assert repair_entry.destination.endswith(".flac")
+
+    def test_repath_repairs_extension_less_mp3(self, fs: FakeFilesystem) -> None:
+        """repath identifies an extension-less MP3, renames it to .mp3, and journals the move.
+
+        Covers the MP3 detection branch of _detect_audio_suffix: when mutagen.flac.FLAC fails
+        but mutagen.mp3.MP3 succeeds, the correct suffix is ".mp3".
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags()
+
+        # Create a valid MP3 at the extension-less path.
+        ext_less_path = dest_root / "Beethoven - Karajan" / "Symphony No. 5 [rec 2020]" / "01 - Allegro"
+        ext_less_path.parent.mkdir(parents=True, exist_ok=True)
+        ext_less_path.write_bytes(_MINIMAL_MP3)
+        apply_tags_mp3(ext_less_path, tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.mp3",
+                    "destination": str(ext_less_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
+
+        # The repaired file must exist with the .mp3 suffix.
+        repaired_path = ext_less_path.parent / "01 - Allegro.mp3"
+        assert repaired_path.exists(), f"Repaired MP3 file not found at {repaired_path}"
+        assert not ext_less_path.exists(), "Extension-less file should have been renamed"
+
+        # A "repathed" journal entry must record the repair.
+        journal = read_journal(dest_root / JOURNAL_FILENAME)
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) >= 1
+        repair_entry = next(e for e in repathed if e.source == str(ext_less_path))
+        assert repair_entry.destination == str(repaired_path)
+
+    def test_repath_extension_repair_dry_run_no_move(self, fs: FakeFilesystem) -> None:
+        """repath(dry_run=True) logs the planned repair but does not move or journal the file.
+
+        In dry-run mode, extension-less audio files are identified and the planned repair is
+        logged, but no filesystem move is performed and no journal entry is written.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags()
+
+        ext_less_path = dest_root / "Beethoven - Karajan" / "Symphony No. 5 [rec 2020]" / "01 - Allegro"
+        ext_less_path.parent.mkdir(parents=True, exist_ok=True)
+        ext_less_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(ext_less_path, tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(ext_less_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=True)
+
+        # The extension-less file must remain (no move in dry-run mode).
+        assert ext_less_path.exists(), "Extension-less file must not be moved in dry-run mode"
+        repaired_path = ext_less_path.parent / "01 - Allegro.flac"
+        assert not repaired_path.exists(), "Repaired file must not be created in dry-run mode"
+
+        # No journal entries must have been written.
+        journal = read_journal(dest_root / JOURNAL_FILENAME)
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 0, f"Expected no repathed entries in dry-run mode, got {repathed}"

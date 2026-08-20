@@ -69,7 +69,7 @@ from music_annotator._pipeline_io import (
     write_transaction_log,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
-from music_annotator._tags import build_dest_path
+from music_annotator._tags import _NAME_MAX, _proposed_short, build_dest_path
 from music_annotator._works import (
     _Rederivation,
     is_catalogue_colon_corrupt,
@@ -298,6 +298,32 @@ def _resolve_current_lib(journal: TransactionLog) -> dict[Path, str]:
     return current_lib
 
 
+def _detect_audio_suffix(path: Path) -> str | None:
+    """Probe ``path`` with mutagen to determine whether it is a FLAC or MP3 audio file.
+
+    Used to repair extension-less audio files whose suffix was lost during over-long-name
+    truncation.  Tries FLAC first (``mutagen.flac.FLAC``), then MP3 (``mutagen.mp3.MP3``).
+    Both probes catch all exceptions so that a non-audio file returns ``None`` rather than
+    raising.
+
+    :param path: Path to the file to probe (may have any suffix, including none).
+    :returns: ``".flac"`` if the file is a valid FLAC, ``".mp3"`` if it is a valid MP3,
+        ``None`` if it is not identifiable as either audio format.
+    """
+    try:
+        MutagenFLAC(str(path))
+        return ".flac"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        # ID3 reads ID3 tags regardless of file extension, making it suitable for probing
+        # extension-less files.  A successful open confirms the file carries MP3/ID3 metadata.
+        ID3(str(path))  # type: ignore[no-untyped-call]
+        return ".mp3"
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _move_verify_journal(
     plan_pairs: list[tuple[Path, Path]],
     *,
@@ -496,16 +522,59 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     # --- Pass 1: read tags for all existing files ---
     # Collect (path, tags, file_dict, ext) tuples so that the work-group modal depth can be
     # computed once per group before building the plan (compute-once-per-group invariant).
+    #
+    # Extension-less files (suffix lost during over-long-name truncation) are repaired here:
+    # mutagen probes the file to identify its format, the correct suffix is appended (with
+    # shortening if the repaired leaf would exceed _NAME_MAX), and the file is moved via
+    # _move_verify_journal before tag-reading continues.  After repair the file has a suffix
+    # and is visible to all subsequent maintenance passes.
     _repath_file_data: list[tuple[Path, TrackTags, dict[str, str], str]] = []
     for current_path in existing_files:
         ext = current_path.suffix.lower()
+
+        if ext not in {".flac", ".mp3"}:
+            # Extension-less or unrecognised suffix: probe for audio format.
+            correct_suffix = _detect_audio_suffix(current_path)
+            if correct_suffix is None:
+                log.warning("repath_not_a_track_file", path=str(current_path), ext=ext)
+                continue
+            # Compute the repaired leaf: current stem + correct suffix.  The stem equals the
+            # full filename because the file has no recognised suffix.  If the repaired leaf
+            # exceeds _NAME_MAX bytes, shorten it via _proposed_short so that stem+suffix ≤
+            # _NAME_MAX (the 7 real stranded files are already at or over the limit).
+            stem = current_path.name
+            repaired_leaf = stem + correct_suffix
+            if len(repaired_leaf.encode("utf-8")) > _NAME_MAX:
+                repaired_leaf = _proposed_short(repaired_leaf, correct_suffix)
+            repaired_path = current_path.parent / repaired_leaf
+            if dry_run:
+                log.info(
+                    "repath_extension_repair_dry_run",
+                    path=str(current_path.relative_to(dest_root)),
+                    repaired=str(repaired_path.relative_to(dest_root)),
+                )
+                continue
+            # Repair move: hash → rename → verify → journal (C-PROV invariant: journal entry
+            # is written only after _verify_copy passes inside _move_verify_journal).
+            repair_now = datetime.datetime.now(datetime.UTC)
+            _move_verify_journal(
+                [(current_path, repaired_path)],
+                journal_path=journal_path,
+                action="repathed",
+                dest_root=dest_root,
+                now=repair_now,
+                release_id="",
+            )
+            current_path = repaired_path
+            ext = correct_suffix
+
         try:
             match ext:
                 case ".flac":
                     file_dict = _read_tags_flac(current_path)
                 case ".mp3":
                     file_dict = _read_tags_mp3(current_path)
-                case _:  # pragma: no cover — AUDIO_EXTENSIONS may include unsupported types
+                case _:  # pragma: no cover — unreachable: ext is always .flac or .mp3 here
                     log.warning("repath_unsupported_format", path=str(current_path), ext=ext)
                     continue
         except Exception as exc:  # noqa: BLE001 — tag read failure: log and skip
