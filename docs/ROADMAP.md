@@ -221,6 +221,18 @@ step-3 watch item that could reshard R3 order.
   arc-boundary finding (C-S0 aggregates within a release, not across a release-group, so box sets modelled as
   multiple releases fragment despite C-S0) is folded into the Discoveries appendix below as an R6d-planning
   input, not re-opened in-arc (D-4).
+  **R4b integration follow-on (scanner → `audit` migration — surfaced 2026-08-20):** the R4b inventory
+  froze C-FRAG-TAX in two read-only scripts (`scripts/scan_fragmentation.py` — the three residual
+  fragmentation shapes not covered by `audit`'s `MUSICBRAINZ_ALBUMID`-keyed detection; and
+  `scripts/scan_nonuniform_depth.py` — non-uniform `CWP_PART_LEVELS` + multi-recording-per-bottom-work
+  detection).  Both hold detection logic that lives only in the scripts.  To drain `scripts/` fully
+  and make these library-health checks re-runnable on the live library, **migrate both into the
+  `audit` CLI action** as additional read-only detectors (a report-model design + a live scan — a
+  design-bearing session, not a mechanical move), then delete the scripts.  Sequenced as a post-R4b
+  integration item coordinated with any III-b regroup remedy; it freezes no new taxonomy (C-FRAG-TAX
+  is the substrate).  The pre-R6d drain shard (`docs/PLAN.md`, Sub-track D) deletes only the three
+  *superseded* scripts and the two spent census tools — it deliberately leaves these two scanners in
+  place pending this migration.
 - **R4c DISSOLVED into E (2026-07-22).**  R4c was scoped as a "small additive allowlist" widening the
   mechanical `top_work.type == "Concerto"` path-injection gate (`_tags.py:1189`) to a few more
   canonical-soloist dirs.  Operator refutation (2026-07-22): an allowlist is the tell of a *missing
@@ -329,6 +341,40 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   `2161dae`):** the destructive `unify` pass requires the `--user-agent-email` plumbing, now landed
   by the pre-R6d fix session; `unify`'s canonical name-form dereference is a permitted stable
   fixed-MBID lookup, not a `MB(*)` wildcard.  R6d's destructive run must supply the user-agent.
+  **R6d BLOCKER caveat (extension-loss — surfaced 2026-08-20, `docs/PLAN.md`):** a live sweep found
+  7 audio files written with no `.flac` suffix (Brahms variation sets, 1996 box) — single-track works
+  whose over-long leaf name had its extension eaten by the truncation path (`_proposed_short`'s
+  ellipsis strategies cut `_NAME_MAX - 3` bytes with no suffix-awareness, after `with_suffix` had
+  already attached `.flac`).  Every maintenance pass gates on a `.flac`/`.mp3` suffix, so these files
+  are stranded — silently skipped by `repath`/`regroup`/`unify` (`repath_unsupported_format`).  R6d's
+  destructive re-derivation would leave them behind — a lossless-principle violation.  **Must clear
+  before R6d:** fix the source truncation to reserve+preserve the suffix (stem+suffix ≤ `_NAME_MAX`),
+  and add a `repath` repair case that identifies extension-less track files, re-suffixes them, and
+  moves them through the C-PROV chain.  Sharded to `docs/PLAN.md` (pre-R6d fix, 2 rows).
+  **R6d BLOCKER caveat (top-dir loses the performer — surfaced 2026-08-20, `docs/PLAN.md`):** the same
+  live preflight sweep found thousands of `repath` top-dir renames replacing a real performer credit
+  with a release/edition/album title.  **Two distinct mechanisms:** (1) `_top_dir_component`'s
+  compilation branch (keyed on the free-classification parameter `releasetype_secondary`) emits
+  `<…> - <ALBUM>` (the Karajan "Ouvertüren" case, ~low hundreds); and (2) — the **dominant class**
+  (thousands: `Mozart - Complete Mozart Edition`, `Bach - Bach Edition`, `Schubert - The String
+  Quartets`) — the composer is present (single-composer Case 3) so the top dir is
+  `<composer> - <performers>`, but on repath the `<performers>` component collapses through
+  `build_dest_path`'s fallback chain to `ARTIST` (`_tags.py:1216`), which for box-set recordings
+  carries the edition title.  The current on-disk paths already show the correct performer, so this is
+  a repath re-derivation loss (`_hydrate_performer_lists` / fallback), not an original-ingest error.
+  The compilation-branch behaviour (mechanism 1) was frozen two ways at once — REND-23/C-INIT marked
+  it *deliberate*
+  (`census-impl.md`), while C-UNIVERSAL's rationale (`NOTES.md`) forbids album name and
+  free-classification parameters in the path.  **Operator resolved the conflict 2026-08-20 (editorial
+  authority): C-UNIVERSAL governs; REND-23 overturned — album name belongs to the playlist lens only,
+  and the general library taxonomy is uniform-strict on composer(s), soloist(s), conductor(s),
+  ensemble(s), rec/rel year, work taxonomy.**  R6d's destructive re-derivation would otherwise bake
+  the album-name-in-path layout across the whole library.  **Must clear before R6d:** restore the
+  `<composer> - <performers>` shape and the performer-led floor (drop the album-name injection; stop
+  keying on `releasetype_secondary`).  Sharded to `docs/PLAN.md` (Sub-track C, 2 rows); the REND-23
+  overturn is to be recorded in the styleguide validate-record.  **Soloist-in-path is a separate,
+  operator-desired-but-deferred item (does NOT block R6d, NOT in the Sub-track-C shard):** see the
+  C-NOSOLO reopen caveat below.
   **R6d planning
   caveat (paths-only vs tag-content — surfaced 2026-08-12,
   R6a shard):** the offline maintenance engine `repath`/`regroup`/`unify` re-derives **paths only**,
@@ -349,6 +395,21 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
   `repatch_acoustid_tags`) on the same chain — R6d drives it destructively under J3; the C-ACID
   dual-read retirement is deferred until the library is fully migrated (post-R6d).  Other
   tag-content re-derivation (`CEA_*`, billing order) still needs the explicit R6d scope decision above.
+  **C-NOSOLO reopen — DECIDED (operator, 2026-08-20): reopen; soloist enters the path.**  The
+  operator's path-ergonomics ruling lists the soloist among the elements the top dir should carry
+  uniformly (composer(s), soloist(s), conductor(s), ensemble(s), rec/rel year, work taxonomy),
+  explicitly reversing the earlier SEL-11 "universally added then universally removed" as *likely
+  overengineered*.  This **overturns C-NOSOLO** ("no soloist enters the path component", frozen with
+  the concerto-gate deletion, 2026-07-31).  **Sequencing (operator): deferred — "focus on completing
+  the unfinished tasks; return and revise later if needed".**  So the soloist promotion is *not* in
+  the pre-R6d Sub-track-C corrective shard (which restores "performer, not album" without touching the
+  soloist), and is *not* a blocker.  It becomes a later A-node: define the soloist promotion rule +
+  performer field set/order for the compact path (editorial — the Albinoni/concerto-grosso/
+  choir+chorusmaster/modern-works hard cases the original R4c refutation named still apply and need an
+  editorial rule, not an allowlist), then coordinate the code-only render change + the destructive
+  library-wide repath with R6d's one pass under J3 (D-A5 precedent).  **When this lands, retire
+  C-NOSOLO and update the styleguide SEL-11/REND records** so the frozen artifacts match the new
+  ruling.
 - **R6e** Conventions-spec finalisation (integrative writeup; consistently under-scheduled — allocate
   a full session minimum).
 
