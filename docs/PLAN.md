@@ -485,7 +485,7 @@ C-NOSOLO reopen).
 | # | Session | Status | Commit | Froze |
 |---|---------|--------|--------|-------|
 | 1 | Fix source truncation to reserve+preserve the suffix | done | 0c894d1 | (none — corrective) |
-| 2 ◆ | Add repath repair case for extension-less track files | pending | — | (none — corrective) |
+| 2 ◆ | Add repath repair case for extension-less track files | done | bdf23a6 | (none — corrective) |
 | 3 | Thread the real release id into the maintenance-pass collision suffix | pending | — | (none — corrective) |
 | 4 ◆ | Guard `_collision_suffix` against empty id + assert suffix content | pending | — | (none — corrective) |
 | 5 | Stop keying top dir on `releasetype_secondary`; drop album-name injection (compilation branch) | pending | — | (none — corrective) |
