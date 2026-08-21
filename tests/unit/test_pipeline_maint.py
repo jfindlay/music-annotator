@@ -6188,8 +6188,9 @@ class TestCUniversalKATs:
         with empty MBRelease()/MBTrack() stubs.  The first component must be derivable from
         embedded tags alone, not from release.release_group.
 
-        Creates tags with ALBUMARTIST and ALBUM set (performer-led branch) and verifies that
-        build_dest_path with an empty stub produces the correct prefix-less path.
+        Creates tags with ALBUMARTIST set (performer-led branch) and verifies that build_dest_path
+        with an empty stub produces the correct prefix-less path.  The album name must not appear
+        in the topmost path component (album identity belongs to the playlist lens).
 
         :param fs: pyfakefs fixture.
         """
@@ -6214,9 +6215,12 @@ class TestCUniversalKATs:
         result = build_dest_path(dest_root, stub_release, stub_track, tags)
 
         rel = result.relative_to(dest_root)
-        # C-UNIVERSAL: first component is the performer-led shape, no class prefix.
-        assert rel.parts[0] == "Test Artist - Test Album", (
-            f"Expected top_dir 'Test Artist - Test Album' from embedded tags, got {rel.parts[0]!r}"
+        # C-UNIVERSAL: first component is the albumartist alone (no album name).
+        assert rel.parts[0] == "Test Artist", (
+            f"Expected top_dir 'Test Artist' from embedded tags (album name excluded), got {rel.parts[0]!r}"
+        )
+        assert "Test Album" not in rel.parts[0], (
+            f"Album name must not appear in top_dir (belongs to playlist lens), got {rel.parts[0]!r}"
         )
 
     def test_repath_reconstructs_composer_first_from_tags(self, fs: FakeFilesystem) -> None:
@@ -6585,13 +6589,15 @@ class TestHydratePerformerLists:
         assert tags.cea_conductors_list[0].mbid == "hvk-1"
 
     def test_hydrate_sets_per_track_ensembles_list(self) -> None:
-        """_hydrate_performer_lists populates cea_ensembles_list from CEA_ENSEMBLES.
+        """_hydrate_performer_lists populates cea_ensembles_list from CEA_ENSEMBLES without MBIDs.
 
-        When ``CEA_ENSEMBLES`` has one name and ``MUSICBRAINZ_ALBUMARTISTID`` has one MBID
-        (with no conductor MBIDs to subtract), the resulting
-        :class:`~music_annotator.models.ArtistEntry` carries the MBID.
+        Per-track ensemble entries are always created without MBIDs.  MUSICBRAINZ_ALBUMARTISTID
+        is the release's artist-credit MBID pool; for box-sets and composer-credited releases
+        this is the edition/collection entity's MBID, not the ensemble's MBID.  Assigning the
+        wrong MBID causes the canonical-form resolver to return the edition title instead of the
+        ensemble name.  The safe invariant: per-track ensemble entries always have mbid == "".
 
-        :raises AssertionError: If the list is not populated or the MBID is absent.
+        :raises AssertionError: If the list is not populated or the entry carries a non-empty MBID.
         """
         tags = TrackTags()
         file_dict = {
@@ -6603,7 +6609,13 @@ class TestHydratePerformerLists:
         _hydrate_performer_lists(tags, file_dict)
 
         assert len(tags.cea_ensembles_list) == 1
-        assert tags.cea_ensembles_list[0].mbid == "vp-1"
+        assert tags.cea_ensembles_list[0].name == "Vienna Philharmonic"
+        # Per-track ensemble entries must never carry an MBID — the ALBUMARTISTID pool is
+        # the edition entity's MBID for box-sets, not the ensemble's MBID.
+        assert tags.cea_ensembles_list[0].mbid == "", (
+            f"Per-track ensemble entry must have mbid='' to prevent edition-title resolution, "
+            f"got {tags.cea_ensembles_list[0].mbid!r}"
+        )
 
     def test_hydrate_no_mbid_when_counts_mismatch(self) -> None:
         """_hydrate_performer_lists creates entries without MBIDs when name and MBID counts differ.
@@ -6627,6 +6639,106 @@ class TestHydratePerformerLists:
         # Counts mismatch (2 names, 1 MBID) → no MBIDs assigned.
         assert tags.cea_album_ensembles_list[0].mbid == ""
         assert tags.cea_album_ensembles_list[1].mbid == ""
+
+    def test_hydrate_per_track_ensemble_never_gets_mbid(self) -> None:
+        """Per-track ensemble entries are always created without MBIDs.
+
+        KAT: the per-track ensemble MBID cannot be reliably derived from embedded tags.
+        MUSICBRAINZ_ALBUMARTISTID is the release's artist-credit MBID pool; for box-sets and
+        composer-credited releases this is the edition/collection entity's MBID, not the
+        ensemble's MBID.  Assigning the wrong MBID causes the canonical-form resolver to return
+        the edition title instead of the ensemble name.
+
+        The safe invariant: per-track ensemble entries always have mbid == "" so _canonical_name
+        falls back to entry.name (the as-credited name from CEA_ENSEMBLES).
+
+        :raises AssertionError: If the per-track ensemble entry carries a non-empty MBID.
+        """
+        tags = TrackTags()
+        # Simulate a box-set: MUSICBRAINZ_ALBUMARTISTID is the edition entity's MBID (not the
+        # ensemble's MBID), and CEA_ENSEMBLES carries the real ensemble name.
+        file_dict = {
+            "CEA_ENSEMBLES": "Academy of St Martin in the Fields",
+            "CEA_ENSEMBLES_SORT": "Academy of St Martin in the Fields",
+            "MUSICBRAINZ_CONDUCTORID": "marriner-mbid",
+            "MUSICBRAINZ_ALBUMARTISTID": "complete-mozart-edition-mbid",
+        }
+        _hydrate_performer_lists(tags, file_dict)
+
+        assert len(tags.cea_ensembles_list) == 1
+        entry = tags.cea_ensembles_list[0]
+        assert entry.name == "Academy of St Martin in the Fields"
+        # Per-track ensemble entries must never carry an MBID — the ALBUMARTISTID pool is
+        # the edition entity's MBID for box-sets, not the ensemble's MBID.
+        assert entry.mbid == "", (
+            f"Per-track ensemble entry must have mbid='' to prevent edition-title resolution, got {entry.mbid!r}"
+        )
+
+    def test_hydrate_boxset_repath_renders_real_ensemble_name(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Box-set repath renders the real ensemble name, not the edition entity's name.
+
+        KAT: when MUSICBRAINZ_ALBUMARTISTID is the edition/collection entity's MBID (not the
+        ensemble's MBID), the per-track ensemble entry must be created without an MBID so that
+        _canonical_name returns entry.name (the as-credited ensemble name) rather than fetching
+        the edition entity's aliases and returning the edition title.
+
+        Simulates the "Complete Mozart Edition" box-set shape: conductor is Sir Neville Marriner
+        (with a real MBID), ensemble is Academy of St Martin in the Fields (no MBID assigned),
+        and MUSICBRAINZ_ALBUMARTISTID is the edition entity's MBID.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # fetch_artist_aliases is called only for the conductor (which has a real MBID).
+        # The ensemble has no MBID, so fetch_artist_aliases is NOT called for it.
+        marriner = MBArtist.model_validate({"id": "marriner-mbid", "name": "Sir Neville Marriner"})
+        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=marriner)
+
+        tags = TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony No. 40",
+            cwp_workid_top="w1",
+            cwp_composer_lastnames="Mozart",
+            cwp_worktype_genres_top="Classical",
+            artist="Complete Mozart Edition",
+            albumartist="Wolfgang Amadeus Mozart",
+            album="Complete Mozart Edition",
+        )
+        # Simulate the embedded tag dict as read back from the audio file.
+        file_dict = {
+            "CEA_CONDUCTORS": "Sir Neville Marriner",
+            "CEA_ENSEMBLES": "Academy of St Martin in the Fields",
+            "CEA_ENSEMBLES_SORT": "Academy of St Martin in the Fields",
+            "MUSICBRAINZ_CONDUCTORID": "marriner-mbid",
+            # ALBUMARTISTID is the edition entity's MBID — NOT the ensemble's MBID.
+            "MUSICBRAINZ_ALBUMARTISTID": "complete-mozart-edition-mbid",
+        }
+        _hydrate_performer_lists(tags, file_dict)
+
+        result = build_dest_path(
+            dest_root,
+            MBRelease(),
+            MBTrack(),
+            tags,
+            global_track_idx=0,
+        )
+        path_str = str(result.relative_to(dest_root))
+        top = result.relative_to(dest_root).parts[0]
+
+        # The path must contain the real ensemble name, not the edition entity's name.
+        assert "Academy of St Martin in the Fields" in top, f"Expected real ensemble name in top_dir, got {top!r}"
+        assert "Sir Neville Marriner" in top, f"Expected conductor name in top_dir, got {top!r}"
+        # The edition title must not appear in the path.
+        assert "Complete Mozart Edition" not in path_str, f"Edition title must not appear in path, got {path_str!r}"
+        # The path must equal the expected form.
+        assert top == "Mozart - Sir Neville Marriner; Academy of St Martin in the Fields", (
+            f"Expected 'Mozart - Sir Neville Marriner; Academy of St Martin in the Fields', got {top!r}"
+        )
 
 
 # ---------------------------------------------------------------------------

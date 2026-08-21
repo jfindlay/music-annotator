@@ -178,9 +178,15 @@ def _hydrate_performer_lists(tags: TrackTags, file_dict: dict[str, str]) -> None
       (order-preserving) to isolate ensemble MBIDs.  When the count of album ensemble names (from
       ``CEA_ALBUM_ENSEMBLES``) equals the count of remaining MBIDs, the two sequences are zipped
       positionally.  Otherwise entries are created without MBIDs.
-    * **Per-track conductors/ensembles** (``cea_conductors_list`` / ``cea_ensembles_list``): the
-      same strategy is applied using ``CEA_CONDUCTORS`` / ``CEA_ENSEMBLES`` names and the full
-      ``MUSICBRAINZ_CONDUCTORID`` / ``MUSICBRAINZ_ALBUMARTISTID`` MBID sets.
+    * **Per-track conductors** (``cea_conductors_list``): ``MUSICBRAINZ_CONDUCTORID`` is used as
+      the MBID source, zipped positionally when counts match.
+    * **Per-track ensembles** (``cea_ensembles_list``): entries are always created **without
+      MBIDs**.  ``MUSICBRAINZ_ALBUMARTISTID`` is the release's artist-credit MBID pool; for
+      box-sets and composer-credited releases this is the edition/collection entity's MBID, not
+      the ensemble's MBID.  Assigning the wrong MBID causes the canonical-form resolver to fetch
+      the edition entity's aliases and return the edition title instead of the ensemble name.
+      Without an MBID the resolver falls back to ``entry.name`` (the as-credited name from
+      ``CEA_ENSEMBLES``), which is always correct.
 
     Mutates ``tags`` in-place; returns ``None``.  The function is idempotent: calling it on a
     ``TrackTags`` that already has non-empty lists is a no-op (the lists are only set when they
@@ -259,7 +265,14 @@ def _hydrate_performer_lists(tags: TrackTags, file_dict: dict[str, str]) -> None
     if not tags.cea_conductors_list and conductor_names:
         tags.cea_conductors_list = _make_entries(conductor_names, conductor_sorts, conductor_mbids)
     if not tags.cea_ensembles_list and ensemble_names:
-        tags.cea_ensembles_list = _make_entries(ensemble_names, ensemble_sorts, ensemble_mbids)
+        # Per-track ensemble MBIDs cannot be reliably derived from embedded tags: the only
+        # available MBID pool is MUSICBRAINZ_ALBUMARTISTID, which for box-sets and
+        # composer-credited releases is the edition/collection entity's MBID — not the
+        # ensemble's MBID.  Assigning the wrong MBID causes _canonical_name to fetch the
+        # edition entity's aliases and return the edition title instead of the ensemble name.
+        # The safe fallback is to create entries without MBIDs so _canonical_name returns
+        # entry.name (the as-credited name from CEA_ENSEMBLES) directly.
+        tags.cea_ensembles_list = _make_entries(ensemble_names, ensemble_sorts, [])
 
 
 def _resolve_current_lib(journal: TransactionLog) -> dict[Path, str]:

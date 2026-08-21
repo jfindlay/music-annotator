@@ -1588,12 +1588,12 @@ class TestBuildDestPathEdgeCases:
         assert "Adagio" in result.name
 
     def test_no_composer_in_tags_uses_recital_shape(self, fs: FakeFilesystem) -> None:
-        """build_dest_path uses performer-led shape (albumartist - album) when CWP/CEA composer tags are empty.
+        """build_dest_path uses performer-led shape (albumartist alone) when CWP/CEA composer tags are empty.
 
         When cwp_composer_lastnames and cea_composer_lastnames are both empty, the performer-led
-        branch of :func:`~music_annotator._tags._top_dir_component` fires and uses albumartist - album
-        as the top_dir.  The release.artist_credit is not consulted (the performer-led branch
-        short-circuits it).
+        branch of :func:`~music_annotator._tags._top_dir_component` fires and uses albumartist as
+        the top_dir.  The release.artist_credit is not consulted (the performer-led branch
+        short-circuits it).  The album name is excluded from the topmost path component.
 
         When albumartist is also empty, falls back to album title alone (or "Unknown Album").
 
@@ -1617,9 +1617,10 @@ class TestBuildDestPathEdgeCases:
         )
 
     def test_no_composer_in_tags_with_albumartist_uses_performer_first(self, fs: FakeFilesystem) -> None:
-        """build_dest_path uses albumartist - album when CWP/CEA composer tags are empty but albumartist is set.
+        """build_dest_path uses albumartist alone when CWP/CEA composer tags are empty but albumartist is set.
 
-        The performer-led branch uses albumartist as the primary attribution.
+        The performer-led branch uses albumartist as the primary attribution.  The album name is
+        excluded from the topmost path component (album identity belongs to the playlist lens).
 
         :param fs: pyfakefs fixture.
         """
@@ -4500,10 +4501,11 @@ class TestBuildDestPathPrefixLess:
         assert "Classical" not in rel.parts, f"Expected no 'Classical' class prefix in path, got parts={rel.parts!r}"
 
     def test_pop_album_no_class_prefix(self, fs: FakeFilesystem) -> None:
-        """Pop album → ``dest_root / "<Artist> - <Album>" / …`` with no class component.
+        """Pop album → ``dest_root / "<Artist>" / …`` with no class component and no album name.
 
         A pop album (no linked composer) routes through the performer-led branch of
-        :func:`~music_annotator._tags._top_dir_component`.
+        :func:`~music_annotator._tags._top_dir_component`.  The album name belongs to the
+        playlist lens and must not appear in the topmost path component.
 
         :param fs: pyfakefs fixture.
         """
@@ -4526,11 +4528,17 @@ class TestBuildDestPathPrefixLess:
             tags,
         )
         rel = result.relative_to(dest_root)
-        assert rel.parts[0] == "The Beatles - Abbey Road", f"Expected top_dir 'The Beatles - Abbey Road', got {rel.parts[0]!r}"
+        assert rel.parts[0] == "The Beatles", f"Expected top_dir 'The Beatles', got {rel.parts[0]!r}"
+        assert "Abbey Road" not in rel.parts[0], (
+            f"Album name must not appear in top_dir (belongs to playlist lens), got {rel.parts[0]!r}"
+        )
         assert "Popular" not in rel.parts, f"Expected no 'Popular' class prefix in path, got parts={rel.parts!r}"
 
     def test_compilation_no_class_prefix(self, fs: FakeFilesystem) -> None:
-        """Compilation → ``dest_root / "<Various or last> - <Album>" / …`` with no class component.
+        """Compilation → ``dest_root / "<Various Artists>" / …`` with no class component and no album name.
+
+        A composerless compilation routes through the performer-led branch.  The album name
+        belongs to the playlist lens and must not appear in the topmost path component.
 
         :param fs: pyfakefs fixture.
         """
@@ -4554,8 +4562,10 @@ class TestBuildDestPathPrefixLess:
             tags,
         )
         rel = result.relative_to(dest_root)
-        assert "Various" in rel.parts[0], f"Expected 'Various' in top_dir, got {rel.parts[0]!r}"
-        assert "Great Piano Concertos" in rel.parts[0], f"Expected album title in top_dir, got {rel.parts[0]!r}"
+        assert rel.parts[0] == "Various Artists", f"Expected top_dir 'Various Artists', got {rel.parts[0]!r}"
+        assert "Great Piano Concertos" not in rel.parts[0], (
+            f"Album name must not appear in top_dir (belongs to playlist lens), got {rel.parts[0]!r}"
+        )
         assert "Compilations" not in rel.parts, f"Expected no 'Compilations' class prefix in path, got parts={rel.parts!r}"
 
 
@@ -4573,7 +4583,8 @@ class TestTopDirComponent:
 
     Two cases:
 
-    1. Performer-led (no linked composer) → ``<albumartist> - <album>`` (or bare ``<album>`` when empty).
+    1. Performer-led (no linked composer) → ``<albumartist>`` (or bare ``<album>`` when albumartist
+       is empty — floor to avoid an empty top dir).
     2. Composer-bearing (dominant population) → ``None`` (caller uses ``<composer> - <performers>``).
        Applies regardless of ``releasetype_secondary``, including "Compilation".
     """
@@ -4598,11 +4609,13 @@ class TestTopDirComponent:
         result = _top_dir_component(tags)
         assert result is None, f"Expected None for single-composer, got {result!r}"
 
-    def test_performer_led_returns_albumartist_album(self) -> None:
-        """Performer-led (no linked composer) → ``<albumartist> - <album>``.
+    def test_performer_led_returns_albumartist(self) -> None:
+        """Performer-led (no linked composer) → ``<albumartist>`` (album name excluded from path).
 
         Signal: CWP_COMPOSER_LASTNAMES and CEA_COMPOSER_LASTNAMES are both empty.
-        Universal: a pop album routes here exactly as a classical recital does.
+        The topmost path component derives from the album artist alone; the album name belongs to
+        the playlist lens, not the directory tree.  Universal: a pop album routes here exactly as
+        a classical recital does.
 
         :returns: None.
         """
@@ -4617,14 +4630,18 @@ class TestTopDirComponent:
         )
         result = _top_dir_component(tags)
         assert result is not None, "Expected a non-None result for performer-led"
-        assert "Mitsuko Uchida" in result, f"Expected albumartist 'Mitsuko Uchida' in top_dir, got {result!r}"
-        assert "Schubert" in result or "Piano Sonatas" in result, f"Expected album title in top_dir, got {result!r}"
+        assert result == "Mitsuko Uchida", f"Expected albumartist 'Mitsuko Uchida' as top_dir, got {result!r}"
+        # The album name must not appear in the topmost path component.
+        assert "Schubert" not in result and "Piano Sonatas" not in result, (
+            f"Album name must not appear in top_dir (belongs to playlist lens), got {result!r}"
+        )
 
-    def test_performer_led_pop_album_returns_albumartist_album(self) -> None:
-        """Pop album (no linked composer) → ``<albumartist> - <album>`` (performer-led branch).
+    def test_performer_led_pop_album_returns_albumartist(self) -> None:
+        """Pop album (no linked composer) → ``<albumartist>`` (album name excluded from path).
 
         Demonstrates the universal nature of the performer-led branch: a pop album routes here
-        exactly as a classical recital does.
+        exactly as a classical recital does.  The album name belongs to the playlist lens, not
+        the directory tree.
 
         :returns: None.
         """
@@ -4640,7 +4657,9 @@ class TestTopDirComponent:
         )
         result = _top_dir_component(tags)
         assert result is not None, "Expected a non-None result for pop album"
-        assert result == "The Beatles - Abbey Road", f"Expected 'The Beatles - Abbey Road', got {result!r}"
+        assert result == "The Beatles", f"Expected 'The Beatles' as top_dir, got {result!r}"
+        # The album name must not appear in the topmost path component.
+        assert "Abbey Road" not in result, f"Album name must not appear in top_dir (belongs to playlist lens), got {result!r}"
 
     def test_compilation_with_composer_returns_none(self) -> None:
         """Compilation with a linked composer → ``None`` (falls through to composer-bearing case).
@@ -4689,12 +4708,12 @@ class TestTopDirComponent:
             f"Expected None for compilation with linked composer (caller uses <composer> - <performers>), got {result!r}"
         )
 
-    def test_composerless_compilation_returns_albumartist_album(self) -> None:
-        """Composerless compilation → ``<albumartist> - <album>`` (performer-led branch).
+    def test_composerless_compilation_returns_albumartist(self) -> None:
+        """Composerless compilation → ``<albumartist>`` (performer-led branch; album name excluded).
 
         Regression guard: when no composer is linked, the performer-led branch fires regardless
-        of ``releasetype_secondary``.  The album name appears here because there is no
-        scholarship-stable composer anchor — the album artist is the primary attribution.
+        of ``releasetype_secondary``.  The album artist is the primary attribution; the album name
+        belongs to the playlist lens and must not appear in the topmost path component.
 
         :returns: None.
         """
@@ -4710,8 +4729,11 @@ class TestTopDirComponent:
         )
         result = _top_dir_component(tags)
         assert result is not None, "Expected a non-None result for composerless compilation"
-        assert "Various Artists" in result, f"Expected albumartist in top_dir, got {result!r}"
-        assert "Now That's What I Call Music" in result, f"Expected album title in top_dir, got {result!r}"
+        assert result == "Various Artists", f"Expected 'Various Artists' as top_dir, got {result!r}"
+        # The album name must not appear in the topmost path component.
+        assert "Now That's What I Call Music" not in result, (
+            f"Album name must not appear in top_dir (belongs to playlist lens), got {result!r}"
+        )
 
     def test_performer_led_no_albumartist_returns_album_only(self) -> None:
         """Performer-led with no albumartist → album-only shape (no performer prefix).
@@ -4734,9 +4756,10 @@ class TestTopDirComponent:
         assert result == "Unknown Recital", f"Expected 'Unknown Recital', got {result!r}"
 
     def test_build_dest_path_recital_uses_performer_first(self, fs: FakeFilesystem) -> None:
-        """build_dest_path for a recital → ``dest_root / "<albumartist> - <album>" / …``.
+        """build_dest_path for a recital → ``dest_root / "<albumartist>" / …`` (album name excluded).
 
         Verifies the performer-led branch end-to-end through build_dest_path (no class prefix).
+        The album name must not appear in the topmost path component.
 
         :param fs: pyfakefs fixture.
         """
@@ -4807,6 +4830,148 @@ class TestTopDirComponent:
             f"Expected album name 'Ouvertüren' to be absent from top_dir (album name must not appear in path), got {top!r}"
         )
         assert "Classical" not in rel.parts, f"Expected no 'Classical' class prefix in path, got parts={rel.parts!r}"
+
+
+# ---------------------------------------------------------------------------
+# Box-set performers path component — C-UNIVERSAL KATs
+# ---------------------------------------------------------------------------
+
+
+class TestBoxSetPerformersComponent:
+    """KATs: the performers path component never resolves to the release/edition title.
+
+    For box-set recordings (e.g. "Complete Mozart Edition"), the recording's ARTIST tag carries
+    the edition/collection title rather than a real performer name.  The performers path component
+    must derive from the embedded CEA_CONDUCTORS / CEA_ENSEMBLES tags (the real performers), not
+    from ARTIST.  When those tags are absent, the component must fall back to "Unknown Performers"
+    rather than baking the edition title into the path.
+
+    Two KATs:
+
+    1. **CEA tags present**: a composer-bearing box-set track whose embedded CEA_CONDUCTORS /
+       CEA_ENSEMBLES carry the real performer renders ``<composer> - <conductor; ensemble>`` —
+       not ``<composer> - <edition title>``.
+    2. **ARTIST == ALBUM (edition-title tell)**: a composer-bearing box-set track whose embedded
+       tags carry ARTIST == ALBUM and no CEA_* performer keys renders without the edition title
+       (composer-only or "Unknown Performers").
+    """
+
+    def test_boxset_with_cea_tags_renders_real_performer(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Box-set track with CEA_CONDUCTORS/CEA_ENSEMBLES renders <composer> - <conductor; ensemble>.
+
+        KAT 1: the embedded CEA_CONDUCTORS and CEA_ENSEMBLES tags carry the real performers.
+        build_dest_path must use those tags (via the per-track fallback) and must NOT use the
+        ARTIST tag (which carries the edition title "Complete Mozart Edition").
+
+        The path must equal "Mozart - Sir Neville Marriner; Academy of St Martin in the Fields"
+        and must not contain the edition title.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # fetch_artist_aliases is called for the conductor (with a real MBID).
+        # The ensemble has no MBID (per-track ensemble MBID cannot be reliably derived from
+        # embedded tags — see _hydrate_performer_lists), so fetch_artist_aliases is not called
+        # for it; _canonical_name falls back to entry.name directly.
+        marriner = MBArtist.model_validate({"id": "marriner-mbid", "name": "Sir Neville Marriner"})
+        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=marriner)
+
+        tags = TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony No. 40",
+            cwp_workid_top="w1",
+            cwp_composer_lastnames="Mozart",
+            cwp_worktype_genres_top="Classical",
+            # ARTIST carries the edition title — the bug: this must NOT appear in the path.
+            artist="Complete Mozart Edition",
+            albumartist="Wolfgang Amadeus Mozart",
+            album="Complete Mozart Edition",
+            # CEA_CONDUCTORS / CEA_ENSEMBLES carry the real performers.
+            cea_conductors="Sir Neville Marriner",
+            cea_ensembles="Academy of St Martin in the Fields",
+            # Per-track lists are hydrated from the string tags (simulating repath).
+            cea_conductors_list=[ArtistEntry(name="Sir Neville Marriner", sort="Marriner, Neville", mbid="marriner-mbid")],
+            cea_ensembles_list=[
+                ArtistEntry(
+                    name="Academy of St Martin in the Fields",
+                    sort="Academy of St Martin in the Fields",
+                    mbid="",
+                ),
+            ],
+        )
+
+        result = music_annotator.build_dest_path(
+            dest_root,
+            MBRelease(),
+            MBTrack(),
+            tags,
+            global_track_idx=0,
+        )
+        path_str = str(result.relative_to(dest_root))
+
+        # The top-dir must be <composer> - <real performers>, not <composer> - <edition title>.
+        top = result.relative_to(dest_root).parts[0]
+        assert top == "Mozart - Sir Neville Marriner; Academy of St Martin in the Fields", (
+            f"Expected 'Mozart - Sir Neville Marriner; Academy of St Martin in the Fields', got {top!r}"
+        )
+        # The edition title must not appear anywhere in the path.
+        assert "Complete Mozart Edition" not in path_str, (
+            f"Edition title must not appear in path (performers component must never resolve to the edition title), "
+            f"got {path_str!r}"
+        )
+
+    def test_boxset_artist_equals_album_renders_without_edition_title(self, fs: FakeFilesystem) -> None:
+        """Box-set track with ARTIST == ALBUM and no CEA_* performer keys renders without the edition title.
+
+        KAT 2: when the embedded tags carry ARTIST == ALBUM (the edition-title tell) and no
+        CEA_CONDUCTORS / CEA_ENSEMBLES are present, the performers component must not contain
+        the edition string.  The path renders as composer-only or "Unknown Performers" — never
+        as the edition title.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony No. 40",
+            cwp_workid_top="w1",
+            cwp_composer_lastnames="Mozart",
+            cwp_worktype_genres_top="Classical",
+            # ARTIST == ALBUM: the edition-title tell.  No CEA_* performer tags.
+            artist="Complete Mozart Edition",
+            albumartist="Wolfgang Amadeus Mozart",
+            album="Complete Mozart Edition",
+            # No per-track performer lists (simulating repath with no CEA_* tags).
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+
+        result = music_annotator.build_dest_path(
+            dest_root,
+            MBRelease(),
+            MBTrack(),
+            tags,
+            global_track_idx=0,
+        )
+        path_str = str(result.relative_to(dest_root))
+
+        # The edition title must not appear in the path.
+        assert "Complete Mozart Edition" not in path_str, (
+            f"Edition title must not appear in path (performers component must never resolve to the edition title), "
+            f"got {path_str!r}"
+        )
+        # The top-dir must start with the composer.
+        top = result.relative_to(dest_root).parts[0]
+        assert top.startswith("Mozart"), f"Expected top_dir to start with composer 'Mozart', got {top!r}"
 
 
 # ---------------------------------------------------------------------------

@@ -262,11 +262,13 @@ def _top_dir_component(tags: TrackTags) -> str | None:
     composer-convergent MB data:
 
     1. **Performer-led** (no single dominant composer) — ``CWP_COMPOSER_LASTNAMES`` and
-       ``CEA_COMPOSER_LASTNAMES`` are both empty: use ``<albumartist> - <album>`` (performer-first),
-       or bare ``<album>`` when albumartist is empty.  This branch is universal: a pop album with no
-       linked composer routes here exactly as a classical recital does.  The honest tag-derivable
-       signal is composer linkage in the MB work hierarchy; when absent, the album artist is the
-       primary attribution.
+       ``CEA_COMPOSER_LASTNAMES`` are both empty: use ``<albumartist>`` (performer-first), or bare
+       ``<album>`` when albumartist is empty (floor: an empty top dir corrupts downstream
+       ``work_top_dir`` derivation).  The album name never appears in the topmost component — album
+       identity belongs to the playlist lens.  This branch is universal: a pop album with no linked
+       composer routes here exactly as a classical recital does.  The honest tag-derivable signal is
+       composer linkage in the MB work hierarchy; when absent, the album artist is the primary
+       attribution.
 
     2. **Composer-bearing** (dominant population) — returns ``None`` to signal the caller should use
        the default ``<composer> - <performers>`` shape.  This applies regardless of
@@ -297,9 +299,13 @@ def _top_dir_component(tags: TrackTags) -> str | None:
     raw_composer = file_dict.get("CWP_COMPOSER_LASTNAMES") or file_dict.get("CEA_COMPOSER_LASTNAMES", "")
     if not raw_composer:
         albumartist = file_dict.get("ALBUMARTIST") or file_dict.get("ARTIST", "")
-        album = file_dict.get("ALBUM", "") or "Unknown Album"
         if albumartist:
-            return safe_name(f"{albumartist} - {album}")
+            # Performer-led: the album artist is the primary attribution.  The album name is
+            # excluded — album identity belongs to the playlist lens, not the directory tree.
+            return safe_name(albumartist)
+        # Floor: no albumartist — fall back to album title so the top dir is never empty.
+        # An empty top dir corrupts downstream work_top_dir derivation.
+        album = file_dict.get("ALBUM", "") or "Unknown Album"
         return safe_name(album)
 
     # Case 2: Composer-bearing (dominant population) — caller uses <composer> - <performers>.
@@ -1225,7 +1231,21 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
         if all_conductors or all_ensembles:
             performers = "; ".join(all_conductors + all_ensembles)
         else:
-            performers = file_dict.get("CEA_ENSEMBLE_NAMES") or file_dict.get("ARTIST", "Unknown Performers")
+            # Last-resort fallback: CEA_ENSEMBLE_NAMES, then ARTIST.
+            # Guard: ARTIST must not equal ALBUM or ALBUMARTIST — when it does, ARTIST carries
+            # the release/edition title (e.g. "Complete Mozart Edition"), not a performer name.
+            # Using the edition title as the performers path component violates C-UNIVERSAL
+            # (the performers component must never resolve to the release/edition title).
+            # In that case, fall through to "Unknown Performers" rather than baking the
+            # edition string into the path.
+            raw_artist = file_dict.get("ARTIST", "")
+            album_val = file_dict.get("ALBUM", "")
+            albumartist_val = file_dict.get("ALBUMARTIST", "")
+            artist_is_edition_title = raw_artist and raw_artist in (album_val, albumartist_val)
+            if artist_is_edition_title:
+                performers = file_dict.get("CEA_ENSEMBLE_NAMES", "") or "Unknown Performers"
+            else:
+                performers = file_dict.get("CEA_ENSEMBLE_NAMES") or raw_artist or "Unknown Performers"
 
     # Work directory component — title + [rec YYYY] or [rel YYYY] year suffix.
     #
