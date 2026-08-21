@@ -252,57 +252,48 @@ _CLASS_VOCAB: frozenset[str] = frozenset({"Spoken Word", "Soundtracks", "Classic
 def _top_dir_component(tags: TrackTags) -> str | None:
     """Derive the universal first path component beneath ``dest_root`` (C-UNIVERSAL).
 
-    Encodes the scholarship-stable first-component rule.  Three cases evaluated in order (first
-    match wins); all three read only release facts and composer-convergent MB data — never
-    free-classification parameters (release-group types, is-classical predicates):
+    Encodes the scholarship-stable first-component rule.  The topmost path component derives only
+    from composer and performers — scholarship-stable data.  The album name never appears in the
+    topmost path component; album identity belongs to the playlist lens, not the directory tree.
+    Free-classification parameters (``releasetype_secondary`` types such as "Compilation") never
+    gate the topmost component: they are not scholarship-stable and must not define library topology.
 
-    1. **Multi-composer compilation** — ``releasetype_secondary`` contains ``"Compilation"``:
-       use ``<albumartist_last_name or "Various"> - <album>`` (CE: primary attribution in path; the
-       album artist is the canonical identity for a compilation).  Aligns with
-       ``_is_composer_split_release`` / ``_canonical_composer_component`` in ``_pipeline_maint.py``
-       (same ``albumartistsort`` → ``last_name`` derivation).
+    Two cases evaluated in order (first match wins); both read only release facts and
+    composer-convergent MB data:
 
-    2. **Performer-led** (no single dominant composer) — ``CWP_COMPOSER_LASTNAMES`` and
+    1. **Performer-led** (no single dominant composer) — ``CWP_COMPOSER_LASTNAMES`` and
        ``CEA_COMPOSER_LASTNAMES`` are both empty: use ``<albumartist> - <album>`` (performer-first),
        or bare ``<album>`` when albumartist is empty.  This branch is universal: a pop album with no
        linked composer routes here exactly as a classical recital does.  The honest tag-derivable
        signal is composer linkage in the MB work hierarchy; when absent, the album artist is the
        primary attribution.
 
-    3. **Single-composer** (dominant population) — returns ``None`` to signal the caller should use
-        the default ``<composer> - <performers>`` shape.
+    2. **Composer-bearing** (dominant population) — returns ``None`` to signal the caller should use
+       the default ``<composer> - <performers>`` shape.  This applies regardless of
+       ``releasetype_secondary`` (including "Compilation"): a compilation with a linked composer
+       renders ``<composer> - <performers>``, not ``<…> - <album>``.
 
     **Tag-derivable source requirement (C-UNIVERSAL substrate correctness):** reads only
-    ``tags.releasetype_secondary``, ``tags.albumartistsort``, ``tags.albumartist``, and the
-    ``CWP_COMPOSER_LASTNAMES`` / ``CEA_COMPOSER_LASTNAMES`` / ``ALBUM`` / ``ALBUMARTIST`` /
-    ``ARTIST`` keys from ``tags.to_file_dict()`` — all of which survive ``to_file_dict()`` and
-    round-trip via ``_tags_from_file_dict``.  Never reads ``release.release_group`` so that
-    ``repath``/``regroup``/``unify`` reconstruct the correct first component from embedded tags alone.
+    ``tags.albumartistsort``, ``tags.albumartist``, and the ``CWP_COMPOSER_LASTNAMES`` /
+    ``CEA_COMPOSER_LASTNAMES`` / ``ALBUM`` / ``ALBUMARTIST`` / ``ARTIST`` keys from
+    ``tags.to_file_dict()`` — all of which survive ``to_file_dict()`` and round-trip via
+    ``_tags_from_file_dict``.  Never reads ``release.release_group`` or ``releasetype_secondary``
+    so that ``repath``/``regroup``/``unify`` reconstruct the correct first component from embedded
+    tags alone without depending on free-classification parameters.
 
     :param tags: The :class:`~music_annotator.models.TrackTags` instance for this track.
-    :returns: The first-component string for cases 1 and 2, or ``None`` for case 3
-        (single-composer default — caller uses ``<composer> - <performers>``).
+    :returns: The first-component string for case 1, or ``None`` for case 2
+        (composer-bearing default — caller uses ``<composer> - <performers>``).
     """
     file_dict = tags.to_file_dict()
-    secondary_parts = {p.strip() for p in tags.releasetype_secondary.split(";")} if tags.releasetype_secondary else set()
 
-    # Case 1: Multi-composer compilation.
-    # releasetype_secondary contains "Compilation" → albumartist-based shape.
-    # Aligns with _canonical_composer_component in _pipeline_maint.py (same last_name derivation).
-    if "Compilation" in secondary_parts:
-        album_artist_sort = tags.albumartistsort.strip()
-        if not album_artist_sort or album_artist_sort == "Various Artists":
-            artist_component = "Various"
-        else:
-            artist_component = last_name(album_artist_sort)
-        album = file_dict.get("ALBUM", "") or "Unknown Album"
-        return safe_name(f"{artist_component} - {album}")
-
-    # Case 2: Performer-led (no single dominant composer).
+    # Case 1: Performer-led (no single dominant composer).
     # Signal: CWP_COMPOSER_LASTNAMES and CEA_COMPOSER_LASTNAMES are both empty.
     # This is the honest tag-derivable signal: if no composer is linked in the MB work hierarchy,
     # the release is performer-led and the album artist is the primary attribution.
     # Universal: a pop album routes here exactly as a classical recital does.
+    # A "Compilation" secondary type with a linked composer does NOT route here — the composer
+    # is the scholarship-stable anchor and the topmost component must reflect it.
     raw_composer = file_dict.get("CWP_COMPOSER_LASTNAMES") or file_dict.get("CEA_COMPOSER_LASTNAMES", "")
     if not raw_composer:
         albumartist = file_dict.get("ALBUMARTIST") or file_dict.get("ARTIST", "")
@@ -311,7 +302,9 @@ def _top_dir_component(tags: TrackTags) -> str | None:
             return safe_name(f"{albumartist} - {album}")
         return safe_name(album)
 
-    # Case 3: Single-composer (dominant population) — caller uses <composer> - <performers>.
+    # Case 2: Composer-bearing (dominant population) — caller uses <composer> - <performers>.
+    # Applies regardless of releasetype_secondary (including "Compilation"): the album name
+    # never enters the topmost path component; free-classification parameters never gate it.
     return None
 
 

@@ -4567,14 +4567,15 @@ class TestBuildDestPathPrefixLess:
 class TestTopDirComponent:
     """KATs (b): first-component-rule witnesses for :func:`~music_annotator._tags._top_dir_component` (C-UNIVERSAL).
 
-    Each test exercises one branch of the three-case universal first-component rule:
-    1. Compilation gate → ``<albumartist-last or "Various"> - <album>``.
-    2. Performer-led (no linked composer) → ``<albumartist> - <album>`` (or bare ``<album>`` when empty).
-    3. Single-composer (dominant population) → ``None`` (caller uses ``<composer> - <performers>``).
+    The topmost path component derives only from composer and performers — scholarship-stable data.
+    The album name never appears in the topmost path component.  Free-classification parameters
+    (``releasetype_secondary`` types such as "Compilation") never gate the topmost component.
 
-    The branches are universal: a pop album routes through case 2 exactly as a classical recital does.
-    All three read only scholarship-stable data (release facts + composer-convergent MB data), never
-    free-classification parameters.
+    Two cases:
+
+    1. Performer-led (no linked composer) → ``<albumartist> - <album>`` (or bare ``<album>`` when empty).
+    2. Composer-bearing (dominant population) → ``None`` (caller uses ``<composer> - <performers>``).
+       Applies regardless of ``releasetype_secondary``, including "Compilation".
     """
 
     def test_single_composer_returns_none(self) -> None:
@@ -4641,11 +4642,12 @@ class TestTopDirComponent:
         assert result is not None, "Expected a non-None result for pop album"
         assert result == "The Beatles - Abbey Road", f"Expected 'The Beatles - Abbey Road', got {result!r}"
 
-    def test_compilation_returns_albumartist_last_album(self) -> None:
-        """Compilation gate → ``<albumartist-last or "Various"> - <album>``.
+    def test_compilation_with_composer_returns_none(self) -> None:
+        """Compilation with a linked composer → ``None`` (falls through to composer-bearing case).
 
-        Signal: releasetype_secondary contains 'Compilation'.
-        Uses albumartistsort → last_name derivation (aligned with _canonical_composer_component).
+        The topmost path component derives only from composer and performers; the album name never
+        appears in the path.  A free-classification parameter (``releasetype_secondary`` containing
+        "Compilation") must not gate the topmost component when a composer is present.
 
         :returns: None.
         """
@@ -4660,15 +4662,15 @@ class TestTopDirComponent:
             album="Great Piano Concertos",
         )
         result = _top_dir_component(tags)
-        assert result is not None, "Expected a non-None result for compilation"
-        assert "Various" in result, f"Expected 'Various' in compilation top_dir, got {result!r}"
-        assert "Great Piano Concertos" in result, f"Expected album title in compilation top_dir, got {result!r}"
+        assert result is None, (
+            f"Expected None for compilation with linked composer (caller uses <composer> - <performers>), got {result!r}"
+        )
 
-    def test_compilation_named_artist_returns_last_name_album(self) -> None:
-        """Compilation with a named albumartist → last_name of albumartistsort.
+    def test_compilation_named_artist_with_composer_returns_none(self) -> None:
+        """Compilation with a named albumartist and a linked composer → ``None``.
 
-        When albumartistsort is not 'Various Artists', uses last_name(albumartistsort) as the
-        artist component (aligned with _canonical_composer_component in _pipeline_maint.py).
+        The "Compilation" secondary type does not short-circuit when a composer is present.
+        The topmost path component derives from composer + performers, not from the album name.
 
         :returns: None.
         """
@@ -4683,9 +4685,33 @@ class TestTopDirComponent:
             album="Perlman Plays Concertos",
         )
         result = _top_dir_component(tags)
-        assert result is not None, "Expected a non-None result for named-artist compilation"
-        assert "Perlman" in result, f"Expected 'Perlman' (last_name of albumartistsort) in top_dir, got {result!r}"
-        assert "Perlman Plays Concertos" in result, f"Expected album title in compilation top_dir, got {result!r}"
+        assert result is None, (
+            f"Expected None for compilation with linked composer (caller uses <composer> - <performers>), got {result!r}"
+        )
+
+    def test_composerless_compilation_returns_albumartist_album(self) -> None:
+        """Composerless compilation → ``<albumartist> - <album>`` (performer-led branch).
+
+        Regression guard: when no composer is linked, the performer-led branch fires regardless
+        of ``releasetype_secondary``.  The album name appears here because there is no
+        scholarship-stable composer anchor — the album artist is the primary attribution.
+
+        :returns: None.
+        """
+        tags = TrackTags(
+            cwp_work_top="",
+            cwp_worktype_genres_top="",
+            cwp_composer_lastnames="",
+            cea_composer_lastnames="",
+            releasetype_secondary="Compilation",
+            albumartist="Various Artists",
+            albumartistsort="Various Artists",
+            album="Now That's What I Call Music",
+        )
+        result = _top_dir_component(tags)
+        assert result is not None, "Expected a non-None result for composerless compilation"
+        assert "Various Artists" in result, f"Expected albumartist in top_dir, got {result!r}"
+        assert "Now That's What I Call Music" in result, f"Expected album title in top_dir, got {result!r}"
 
     def test_performer_led_no_albumartist_returns_album_only(self) -> None:
         """Performer-led with no albumartist → album-only shape (no performer prefix).
@@ -4740,37 +4766,46 @@ class TestTopDirComponent:
         )
         assert "Classical" not in rel.parts, f"Expected no 'Classical' class prefix in path, got parts={rel.parts!r}"
 
-    def test_build_dest_path_compilation_uses_various(self, fs: FakeFilesystem) -> None:
-        """build_dest_path for a compilation → ``dest_root / "Various - <album>" / …``.
+    def test_build_dest_path_compilation_with_composer_uses_composer_performers(self, fs: FakeFilesystem) -> None:
+        """build_dest_path for a compilation with a linked composer → ``<composer> - <performers>``.
 
-        Verifies the compilation branch end-to-end through build_dest_path (no class prefix).
+        The topmost path component derives from composer and performers, not from the album name.
+        A free-classification parameter (``releasetype_secondary`` containing "Compilation") does
+        not gate the topmost component when a composer is present.  The album name must not appear
+        in the topmost path component.
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
         tags = TrackTags(
-            title="Piano Concerto No. 1",
+            title="Ouvertüre",
             movementnumber="1",
             movementtotal="1",
-            cwp_work_top="Piano Concerto No. 1",
+            cwp_work_top="Ouvertüre",
             cwp_worktype_genres_top="Classical",
-            cwp_composer_lastnames="Beethoven",
-            cea_composer_lastnames="Beethoven",
+            cwp_composer_lastnames="Rossini",
+            cea_composer_lastnames="Rossini",
             releasetype_secondary="Compilation",
-            albumartist="Various Artists",
-            albumartistsort="Various Artists",
-            album="Great Piano Concertos",
+            albumartist="Herbert von Karajan",
+            albumartistsort="Karajan, Herbert von",
+            album="Ouvertüren",
+            artist="Herbert von Karajan; Berliner Philharmoniker",
+            cea_conductors="Herbert von Karajan",
+            cea_ensembles="Berliner Philharmoniker",
         )
         result = music_annotator.build_dest_path(
             dest_root,
-            _rel({"id": "r1", "title": "Great Piano Concertos", "artist-credit": [], "medium-list": []}),
-            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Piano Concerto No. 1"}}),
+            _rel({"id": "r1", "title": "Ouvertüren", "artist-credit": [], "medium-list": []}),
+            _trk({"id": "t1", "position": 1, "recording": {"id": "rec1", "title": "Ouvertüre"}}),
             tags,
         )
         rel = result.relative_to(dest_root)
-        assert "Various" in rel.parts[0], f"Expected 'Various' in top_dir (parts[0]), got {rel.parts[0]!r}"
-        assert "Great Piano Concertos" in rel.parts[0], f"Expected album title in top_dir, got {rel.parts[0]!r}"
+        top = rel.parts[0]
+        assert "Rossini" in top, f"Expected composer 'Rossini' in top_dir (parts[0]), got {top!r}"
+        assert "Ouvertüren" not in top, (
+            f"Expected album name 'Ouvertüren' to be absent from top_dir (album name must not appear in path), got {top!r}"
+        )
         assert "Classical" not in rel.parts, f"Expected no 'Classical' class prefix in path, got parts={rel.parts!r}"
 
 
