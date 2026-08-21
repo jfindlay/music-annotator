@@ -489,13 +489,17 @@ C-NOSOLO reopen).
 | 3 | Thread the real release id into the maintenance-pass collision suffix | done | 040a179 | (none — corrective) |
 | 4 ◆ | Guard `_collision_suffix` against empty id + assert suffix content | done | 166e506 | (none — corrective) |
 | 5 | Stop keying top dir on `releasetype_secondary`; drop album-name injection (compilation branch) | done | 9b19b91 | (none — corrective) |
-| 6 ◆ | Drop album-name injection in the no-composer branch; keep performer-led floor | pending | — | (none — corrective) |
+| 6 ◆ | Drop album-name injection in the no-composer branch; keep performer-led floor | done | 0c5eb5a | (none — corrective) |
 | 7 | Delete the three superseded scripts | pending | — | (none — drain) |
 | 8 ◆ | Delete the two spent census scripts after verifying artifacts | pending | — | (none — drain) |
 
 ## Action-frame digest
 
-*(none yet)*
+### S6 — 2026-08-20
+Discovery/flex: D-12 diagnostic resolved as branch (a) — hydration-loss: _hydrate_performer_lists was creating per-track ensemble ArtistEntry objects with MBIDs from MUSICBRAINZ_ALBUMARTISTID (the release's artist-credit MBID pool), which for box-sets is the edition entity's MBID, not the ensemble's; _canonical_name then returned the edition entity's name. Fix: per-track ensemble entries always created without MBIDs so _canonical_name falls back to entry.name (the as-credited CEA_ENSEMBLES value).
+Affected: none (corrective — no contract changed)
+Deferred: no
+Texture: The D-12 diagnostic was resolvable from code analysis alone (no live tags needed); the hydration bug was in MBID sourcing, not in tag absence. The data-absence branch (b) was not needed.
 
 ## Discoveries & risks
 
