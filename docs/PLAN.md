@@ -487,7 +487,7 @@ C-NOSOLO reopen).
 | 1 | Fix source truncation to reserve+preserve the suffix | done | 0c894d1 | (none — corrective) |
 | 2 ◆ | Add repath repair case for extension-less track files | done | bdf23a6 | (none — corrective) |
 | 3 | Thread the real release id into the maintenance-pass collision suffix | done | 040a179 | (none — corrective) |
-| 4 ◆ | Guard `_collision_suffix` against empty id + assert suffix content | pending | — | (none — corrective) |
+| 4 ◆ | Guard `_collision_suffix` against empty id + assert suffix content | done | 166e506 | (none — corrective) |
 | 5 | Stop keying top dir on `releasetype_secondary`; drop album-name injection (compilation branch) | pending | — | (none — corrective) |
 | 6 ◆ | Drop album-name injection in the no-composer branch; keep performer-led floor | pending | — | (none — corrective) |
 | 7 | Delete the three superseded scripts | pending | — | (none — drain) |
