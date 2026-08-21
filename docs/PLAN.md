@@ -490,7 +490,7 @@ C-NOSOLO reopen).
 | 4 ◆ | Guard `_collision_suffix` against empty id + assert suffix content | done | 166e506 | (none — corrective) |
 | 5 | Stop keying top dir on `releasetype_secondary`; drop album-name injection (compilation branch) | done | 9b19b91 | (none — corrective) |
 | 6 ◆ | Drop album-name injection in the no-composer branch; keep performer-led floor | done | 0c5eb5a | (none — corrective) |
-| 7 | Delete the three superseded scripts | pending | — | (none — drain) |
+| 7 | Delete the three superseded scripts | done | a2f1459 | (none — drain) |
 | 8 ◆ | Delete the two spent census scripts after verifying artifacts | pending | — | (none — drain) |
 
 ## Action-frame digest
