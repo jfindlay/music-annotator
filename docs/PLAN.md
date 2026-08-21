@@ -488,7 +488,7 @@ C-NOSOLO reopen).
 | 2 ◆ | Add repath repair case for extension-less track files | done | bdf23a6 | (none — corrective) |
 | 3 | Thread the real release id into the maintenance-pass collision suffix | done | 040a179 | (none — corrective) |
 | 4 ◆ | Guard `_collision_suffix` against empty id + assert suffix content | done | 166e506 | (none — corrective) |
-| 5 | Stop keying top dir on `releasetype_secondary`; drop album-name injection (compilation branch) | pending | — | (none — corrective) |
+| 5 | Stop keying top dir on `releasetype_secondary`; drop album-name injection (compilation branch) | done | 9b19b91 | (none — corrective) |
 | 6 ◆ | Drop album-name injection in the no-composer branch; keep performer-led floor | pending | — | (none — corrective) |
 | 7 | Delete the three superseded scripts | pending | — | (none — drain) |
 | 8 ◆ | Delete the two spent census scripts after verifying artifacts | pending | — | (none — drain) |
