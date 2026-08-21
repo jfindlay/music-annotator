@@ -8008,6 +8008,19 @@ class TestCollisionSuffixAndApply:
         )
         assert _collision_suffix(release) == "12345678"
 
+    def test_collision_suffix_empty_id_raises(self) -> None:
+        """_collision_suffix raises ValueError when the release id is empty and no catalog number is present.
+
+        An empty release id cannot yield a collision suffix: the result would be an empty string,
+        producing a degenerate '[]' suffix that silently corrupts the library layout instead of
+        disambiguating it.  Any caller that passes a release with an empty id has a threading
+        defect; the guard raises immediately so the defect is caught rather than silently degraded.
+
+        :raises AssertionError: If ValueError is not raised with a message naming the missing-id invariant.
+        """
+        with pytest.raises(ValueError, match="collision suffix cannot be derived without a release id"):
+            _collision_suffix(MBRelease())
+
     def test_apply_collision_suffix_renames_matching_entry(self) -> None:
         """_apply_collision_suffix rewrites the work_dir component of matching plan entries.
 

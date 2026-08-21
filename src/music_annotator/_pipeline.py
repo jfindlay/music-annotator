@@ -484,14 +484,29 @@ def _collision_suffix(release: MBRelease) -> str:
        non-empty.
     2. The first 8 characters of the release MBID — guaranteed unique and always present.
 
+    A collision suffix cannot be derived without a release id: an empty id would produce an
+    empty suffix, silently corrupting the library layout instead of disambiguating it.  Any
+    caller that passes a release with an empty id has a threading defect; fail loud so the
+    defect is caught immediately rather than silently degrading the library.
+
     :param release: The :class:`~music_annotator.models.MBRelease` being processed.
     :returns: A non-empty suffix string suitable for appending as ``[<suffix>]``.
+    :raises ValueError: If no non-empty suffix can be derived (release id is empty and no
+        catalog number is present), indicating a caller threading defect.
     """
     if release.label_info_list:
         cat = release.label_info_list[0].catalog_number.strip()
         if cat:
             return cat
-    return release.id[:8]
+    suffix = release.id[:8]
+    if not suffix:
+        raise ValueError(
+            "a collision suffix cannot be derived without a release id: "
+            "release.id is empty, which would produce an empty '[]' suffix and silently "
+            "corrupt the library layout; ensure the release id is threaded through to the "
+            "collision suffix builder"
+        )
+    return suffix
 
 
 def _apply_collision_suffix(

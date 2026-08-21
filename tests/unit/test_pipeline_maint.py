@@ -523,8 +523,13 @@ class TestRepath:
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
         repathed = [e for e in journal.entries if e.action == "repathed"]
         assert len(repathed) == 1
+        dest = repathed[0].destination
         # The destination should NOT be new_path_raw (it would collide); it has a suffix
-        assert repathed[0].destination != str(new_path_raw)
+        assert dest != str(new_path_raw)
+        # The suffix must be the real release MBID prefix ("r1"[:8] == "r1"), not an empty "[]"
+        mbid8 = "r1"[:8]
+        assert f"[{mbid8}]" in dest, f"expected '[{mbid8}]' in destination, got: {dest}"
+        assert "[]" not in dest, f"empty suffix '[]' must not appear in destination: {dest}"
 
     def test_repath_collision_suffix_is_release_identifying(self, fs: FakeFilesystem) -> None:
         """repath() collision suffix is the real 8-char MBID prefix, not an empty '[]'.
@@ -2126,8 +2131,13 @@ class TestRegroup:
         regrouped = [e for e in journal.entries if e.action == "regrouped"]
         assert len(regrouped) == 1
         assert regrouped[0].release_id == "split-rel-1"
+        dest = regrouped[0].destination
         # The destination must be different from the pre-existing canonical path (collision was resolved)
-        assert regrouped[0].destination != str(canonical)
+        assert dest != str(canonical)
+        # The suffix must be the real release MBID prefix ("split-rel-1"[:8] == "split-re"), not an empty "[]"
+        mbid8 = "split-rel-1"[:8]
+        assert f"[{mbid8}]" in dest, f"expected '[{mbid8}]' in destination, got: {dest}"
+        assert "[]" not in dest, f"empty suffix '[]' must not appear in destination: {dest}"
 
     def test_regroup_collision_suffix_is_release_identifying(self, fs: FakeFilesystem) -> None:
         """regroup() collision suffix is the real 8-char MBID prefix, not an empty '[]'.
@@ -4740,6 +4750,11 @@ class TestUnify:
         journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
         unified = [e for e in journal.entries if e.action == "unified"]
         assert len(unified) == 1
+        dest = unified[0].destination
+        # The suffix must be the real release MBID prefix ("frag-rel-1"[:8] == "frag-rel"), not an empty "[]"
+        mbid8 = "frag-rel-1"[:8]
+        assert f"[{mbid8}]" in dest, f"expected '[{mbid8}]' in destination, got: {dest}"
+        assert "[]" not in dest, f"empty suffix '[]' must not appear in destination: {dest}"
 
     def test_unify_collision_suffix_is_release_identifying(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """unify() collision suffix is the real 8-char MBID prefix, not an empty '[]'.
