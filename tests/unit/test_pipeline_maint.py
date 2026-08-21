@@ -526,6 +526,202 @@ class TestRepath:
         # The destination should NOT be new_path_raw (it would collide); it has a suffix
         assert repathed[0].destination != str(new_path_raw)
 
+    def test_repath_collision_suffix_is_release_identifying(self, fs: FakeFilesystem) -> None:
+        """repath() collision suffix is the real 8-char MBID prefix, not an empty '[]'.
+
+        When a file's recomputed path collides with an existing file (confirmed non-match),
+        the disambiguated work_dir must carry the file's real release MBID prefix as the
+        suffix token — e.g. ``[abcd1234]`` — not the empty ``[]`` that results from a
+        default-constructed MBRelease whose id is "".
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        real_release_id = "abcd1234-ef56-7890-abcd-ef1234567890"
+        mbid8 = real_release_id[:8]  # "abcd1234"
+
+        tags_incoming = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+            acoustid_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+
+        new_path_raw = self._new_path(dest_root, tags_incoming)
+        old_path = _make_library_flac(dest_root, self._OLD_REL_MVT1, tags_incoming)
+
+        # Pre-create a different file at the canonical path (different AcoustID → non-match)
+        tags_existing = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+            acoustid_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        )
+        new_path_raw.parent.mkdir(parents=True, exist_ok=True)
+        new_path_raw.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_path_raw, tags_existing)
+
+        # Journal: old_path tagged with the real release MBID
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": real_release_id,
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 1
+        dest = repathed[0].destination
+        # The disambiguated path must carry the real MBID prefix, not an empty "[]"
+        assert f"[{mbid8}]" in dest, f"expected '[{mbid8}]' in destination, got: {dest}"
+        assert "[]" not in dest, f"empty suffix '[]' must not appear in destination: {dest}"
+
+    def test_repath_two_releases_get_distinct_collision_suffixes(self, fs: FakeFilesystem) -> None:
+        """Two files from different releases each colliding with a pre-existing file get distinct suffixes.
+
+        When two files from different releases each recompute to a different canonical path that
+        is already occupied by a non-matching recording, each must receive a suffix derived from
+        its own release MBID.  Without per-release suffix derivation both would get the same
+        empty '[]' suffix — and if they happened to share a work_dir, they would re-collide.
+
+        Scenario:
+        - File A (rid_a) at legacy path → canonical_a (occupied by existing_a, different AcoustID)
+        - File B (rid_b) at legacy path → canonical_b (occupied by existing_b, different AcoustID)
+        - canonical_a and canonical_b differ (different works), so no intra-plan collision guard fires.
+        - After collision resolution: A lands at canonical_a [aaaaaaaa], B at canonical_b [bbbbbbbb].
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        rid_a = "aaaaaaaa-0000-0000-0000-000000000000"
+        rid_b = "bbbbbbbb-0000-0000-0000-000000000000"
+        mbid8_a = rid_a[:8]  # "aaaaaaaa"
+        mbid8_b = rid_b[:8]  # "bbbbbbbb"
+
+        # File A: Brahms Violin Concerto, will recompute to canonical_a
+        tags_a = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Violin Concerto",
+            recording_date="2019",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro",
+            artist="Mutter",
+            acoustid_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+        canonical_a = self._new_path(dest_root, tags_a)
+        old_path_a = _make_library_flac(dest_root, "Brahms - Mutter/OldConcerto [2019]/01 - Allegro.flac", tags_a)
+
+        # File B: Brahms Piano Concerto No. 1 (different work → different canonical path)
+        tags_b = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2019",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro",
+            artist="Mutter",
+            acoustid_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        )
+        canonical_b = self._new_path(dest_root, tags_b)
+        old_path_b = _make_library_flac(dest_root, "Brahms - Mutter/OldPianoConcerto [2019]/01 - Allegro.flac", tags_b)
+
+        # canonical_a and canonical_b must differ (different works)
+        assert canonical_a != canonical_b, "test setup error: canonical paths must differ"
+
+        # Pre-create canonical_a with a different AcoustID (non-match for file A)
+        tags_existing_a = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Violin Concerto",
+            recording_date="2019",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro",
+            artist="Mutter",
+            acoustid_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+        )
+        canonical_a.parent.mkdir(parents=True, exist_ok=True)
+        canonical_a.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(canonical_a, tags_existing_a)
+
+        # Pre-create canonical_b with a different AcoustID (non-match for file B)
+        tags_existing_b = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2019",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro",
+            artist="Mutter",
+            acoustid_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
+        )
+        canonical_b.parent.mkdir(parents=True, exist_ok=True)
+        canonical_b.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(canonical_b, tags_existing_b)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": rid_a,
+                    "source": "/src/a.flac",
+                    "destination": str(old_path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": rid_b,
+                    "source": "/src/b.flac",
+                    "destination": str(old_path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.repath(dest_root=dest_root, dry_run=False, yes=True)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 2
+
+        destinations = sorted(e.destination for e in repathed)
+        # Each file must land at a distinct path (no re-collision)
+        assert len(set(destinations)) == 2, f"two files must land at distinct paths; got: {destinations}"
+        # Each destination must carry its own release's MBID prefix, not an empty "[]"
+        for dest in destinations:
+            assert "[]" not in dest, f"empty suffix '[]' must not appear: {dest}"
+        # File A's destination carries mbid8_a; file B's carries mbid8_b
+        assert any(f"[{mbid8_a}]" in d for d in destinations), f"[{mbid8_a}] not found in {destinations}"
+        assert any(f"[{mbid8_b}]" in d for d in destinations), f"[{mbid8_b}] not found in {destinations}"
+
     def test_repath_exdev_fallback(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """repath() falls back to shutil.copy2 + unlink when os.replace raises EXDEV.
 
@@ -1932,6 +2128,86 @@ class TestRegroup:
         assert regrouped[0].release_id == "split-rel-1"
         # The destination must be different from the pre-existing canonical path (collision was resolved)
         assert regrouped[0].destination != str(canonical)
+
+    def test_regroup_collision_suffix_is_release_identifying(self, fs: FakeFilesystem) -> None:
+        """regroup() collision suffix is the real 8-char MBID prefix, not an empty '[]'.
+
+        When a file's recomputed canonical path collides with an existing file (confirmed
+        non-match), the disambiguated work_dir must carry the file's real release MBID prefix
+        as the suffix token — e.g. ``[abcd1234]`` — not the empty ``[]`` produced by a
+        default-constructed MBRelease.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        real_release_id = "abcd1234-ef56-7890-abcd-ef1234567890"
+        mbid8 = real_release_id[:8]  # "abcd1234"
+
+        tags_incoming = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Vienna PO",
+            musicbrainz_albumid=real_release_id,
+            acoustid_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        )
+
+        canonical = self._canonical_path(dest_root, tags_incoming)
+        old_path = _make_library_flac(dest_root, "Brahms - Vienna PO/OldWork [2021]/01 - First movement.flac", tags_incoming)
+        assert old_path != canonical
+
+        # Pre-create a different file at the canonical path (different AcoustID → non-match)
+        tags_existing = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Vienna PO",
+            musicbrainz_albumid=real_release_id,
+            acoustid_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        )
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        canonical.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(canonical, tags_existing)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": real_release_id,
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-06-01T00:00:01+00:00",
+                    "release_id": real_release_id,
+                    "source": "/src/02.flac",
+                    "destination": str(canonical),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert len(regrouped) == 1
+        dest = regrouped[0].destination
+        # The disambiguated path must carry the real MBID prefix, not an empty "[]"
+        assert f"[{mbid8}]" in dest, f"expected '[{mbid8}]' in destination, got: {dest}"
+        assert "[]" not in dest, f"empty suffix '[]' must not appear in destination: {dest}"
 
     # ------------------------------------------------------------------
     # Confirmed release, all files gone from disk → nothing to regroup (line 1799-1800)
@@ -4465,6 +4741,49 @@ class TestUnify:
         unified = [e for e in journal.entries if e.action == "unified"]
         assert len(unified) == 1
 
+    def test_unify_collision_suffix_is_release_identifying(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """unify() collision suffix is the real 8-char MBID prefix, not an empty '[]'.
+
+        When a file's recomputed canonical path collides with an existing file (confirmed
+        non-match), the disambiguated work_dir must carry the file's real release MBID prefix
+        as the suffix token — e.g. ``[abcd1234]`` — not the empty ``[]`` produced by a
+        default-constructed MBRelease.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        real_release_id = "abcd1234-ef56-7890-abcd-ef1234567890"
+        mbid8 = real_release_id[:8]  # "abcd1234"
+
+        old_path, new_path = self._build_frag_scenario(dest_root)
+
+        # Patch _assess_collisions to return a confirmed non-match at new_path
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_path, match=False, method="sha256", detail="different")],
+        )
+
+        # Patch detect_fragmented_releases to use the real release MBID
+        mocker.patch(
+            "music_annotator._pipeline_maint.detect_fragmented_releases",
+            return_value={real_release_id: [old_path]},
+        )
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified = [e for e in journal.entries if e.action == "unified"]
+        assert len(unified) == 1
+        dest = unified[0].destination
+        # The disambiguated path must carry the real MBID prefix, not an empty "[]"
+        assert f"[{mbid8}]" in dest, f"expected '[{mbid8}]' in destination, got: {dest}"
+        assert "[]" not in dest, f"empty suffix '[]' must not appear in destination: {dest}"
+
+    # ------------------------------------------------------------------
+    # main() dispatch: unify subcommand
     # ------------------------------------------------------------------
     # EXDEV cross-fs fallback with cross-hash mismatch
     # ------------------------------------------------------------------

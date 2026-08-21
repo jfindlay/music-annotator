@@ -57,6 +57,7 @@ from music_annotator._mb_api import _fetch_acoustid_lookup_raw
 from music_annotator._pipeline import _apply_collision_suffix
 from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
+    AudioCompareResult,
     _assess_collisions,
     _needs_enrich,
     _read_acoustid_fingerprint_tag,
@@ -510,8 +511,10 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     # each move pops the old path and registers the new one.
     current_lib = _resolve_current_lib(journal)
 
-    # Filter to files that actually exist on disk
-    existing_files: list[Path] = [p for p in current_lib if p.exists()]
+    # Filter to files that actually exist on disk; carry the release_id so the collision-suffix
+    # builder can derive a release-identifying token (8-char MBID prefix) rather than falling
+    # back to a default-constructed MBRelease whose id is "".
+    existing_files: list[tuple[Path, str]] = [(p, rid) for p, rid in current_lib.items() if p.exists()]
 
     if not existing_files:
         log.info("repath_nothing_to_move", dest_root=str(dest_root))
@@ -520,16 +523,17 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
         return None
 
     # --- Pass 1: read tags for all existing files ---
-    # Collect (path, tags, file_dict, ext) tuples so that the work-group modal depth can be
-    # computed once per group before building the plan (compute-once-per-group invariant).
+    # Collect (path, tags, file_dict, ext, release_id) tuples so that the work-group modal depth
+    # can be computed once per group before building the plan (compute-once-per-group invariant).
+    # release_id is threaded through so the collision-suffix builder receives the file's real MBID.
     #
     # Extension-less files (suffix lost during over-long-name truncation) are repaired here:
     # mutagen probes the file to identify its format, the correct suffix is appended (with
     # shortening if the repaired leaf would exceed _NAME_MAX), and the file is moved via
     # _move_verify_journal before tag-reading continues.  After repair the file has a suffix
     # and is visible to all subsequent maintenance passes.
-    _repath_file_data: list[tuple[Path, TrackTags, dict[str, str], str]] = []
-    for current_path in existing_files:
+    _repath_file_data: list[tuple[Path, TrackTags, dict[str, str], str, str]] = []
+    for current_path, release_id in existing_files:
         ext = current_path.suffix.lower()
 
         if ext not in {".flac", ".mp3"}:
@@ -589,7 +593,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
         # to_file_dict() and therefore absent from the embedded tag dict; without hydration,
         # build_dest_path falls back to the raw CEA_ENSEMBLE_NAMES / ARTIST string.
         _hydrate_performer_lists(tags, file_dict)
-        _repath_file_data.append((current_path, tags, file_dict, ext))
+        _repath_file_data.append((current_path, tags, file_dict, ext, release_id))
 
     # --- Compute work-group modal depth per group (once per group, not per track) ---
     # Groups tracks by CWP_WORKID_TOP, mirroring the scanner grouping in
@@ -598,7 +602,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     # grouping key is CWP_WORKID_TOP alone (consistent with the scanner's per-release-dir
     # grouping because each release dir maps to one top-work MBID in practice).
     _repath_work_groups: dict[str, list[int]] = {}
-    for _ri, (_rp, _rt, _rfd, _re) in enumerate(_repath_file_data):
+    for _ri, (_rp, _rt, _rfd, _re, _rrid) in enumerate(_repath_file_data):
         _twid = _rt.cwp_workid_top
         if _twid not in _repath_work_groups:
             _repath_work_groups[_twid] = []
@@ -615,9 +619,11 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
             _repath_modal_by_idx[_i] = _modal_or_none
 
     # --- Pass 2: build repath plan using the per-group modal depth ---
-    plan_pairs: list[tuple[Path, Path, str, int]] = []
+    # plan_pairs carries (src, dest, acoustid, length_ms, release_id) so the collision-suffix
+    # builder can group non-matches by release_id and derive a release-identifying suffix.
+    plan_pairs: list[tuple[Path, Path, str, int, str]] = []
 
-    for _ri, (current_path, tags, file_dict, ext) in enumerate(_repath_file_data):
+    for _ri, (current_path, tags, file_dict, ext, release_id) in enumerate(_repath_file_data):
         # Construct minimal stand-in objects for build_dest_path.
         # release is kept for API stability (C-INIT removed the last internal use of
         # release.artist_credit in the classical path).  track.position is used only as the
@@ -648,7 +654,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
         except ValueError:
             length_ms = 0
 
-        plan_pairs.append((current_path, new_dest, acoustid, length_ms))
+        plan_pairs.append((current_path, new_dest, acoustid, length_ms, release_id))
         log.info(
             "repath_plan",
             old=str(current_path.relative_to(dest_root)),
@@ -675,7 +681,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     # Intra-plan collisions are invisible to _assess_collisions because neither destination
     # exists on disk yet when the plan is built.
     _dest_to_plan_indices: dict[Path, list[int]] = {}
-    for _i, (_, _dest, _, _) in enumerate(plan_pairs):
+    for _i, (_, _dest, _, _, _) in enumerate(plan_pairs):
         _dest_to_plan_indices.setdefault(_dest, []).append(_i)
 
     _intra_collision_indices: set[int] = set()
@@ -698,24 +704,35 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
             return None
 
     # --- Collision detection and resolution ---
-    collision_results = _assess_collisions(plan_pairs)
+    collision_pairs = [(src, dest, acust, length) for src, dest, acust, length, _ in plan_pairs]
+    collision_results = _assess_collisions(collision_pairs)
     confirmed_nonmatches = [r for r in collision_results if r.match is False]
     if confirmed_nonmatches:
-        # Rewrite destinations for confirmed non-matches using a release-stub suffix.
-        # _apply_collision_suffix expects a list[CopyPlanEntry]; build temporary stubs using
-        # CopyPlanEntry (src_file=current_path, dest_file=new_dest, idx=0).
-        stub_plan = [CopyPlanEntry(idx=0, src_file=src, dest_file=dest) for src, dest, _, _ in plan_pairs]
-        stub_release_for_suffix = MBRelease()
-        _apply_collision_suffix(stub_plan, confirmed_nonmatches, stub_release_for_suffix, dest_root)
+        # Rewrite destinations for confirmed non-matches using a release-identifying suffix
+        # (8-char MBID prefix) so the disambiguated directory carries a release-identifying
+        # token rather than an empty " []".  Group non-matches by release_id and call
+        # _apply_collision_suffix once per group so each group gets its own release's suffix.
+        stub_plan = [CopyPlanEntry(idx=0, src_file=src, dest_file=dest) for src, dest, _, _, _ in plan_pairs]
+        # Build a dest→rid lookup so each non-match entry can be routed to its release's suffix.
+        _dest_to_rid: dict[Path, str] = {dest: rid for _, dest, _, _, rid in plan_pairs}
+        # Group non-match results by release_id; each group gets its own _apply_collision_suffix
+        # call so the suffix is derived from that group's real release MBID.
+        _nonmatch_by_rid: dict[str, list[AudioCompareResult]] = {}
+        for _nm in confirmed_nonmatches:
+            _nm_rid = _dest_to_rid.get(_nm.dest, "")
+            _nonmatch_by_rid.setdefault(_nm_rid, []).append(_nm)
+        for _nm_rid, _nm_group in _nonmatch_by_rid.items():
+            _apply_collision_suffix(stub_plan, _nm_group, MBRelease(id=_nm_rid), dest_root)
         # Rebuild plan_pairs with updated destinations
         plan_pairs = [
-            (entry.src_file, entry.dest_file, acust, length) for entry, (_, _, acust, length) in zip(stub_plan, plan_pairs)
+            (entry.src_file, entry.dest_file, acust, length, rid)
+            for entry, (_, _, acust, length, rid) in zip(stub_plan, plan_pairs)
         ]
         log.warning("repath_collision_suffix_applied", count=len(confirmed_nonmatches))
 
     if dry_run:
         dry_run_entries: list[DryRunEntry] = []
-        for current_path, new_dest, _, _ in plan_pairs:
+        for current_path, new_dest, _, _, _ in plan_pairs:
             log.info(
                 "repath_dry_run",
                 old=str(current_path.relative_to(dest_root)),
@@ -727,7 +744,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     # --- Confirmation prompt ---
     if not yes:
         _console.print("\n[bold yellow]repath[/] will move the following files:\n")
-        for current_path, new_dest, _, _ in plan_pairs:
+        for current_path, new_dest, _, _, _ in plan_pairs:
             _console.print(
                 f"  [dim]{_markup_escape(str(current_path.relative_to(dest_root)))}[/]\n"
                 f"    → [green]{_markup_escape(str(new_dest.relative_to(dest_root)))}[/]"
@@ -740,8 +757,11 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
             return None
 
     # --- Perform moves, verify, journal ---
+    # repath does not have a per-file release_id in the journal (the release is not known at
+    # repath time for files that were never tagged with a release MBID); release_id="" is the
+    # correct sentinel here.  The collision suffix was already derived from the real id above.
     now = datetime.datetime.now(datetime.UTC)
-    move_pairs = [(src, dest) for src, dest, _, _ in plan_pairs]
+    move_pairs = [(src, dest) for src, dest, _, _, _ in plan_pairs]
     moved = _move_verify_journal(
         move_pairs,
         journal_path=journal_path,
@@ -927,8 +947,15 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
     confirmed_nonmatches = [r for r in collision_results if r.match is False]
     if confirmed_nonmatches:
         stub_plan = [CopyPlanEntry(idx=0, src_file=src, dest_file=dest) for src, dest, _, _, _ in plan_pairs]
-        stub_release_for_suffix = MBRelease()
-        _apply_collision_suffix(stub_plan, confirmed_nonmatches, stub_release_for_suffix, dest_root)
+        # Group non-matches by release_id so each group's suffix is derived from its real MBID,
+        # producing a release-identifying token (8-char prefix) rather than an empty " []".
+        _dest_to_rid_rg: dict[Path, str] = {dest: rid for _, dest, _, _, rid in plan_pairs}
+        _nonmatch_by_rid_rg: dict[str, list[AudioCompareResult]] = {}
+        for _nm in confirmed_nonmatches:
+            _nm_rid = _dest_to_rid_rg.get(_nm.dest, "")
+            _nonmatch_by_rid_rg.setdefault(_nm_rid, []).append(_nm)
+        for _nm_rid, _nm_group in _nonmatch_by_rid_rg.items():
+            _apply_collision_suffix(stub_plan, _nm_group, MBRelease(id=_nm_rid), dest_root)
         plan_pairs = [
             (entry.src_file, entry.dest_file, acust, length, rid)
             for entry, (_, _, acust, length, rid) in zip(stub_plan, plan_pairs)
@@ -1309,8 +1336,15 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
     confirmed_nonmatches = [r for r in collision_results if r.match is False]
     if confirmed_nonmatches:
         stub_plan = [CopyPlanEntry(idx=0, src_file=src, dest_file=dest) for src, dest, _, _, _ in plan_pairs]
-        stub_release_for_suffix = MBRelease()
-        _apply_collision_suffix(stub_plan, confirmed_nonmatches, stub_release_for_suffix, dest_root)
+        # Group non-matches by release_id so each group's suffix is derived from its real MBID,
+        # producing a release-identifying token (8-char prefix) rather than an empty " []".
+        _dest_to_rid_un: dict[Path, str] = {dest: rid for _, dest, _, _, rid in plan_pairs}
+        _nonmatch_by_rid_un: dict[str, list[AudioCompareResult]] = {}
+        for _nm in confirmed_nonmatches:
+            _nm_rid = _dest_to_rid_un.get(_nm.dest, "")
+            _nonmatch_by_rid_un.setdefault(_nm_rid, []).append(_nm)
+        for _nm_rid, _nm_group in _nonmatch_by_rid_un.items():
+            _apply_collision_suffix(stub_plan, _nm_group, MBRelease(id=_nm_rid), dest_root)
         plan_pairs = [
             (entry.src_file, entry.dest_file, acust, length, rid)
             for entry, (_, _, acust, length, rid) in zip(stub_plan, plan_pairs)
