@@ -799,6 +799,86 @@ with the REND-14 shard.  **"Done means V1b" checklist passes; STYLEGUIDE v1 decl
 tag-shaping A-shard queue out of S6: REND-14 reorder + naming realignment, chorusmaster-into-`CONDUCTOR` addition,
 `IS_CLASSICAL` conditionalisation — all coordinate with R6d's one-pass re-derivation.
 
+## Preflight evidence analysis (2026-08-24): six confirmed defects in the maintenance recompute engine
+
+First full `preflight` run against live hades (`Done/`, 47,559 journal entries, Reference/ present at 429 GB).  Headline counts:
+repath 3,620 / regroup 2,864 / unify 2,511 / enrich 5,111 / repatch_catalogue_colon **0** / repatch_acoustid_tags 7,035; 3,628
+cross-pass overlap files, nearly all involving repath.  Analysis of the full old→new move-pair corpus (parsed from the structured
+log) shows the planned changes decompose into a **legitimate backlog** and **six engine defects**.  The repair turn is blocked
+until the defects are fixed: three of them (C, E, F below) are actively destructive.
+
+**Legitimate backlog confirmed pending** (the real work the repair turn should execute):
+
+- 1,099 pure leaf renumberings (same title, new `nn`) plus intermediate-level renumbering with redundant-grouping-dir collapse
+  (e.g. a `Teil II` level removed and leaves renumbered continuously) — the C-L0/C-L1 policies applied retroactively.
+- All 83 `mm.nn` double-numbered leaves are eliminated (0 survive in any planned path).
+- 439 `[rec]`/`[rel]` year-label normalisations (work-level ranges collapse to per-work session years).
+- 12 genuine multi-source consolidations (regroup 7, unify 5) — the recombination logic is sound; catalogue-token strips
+  (`[464 6602 5 PB17]`) fold duplicate release dirs correctly.
+
+**Defect A — locale-blind canonical name resolution (`_artists.py:200-207`).**  MB's `primary` alias flag is scoped *per locale*;
+`canonical_artist_form` collects all primary aliases and takes the first typed one, i.e. whichever locale the webservice lists
+first.  Observed: `Karl Richter → カール・リヒター` (222 files), `Neeme Järvi → Неэме Ярви` (129), `小澤征爾 → Seiji Ozawa` (42),
+`Wiener Philharmoniker → Orchestre philharmonique de Vienne` (17), `Vladimir Ashkenazy → Vladimir Asjkenazi` (nl!).  The
+implementation contains no locale or script logic although its docstring cites NORM-2 — `Orchestre philharmonique de Vienne`
+violates NORM-2 *as adjudicated*, independent of any amendment.  `MBAlias.locale` is populated and unused.
+
+**Defect B — the C-DET stability premise is broken, plus docstring drift.**  The determinate-transition note (above) sanctions the
+fixed-MBID alias dereference *because* the canonical name-form is stable.  Defect A makes the resolved form unstable (first-in-list
+across locales), so recomputed paths oscillate and the library has no fixed point.  Separately `repath`'s docstring still claims
+"embedded tags alone (no MusicBrainz network calls)" while `build_dest_path` hydrates aliases — register drift against C-DET.
+Dissolution hypothesis (unverified): MB's artist `name` field is already the native form for the observed cases (the as-credited
+on-disk names match operator preference); if the canonical form becomes "MB artist name, aliases as evidence only" — or the
+resolved form is persisted into a tag at annotation time — the hydration leaves the maintenance path entirely and the
+database-as-infrastructure reconstruction guarantee (path from tags alone) is restored.  Adjudication pending.
+
+**Defect C — `Unknown Performers` guard overreach (`_tags.py:1241-1248`).**  The last-resort ARTIST fallback treats ARTIST as a
+release/edition title whenever it equals ALBUM **or ALBUMARTIST** — but ARTIST == ALBUMARTIST is the *normal* shape for pop, jazz,
+and self-performed classical.  Effect: 410 planned moves degrade a named performer to `Unknown Performers` (Rachmaninoff ×142,
+Jamey Aebersold, Yo‑Yo Ma, Michael Jackson, Miles Davis, …) and **zero** recover one.  Strictly one-directional data degradation;
+the guard must discriminate on the edition-title case only (ARTIST == ALBUM shape), preserving the original fixture's regression.
+
+**Defect D — release-level-only ensembles drop true performing bodies.**  The path performer component uses release-level credits
+only (anti-forking, "path is a handle" above).  Confirmed information loss: `Bläser der Berliner Philharmoniker` removed from a
+release the operator confirms is genuinely performed by the wind subgroup; choirs (`Don Cossack Choir`, `Staats‐ und Domchor
+Berlin`) removed from choral-work handles because MB credits them per-track only (59 removal transforms).  A chorus in a mass is a
+spine-position occupant (STYLEGUIDE 2.2/SEL-4); the anti-forking rule needs a selection ruling that admits bodies present on all
+(or a modal majority of) tracks — an adjudication, not a mechanical fix.
+
+**Defect E — composer unification direction contradicts SEL-8.**  When MB credits a completer as "composer (additional)" on some
+movements only, the work-group unification (`_pipeline.py:988-1022`) propagates **primary-only** composers over the fallback
+movements, and the classical arranger/finisher maintenance pass enforces the same direction retroactively — erasing `Süßmayr` from
+`Mozart; Süßmayr` handles.  SEL-8 (adjudicated) rules the opposite: completion authorship "enters both full and compact
+projections, role-annotated, primary composer always leading" (Mahler 10 is not identifiable without Cooke).  Unifying *upward*
+(primary + completer everywhere) fixes the same fragmentation SEL-8-compliantly.  The operator's stated bias agrees
+(`Mozart; Süßmayr`).  Likely cause: SEL-19's source-priority chain misread as a rendering-exclusion rule.
+
+**Defect F — collision assessment is blind to plan-vacated paths; the executor relies on clobber semantics.**  164 of 176
+`collision_nonmatch_suffix` warnings target a destination whose occupant is itself scheduled to move away in the same plan
+(mass-renumbering shift chains); only 12 are genuine (over-truncated leaf names + one duplicate-dir merge).  Root cause is
+two-fold: `_assess_collisions` checks bare `dest.exists()` against current disk, and plan execution runs in arbitrary order with
+`os.replace`, which silently overwrites — the suffix is currently the *only* thing preventing chain-move data loss.  Ruling
+(operator, 2026-08-24): moves must check destination existence and never clobber; maximally protect the authority, provenance,
+completeness, and correctness of written data.  Design: three complementary layers — dependency-ordered execution
+(vacate-before-occupy; swap cycles via in-dir temp hop), a never-overwrite invariant at the single move site (C-NOCLOBBER,
+extending C-MOVE), and the collision suffix retained but narrowed to genuine occupant-stays collisions (it is the disambiguation
+policy for true path-identity conflicts; without it those moves would be refused forever).
+
+**Operator rulings recorded 2026-08-24 (adjudication pending in the styleguide loop):**
+
+- **NORM-2 reopen candidate.**  Preference for native-script renderings universally (小澤征爾, Игорь Стравинский, Wiener
+  Philharmoniker, Má vlast), overturning NORM-2's Latin-reception clause for non-Latin scripts; fallbacks only where the native
+  form is unknown (incomplete data), non-standard (scholarship or provenance plurality), or otherwise problematic.  Rationale: the
+  catalog's organizational philosophy is academic rigor at global scale; cosmopolitan on-ramps belong at the playlist lens.
+- **Ensemble parent/subgroup/chorus selection case** (defect D) — needs a new SEL/NORM case.
+- **Completer-in-path** (defect E) — enforce SEL-8; the exact path grammar (plain `Mozart; Süßmayr` vs role-annotated) needs a
+  REND-level ruling.
+
+**Meta-lesson (CAPTURE-CANDIDATE).**  A dry-run collision assessment that tests planned destinations against *current* disk state,
+without subtracting paths the same plan vacates, systematically manufactures false collisions under mass renumbering — 93% false
+positive rate here.  Any plan-then-execute mover needs vacancy-aware assessment and dependency-ordered execution before its
+dry-run evidence can be trusted for destructive go/no-go decisions.
+
 ## Dormant decisions register (consolidated 2026-08-24)
 
 One entry per open-but-deferred design path, with its firing trigger and where the design context
