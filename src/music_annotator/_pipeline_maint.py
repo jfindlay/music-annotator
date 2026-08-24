@@ -33,6 +33,10 @@ Private helpers used exclusively by :func:`unify`:
 * :func:`_unify_classical_composer_groups`
 """
 
+# pylint: disable=duplicate-code  # _clamp_maint_dest's name_too_long log block mirrors the silent
+# path of _resolve_long_names in _pipeline.py; the duplication is inherent to the module split
+# (_pipeline_maint cannot import from _pipeline without a circular dependency).
+
 from __future__ import annotations
 
 import datetime
@@ -336,6 +340,54 @@ def _detect_audio_suffix(path: Path) -> str | None:
         return ".mp3"
     except Exception:  # noqa: BLE001
         return None
+
+
+def _clamp_maint_dest(dest_root: Path, dest: Path) -> Path:
+    """Clamp each component of ``dest`` to at most :data:`~music_annotator._tags._NAME_MAX` UTF-8 bytes.
+
+    Maintenance passes (``repath``, ``regroup``, ``unify``) build destination paths from embedded
+    tags via :func:`~music_annotator._tags.build_dest_path`, which deliberately does not enforce
+    per-component byte limits (enforcement is the caller's responsibility).  Without clamping, a
+    path whose work title or performer blob exceeds 255 UTF-8 bytes would reach
+    :func:`~music_annotator._pipeline_io._assess_collisions` and raise ``OSError: [Errno 36]`` on
+    ``dest.exists()``.
+
+    The clamping logic mirrors the silent (``ui=None``) path of
+    :func:`~music_annotator._pipeline._resolve_long_names`: ``_proposed_short`` is applied once per
+    over-limit component, with the audio suffix bytes reserved for the leaf so that stem + suffix
+    together fit within ``_NAME_MAX``.  A ``name_too_long`` warning is logged for each clamped
+    component.  The function is idempotent: components already within the limit pass through
+    unchanged.
+
+    :param dest_root: Library root.  Used only to compute the relative parts of ``dest``.
+    :param dest: Full absolute destination path including the audio extension (i.e. the result of
+        ``build_dest_path(...).with_suffix(ext)``).
+    :returns: A new :class:`~pathlib.Path` with every component guaranteed to be at most
+        ``_NAME_MAX`` UTF-8 bytes.
+    """
+    rel_parts = dest.relative_to(dest_root).parts
+    leaf = rel_parts[-1]
+    # Derive the audio suffix from the leaf (the last component of dest).  Path.suffix on the leaf
+    # may misidentify a trailing dot in a work title (e.g. "op.") as an extension, but at this
+    # point the leaf was produced by .with_suffix(ext) where ext is always a clean audio extension
+    # (".flac" or ".mp3"), so Path.suffix is safe to use here.
+    leaf_audio_suffix = Path(leaf).suffix.lower()
+    new_parts: list[str] = []
+    for part in rel_parts:
+        if len(part.encode("utf-8")) > _NAME_MAX:
+            part_audio_suffix = leaf_audio_suffix if part == leaf else ""
+            clamped = _proposed_short(part, part_audio_suffix)
+            log.warning(
+                "name_too_long",
+                component=part,
+                bytes=len(part.encode("utf-8")),
+                limit=_NAME_MAX,
+                shortened=clamped,
+            )
+            new_parts.append(clamped)
+        else:
+            new_parts.append(part)
+    return dest_root.joinpath(*new_parts)
 
 
 def _move_verify_journal(
@@ -654,7 +706,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
             global_track_idx=0,
             group_modal_depth=_repath_modal_by_idx.get(_ri),
         )
-        new_dest = new_dest_base.with_suffix(ext)
+        new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext))
 
         if new_dest == current_path:
             log.debug("repath_noop", path=str(current_path.relative_to(dest_root)))
@@ -926,7 +978,7 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
             global_track_idx=0,
             group_modal_depth=_regroup_modal_by_idx.get(_ri),
         )
-        new_dest = new_dest_base.with_suffix(ext)
+        new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext))
 
         if new_dest == current_path:
             log.debug("regroup_noop", path=str(current_path.relative_to(dest_root)))
@@ -1315,7 +1367,7 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
             # 3.1/NORM-2) in the compact path projection.
             _hydrate_performer_lists(tags, file_dict)
             new_dest_base = build_dest_path(dest_root, stub_release, stub_track, tags, global_track_idx=0)
-            new_dest = new_dest_base.with_suffix(ext)
+            new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext))
 
             if new_dest == file_path:
                 log.debug("unify_noop", path=str(file_path.relative_to(dest_root)))

@@ -42,6 +42,7 @@ from music_annotator._pipeline_io import (
 )
 from music_annotator._pipeline_maint import (
     _check_dest_root,
+    _clamp_maint_dest,
     _has_legacy_acoustid_key,
     _hydrate_performer_lists,
     _journal_capacity,
@@ -53,7 +54,7 @@ from music_annotator._pipeline_maint import (
     compose_preflight_report,
     repatch_acoustid_tags,
 )
-from music_annotator._tags import _work_top_dir
+from music_annotator._tags import _NAME_MAX, _proposed_short, _work_top_dir
 from music_annotator._works import work_group_modal_depth
 from music_annotator.models import (
     ArtistEntry,
@@ -115,6 +116,115 @@ def _make_library_mp3(dest_root: Path, rel_path: str, tags: TrackTags) -> Path:
     full_path.write_bytes(_MINIMAL_MP3)
     apply_tags_mp3(full_path, tags)
     return full_path
+
+
+class TestClampMaintDest:
+    """Unit tests for :func:`_clamp_maint_dest`.
+
+    Verifies that per-component byte clamping is applied consistently to leaf, intermediate, and
+    in-bounds components, and that the helper is idempotent on already-short paths.
+    """
+
+    def test_in_bounds_path_returned_unchanged(self) -> None:
+        """_clamp_maint_dest returns the same path when all components are within _NAME_MAX bytes.
+
+        Ensures the happy-path does not modify or recreate the path unnecessarily.
+        """
+        dest_root = Path("/music")
+        dest = dest_root / "Mozart - Karajan" / "Symphony No. 41 [rec 2000]" / "01 - Allegro vivace.flac"
+        assert _clamp_maint_dest(dest_root, dest) == dest
+
+    def test_over_long_leaf_is_clamped(self) -> None:
+        """_clamp_maint_dest clamps a leaf component exceeding _NAME_MAX bytes.
+
+        The clamped leaf must be identical to _proposed_short with the audio suffix reserved, and
+        the result must fit within _NAME_MAX bytes.
+        """
+        dest_root = Path("/music")
+        # Construct a leaf whose stem + ".flac" exceeds 255 bytes.
+        long_stem = "Canon in 3 Parts for 3 Female Voices " + ("x" * 220)
+        leaf = long_stem + ".flac"
+        assert len(leaf.encode("utf-8")) > _NAME_MAX
+        dest = dest_root / "Mozart - Karajan" / "Work [rec 2000]" / leaf
+        result = _clamp_maint_dest(dest_root, dest)
+        result_leaf = result.name
+        assert len(result_leaf.encode("utf-8")) <= _NAME_MAX
+        assert result_leaf.endswith(".flac")
+        assert result_leaf == _proposed_short(leaf, ".flac")
+
+    def test_over_long_intermediate_dir_is_clamped(self) -> None:
+        """_clamp_maint_dest clamps an intermediate directory component exceeding _NAME_MAX bytes.
+
+        No suffix reservation is applied to intermediate components; the component is clamped to
+        exactly _NAME_MAX bytes (via _proposed_short with audio_suffix="").
+        """
+        dest_root = Path("/music")
+        long_dir = "Mozart - " + ("y" * 250)
+        assert len(long_dir.encode("utf-8")) > _NAME_MAX
+        dest = dest_root / long_dir / "Work [rec 2000]" / "01 - Title.flac"
+        result = _clamp_maint_dest(dest_root, dest)
+        result_dir = result.relative_to(dest_root).parts[0]
+        assert len(result_dir.encode("utf-8")) <= _NAME_MAX
+        assert result_dir == _proposed_short(long_dir, "")
+        # Leaf and mid-dir are unchanged.
+        assert result.name == "01 - Title.flac"
+
+    def test_repath_does_not_raise_on_over_long_leaf(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """repath() does not raise OSError[Errno 36] when a recomputed destination leaf exceeds 255 bytes.
+
+        Regression KAT: before _clamp_maint_dest was applied inside repath(), a library file whose
+        recomputed path had a leaf name exceeding 255 UTF-8 bytes would trigger OSError on
+        dest.exists() inside _assess_collisions.  This test manufactures that condition and asserts
+        repath() completes without raising.
+        """
+        dest_root = Path("/music")
+        dest_root.mkdir(parents=True)
+
+        # Build tags that produce an over-long leaf via build_dest_path.
+        # title is the leaf stem after "01 - "; we make it long enough that "01 - <title>.flac"
+        # exceeds 255 bytes.
+        long_title = "Canon in 3 Parts " + ("x" * 240)
+        tags = TrackTags(
+            cwp_composer_lastnames="Mozart",
+            cwp_work_top="Canon",
+            recording_date="2000",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title=long_title,
+            artist="Karajan",
+        )
+
+        # Place the file at a legacy path so repath() wants to move it.
+        old_rel = "Mozart - Karajan/OldWork [rec 2000]/01 - OldTitle.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        # Must not raise; if _clamp_maint_dest is absent, dest.exists() in _assess_collisions
+        # raises OSError: [Errno 36] File name too long.
+        result = music_annotator.repath(dest_root=dest_root, dry_run=True)
+
+        # dry_run returns a DryRunPlan with exactly one entry (the clamped move).
+        assert result is not None
+        assert result.count == 1
+        new_leaf = result.entries[0].planned_path.split("/")[-1]
+        assert len(new_leaf.encode("utf-8")) <= _NAME_MAX
+        assert new_leaf.endswith(".flac")
 
 
 class TestRepath:
