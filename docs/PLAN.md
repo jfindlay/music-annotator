@@ -167,7 +167,7 @@ VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch covera
 | ID | Title                                                                 | Status  | Commit | Notes |
 |----|-----------------------------------------------------------------------|---------|--------|-------|
 | S1 | Fix ARTIST-fallback guard (C-GUARD)                                   | done    | f09b31d | C-GUARD frozen |
-| S2 | Dependency-ordered move execution + vacancy-aware collision (C-NOCLOBBER, C-SEQ) | pending | — | |
+| S2 | Dependency-ordered move execution + vacancy-aware collision (C-NOCLOBBER, C-SEQ) | done    | e71256d | C-NOCLOBBER, C-SEQ frozen |
 | S3 | STYLEGUIDE adjudication (NORM-2, ensemble, SEL-8, C-DET)              | pending | —      | operator-interactive |
 | S4 | Locale/script-aware canonical name resolution (defects A+B)           | pending | —      | depends S3 |
 | S5 | Ensemble path component per new selection ruling (defect D)           | pending | —      | depends S3 |
@@ -175,7 +175,7 @@ VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch covera
 | S7 | Register/doc reconciliation: repath docstring, C-DET note             | pending | —      | depends S4 |
 | S8 | Re-run preflight on hades; acceptance gate                            | pending | —      | depends all; operator |
 
-Frozen contracts: C-NOCLOBBER, C-SEQ, C-GUARD (frozen at derivation; C-GUARD implementation confirmed f09b31d). NORM-2 amendment, Ensemble selection case, SEL-8 path grammar, C-DET premise repair — to be frozen at S3.
+Frozen contracts: C-NOCLOBBER (implementation confirmed e71256d), C-SEQ (implementation confirmed e71256d), C-GUARD (implementation confirmed f09b31d). NORM-2 amendment, Ensemble selection case, SEL-8 path grammar, C-DET premise repair — to be frozen at S3.
 
 ## Action-frame digest
 
