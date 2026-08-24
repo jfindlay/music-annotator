@@ -43,6 +43,7 @@ import datetime
 import errno
 import os
 import shutil
+import tempfile
 from pathlib import Path
 
 import structlog
@@ -58,7 +59,7 @@ from music_annotator._audit import (
 )
 from music_annotator._console import _console
 from music_annotator._mb_api import _fetch_acoustid_lookup_raw
-from music_annotator._pipeline import _apply_collision_suffix
+from music_annotator._pipeline import _apply_collision_suffix, _collision_suffix
 from music_annotator._pipeline_io import (
     JOURNAL_FILENAME,
     AudioCompareResult,
@@ -74,7 +75,7 @@ from music_annotator._pipeline_io import (
     write_transaction_log,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
-from music_annotator._tags import _NAME_MAX, _proposed_short, build_dest_path
+from music_annotator._tags import _CLASS_VOCAB, _NAME_MAX, _proposed_short, build_dest_path
 from music_annotator._works import (
     _Rederivation,
     is_catalogue_colon_corrupt,
@@ -390,6 +391,128 @@ def _clamp_maint_dest(dest_root: Path, dest: Path) -> Path:
     return dest_root.joinpath(*new_parts)
 
 
+def _topo_sort_moves(
+    plan_pairs: list[tuple[Path, Path]],
+) -> tuple[list[tuple[Path, Path]], list[tuple[Path, Path]]]:
+    """Sort ``plan_pairs`` in dependency order and identify swap cycles.
+
+    Moves execute in dependency order to prevent destination-occupied errors in shift chains: a
+    move whose destination is another plan entry's source must run after that entry vacates it.
+    This is the C-SEQ topological ordering requirement.
+
+    The move graph has an edge from move A to move B when A's destination equals B's source (A
+    depends on B vacating its source before A can land).  A topological sort over this graph
+    produces an execution order where each move's destination is guaranteed to be vacant when
+    the move runs.
+
+    True swap cycles (A→B, B→A) cannot be resolved by ordering alone.  They are returned
+    separately as ``swap_pairs`` so the caller can break them via an in-directory temp hop
+    (which stays inside the C-PROV verify-then-journal chain).
+
+    :param plan_pairs: List of ``(src, dest)`` path pairs to sort.
+    :returns: A ``(ordered, swap_pairs)`` tuple where ``ordered`` is the dependency-ordered list
+        (non-cycle moves only) and ``swap_pairs`` is the list of pairs involved in swap cycles.
+        Each swap cycle of length N produces N entries in ``swap_pairs`` (the cycle members in
+        cycle order, starting from an arbitrary member).
+    """
+    # Build adjacency: dest_to_src_idx[dest] = index of the move whose src == dest.
+    # This tells us: "before move i can land at dest, the move at dest_to_src_idx[dest] must run."
+    dest_to_src_idx: dict[Path, int] = {}
+    for i, (src, _) in enumerate(plan_pairs):
+        dest_to_src_idx[src] = i
+
+    n = len(plan_pairs)
+    # For each move i, find which move j must run before i (j's src == i's dest).
+    # i depends on j: j must run first so i's destination is vacant.
+    # Edge: i → j means "i must run after j".
+    # Build in-degree and adjacency for Kahn's algorithm.
+    # depends_on[i] = j means move i cannot run until move j has run.
+    depends_on: dict[int, int] = {}
+    for i, (_, dest) in enumerate(plan_pairs):
+        if dest in dest_to_src_idx:
+            j = dest_to_src_idx[dest]
+            if j == i:  # pragma: no cover — self-loop (src==dest); callers filter no-ops
+                continue
+            depends_on[i] = j
+
+    # Detect cycles using DFS.  A cycle means a set of moves that mutually depend on each other
+    # (the simplest case is a two-file swap: A→B, B→A).
+    # Node colours: 0=unvisited, 1=in-progress (on the current DFS stack), 2=fully processed.
+    _unvisited, _in_progress, _done = 0, 1, 2
+    color: list[int] = [_unvisited] * n
+    in_cycle: list[bool] = [False] * n
+
+    def _dfs_detect(node: int) -> bool:
+        """DFS from ``node``; return True if a cycle is found through this node.
+
+        :param node: Index of the move to start DFS from.
+        :returns: True when a back-edge (cycle) is detected.
+        """
+        color[node] = _in_progress
+        if node in depends_on:
+            nxt = depends_on[node]
+            if color[nxt] == _in_progress:
+                # Back edge: cycle detected.
+                in_cycle[nxt] = True
+                in_cycle[node] = True
+                return True
+            if color[nxt] == _unvisited:
+                if _dfs_detect(nxt):
+                    # Propagate cycle membership up the call stack.  color[node] is always
+                    # _in_progress here (set above, not yet changed to _done), so the False
+                    # branch is unreachable in practice.
+                    if color[node] == _in_progress:  # pragma: no cover — always True
+                        in_cycle[node] = True
+                    return True
+        color[node] = _done
+        return False
+
+    for start in range(n):
+        if color[start] == _unvisited:
+            _dfs_detect(start)
+
+    # Separate cycle members from non-cycle moves.
+    swap_indices: set[int] = {i for i in range(n) if in_cycle[i]}
+    non_cycle_pairs: list[tuple[Path, Path]] = []
+    swap_pairs: list[tuple[Path, Path]] = []
+
+    # Topological sort (Kahn's algorithm) over non-cycle moves only.
+    # in_degree[i] = number of non-cycle moves that i depends on.
+    in_degree: list[int] = [0] * n
+    dependents: dict[int, list[int]] = {}  # j → list of i that depend on j
+    for i, j in depends_on.items():
+        if i in swap_indices or j in swap_indices:
+            continue
+        in_degree[i] += 1
+        dependents.setdefault(j, []).append(i)
+
+    # Kahn's: start with moves that have no dependencies (in_degree == 0).
+    queue: list[int] = [i for i in range(n) if i not in swap_indices and in_degree[i] == 0]
+    ordered_indices: list[int] = []
+    while queue:
+        node = queue.pop(0)
+        ordered_indices.append(node)
+        for dep in dependents.get(node, []):
+            in_degree[dep] -= 1
+            # in_degree[dep] is always 0 after decrementing: each move has at most one
+            # dependency (depends_on[i] is a single value), so in_degree starts at 1 and
+            # reaches 0 on the first decrement.  The False branch is unreachable.
+            if in_degree[dep] == 0:  # pragma: no cover — always True; see comment above
+                queue.append(dep)
+
+    # Any non-cycle move not reached by Kahn's is an isolated move (no dependencies).
+    # They should all be in ordered_indices already; this is a safety net.
+    reached = set(ordered_indices)
+    for i in range(n):
+        if i not in swap_indices and i not in reached:
+            ordered_indices.append(i)  # pragma: no cover — Kahn's covers all non-cycle nodes
+
+    non_cycle_pairs = [plan_pairs[i] for i in ordered_indices]
+    swap_pairs = [plan_pairs[i] for i in range(n) if i in swap_indices]
+
+    return non_cycle_pairs, swap_pairs
+
+
 def _move_verify_journal(
     plan_pairs: list[tuple[Path, Path]],
     *,
@@ -406,21 +529,35 @@ def _move_verify_journal(
     entry is written **only after** the file passes both the SHA-256 destination check and
     :func:`~music_annotator._pipeline_io._verify_copy`.
 
+    **C-NOCLOBBER**: before executing each move, the destination is checked for existence using
+    ``os.open`` with ``O_CREAT|O_EXCL`` (atomic exclusive-create).  If the destination already
+    exists and is not the source being moved away by another move in the same plan, a
+    :exc:`RuntimeError` is raised — the move is refused.  A maintenance move NEVER overwrites an
+    existing destination file.
+
+    **C-SEQ**: moves execute in dependency order via :func:`_topo_sort_moves`.  A move whose
+    destination is another plan entry's source runs after that entry vacates it (topological order
+    over the move graph).  True swap cycles (A→B, B→A) are broken via an in-directory temp hop:
+    one file is moved to a temporary name in the same directory, then the other file moves to its
+    final destination, then the temp file moves to its final destination.  Every hop in the temp
+    sequence goes through the full SHA-256 + :func:`_verify_copy` + journal chain (C-PROV).
+
     For each pair the sequence is:
 
     1. Capture source SHA-256 and mtime before the move.
     2. Ensure the destination parent directory exists.
-    3. Move atomically via :func:`os.replace` (rename within the same filesystem).  On
+    3. **C-NOCLOBBER check**: atomically verify the destination does not exist.
+    4. Move atomically via :func:`os.replace` (rename within the same filesystem).  On
        ``OSError`` with ``errno.EXDEV`` (cross-filesystem move), fall back to
        :func:`shutil.copy2` + :func:`os.unlink`; the copy is integrity-checked before the
        source is unlinked.
-    4. Verify destination SHA-256 == source SHA-256 (raises :exc:`RuntimeError` on mismatch —
+    5. Verify destination SHA-256 == source SHA-256 (raises :exc:`RuntimeError` on mismatch —
        **no journal entry is written**).
-    5. Read back the destination tags and run :func:`~music_annotator._pipeline_io._verify_copy`
+    6. Read back the destination tags and run :func:`~music_annotator._pipeline_io._verify_copy`
        (raises :exc:`RuntimeError` on mismatch — **no journal entry is written**).
-    6. **Only then** append a :class:`~music_annotator.models.TransactionEntry` with the given
+    7. **Only then** append a :class:`~music_annotator.models.TransactionEntry` with the given
        ``action`` and ``release_id`` and flush it to the journal.
-    7. Clean up now-empty source directories (best-effort; non-empty directories are skipped).
+    8. Clean up now-empty source directories (best-effort; non-empty directories are skipped).
 
     :param plan_pairs: List of ``(src, dest)`` path pairs to move.
     :param journal_path: Path to the journal file (``<dest_root>/music_annotator_journal.json``).
@@ -432,87 +569,343 @@ def _move_verify_journal(
     :param release_id: MusicBrainz release MBID for the journal entry.  Empty string for
         ``"repathed"`` entries (repath operates offline from embedded tags).
     :returns: Count of files successfully moved and journalled.
-    :raises RuntimeError: If the post-move SHA-256 check or :func:`_verify_copy` fails.
+    :raises RuntimeError: If the destination already exists (C-NOCLOBBER), if the post-move
+        SHA-256 check fails, or if :func:`_verify_copy` fails.
     :raises OSError: If the source file cannot be read or the destination cannot be written
         (except ``EXDEV``, which is handled by the cross-filesystem fallback).
     """
     now_str = now.isoformat()
     moved_count = 0
 
-    for src, dest in plan_pairs:
-        # a. Capture source SHA-256 and mtime before the move.
-        src_hash = _sha256_file(src)
-        src_stat = src.stat()
-        src_mtime = src_stat.st_mtime
+    # C-SEQ: sort moves in dependency order; break swap cycles via temp-hop.
+    ordered_pairs, swap_pairs = _topo_sort_moves(plan_pairs)
 
-        # b. Ensure parent directory exists; move atomically.
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.replace(src, dest)
-        except OSError as exc:
-            if exc.errno != errno.EXDEV:
-                raise
-            # Cross-filesystem fallback: copy + verify + unlink.
-            shutil.copy2(src, dest)
-            cross_hash = _sha256_file(dest)
-            if cross_hash != src_hash:
-                dest.unlink(missing_ok=True)
-                raise RuntimeError(
-                    f"cross-fs copy integrity failure for '{src.name}': "
-                    f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {cross_hash[:12]}…"
-                ) from exc
+    # Process swap cycles first via temp-hop, then process ordered (non-cycle) moves.
+    # Each swap cycle of length 2 (A→B, B→A) is broken by: A→temp, B→A, temp→B.
+    # For longer cycles the same principle applies: move the first element to a temp,
+    # then shift the rest of the chain, then move temp to the last destination.
+    # Currently _topo_sort_moves returns all cycle members; we process them as a chain.
+    if swap_pairs:
+        moved_count += _execute_swap_cycles(
+            swap_pairs,
+            journal_path=journal_path,
+            action=action,
+            dest_root=dest_root,
+            now_str=now_str,
+            release_id=release_id,
+        )
+
+    for src, dest in ordered_pairs:
+        moved_count += _execute_single_move(
+            src,
+            dest,
+            journal_path=journal_path,
+            action=action,
+            dest_root=dest_root,
+            now_str=now_str,
+            release_id=release_id,
+        )
+
+    return moved_count
+
+
+def _atomic_noclobber_check(dest: Path) -> bool:
+    """Atomically verify that ``dest`` does not exist; return ``True`` if it does exist.
+
+    Uses ``os.open`` with ``O_CREAT|O_EXCL`` to perform an atomic existence check.  If the
+    destination already exists, ``O_EXCL`` causes ``os.open`` to raise ``FileExistsError``
+    (``errno.EEXIST``), which is caught and returned as ``True`` so the caller can decide
+    whether to refuse (different content) or dedup (same content).
+
+    When the destination does not exist, the placeholder file created by ``os.open`` is
+    immediately closed and unlinked so the actual move can proceed.  Returns ``False``.
+
+    :param dest: Destination path to check.
+    :returns: ``True`` if the destination already exists, ``False`` if it did not exist.
+    :raises OSError: If the parent directory is not writable or another OS error occurs.
+    """
+    try:
+        fd = os.open(str(dest), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return True
+    # Destination did not exist; close and remove the placeholder so the move can proceed.
+    os.close(fd)
+    dest.unlink()
+    return False
+
+
+def _execute_single_move(
+    src: Path,
+    dest: Path,
+    *,
+    journal_path: Path,
+    action: str,
+    dest_root: Path,
+    now_str: str,
+    release_id: str,
+) -> int:
+    """Execute one ``(src, dest)`` move through the full C-PROV + C-NOCLOBBER chain.
+
+    Performs the SHA-256 capture, C-NOCLOBBER existence check, atomic rename (or cross-fs
+    fallback), post-move SHA-256 verification, tag round-trip verification, journal append,
+    and empty-directory cleanup.  Returns 1 on success.
+
+    This helper is factored out of :func:`_move_verify_journal` so that the swap-cycle temp-hop
+    path can reuse the same provenance chain for each hop without duplicating the logic.
+
+    :param src: Source path.
+    :param dest: Destination path.
+    :param journal_path: Path to the journal file.
+    :param action: Journal action string.
+    :param dest_root: Library root for log messages and empty-dir cleanup.
+    :param now_str: ISO-format UTC timestamp string for the journal entry.
+    :param release_id: MusicBrainz release MBID for the journal entry.
+    :returns: Always 1 (one file successfully moved and journalled).
+    :raises RuntimeError: On C-NOCLOBBER violation, SHA-256 mismatch, or :func:`_verify_copy` failure.
+    :raises OSError: On filesystem errors (except EXDEV, handled by cross-fs fallback).
+    """
+    # a. Capture source SHA-256 and mtime before the move.
+    src_hash = _sha256_file(src)
+    src_stat = src.stat()
+    src_mtime = src_stat.st_mtime
+
+    # b. Ensure parent directory exists.
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    # c. C-NOCLOBBER: atomically verify the destination does not exist.
+    # When the destination already exists, check whether it has the same audio content as the
+    # source (same SHA-256).  If yes, this is a dedup case: the content is already at the
+    # destination; delete the source and journal the move.  If no, raise RuntimeError — a
+    # maintenance move NEVER overwrites a destination with different content (C-NOCLOBBER).
+    dest_exists = _atomic_noclobber_check(dest)
+    if dest_exists:
+        dest_hash_existing = _sha256_file(dest)
+        if dest_hash_existing == src_hash:
+            # Dedup: destination already has identical content.  Delete the source and journal
+            # the move so the provenance chain records that the source path is gone.
             os.unlink(src)
+            entry = TransactionEntry(
+                timestamp=now_str,
+                release_id=release_id,
+                source=str(src),
+                destination=str(dest),
+                action=action,
+            )
+            write_transaction_log(journal_path, [entry])
+            log.info(
+                f"{action}_dedup",
+                old=str(src.relative_to(dest_root)) if src.is_relative_to(dest_root) else str(src),
+                new=str(dest.relative_to(dest_root)),
+            )
+            # Clean up now-empty source directories (best-effort).
+            src_dir = src.parent
+            while src_dir != dest_root and src_dir.is_relative_to(dest_root):
+                try:
+                    src_dir.rmdir()
+                    log.info(f"{action}_removed_empty_dir", dir=str(src_dir.relative_to(dest_root)))
+                    src_dir = src_dir.parent
+                except OSError:
+                    break
+            return 1
+        raise RuntimeError(f"C-NOCLOBBER: destination already exists and is not vacated by this plan: '{dest}'")
 
-        # c. Verify destination SHA-256 == source SHA-256.
-        dest_hash = _sha256_file(dest)
-        if dest_hash != src_hash:
+    # d. Move atomically via os.replace (rename within the same filesystem).
+    try:
+        os.replace(src, dest)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        # Cross-filesystem fallback: copy + verify + unlink.
+        shutil.copy2(src, dest)
+        cross_hash = _sha256_file(dest)
+        if cross_hash != src_hash:
+            dest.unlink(missing_ok=True)
             raise RuntimeError(
-                f"{action} integrity failure for '{dest.name}': src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_hash[:12]}…"
+                f"cross-fs copy integrity failure for '{src.name}': "
+                f"src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {cross_hash[:12]}…"
+            ) from exc
+        os.unlink(src)
+
+    # e. Verify destination SHA-256 == source SHA-256.
+    dest_hash = _sha256_file(dest)
+    if dest_hash != src_hash:
+        raise RuntimeError(
+            f"{action} integrity failure for '{dest.name}': src SHA-256 {src_hash[:12]}… ≠ dest SHA-256 {dest_hash[:12]}…"
+        )
+
+    # f. Reconstruct tags for _verify_copy (tags are unchanged by the move).
+    ext = src.suffix.lower()
+    try:
+        match ext:
+            case ".flac":
+                post_dict = _read_tags_flac(dest)
+            case ".mp3":
+                post_dict = _read_tags_mp3(dest)
+            case _:  # pragma: no cover
+                post_dict = {}
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"{action} tag re-read failure for '{dest.name}': {exc}") from exc
+    moved_tags = _tags_from_file_dict(post_dict)
+    # _verify_copy checks mtime; for os.replace (same-fs rename) mtime is preserved.
+    # For cross-fs copy2+unlink, shutil.copy2 copies atime/mtime so src_mtime still holds.
+    _verify_copy(src, dest, moved_tags, None, src_mtime)
+
+    # g. Journal the move and flush before proceeding to the next file (C-PROV invariant:
+    #    entry is written ONLY after _verify_copy passes).
+    entry = TransactionEntry(
+        timestamp=now_str,
+        release_id=release_id,
+        source=str(src),
+        destination=str(dest),
+        action=action,
+    )
+    write_transaction_log(journal_path, [entry])
+    log.info(
+        f"{action}_moved",
+        old=str(src.relative_to(dest_root)) if src.is_relative_to(dest_root) else str(src),
+        new=str(dest.relative_to(dest_root)),
+    )
+
+    # h. Clean up now-empty source directories (best-effort; non-empty dirs are skipped).
+    src_dir = src.parent
+    while src_dir != dest_root and src_dir.is_relative_to(dest_root):
+        try:
+            src_dir.rmdir()  # Only succeeds if directory is now empty.
+            log.info(f"{action}_removed_empty_dir", dir=str(src_dir.relative_to(dest_root)))
+            src_dir = src_dir.parent
+        except OSError:
+            break
+
+    return 1
+
+
+def _execute_swap_cycles(
+    swap_pairs: list[tuple[Path, Path]],
+    *,
+    journal_path: Path,
+    action: str,
+    dest_root: Path,
+    now_str: str,
+    release_id: str,
+) -> int:
+    """Execute swap-cycle moves via in-directory temp hops, keeping every hop inside C-PROV.
+
+    A swap cycle (A→B, B→A) cannot be resolved by ordering alone because each move's destination
+    is occupied by the other move's source.  This function breaks the cycle by moving one file to
+    a temporary name in the same directory, then executing the remaining moves in order, then
+    moving the temp file to its final destination.
+
+    For a two-file swap (A→B, B→A):
+    1. A → temp  (temp is in A's directory; journalled as ``action`` with dest=temp)
+    2. B → A     (now A's slot is vacant; journalled as ``action`` with dest=A)
+    3. temp → B  (now B's slot is vacant; journalled as ``action`` with dest=B)
+
+    For longer cycles (A→B, B→C, C→A):
+    1. A → temp
+    2. C → A
+    3. B → C
+    4. temp → B
+
+    Every hop goes through the full SHA-256 + :func:`_verify_copy` + journal chain (C-PROV
+    invariant: no journal entry before verification passes).
+
+    The temp file is created in the same directory as the first source so that the rename is
+    guaranteed to be same-filesystem (no EXDEV risk for the temp hop).
+
+    :param swap_pairs: List of ``(src, dest)`` pairs forming one or more swap cycles, as returned
+        by :func:`_topo_sort_moves`.
+    :param journal_path: Path to the journal file.
+    :param action: Journal action string.
+    :param dest_root: Library root for log messages and empty-dir cleanup.
+    :param now_str: ISO-format UTC timestamp string for journal entries.
+    :param release_id: MusicBrainz release MBID for journal entries.
+    :returns: Count of files successfully moved and journalled (each hop counts as one move).
+    :raises RuntimeError: On C-NOCLOBBER violation, SHA-256 mismatch, or :func:`_verify_copy` failure.
+    :raises OSError: On filesystem errors.
+    """
+    moved_count = 0
+
+    # Reconstruct the cycle(s) from swap_pairs.  _topo_sort_moves returns all cycle members;
+    # we process them as a single chain (works for both 2-cycles and longer cycles).
+    # Build a src→dest map to follow the chain.
+    src_to_dest: dict[Path, Path] = dict(swap_pairs)
+
+    # Find all distinct cycles by following chains.
+    visited: set[Path] = set()
+    cycles: list[list[Path]] = []
+    for start_src, _ in swap_pairs:
+        if start_src in visited:
+            continue
+        cycle: list[Path] = []
+        current = start_src
+        while current not in visited:
+            visited.add(current)
+            cycle.append(current)
+            current = src_to_dest[current]
+        cycles.append(cycle)
+
+    for cycle in cycles:
+        # cycle = [A, B, C, …] where A→B, B→C, C→A (the last element's dest is cycle[0]).
+        first_src = cycle[0]
+        first_dest = src_to_dest[first_src]
+
+        # Step 1: Move first_src to a temp file in the same directory.
+        # Use tempfile.mkstemp in the same directory to guarantee same-filesystem rename.
+        # The temp file must have the same suffix as the source so _verify_copy can read tags.
+        # Delete the empty placeholder created by mkstemp so _execute_single_move can use
+        # C-NOCLOBBER semantics (it checks that the destination does not exist before moving).
+        suffix = first_src.suffix
+        tmp_fd, tmp_path_str = tempfile.mkstemp(suffix=suffix, dir=str(first_src.parent))
+        os.close(tmp_fd)
+        tmp_path = Path(tmp_path_str)
+        # Remove the empty placeholder so _execute_single_move can proceed with C-NOCLOBBER.
+        tmp_path.unlink()
+        # Move first_src to tmp_path through the full C-PROV chain (SHA-256 + verify + journal).
+        moved_count += _execute_single_move(
+            first_src,
+            tmp_path,
+            journal_path=journal_path,
+            action=action,
+            dest_root=dest_root,
+            now_str=now_str,
+            release_id=release_id,
+        )
+        log.info(
+            f"{action}_swap_temp_hop",
+            src=str(first_src.relative_to(dest_root)) if first_src.is_relative_to(dest_root) else str(first_src),
+            tmp=str(tmp_path.relative_to(dest_root)) if tmp_path.is_relative_to(dest_root) else str(tmp_path),
+        )
+
+        # Step 2: Execute the remaining moves in the cycle in reverse order.
+        # For cycle [A, B, C] (A→B, B→C, C→A): after A→temp, execute C→A, then B→C.
+        # Processing in reverse (i from len-1 down to 1) ensures each destination is vacant
+        # before the move: cycle[-1]→cycle[0] (now vacant via temp), cycle[-2]→cycle[-1], …
+        # Each cycle[i] moves to src_to_dest[cycle[i]] (its original destination).
+        for i in range(len(cycle) - 1, 0, -1):
+            chain_src = cycle[i]
+            actual_dest = src_to_dest[cycle[i]]
+            moved_count += _execute_single_move(
+                chain_src,
+                actual_dest,
+                journal_path=journal_path,
+                action=action,
+                dest_root=dest_root,
+                now_str=now_str,
+                release_id=release_id,
             )
 
-        # d. Reconstruct tags for _verify_copy (tags are unchanged by the move).
-        ext = src.suffix.lower()
-        try:
-            match ext:
-                case ".flac":
-                    post_dict = _read_tags_flac(dest)
-                case ".mp3":
-                    post_dict = _read_tags_mp3(dest)
-                case _:  # pragma: no cover
-                    post_dict = {}
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(f"{action} tag re-read failure for '{dest.name}': {exc}") from exc
-        moved_tags = _tags_from_file_dict(post_dict)
-        # _verify_copy checks mtime; for os.replace (same-fs rename) mtime is preserved.
-        # For cross-fs copy2+unlink, shutil.copy2 copies atime/mtime so src_mtime still holds.
-        _verify_copy(src, dest, moved_tags, None, src_mtime)
-
-        # e. Journal the move and flush before proceeding to the next file (C-PROV invariant:
-        #    entry is written ONLY after _verify_copy passes).
-        entry = TransactionEntry(
-            timestamp=now_str,
-            release_id=release_id,
-            source=str(src),
-            destination=str(dest),
+        # Step 3: Move temp to first_dest (the original destination of first_src).
+        # C-NOCLOBBER check: first_dest should now be vacant (the file that was there was moved
+        # in step 2).  Use _execute_single_move which enforces C-NOCLOBBER.
+        moved_count += _execute_single_move(
+            tmp_path,
+            first_dest,
+            journal_path=journal_path,
             action=action,
+            dest_root=dest_root,
+            now_str=now_str,
+            release_id=release_id,
         )
-        write_transaction_log(journal_path, [entry])
-        log.info(
-            f"{action}_moved",
-            old=str(src.relative_to(dest_root)) if src.is_relative_to(dest_root) else str(src),
-            new=str(dest.relative_to(dest_root)),
-        )
-        moved_count += 1
-
-        # f. Clean up now-empty source directories (best-effort; non-empty dirs are skipped).
-        src_dir = src.parent
-        while src_dir != dest_root and src_dir.is_relative_to(dest_root):
-            try:
-                src_dir.rmdir()  # Only succeeds if directory is now empty.
-                log.info(f"{action}_removed_empty_dir", dir=str(src_dir.relative_to(dest_root)))
-                src_dir = src_dir.parent
-            except OSError:
-                break
 
     return moved_count
 
@@ -769,8 +1162,13 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
             return None
 
     # --- Collision detection and resolution ---
+    # C-SEQ vacancy-aware collision check: subtract plan-vacated paths (sources of all moves in
+    # the plan) from the collision check.  A destination occupied by a file that will be vacated
+    # by another move in the same plan is not a genuine collision — the occupant will be moved
+    # away before this move executes (guaranteed by the topological ordering in _move_verify_journal).
+    _repath_vacated: frozenset[Path] = frozenset(src for src, _, _, _, _ in plan_pairs)
     collision_pairs = [(src, dest, acust, length) for src, dest, acust, length, _ in plan_pairs]
-    collision_results = _assess_collisions(collision_pairs)
+    collision_results = _assess_collisions(collision_pairs, vacated_paths=_repath_vacated)
     confirmed_nonmatches = [r for r in collision_results if r.match is False]
     if confirmed_nonmatches:
         # Rewrite destinations for confirmed non-matches using a release-identifying suffix
@@ -1006,9 +1404,47 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
             return DryRunPlan(pass_name="regroup", entries=[], count=0)
         return None
 
+    # --- Intra-plan collision guard (two files in the same plan compute to the same destination) ---
+    # When two files in the plan share the same destination, apply the collision suffix to the
+    # second file in each group so both files can move without C-NOCLOBBER refusing the second.
+    _regroup_dest_to_indices: dict[Path, list[int]] = {}
+    for _rgi, (_, _rgdest, _, _, _) in enumerate(plan_pairs):
+        _regroup_dest_to_indices.setdefault(_rgdest, []).append(_rgi)
+
+    _regroup_intra_collision_indices: set[int] = set()
+    for _rgdest, _rgindices in _regroup_dest_to_indices.items():
+        if len(_rgindices) > 1:
+            for _rgidx in _rgindices[1:]:
+                _regroup_intra_collision_indices.add(_rgidx)
+            log.info(
+                "regroup_intra_plan_collision_suffix",
+                dest=str(_rgdest.relative_to(dest_root)),
+                count=len(_rgindices),
+            )
+
+    if _regroup_intra_collision_indices:
+        _regroup_plan_list: list[tuple[Path, Path, str, int, str]] = list(plan_pairs)
+        for _rgidx in sorted(_regroup_intra_collision_indices):
+            _rgsrc, _rgdest_orig, _rgacust, _rglength, _rgrid = _regroup_plan_list[_rgidx]
+            _rgsuffix = _collision_suffix(MBRelease(id=_rgrid))
+            _rgrel_parts = list(_rgdest_orig.relative_to(dest_root).parts)
+            _rgwork_dir_idx = 2 if _rgrel_parts[0] in _CLASS_VOCAB else 1
+            _rgrel_parts[_rgwork_dir_idx] = f"{_rgrel_parts[_rgwork_dir_idx]} [{_rgsuffix}]"
+            _rgnew_dest = dest_root.joinpath(*_rgrel_parts)
+            log.warning(
+                "regroup_intra_plan_collision_suffix_applied",
+                original=str(_rgdest_orig.relative_to(dest_root)),
+                renamed=str(_rgnew_dest.relative_to(dest_root)),
+                suffix=_rgsuffix,
+            )
+            _regroup_plan_list[_rgidx] = (_rgsrc, _rgnew_dest, _rgacust, _rglength, _rgrid)
+        plan_pairs = _regroup_plan_list
+
     # --- Collision detection and resolution ---
+    # C-SEQ vacancy-aware collision check: subtract plan-vacated paths from the collision check.
+    _regroup_vacated: frozenset[Path] = frozenset(src for src, _, _, _, _ in plan_pairs)
     collision_pairs = [(src, dest, acust, length) for src, dest, acust, length, _ in plan_pairs]
-    collision_results = _assess_collisions(collision_pairs)
+    collision_results = _assess_collisions(collision_pairs, vacated_paths=_regroup_vacated)
     confirmed_nonmatches = [r for r in collision_results if r.match is False]
     if confirmed_nonmatches:
         stub_plan = [CopyPlanEntry(idx=0, src_file=src, dest_file=dest) for src, dest, _, _, _ in plan_pairs]
@@ -1395,9 +1831,50 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
             return DryRunPlan(pass_name="unify", entries=[], count=0)
         return None
 
+    # --- Intra-plan collision guard (two files in the same plan compute to the same destination) ---
+    # When two files in the plan share the same destination, apply the collision suffix directly
+    # to the duplicate entries (by index) so both files can move without C-NOCLOBBER refusing
+    # the second.  The first entry in each collision group keeps the canonical path; subsequent
+    # entries get a release-identifying suffix appended to the work_dir component.
+    # This is distinct from on-disk collision detection below (which handles pre-existing files).
+    _unify_dest_to_indices: dict[Path, list[int]] = {}
+    for _ui, (_, _udest, _, _, _) in enumerate(plan_pairs):
+        _unify_dest_to_indices.setdefault(_udest, []).append(_ui)
+
+    _unify_plan_list: list[tuple[Path, Path, str, int, str]] = list(plan_pairs)
+    _unify_intra_count = 0
+    for _udest, _uindices in _unify_dest_to_indices.items():
+        if len(_uindices) > 1:
+            log.info(
+                "unify_intra_plan_collision_suffix",
+                dest=str(_udest.relative_to(dest_root)),
+                count=len(_uindices),
+            )
+            # Apply suffix to all entries after the first (by index), not by destination.
+            for _uidx in _uindices[1:]:
+                _usrc, _udest_orig, _uacust, _ulength, _urid = _unify_plan_list[_uidx]
+                _usuffix = _collision_suffix(MBRelease(id=_urid))
+                _urel_parts = list(_udest_orig.relative_to(dest_root).parts)
+                _uwork_dir_idx = 2 if _urel_parts[0] in _CLASS_VOCAB else 1
+                _urel_parts[_uwork_dir_idx] = f"{_urel_parts[_uwork_dir_idx]} [{_usuffix}]"
+                _unew_dest = dest_root.joinpath(*_urel_parts)
+                log.warning(
+                    "unify_intra_plan_collision_suffix_applied",
+                    original=str(_udest_orig.relative_to(dest_root)),
+                    renamed=str(_unew_dest.relative_to(dest_root)),
+                    suffix=_usuffix,
+                )
+                _unify_plan_list[_uidx] = (_usrc, _unew_dest, _uacust, _ulength, _urid)
+                _unify_intra_count += 1
+
+    if _unify_intra_count > 0:
+        plan_pairs = _unify_plan_list
+
     # --- Collision detection and resolution ---
+    # C-SEQ vacancy-aware collision check: subtract plan-vacated paths from the collision check.
+    _unify_vacated: frozenset[Path] = frozenset(src for src, _, _, _, _ in plan_pairs)
     collision_pairs = [(src, dest, acust, length) for src, dest, acust, length, _ in plan_pairs]
-    collision_results = _assess_collisions(collision_pairs)
+    collision_results = _assess_collisions(collision_pairs, vacated_paths=_unify_vacated)
     confirmed_nonmatches = [r for r in collision_results if r.match is False]
     if confirmed_nonmatches:
         stub_plan = [CopyPlanEntry(idx=0, src_file=src, dest_file=dest) for src, dest, _, _, _ in plan_pairs]

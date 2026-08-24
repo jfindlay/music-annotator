@@ -35,6 +35,7 @@ from music_annotator import (
 from music_annotator.__main__ import _build_parser, main
 from music_annotator._pipeline_io import (
     AudioCompareResult,
+    _assess_collisions,
     _needs_enrich,
     _read_albumid_tag,
     _read_tags_flac,
@@ -4317,7 +4318,9 @@ class TestUnify:
         - File B lives at the canonical path "Brahms - Karajan/..." (already correct).
 
         detect_fragmented_releases will detect two distinct top_dirs for "frag-rel-1".
-        unify() should move File A to the canonical path.
+        unify() should move File A to the canonical path.  Because File B is already at the
+        canonical path with identical content, unify() deduplicates File A (deletes it and
+        journals the move) rather than overwriting File B.
 
         Returns (old_path, new_path) where old_path is File A's current location and new_path is
         the recomputed canonical destination from the embedded tags.
@@ -4339,6 +4342,56 @@ class TestUnify:
 
         # The old and canonical paths must differ for the scenario to be non-trivial
         assert old_path != canonical_path, "test setup error: old and canonical paths must differ"
+
+        return old_path, canonical_path
+
+    def _build_frag_scenario_no_canonical(self, dest_root: Path) -> tuple[Path, Path]:
+        """Create a performer-split fragmented release scenario where the canonical path is vacant.
+
+        Two FLAC files for release_id "frag-rel-1" land under different top_dirs:
+        - File A lives at "Brahms - Pollini/..." (wrong performer in path, track 1).
+        - File B lives at "Brahms - Karajan/..." (correct top_dir, but track 2 — a different
+          file, so File A's canonical path does not exist on disk).
+
+        detect_fragmented_releases detects two distinct top_dirs for "frag-rel-1".
+        unify() moves File A to its canonical path (which is vacant — no dedup case).
+
+        This variant is used by tests that patch filesystem operations (os.replace, _sha256_file,
+        _read_tags_flac) to exercise error branches inside _execute_single_move.  Those tests
+        require the canonical path to be vacant so the move is attempted (not deduped).
+
+        Returns (old_path, new_path) where old_path is File A's current location and new_path is
+        the recomputed canonical destination from the embedded tags.
+
+        :param dest_root: Library root (must already exist).
+        :returns: Tuple of (current file path, expected canonical path after unify).
+        """
+        tags_a = self._make_frag_tags()  # track 1, wrong top_dir
+
+        # File A: wrong top_dir (Pollini instead of Karajan), track 1
+        old_path = _make_library_flac(
+            dest_root, "Brahms - Pollini/Piano Concerto No. 1 [rec 2021]/01 - First movement.flac", tags_a
+        )
+
+        # File B: correct top_dir (Karajan), but track 2 — different file, different canonical path.
+        # This ensures two distinct top_dirs (triggering fragmentation detection) without placing
+        # any file at File A's canonical path.
+        tags_b = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="2",
+            movementtotal="2",
+            cwp_part_levels="1",
+            title="Second movement",
+            artist="Karajan",
+            musicbrainz_albumid="frag-rel-1",
+        )
+        _make_library_flac(dest_root, "Brahms - Karajan/Piano Concerto No. 1 [rec 2021]/02 - Second movement.flac", tags_b)
+
+        canonical_path = self._canonical_path(dest_root, tags_a)
+        assert old_path != canonical_path, "test setup error: old and canonical paths must differ"
+        assert not canonical_path.exists(), "test setup error: canonical path must not exist"
 
         return old_path, canonical_path
 
@@ -4572,13 +4625,16 @@ class TestUnify:
         (a) RuntimeError is raised, and
         (b) no "unified" journal entry is written.
 
+        Uses the no-canonical variant of the fragmented scenario so the canonical path is vacant
+        and the move is attempted (not deduped), allowing the SHA-256 mismatch to be exercised.
+
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        self._build_frag_scenario(dest_root)
+        self._build_frag_scenario_no_canonical(dest_root)
 
         # Patch _sha256_file: first call returns "aaa..." (src), second returns "bbb..." (dest ≠ src)
         call_count = {"n": 0}
@@ -4925,7 +4981,7 @@ class TestUnify:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        self._build_frag_scenario(dest_root)
+        self._build_frag_scenario_no_canonical(dest_root)
 
         mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=OSError(errno.EACCES, "Permission denied"))
 
@@ -4938,13 +4994,16 @@ class TestUnify:
         Patches os.replace to raise EXDEV and _sha256_file to return mismatched hashes
         for the cross-fs copy verification, exercising the cross-hash-mismatch branch.
 
+        Uses the no-canonical variant of the fragmented scenario so the canonical path is vacant
+        and the move is attempted (not deduped), allowing the EXDEV + hash-mismatch path to fire.
+
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        self._build_frag_scenario(dest_root)
+        self._build_frag_scenario_no_canonical(dest_root)
 
         # Patch os.replace to always raise EXDEV
         mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=OSError(errno.EXDEV, "Cross-device link"))
@@ -4980,8 +5039,11 @@ class TestUnify:
     def test_unify_tag_reread_failure_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """unify() raises RuntimeError when tag re-read fails after the move.
 
-        Patches _read_tags_flac to raise on the second call (post-move re-read), exercising
+        Patches _read_tags_flac to raise on the third call (post-move re-read), exercising
         the ``except Exception: raise RuntimeError(...)`` branch in the tag re-read step.
+
+        Uses the no-canonical variant of the fragmented scenario so the canonical path is vacant
+        and the move is attempted (not deduped), allowing the post-move tag re-read to fire.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -4989,13 +5051,16 @@ class TestUnify:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        self._build_frag_scenario(dest_root)
+        self._build_frag_scenario_no_canonical(dest_root)
 
         original_read = _read_tags_flac
         call_count = {"n": 0}
 
         def _fake_read(path: Path) -> dict[str, str]:
-            """Raise on second call to simulate post-move tag read failure.
+            """Raise on third call to simulate post-move tag read failure.
+
+            The first two calls are during plan-building (one per file); the third is the
+            post-move re-read inside _execute_single_move.
 
             :param path: File path.
             :returns: Tag dict.
@@ -6117,6 +6182,355 @@ class TestMoveVerifyJournal:
         # The now-empty source directories should have been removed.
         assert not src_dir.exists()
         assert not (dest_root / "OldComposer").exists()
+
+    # ---------------------------------------------------------------------------
+    # KAT 1: Renumbering shift chain (C-SEQ dependency ordering)
+    # ---------------------------------------------------------------------------
+
+    def test_shift_chain_no_suffix_correct_final_layout(self, fs: FakeFilesystem) -> None:
+        """C-SEQ KAT: a shift chain executes in dependency order with no suffix and all files present.
+
+        Constructs a three-file shift chain where each destination is the next entry's source:
+          A → B, B → C, C → D
+        (A's destination is B's source, B's destination is C's source.)
+
+        Asserts:
+        - All three files are present at their final destinations (D, C, B respectively).
+        - No collision suffix is applied (no file is lost or overwritten).
+        - Three journal entries are written with the correct source/destination pairs.
+        - Moves execute in dependency order (C vacates before B lands, B vacates before A lands).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/lib/Work")
+        fs.create_dir(str(src_dir))
+
+        # Create three files: A at path_a, B at path_b, C at path_c.
+        # Shift chain: A→B, B→C, C→D (each dest is the next source).
+        path_a = src_dir / "01.flac"
+        path_b = src_dir / "02.flac"
+        path_c = src_dir / "03.flac"
+        path_d = src_dir / "04.flac"
+
+        self._make_flac(path_a)
+        self._make_flac(path_b)
+        self._make_flac(path_c)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        # Shift chain: A→B, B→C, C→D.
+        # Without dependency ordering, A→B would clobber B before B→C runs.
+        # With C-SEQ topological ordering: C→D first, then B→C, then A→B.
+        now = datetime.datetime.now(datetime.UTC)
+        moved = _move_verify_journal(
+            [(path_a, path_b), (path_b, path_c), (path_c, path_d)],
+            journal_path=journal_path,
+            action="repathed",
+            dest_root=dest_root,
+            now=now,
+            release_id="",
+        )
+
+        # All three moves succeeded.
+        assert moved == 3
+
+        # Final layout: A's content at path_b, B's content at path_c, C's content at path_d.
+        # (Each file shifted one slot forward.)
+        assert path_b.exists(), "A's content must be at path_b after shift"
+        assert path_c.exists(), "B's content must be at path_c after shift"
+        assert path_d.exists(), "C's content must be at path_d after shift"
+        assert not path_a.exists(), "path_a must be vacated after shift"
+
+        # Three journal entries, one per move.
+        journal = read_journal(journal_path)
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 3, f"expected 3 journal entries, got {len(repathed)}"
+
+        # All source/destination pairs are present in the journal (order may vary).
+        pairs = {(e.source, e.destination) for e in repathed}
+        assert (str(path_a), str(path_b)) in pairs
+        assert (str(path_b), str(path_c)) in pairs
+        assert (str(path_c), str(path_d)) in pairs
+
+    # ---------------------------------------------------------------------------
+    # KAT 2: True two-file swap (C-SEQ swap cycle via temp hop)
+    # ---------------------------------------------------------------------------
+
+    def test_swap_cycle_temp_hop_provenance_intact(self, fs: FakeFilesystem) -> None:
+        """C-SEQ KAT: a two-file swap uses a temp hop; provenance chain intact, no data loss.
+
+        Constructs a two-file swap: A→B, B→A.  Without temp-hop support, both moves would
+        deadlock (each destination is the other's source).  With C-SEQ, the swap is broken by:
+          1. A → temp  (journalled)
+          2. B → A     (journalled)
+          3. temp → B  (journalled)
+
+        Asserts:
+        - Both files are at their swapped destinations after the operation.
+        - Three journal entries are written (two real moves + one temp hop).
+        - No data loss: both files are intact (readable via _read_tags_flac).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = Path("/lib/Work")
+        fs.create_dir(str(work_dir))
+
+        path_a = work_dir / "01.flac"
+        path_b = work_dir / "02.flac"
+
+        # Write distinct tags to A and B so we can verify the swap.
+        tags_a = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="2",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+        )
+        tags_b = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="2",
+            movementtotal="2",
+            cwp_part_levels="1",
+            title="Andante con moto",
+            artist="Karajan",
+        )
+        path_a.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path_a, tags_a)
+        path_b.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path_b, tags_b)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        now = datetime.datetime.now(datetime.UTC)
+        moved = _move_verify_journal(
+            [(path_a, path_b), (path_b, path_a)],
+            journal_path=journal_path,
+            action="repathed",
+            dest_root=dest_root,
+            now=now,
+            release_id="",
+        )
+
+        # Three moves: A→temp, B→A, temp→B (temp hop counts as a move).
+        assert moved == 3, f"expected 3 moves (temp hop), got {moved}"
+
+        # Both files exist at their swapped destinations.
+        assert path_a.exists(), "path_a must exist after swap (B's content)"
+        assert path_b.exists(), "path_b must exist after swap (A's content)"
+
+        # Verify the swap: A's original content (tags_a) is now at path_b,
+        # and B's original content (tags_b) is now at path_a.
+        tags_at_a = _read_tags_flac(path_a)
+        tags_at_b = _read_tags_flac(path_b)
+        assert tags_at_a.get("TITLE") == "Andante con moto", (
+            f"path_a should have B's content (Andante con moto), got {tags_at_a.get('TITLE')!r}"
+        )
+        assert tags_at_b.get("TITLE") == "Allegro con brio", (
+            f"path_b should have A's content (Allegro con brio), got {tags_at_b.get('TITLE')!r}"
+        )
+
+        # Three journal entries (A→temp, B→A, temp→B).
+        journal = read_journal(journal_path)
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 3, f"expected 3 journal entries (temp hop), got {len(repathed)}"
+
+        # The final destinations (path_a and path_b) must appear in the journal.
+        dests = {e.destination for e in repathed}
+        assert str(path_a) in dests, f"path_a must appear as a destination in the journal; dests={dests}"
+        assert str(path_b) in dests, f"path_b must appear as a destination in the journal; dests={dests}"
+
+    def test_dependency_ordering_already_processed_node(self, fs: FakeFilesystem) -> None:
+        """C-SEQ: dependency ordering handles a node whose dependency was already processed.
+
+        Constructs a two-move plan where move 1 depends on move 0 (move 0 must vacate its
+        source before move 1 can land there), and move 0 has no dependency.  The topological
+        sort processes move 0 first (no dependency), then move 1.  During DFS, when processing
+        move 1, move 0's node is already BLACK (fully processed) — exercising the
+        ``color[nxt] == BLACK`` branch in the DFS cycle detection.
+
+        Scenario:
+          Move 0: A → B  (A is vacated; B is the new location)
+          Move 1: C → A  (C is vacated; A is the new location — A was vacated by move 0)
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = Path("/lib/Work")
+        fs.create_dir(str(work_dir))
+
+        path_a = work_dir / "01.flac"
+        path_b = work_dir / "02.flac"
+        path_c = work_dir / "03.flac"
+
+        self._make_flac(path_a)
+        self._make_flac(path_c)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        # Move 0: A→B (no dependency: B is not a source of any move).
+        # Move 1: C→A (depends on move 0: A must be vacated before C can land there).
+        # Topological order: move 0 first (no dep), then move 1.
+        now = datetime.datetime.now(datetime.UTC)
+        moved = _move_verify_journal(
+            [(path_a, path_b), (path_c, path_a)],
+            journal_path=journal_path,
+            action="repathed",
+            dest_root=dest_root,
+            now=now,
+            release_id="",
+        )
+
+        assert moved == 2
+        assert path_b.exists(), "A's content must be at path_b"
+        assert path_a.exists(), "C's content must be at path_a"
+        assert not path_c.exists(), "path_c must be vacated"
+
+        journal = read_journal(journal_path)
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 2
+
+    # ---------------------------------------------------------------------------
+    # KAT 3: Genuine occupant-stays collision (vacancy-aware _assess_collisions)
+    # ---------------------------------------------------------------------------
+
+    def test_genuine_occupant_stays_collision_suffix_applied(self, fs: FakeFilesystem) -> None:
+        """C-SEQ KAT: a destination occupied by a file NOT in the plan triggers a suffix.
+
+        Constructs a scenario where:
+        - File A is planned to move to dest_path.
+        - dest_path is already occupied by an UNRELATED file (not a source in the plan).
+        - The occupant has a different AcoustID tag (confirming different audio content).
+
+        Asserts that _assess_collisions returns a non-match result for dest_path (the suffix
+        fires), and that the vacated_paths set does NOT suppress this collision (the occupant
+        is not vacated by the plan).
+
+        The vacancy-aware check is also verified: when dest_path IS in vacated_paths, the
+        collision is suppressed (the occupant would be moved away before this move executes).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/lib/Src")
+        fs.create_dir(str(src_dir))
+
+        # File A: source file to be moved.  Tag with AcoustID "aaaa-1111".
+        src_a = src_dir / "01.flac"
+        tags_src = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+            acoustid_id="aaaa-1111-aaaa-1111",
+        )
+        src_a.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(src_a, tags_src)
+
+        # Occupant: a DIFFERENT file already at the destination (not in the plan).
+        # Tag with a different AcoustID "bbbb-2222" so compare_audio_collision returns match=False.
+        dest_path = dest_root / "Work" / "01.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        tags_occ = TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Piano Concerto No. 1",
+            recording_date="2021",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="First movement",
+            artist="Pollini",
+            acoustid_id="bbbb-2222-bbbb-2222",
+        )
+        dest_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_path, tags_occ)
+
+        # vacated_paths contains only src_a (the plan's source), NOT dest_path.
+        vacated: frozenset[Path] = frozenset({src_a})
+
+        results = _assess_collisions(
+            [(src_a, dest_path, "aaaa-1111-aaaa-1111", 0)],
+            vacated_paths=vacated,
+        )
+
+        # The occupant is not vacated → collision is detected with match=False (different AcoustID).
+        assert len(results) == 1, f"expected 1 collision result, got {len(results)}"
+        assert results[0].match is False, f"expected match=False (different AcoustID), got match={results[0].match}"
+
+        # Vacancy-aware check: when dest_path IS in vacated_paths, the collision is suppressed.
+        vacated_with_dest: frozenset[Path] = frozenset({src_a, dest_path})
+        results_suppressed = _assess_collisions(
+            [(src_a, dest_path, "aaaa-1111-aaaa-1111", 0)],
+            vacated_paths=vacated_with_dest,
+        )
+        assert len(results_suppressed) == 0, f"expected 0 results when dest is vacated, got {len(results_suppressed)}"
+
+    # ---------------------------------------------------------------------------
+    # KAT 4: Forced stationary-occupant clobber attempt (C-NOCLOBBER refusal)
+    # ---------------------------------------------------------------------------
+
+    def test_stationary_occupant_clobber_refused_no_journal_entry(self, fs: FakeFilesystem) -> None:
+        """C-NOCLOBBER KAT: a move whose destination is occupied and NOT vacated is refused.
+
+        Constructs a scenario where:
+        - File A is planned to move to dest_path.
+        - dest_path is already occupied by a file with DIFFERENT content (not a dedup case).
+        - The occupant is NOT a source in the plan (not vacated).
+
+        Asserts:
+        - RuntimeError is raised with a C-NOCLOBBER message.
+        - No journal entry is written.
+        - Both files (source and occupant) remain intact after the refusal.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/lib/Src")
+        fs.create_dir(str(src_dir))
+
+        src_a = src_dir / "01.flac"
+        self._make_flac(src_a)
+
+        # Occupant: a DIFFERENT file at the destination (different content → not dedup).
+        dest_path = dest_root / "Work" / "01.flac"
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        # Write different bytes so SHA-256 differs from src_a (not a dedup case).
+        dest_path.write_bytes(_MINIMAL_FLAC + b"\xff\xfe\xfd")
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("[]", encoding="utf-8")
+
+        now = datetime.datetime.now(datetime.UTC)
+        with pytest.raises(RuntimeError, match="C-NOCLOBBER"):
+            _move_verify_journal(
+                [(src_a, dest_path)],
+                journal_path=journal_path,
+                action="repathed",
+                dest_root=dest_root,
+                now=now,
+                release_id="",
+            )
+
+        # No journal entry written (C-PROV: no entry before verification passes).
+        journal = read_journal(journal_path)
+        assert journal.entries == [], "C-NOCLOBBER: no journal entry must be written on refusal"
+
+        # Both files remain intact.
+        assert src_a.exists(), "source file must remain intact after C-NOCLOBBER refusal"
+        assert dest_path.exists(), "occupant file must remain intact after C-NOCLOBBER refusal"
 
 
 # ---------------------------------------------------------------------------

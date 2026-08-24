@@ -829,21 +829,34 @@ def compare_audio_collision(
 
 def _assess_collisions(
     plan_pairs: list[tuple[Path, Path, str, int]],
+    vacated_paths: frozenset[Path] | None = None,
 ) -> list[AudioCompareResult]:
     """Assess each planned-destination collision against its source for audio content similarity.
 
-    Filters ``plan_pairs`` to entries whose destination already exists on disk, then calls
-    :func:`compare_audio_collision` for each one.  Plan entries with no pre-existing destination
-    are omitted from the result.
+    Filters ``plan_pairs`` to entries whose destination already exists on disk **and** is not
+    vacated by the same plan, then calls :func:`compare_audio_collision` for each one.  Plan
+    entries with no pre-existing destination, or whose destination is in ``vacated_paths`` (i.e.
+    it will be vacated by another move in the same plan before this move executes), are omitted
+    from the result.
+
+    The ``vacated_paths`` parameter implements the C-SEQ vacancy-aware collision rule: the suffix
+    fires only when the occupant is NOT vacated by the same plan AND audio differs
+    (acoustid/length).  Callers must pass the set of source paths from the same plan so that
+    destinations that are also sources (shift chains, swaps) are not falsely flagged as collisions.
 
     :param plan_pairs: A list of ``(src_file, dest_file, acoustid, length_ms)`` tuples, one per
         planned copy operation.  ``acoustid`` is the incoming track's AcoustID UUID (may be ``""``);
         ``length_ms`` is its duration in milliseconds (may be ``0``).
+    :param vacated_paths: Optional set of paths that will be vacated by the same plan (i.e. the
+        source paths of all moves in the plan).  When a destination is in this set, it is not
+        treated as a collision — the occupant will be moved away before this move executes.
+        Defaults to ``None`` (no vacancy subtraction, equivalent to an empty set).
     :returns: A (possibly empty) list of :class:`AudioCompareResult` objects, one per collision.
     """
+    effective_vacated: frozenset[Path] = vacated_paths if vacated_paths is not None else frozenset()
     results: list[AudioCompareResult] = []
     for src, dest, acoustid, length_ms in plan_pairs:
-        if dest.exists():
+        if dest.exists() and dest not in effective_vacated:
             results.append(compare_audio_collision(src, dest, acoustid, length_ms))
     return results
 
