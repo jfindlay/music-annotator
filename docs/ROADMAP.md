@@ -13,6 +13,26 @@ loop (enforced 100% branch coverage, strict mypy, pylint 10/10) licenses small c
 but provenance-chain and path-policy work keeps correctness-criticality high, so the adjudicator does
 not opt down.
 
+## Current state (2026-08-24 consolidation)
+
+All agent-shardable code work in this arc is **done and green**: R0–R4, the R3 adapters, the
+R6a–R6c machinery, the J3-preflight harness (C-PREFLIGHT), the C-UNIVERSAL re-freeze + styleguide
+sync, and the pre-R6d corrective shard (extension-loss, collision suffix, top-dir performer
+restore, scripts drain — `docs/PLAN.md` git history, 8/8 rows, through commit `6ee245f`).  The
+remaining critical path is **entirely operator-paced**:
+
+1. **Preflight re-run** against live hades under C-UNIVERSAL: `music-annotator preflight
+   <library> --user-agent-email <email>` — the shipped CLI action (the old
+   `scripts/preflight_r6d.py` was deleted in the scripts drain).  Produces fresh J3 evidence; the
+   2026-08-14 artifact was superseded by construction and has been removed from `docs/`.
+2. **Maintenance repair turn**: `repath` first (extension repair precedes `regroup`/`unify`),
+   then per the report — repairs the live defects the pre-R6d shard fixed on fixtures.
+3. **R5 drain** of `Original/` (exit = empty; Act I done).
+4. **J3 go/no-go** → **R6d** destructive one-pass → **R6e** conventions spec.
+
+Deferred/dormant design paths are consolidated in `docs/NOTES.md` § "Dormant decisions register";
+the styleguide arc is closed to its steady-state loop (`docs/ROADMAP-styleguide.md` tombstone).
+
 ## Design intent (anchor — re-read at every sub-track boundary)
 
 The north star (BACKLOG, 2026-07-17): **full inclusion** (the library is a catalog; nothing stays
@@ -421,7 +441,7 @@ with dev work throughout.  Exit condition: `Original/` empty — this is Act I's
 |----------|------|-------------|
 | **J1** *(FIRED 2026-07-20)* | end of R0 | Census distribution → R3 order/pruning; rung-ladder shape for R2; not-in-MB default posture.  Verdict `still-on-intent` + `additive-reshard`; no destructive-HALT.  Outputs folded into R2/R3/pre-R3 nodes above and recorded in the appendix.  R2 shard proceeds against C-TIER. |
 | **J2** *(FIRED 2026-07-30; REOPENED 2026-08-19; RE-FROZEN 2026-08-19)* | end of R4 + **styleguide v1** | **Taxonomy half re-frozen: C-CLASS refuted-and-deleted, superseded by C-UNIVERSAL (prefix-less universal top dir; the first path component is the scholarship-stable first-component shape, absorbing+generalising C-INIT); `IS_CLASSICAL` decoupled to the work-type predicate; the epistemic criterion pinned in NOTES.  Depth policy and the editorial half (styleguide v1) stand unchanged.**  Original freeze (2026-07-30): naming-policy `still-on-intent`, C-W3b graduated, editorial half = styleguide v1 by reference, C-S0 release-scoped.  A-b/A-c close; **Act II is done**.  Full adjudication + re-freeze in the Discoveries appendix. |
-| **J3** *(UN-HALTED 2026-08-19; awaiting preflight re-run)* | before R6d | Go/no-go on the destructive-scale full-library repath: `Reference/` retention decision, journal capacity, dry-run evidence.  **The naming-policy re-freeze that halted J3 has landed (C-UNIVERSAL, commit `bec261d`).  The go/no-go input is the preflight re-run against the re-frozen policy — an operator step (`scripts/preflight_r6d.py` against live hades; the harness is built and green, C-PREFLIGHT).  The 2026-08-14 evidence is superseded; its change-set will be strictly larger (every former class-dir file now moves).** |
+| **J3** *(UN-HALTED 2026-08-19; awaiting preflight re-run)* | before R6d | Go/no-go on the destructive-scale full-library repath: `Reference/` retention decision, journal capacity, dry-run evidence.  **The naming-policy re-freeze that halted J3 has landed (C-UNIVERSAL, commit `bec261d`).  The go/no-go input is the preflight re-run against the re-frozen policy — an operator step (the `preflight` CLI action against live hades; the harness is built and green, C-PREFLIGHT; the superseded `scripts/preflight_r6d.py` was deleted in the scripts drain).  The 2026-08-14 evidence is superseded; its change-set will be strictly larger (every former class-dir file now moves).** |
 
 Post-R3, the **structural-audit trigger** fires (BACKLOG "Codebase maintenance cadence"): review the
 coherence of the new module boundaries (adapters, rung substrate, `_net`) once settled.  Trigger-based;

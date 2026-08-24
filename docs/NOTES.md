@@ -798,3 +798,68 @@ carries assembled semantics under a name whose CE meaning is the verbatim credit
 with the REND-14 shard.  **"Done means V1b" checklist passes; STYLEGUIDE v1 declared; reported to J2.**  Post-v1
 tag-shaping A-shard queue out of S6: REND-14 reorder + naming realignment, chorusmaster-into-`CONDUCTOR` addition,
 `IS_CLASSICAL` conditionalisation — all coordinate with R6d's one-pass re-derivation.
+
+## Dormant decisions register (consolidated 2026-08-24)
+
+One entry per open-but-deferred design path, with its firing trigger and where the design context
+lives.  Nothing here blocks the operator critical path (preflight → repair turn → drain
+`Original/` → J3 → the one-pass re-derivation).  Consult this register before opening any new
+sub-track; evolve entries in place rather than opening new roadmap threads.  Cross-references to
+roadmap node names are citations into the files where those coordinates legitimately live.
+
+- **Soloist-in-path (C-NOSOLO reopen).**  The operator wants the soloist in the top dir
+  (2026-08-20 ruling, reversing the earlier SEL-11 universal removal as likely overengineered);
+  explicitly deferred until the unfinished tasks complete.  Needs an editorial rule — the
+  Albinoni / concerto-grosso / choir+chorusmaster / modern-works hard cases prove attribution is
+  editorial, not mechanical — never an allowlist.  If it lands after the one-pass re-derivation it
+  costs a second journaled library-wide repath (churn, not integrity; accepted by the deferral
+  ruling).  When it lands, retire C-NOSOLO and update the styleguide SEL-11/REND records.
+  Context: ROADMAP R6d node; STYLEGUIDE SEL-11.
+- **Maintenance apply-all verb.**  `preflight` is the diagnose-all umbrella (all six maintenance
+  passes, dry-run, one consolidated report); no apply-all counterpart exists — the destructive
+  run is the individual passes invoked in sequence.  Trigger: the by-hand run cookbook proving
+  error-prone.  Context: the `preflight` epilog in `__main__.py`; ROADMAP R6d node.
+- **Scanner→`audit` migration.**  `scripts/scan_fragmentation.py` and
+  `scripts/scan_nonuniform_depth.py` hold detection logic that lives only in the scripts; migrate
+  both into the `audit` CLI action as read-only detectors (a report-model design session, not a
+  mechanical move), then delete them.  Trigger: operator election; coordinate with any
+  fragmentation-regroup remedy.  Context: ROADMAP R4b follow-on.
+- **rg-multi-release regroup.**  Box sets modelled by MB as multiple releases fragment across top
+  dirs despite C-S0 (release-scoped by J2 ruling); 5 documentary candidates, live scan is the
+  authoritative count.  Trigger: R6d PLAN derivation consumes it.  Context:
+  `docs/census-fragmentation.md`; ROADMAP R4b/J2 appendix entries.
+- **R6d tag-content scope decision.**  The offline maintenance engine re-derives paths only; the
+  catalogue-colon and AcoustID tag repatches are built, but any further tag-content re-derivation
+  (`CEA_*`, billing order) needs a new offline pass or a bulk re-apply — an explicit scope
+  decision.  Trigger: R6d PLAN derivation.  Context: ROADMAP R6d planning caveat.
+- **C-ACID dual-read retirement.**  Drop the legacy `CHROMAPRINT_FP` read key once the library is
+  fully migrated to `ACOUSTID_FINGERPRINT`.  Trigger: post-R6d migration verification.  Context:
+  ROADMAP R6c node.
+- **Structural audit of module boundaries.**  Review the coherence of the adapter / tier-substrate
+  / `_net` module boundaries now that they have settled; fired-eligible since 2026-07-21, never
+  elected.  Trigger: operator election (off critical path).  Context: BACKLOG "Codebase
+  maintenance cadence".
+- **Conventions spec (R6e).**  Deliberately held until after the one-pass re-derivation so it
+  describes final on-disk conventions, not churning ones.  Trigger: R6d lands.  Context: ROADMAP
+  R6e node; BACKLOG "Public conventions spec".
+- **Playlist library arc design.**  Charter only (`docs/ROADMAP-playlists.md`); sub-tracks derive
+  after the catalog shape settles so playlist references are written once against final paths.
+  Trigger: R6d lands.  Context: the playlists roadmap's open design questions.
+- **Local accession identity (C-LOCAL-ID).**  The ingest verb for never-in-MB material; design is
+  pinned in this file ("Local accession identity").  Trigger: the operator chooses to catalog
+  never-external material.
+- **CEv3 / CE-author contact.**  The CE successor on Picard v3; graduates to its own roadmap when
+  actioned; first step is contacting the CE author.  Trigger: operator election.  Context:
+  `docs/ROADMAP-styleguide.md` tombstone, node C.
+- **jmoney → media-annotator merge.**  jmoney's acquisition layer is merge-ready and spec'd in
+  `~/Source/jmoney/docs/MERGE-READINESS.md` (five output contracts: C-DETECT, C-STAGE, C-PROV-J,
+  C-ANNOT, C-WHIP-COMPAT, plus four prose invariants); merge *execution* — the media-annotator
+  rename, the video-pipeline adapter, the wiring — belongs to this repo's planning and is
+  deliberately unscheduled.  jmoney's own in-flight pipeline sub-track is operator-blocked on two
+  empirical transcript captures (its `docs/PLAN.md` E6/E7).  Trigger: R6d lands **and** jmoney's
+  pipeline sub-track closes.  Cross-repo note: a change to this repo's C-WHIP or C-AR contracts is
+  a reopen trigger for jmoney's whipper backend (co-evolution is manual, not test-enforced).
+- **Styleguide adjudication loop (L).**  Perpetual steady state, not a task: new cases append to
+  the STYLEGUIDE register as annotation work surfaces them (C-CASE: append-only, never
+  renumbered); statuses revise as evidence improves.  The census artifacts (`docs/census-ce.md`,
+  `census-impl.md`, `census-library.md`) remain its evidence reservoirs.
