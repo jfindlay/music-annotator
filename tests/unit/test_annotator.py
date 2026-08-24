@@ -4846,7 +4846,11 @@ class TestBoxSetPerformersComponent:
     from ARTIST.  When those tags are absent, the component must fall back to "Unknown Performers"
     rather than baking the edition title into the path.
 
-    Two KATs:
+    The guard fires only on the edition-title shape (ARTIST == ALBUM).  The normal performer-name
+    shapes — ARTIST == ALBUMARTIST (self-performed classical, pop, jazz) — must NOT trigger the
+    guard; the performer name must survive to the path.
+
+    Four KATs:
 
     1. **CEA tags present**: a composer-bearing box-set track whose embedded CEA_CONDUCTORS /
        CEA_ENSEMBLES carry the real performer renders ``<composer> - <conductor; ensemble>`` —
@@ -4854,6 +4858,9 @@ class TestBoxSetPerformersComponent:
     2. **ARTIST == ALBUM (edition-title tell)**: a composer-bearing box-set track whose embedded
        tags carry ARTIST == ALBUM and no CEA_* performer keys renders without the edition title
        (composer-only or "Unknown Performers").
+    3. **Self-performed classical (ARTIST == ALBUMARTIST, ALBUM is album title)**: the performer
+       name must appear in the rendered performers component, not "Unknown Performers".
+    4. **Pop/jazz (ARTIST == ALBUMARTIST ≠ ALBUM)**: the performer name must survive to the path.
     """
 
     def test_boxset_with_cea_tags_renders_real_performer(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
@@ -4972,6 +4979,99 @@ class TestBoxSetPerformersComponent:
         # The top-dir must start with the composer.
         top = result.relative_to(dest_root).parts[0]
         assert top.startswith("Mozart"), f"Expected top_dir to start with composer 'Mozart', got {top!r}"
+
+    def test_self_performed_classical_artist_equals_albumartist_survives(self, fs: FakeFilesystem) -> None:
+        """Self-performed classical: ARTIST == ALBUMARTIST must not trigger the edition-title guard.
+
+        KAT 3: Rachmaninoff performing his own works — ARTIST and ALBUMARTIST both equal
+        "Sergei Rachmaninoff", ALBUM is the album title "Piano Concertos".  The guard fires only
+        on the edition-title shape (ARTIST == ALBUM); ARTIST == ALBUMARTIST is the normal
+        self-performed shape and must NOT suppress the performer name.
+
+        The performers component must contain "Rachmaninoff" (from ARTIST via the last-resort
+        fallback), not "Unknown Performers".
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            title="I. Allegro moderato",
+            movementnumber="1",
+            movementtotal="3",
+            cwp_work_top="Piano Concerto No. 2",
+            cwp_workid_top="w-rach2",
+            cwp_composer_lastnames="Rachmaninoff",
+            cwp_worktype_genres_top="Classical",
+            # Self-performed shape: ARTIST == ALBUMARTIST, ALBUM is the album title.
+            artist="Sergei Rachmaninoff",
+            albumartist="Sergei Rachmaninoff",
+            album="Piano Concertos",
+            # No conductor or ensemble tags — the last-resort ARTIST fallback must fire.
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+
+        result = music_annotator.build_dest_path(
+            dest_root,
+            MBRelease(),
+            MBTrack(),
+            tags,
+            global_track_idx=0,
+        )
+        top = result.relative_to(dest_root).parts[0]
+
+        # The performers component must contain the performer name, not "Unknown Performers".
+        assert "Unknown Performers" not in top, (
+            f"Self-performed classical shape (ARTIST == ALBUMARTIST) must not degrade to "
+            f"'Unknown Performers'; got top_dir {top!r}"
+        )
+        assert "Rachmaninoff" in top, f"Performer name must appear in the top-dir performers component; got {top!r}"
+
+    def test_pop_jazz_artist_equals_albumartist_not_album_survives(self, fs: FakeFilesystem) -> None:
+        """Pop/jazz shape: ARTIST == ALBUMARTIST ≠ ALBUM must not trigger the edition-title guard.
+
+        KAT 4: a pop/jazz release where ARTIST and ALBUMARTIST both equal "Miles Davis" and ALBUM
+        is "Kind of Blue".  The guard fires only on the edition-title shape (ARTIST == ALBUM);
+        ARTIST == ALBUMARTIST with a distinct ALBUM is the normal performer-name shape and must
+        NOT suppress the performer name.
+
+        The performers component must contain "Miles Davis" (from ARTIST via the last-resort
+        fallback), not "Unknown Performers".
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            title="So What",
+            movementnumber="1",
+            movementtotal="5",
+            # No composer hierarchy — performer-led release.
+            artist="Miles Davis",
+            albumartist="Miles Davis",
+            album="Kind of Blue",
+            # No conductor or ensemble tags — the last-resort ARTIST fallback must fire.
+            cea_conductors_list=[],
+            cea_ensembles_list=[],
+        )
+
+        result = music_annotator.build_dest_path(
+            dest_root,
+            MBRelease(),
+            MBTrack(),
+            tags,
+            global_track_idx=0,
+        )
+        top = result.relative_to(dest_root).parts[0]
+
+        # The performers component must contain the performer name, not "Unknown Performers".
+        assert "Unknown Performers" not in top, (
+            f"Pop/jazz shape (ARTIST == ALBUMARTIST ≠ ALBUM) must not degrade to 'Unknown Performers'; got top_dir {top!r}"
+        )
+        assert "Miles Davis" in top, f"Performer name must appear in the top-dir component; got {top!r}"
 
 
 # ---------------------------------------------------------------------------

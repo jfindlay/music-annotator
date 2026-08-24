@@ -1232,16 +1232,21 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
             performers = "; ".join(all_conductors + all_ensembles)
         else:
             # Last-resort fallback: CEA_ENSEMBLE_NAMES, then ARTIST.
-            # Guard: ARTIST must not equal ALBUM or ALBUMARTIST — when it does, ARTIST carries
-            # the release/edition title (e.g. "Complete Mozart Edition"), not a performer name.
+            # Guard: ARTIST must not equal ALBUM — when it does, ARTIST carries the
+            # release/edition title (e.g. "Complete Mozart Edition"), not a performer name.
             # Using the edition title as the performers path component violates C-UNIVERSAL
             # (the performers component must never resolve to the release/edition title).
             # In that case, fall through to "Unknown Performers" rather than baking the
             # edition string into the path.
+            #
+            # ARTIST == ALBUMARTIST is the normal shape for pop, jazz, and self-performed
+            # classical (e.g. Rachmaninoff performing his own works).  That shape must NOT
+            # trigger the guard — the performer name must survive to the path.  Only the
+            # edition-title shape (ARTIST == ALBUM) is the tell that ARTIST holds a collection
+            # title rather than a performer name.
             raw_artist = file_dict.get("ARTIST", "")
             album_val = file_dict.get("ALBUM", "")
-            albumartist_val = file_dict.get("ALBUMARTIST", "")
-            artist_is_edition_title = raw_artist and raw_artist in (album_val, albumartist_val)
+            artist_is_edition_title = bool(raw_artist and raw_artist == album_val)
             if artist_is_edition_title:
                 performers = file_dict.get("CEA_ENSEMBLE_NAMES", "") or "Unknown Performers"
             else:
