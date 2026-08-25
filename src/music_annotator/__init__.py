@@ -148,6 +148,7 @@ from music_annotator._tags import (
     build_dest_path,
     build_track_tags,
     safe_name,
+    sel23_ensemble_patch,
 )
 from music_annotator._works import (
     CANNOT_RECOMPUTE,
@@ -196,6 +197,7 @@ __all__ = [
     "build_track_tags",
     "safe_name",
     "build_dest_path",
+    "sel23_ensemble_patch",
     "apply_tags_flac",
     "apply_tags_mp3",
     "find_source_files",

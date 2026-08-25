@@ -442,6 +442,70 @@ def build_cea_performers(recording_detail: MBRecording) -> CeaPerformers:
     return cea
 
 
+def sel23_ensemble_patch(all_track_tags: list[TrackTags]) -> None:
+    """Expand each track's album-scope ensemble list per the SEL-23 selection rule.
+
+    Implements the SEL-23 ensemble selection rule: the ensemble position at release scope equals
+    the release-level credits (``cea_album_ensembles_list``) unioned with any ensemble body that
+    appears on a modal majority (strictly more than 50%) of the release's tracks.  Minority
+    configurations stay credits-only; soloists still never enter (SEL-11 unchanged).
+
+    This function is the single authoritative implementation of the SEL-23 rule.  It must be
+    called with the full track set of a release (all tracks, not a subset) so that the majority
+    threshold is computed over the correct denominator.  Callers must ensure that
+    ``cea_ensembles_list`` is populated on each :class:`~music_annotator.models.TrackTags` before
+    calling this function (e.g. via
+    :func:`~music_annotator._pipeline_maint._hydrate_performer_lists` in the maintenance path).
+
+    Mutates ``all_track_tags`` in-place: for each track, any ensemble that qualifies under the
+    modal-majority criterion is appended to ``cea_album_ensembles_list`` when not already present
+    (deduplication is by name).  The function is idempotent: calling it twice on the same list
+    produces the same result.
+
+    :param all_track_tags: List of :class:`~music_annotator.models.TrackTags` for every track in
+        the release.  Must be the complete track set; partial sets produce incorrect majority
+        thresholds.
+    """
+    n_tracks = len(all_track_tags)
+    if n_tracks == 0:
+        return
+
+    # Count how many tracks each ensemble (by name) appears on.
+    # Uses cea_ensembles_list (per-track ensembles from recording-level artist relations).
+    ensemble_track_count: dict[str, int] = {}
+    # Also collect the first ArtistEntry seen for each ensemble name so we can append it to
+    # cea_album_ensembles_list with the correct sort/mbid fields.
+    ensemble_first_entry: dict[str, ArtistEntry] = {}
+    for tags in all_track_tags:
+        # Deduplicate within a single track: an ensemble that appears twice on one track
+        # (duplicate MB relation) should count as one appearance for the majority threshold.
+        seen_on_track: set[str] = set()
+        for entry in tags.cea_ensembles_list:
+            if entry.name and entry.name not in seen_on_track:
+                seen_on_track.add(entry.name)
+                ensemble_track_count[entry.name] = ensemble_track_count.get(entry.name, 0) + 1
+                if entry.name not in ensemble_first_entry:
+                    ensemble_first_entry[entry.name] = entry
+
+    # Identify ensembles present on a strict modal majority (>50%) of tracks.
+    majority_threshold = n_tracks / 2  # strictly greater than this value
+    majority_ensembles: list[ArtistEntry] = [
+        ensemble_first_entry[name] for name, count in ensemble_track_count.items() if count > majority_threshold
+    ]
+
+    if not majority_ensembles:
+        return
+
+    # Union majority ensembles into each track's cea_album_ensembles_list.
+    # Deduplication is by name: an ensemble already present at release level is not added again.
+    for tags in all_track_tags:
+        existing_names: set[str] = {e.name for e in tags.cea_album_ensembles_list}
+        for entry in majority_ensembles:
+            if entry.name not in existing_names:
+                tags.cea_album_ensembles_list.append(entry)
+                existing_names.add(entry.name)
+
+
 def build_cwp_tags(
     work_hierarchy: list[MBWork],
     role_buckets: RoleBuckets,
@@ -1102,13 +1166,16 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
             <Work title or ALBUM> [YYYY]/
               <nn> - <track title>
 
-    The ``<Conductor; Ensemble>`` component (classical only) uses the **album-level** performers —
-    i.e. those credited at the release level in ``release.artist_credit``
-    (``tags.cea_album_conductors_list`` and ``tags.cea_album_ensembles_list``).  This prevents the
-    top-level directory from forking when MB credits performers inconsistently across movements
-    (e.g. conductor on some tracks only, or parent ensemble on some tracks and a named subgroup on
-    others).  Support performers (credited per-track but not at release level) are captured in tags
-    only, not in the directory path.
+    The ``<Conductor; Ensemble>`` component (classical only) uses the **release-scope** performers
+    from ``tags.cea_album_conductors_list`` and ``tags.cea_album_ensembles_list``.  The release-scope
+    ensemble set is the union of release-level credits and any ensemble body present on a modal
+    majority (>50%) of the release's tracks (SEL-23).  Callers must apply
+    :func:`sel23_ensemble_patch` over the full release track set before calling this function to
+    ensure ``cea_album_ensembles_list`` reflects the SEL-23 rule.  This prevents the top-level
+    directory from forking when MB credits performers inconsistently across movements (e.g. conductor
+    on some tracks only, or parent ensemble on some tracks and a named subgroup on others).  Minority
+    configurations (ensembles on ≤50% of tracks) and soloists (SEL-11) are captured in tags only,
+    not in the directory path.
 
     Each path performer is rendered as the entity's **canonical name-form** — the MB artist
     ``name`` field per STYLEGUIDE 3.1/NORM-2 (as revised): the MB ``name`` field is already the
@@ -1189,12 +1256,17 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
 
     # Performers directory component.
     #
-    # Primary: album-level conductors and ensembles — those credited at the release level in MB
-    # (release.artist_credit).  Using the album-level subset prevents the top-level directory from
-    # forking when MB credits performers inconsistently across movements (e.g. conductor on some
-    # tracks but not others, or parent ensemble on some tracks and named subgroup on others).
+    # Primary: release-scope conductors and ensembles from cea_album_conductors_list and
+    # cea_album_ensembles_list.  The release-scope ensemble set is the union of release-level
+    # credits and any ensemble body present on a modal majority (>50%) of the release's tracks
+    # (SEL-23).  Callers must apply sel23_ensemble_patch() over the full release track set before
+    # calling this function to ensure cea_album_ensembles_list reflects the SEL-23 rule.  Using
+    # the release-scope set prevents the top-level directory from forking when MB credits performers
+    # inconsistently across movements (e.g. conductor on some tracks but not others, or parent
+    # ensemble on some tracks and named subgroup on others).  Minority configurations (ensembles on
+    # ≤50% of tracks) and soloists (SEL-11) are captured in tags only, not in the directory path.
     #
-    # Fallback (album-level yields nothing): use all per-track conductors + ensembles so that
+    # Fallback (release-scope yields nothing): use all per-track conductors + ensembles so that
     # composer-only releases and Various-Artists compilations still produce a meaningful directory.
     # When even the fallback is empty, use CEA_ENSEMBLE_NAMES, then ARTIST.
     #

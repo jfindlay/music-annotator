@@ -31,6 +31,7 @@ from music_annotator import (
     build_dest_path,
     read_journal,
     repath,
+    sel23_ensemble_patch,
 )
 from music_annotator.__main__ import _build_parser, main
 from music_annotator._pipeline_io import (
@@ -11416,3 +11417,160 @@ class TestPreflightParity:
         assert cap.projected_delta_entries >= 4, (
             f"projected_delta_entries must be >= 4 (2 repath + 2 repatch_catalogue_colon); got {cap.projected_delta_entries}"
         )
+
+
+# ---------------------------------------------------------------------------
+# SEL-23 ensemble patch in repath — KAT
+# ---------------------------------------------------------------------------
+
+
+class TestRepathSel23EnsemblePatch:
+    """KAT: repath applies the SEL-23 ensemble selection rule when recomputing paths.
+
+    When a library file has a MUSICBRAINZ_ALBUMID and its per-track CEA_ENSEMBLES tag contains
+    an ensemble that appears on a modal majority (>50%) of the release's tracks, repath must
+    include that ensemble in the performers path component — even if the ensemble is not in
+    CEA_ALBUM_ENSEMBLES (the release-level credit).
+
+    This exercises the sel23_ensemble_patch call inside repath (the SEL-23 patch pass that runs
+    between Pass 1 tag-reading and Pass 2 path-building).
+    """
+
+    @staticmethod
+    def _make_sel23_tags(
+        *,
+        movt_num: str,
+        title: str,
+        album_ensemble: str,
+        per_track_ensembles: list[str],
+    ) -> TrackTags:
+        """Build TrackTags for a SEL-23 repath test track.
+
+        :param movt_num: Movement number (``CWP_MOVT_NUM``).
+        :param title: Track title.
+        :param album_ensemble: Release-level ensemble name (``CEA_ALBUM_ENSEMBLES``).
+        :param per_track_ensembles: Per-track ensemble names (``CEA_ENSEMBLES``).
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        return TrackTags(
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Symphony No. 1",
+            recording_date="2022",
+            cwp_movt_num=movt_num,
+            movementtotal="2",
+            cwp_part_levels="1",
+            title=title,
+            musicbrainz_albumid="sel23-repath-rel",
+            # Release-level ensemble (CEA_ALBUM_ENSEMBLES): only the parent orchestra.
+            cea_album_ensembles=album_ensemble,
+            # Per-track ensembles (CEA_ENSEMBLES): includes the wind subgroup on majority tracks.
+            cea_ensembles="; ".join(per_track_ensembles),
+        )
+
+    def test_repath_applies_sel23_patch_for_majority_ensemble(self, fs: FakeFilesystem) -> None:
+        """repath applies the SEL-23 patch: a majority per-track ensemble enters the path.
+
+        Two-track release where both tracks have the wind subgroup in CEA_ENSEMBLES (2/2 = 100%,
+        a strict majority).  The subgroup is NOT in CEA_ALBUM_ENSEMBLES.  After repath, the
+        recomputed path must include the wind subgroup in the performers component.
+
+        This test covers the sel23_ensemble_patch call inside repath (line 1087 in
+        _pipeline_maint.py) by verifying that the path changes to include the majority ensemble.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        bph = "Berliner Philharmoniker"
+        blaaser = "Bläser der Berliner Philharmoniker"
+
+        # Both tracks have the wind subgroup in CEA_ENSEMBLES (2/2 = 100% majority).
+        tags_mvt1 = self._make_sel23_tags(
+            movt_num="1",
+            title="I. Un poco sostenuto",
+            album_ensemble=bph,
+            per_track_ensembles=[bph, blaaser],
+        )
+        tags_mvt2 = self._make_sel23_tags(
+            movt_num="2",
+            title="II. Andante sostenuto",
+            album_ensemble=bph,
+            per_track_ensembles=[bph, blaaser],
+        )
+
+        # Compute the canonical path WITH the SEL-23 patch applied (what repath should produce).
+        # We apply the patch manually here to derive the expected path.
+        tags_mvt1_patched = self._make_sel23_tags(
+            movt_num="1",
+            title="I. Un poco sostenuto",
+            album_ensemble=bph,
+            per_track_ensembles=[bph, blaaser],
+        )
+        tags_mvt2_patched = self._make_sel23_tags(
+            movt_num="2",
+            title="II. Andante sostenuto",
+            album_ensemble=bph,
+            per_track_ensembles=[bph, blaaser],
+        )
+        # Hydrate performer lists (simulating what repath does before sel23_ensemble_patch).
+        file_dict_1 = {
+            "CEA_ALBUM_ENSEMBLES": bph,
+            "CEA_ALBUM_ENSEMBLES_SORT": bph,
+            "CEA_ENSEMBLES": f"{bph}; {blaaser}",
+            "CEA_ENSEMBLES_SORT": f"{bph}; {blaaser}",
+        }
+        file_dict_2 = dict(file_dict_1)
+        _hydrate_performer_lists(tags_mvt1_patched, file_dict_1)
+        _hydrate_performer_lists(tags_mvt2_patched, file_dict_2)
+        sel23_ensemble_patch([tags_mvt1_patched, tags_mvt2_patched])
+
+        expected_path_mvt1 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_mvt1_patched).with_suffix(".flac")
+        expected_path_mvt2 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_mvt2_patched).with_suffix(".flac")
+
+        # Verify the expected path includes the wind subgroup.
+        assert blaaser in str(expected_path_mvt1), f"Expected '{blaaser}' in SEL-23-patched path, got {expected_path_mvt1!r}"
+
+        # Create files at the OLD path (without the wind subgroup in the performers component).
+        # The old path uses only the release-level ensemble (BPh), not the wind subgroup.
+        old_path_mvt1 = _make_library_flac(
+            dest_root,
+            f"Brahms - {bph}/Symphony No. 1 [rec 2022]/01 - I. Un poco sostenuto.flac",
+            tags_mvt1,
+        )
+        old_path_mvt2 = _make_library_flac(
+            dest_root,
+            f"Brahms - {bph}/Symphony No. 1 [rec 2022]/02 - II. Andante sostenuto.flac",
+            tags_mvt2,
+        )
+
+        # Write journal entries so repath picks up these files.
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "sel23-repath-rel",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path_mvt1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "sel23-repath-rel",
+                    "source": "/src/02.flac",
+                    "destination": str(old_path_mvt2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Run repath.
+        repath(dest_root, yes=True)
+
+        # After repath, the files should be at the SEL-23-patched paths (including wind subgroup).
+        assert expected_path_mvt1.exists(), f"After repath, file should be at SEL-23-patched path {expected_path_mvt1!r}"
+        assert expected_path_mvt2.exists(), f"After repath, file should be at SEL-23-patched path {expected_path_mvt2!r}"
+        # Old paths should no longer exist.
+        assert not old_path_mvt1.exists(), f"Old path should be gone after repath: {old_path_mvt1!r}"
+        assert not old_path_mvt2.exists(), f"Old path should be gone after repath: {old_path_mvt2!r}"

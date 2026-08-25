@@ -75,7 +75,7 @@ from music_annotator._pipeline_io import (
     write_transaction_log,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
-from music_annotator._tags import _CLASS_VOCAB, _NAME_MAX, _proposed_short, build_dest_path
+from music_annotator._tags import _CLASS_VOCAB, _NAME_MAX, _proposed_short, build_dest_path, sel23_ensemble_patch
 from music_annotator._works import (
     _Rederivation,
     is_catalogue_colon_corrupt,
@@ -1072,6 +1072,20 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
         for _i in _group_idxs:
             _repath_modal_by_idx[_i] = _modal_or_none
 
+    # --- SEL-23 ensemble patch (release-scope ensemble expansion) ---
+    # Group files by MUSICBRAINZ_ALBUMID and apply the SEL-23 rule over each release group so
+    # the majority threshold is computed over the correct denominator (the full track set of each
+    # release).  sel23_ensemble_patch expands cea_album_ensembles_list on each track to include
+    # any ensemble present on a modal majority (>50%) of the release's tracks.  This must run
+    # before Pass 2 so the expanded set is used for path computation.
+    _repath_release_groups: dict[str, list[int]] = {}
+    for _ri, (_, _, _rfd, _, _) in enumerate(_repath_file_data):
+        _album_id = _rfd.get("MUSICBRAINZ_ALBUMID", "")
+        _repath_release_groups.setdefault(_album_id, []).append(_ri)
+    for _album_id, _release_idxs in _repath_release_groups.items():
+        if _album_id:  # skip files with no album ID (cannot determine release group)
+            sel23_ensemble_patch([_repath_file_data[_i][1] for _i in _release_idxs])
+
     # --- Pass 2: build repath plan using the per-group modal depth ---
     # plan_pairs carries (src, dest, acoustid, length_ms, release_id) so the collision-suffix
     # builder can group non-matches by release_id and derive a release-identifying suffix.
@@ -1356,6 +1370,22 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
         _modal_or_none: int | None = _modal if _modal > 0 else None
         for _i in _group_idxs:
             _regroup_modal_by_idx[_i] = _modal_or_none
+
+    # --- SEL-23 ensemble patch (release-scope ensemble expansion) ---
+    # Group files by MUSICBRAINZ_ALBUMID and apply the SEL-23 rule over each release group so
+    # the majority threshold is computed over the correct denominator (the full track set of each
+    # release).  sel23_ensemble_patch expands cea_album_ensembles_list on each track to include
+    # any ensemble present on a modal majority (>50%) of the release's tracks.  This must run
+    # before Pass 2 so the expanded set is used for path computation.
+    _regroup_release_groups: dict[str, list[int]] = {}
+    for _ri, (_, _, _rfd, _, _) in enumerate(_regroup_file_data):
+        _album_id = _rfd.get("MUSICBRAINZ_ALBUMID", "")
+        _regroup_release_groups.setdefault(_album_id, []).append(_ri)
+    for _album_id, _release_idxs in _regroup_release_groups.items():
+        if not _album_id:
+            continue  # pragma: no cover — defensive guard; regroup only processes confirmed
+            # split-release candidates which always have MUSICBRAINZ_ALBUMID embedded.
+        sel23_ensemble_patch([_regroup_file_data[_i][1] for _i in _release_idxs])
 
     # --- Pass 2: build regroup plan using the per-group modal depth ---
     plan_pairs: list[tuple[Path, Path, str, int, str]] = []
@@ -1792,12 +1822,18 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
         stub_release = MBRelease()
         stub_track = MBTrack()
 
+        # --- SEL-23 ensemble patch (release-scope ensemble expansion) ---
+        # Hydrate performer lists for all files in the group first, then apply the SEL-23
+        # rule over the full group so the majority threshold is computed over the correct
+        # denominator.  sel23_ensemble_patch expands cea_album_ensembles_list on each track
+        # to include any ensemble present on a modal majority (>50%) of the release's tracks.
+        # This must run before build_dest_path so the expanded set is used for path computation.
+        for _, _tags, _file_dict in group_tags:
+            _hydrate_performer_lists(_tags, _file_dict)
+        sel23_ensemble_patch([_tags for _, _tags, _ in group_tags])
+
         for file_path, tags, file_dict in group_tags:
             ext = file_path.suffix.lower()
-            # Reconstruct performer ArtistEntry lists from embedded tags so that build_dest_path
-            # renders canonical entity name-forms (primary-flagged MB alias per STYLEGUIDE
-            # 3.1/NORM-2) in the compact path projection.
-            _hydrate_performer_lists(tags, file_dict)
             new_dest_base = build_dest_path(dest_root, stub_release, stub_track, tags, global_track_idx=0)
             new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext))
 

@@ -36,6 +36,7 @@ from music_annotator import (
     period_for_year,
     rederive_part_label,
     safe_name,
+    sel23_ensemble_patch,
     strip_common_prefix,
 )
 from music_annotator._audit import _audit_tier_pass, _make_audit_counts
@@ -5959,3 +5960,292 @@ class TestIsCatalogueColonCorrupt:
         stored = "Allegro"  # disagrees with "I. Allegro" but no catalogue-colon signature
         # _old_bare_colon_split("I. Allegro") = "I. Allegro" (no colon) → stored != recomputed → False
         assert is_catalogue_colon_corrupt(stored, child, parent) is False
+
+
+# ---------------------------------------------------------------------------
+# sel23_ensemble_patch — KATs for the SEL-23 ensemble selection rule
+# ---------------------------------------------------------------------------
+
+
+class TestSel23EnsemblePatch:
+    """KATs for :func:`sel23_ensemble_patch` — the SEL-23 ensemble selection rule.
+
+    The SEL-23 rule: ensemble position at release scope = release-level credits ∪ bodies present
+    on a modal majority (>50%) of the release's tracks.  Minority configurations stay
+    credits-only; soloists still never enter (SEL-11 unchanged).
+
+    Three behavioural witnesses (KATs):
+
+    1. **Wind-subgroup release**: ``Bläser der Berliner Philharmoniker`` appears on a modal
+       majority of tracks (4 of 6) but not at release level — the subgroup is added to
+       ``cea_album_ensembles_list`` on every track.
+    2. **Choral work with per-track chorus**: ``Don Cossack Choir`` appears on a modal majority
+       of tracks (3 of 4) — the chorus is added to ``cea_album_ensembles_list`` on every track.
+    3. **Anti-forking regression**: a subgroup appears on only a minority of tracks (2 of 4,
+       exactly 50% — not strictly greater than 50%) — it does NOT enter ``cea_album_ensembles_list``.
+
+    Additional coverage cases:
+    4. **Empty input**: empty list → no-op (function returns immediately).
+    5. **No per-track ensembles**: tracks with empty ``cea_ensembles_list`` → no majority
+       ensembles found, function returns early.
+    6. **Idempotency**: calling the function twice produces the same result.
+    7. **Deduplication**: an ensemble already in ``cea_album_ensembles_list`` is not added again.
+    """
+
+    @staticmethod
+    def _make_track(
+        *,
+        ensemble_names: list[str] | None = None,
+        album_ensemble_names: list[str] | None = None,
+    ) -> TrackTags:
+        """Build a minimal TrackTags with the given per-track and album-level ensembles.
+
+        :param ensemble_names: Names of per-track ensembles (``cea_ensembles_list``).
+        :param album_ensemble_names: Names of album-level ensembles (``cea_album_ensembles_list``).
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        per_track = [ArtistEntry(name=n, sort=n, mbid="") for n in (ensemble_names or [])]
+        album_level = [ArtistEntry(name=n, sort=n, mbid="") for n in (album_ensemble_names or [])]
+        return TrackTags(
+            title="Movement",
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Symphony No. 1",
+            cea_ensembles_list=per_track,
+            cea_album_ensembles_list=album_level,
+        )
+
+    # ------------------------------------------------------------------
+    # KAT 1: wind-subgroup release — subgroup survives
+    # ------------------------------------------------------------------
+
+    def test_wind_subgroup_majority_survives(self) -> None:
+        """KAT (wind-subgroup): Bläser der Berliner Philharmoniker on 4/6 tracks enters the path.
+
+        A 6-track release where the wind subgroup appears on 4 tracks (strictly >50%) but is not
+        credited at release level.  After sel23_ensemble_patch, the subgroup must be present in
+        ``cea_album_ensembles_list`` on every track.
+
+        This is the primary defect-D regression: the release-level-only rule dropped the subgroup;
+        the SEL-23 rule admits it because it appears on a modal majority of tracks.
+        """
+        blaaser = "Bläser der Berliner Philharmoniker"
+        bph = "Berliner Philharmoniker"
+
+        # 6 tracks: BPh at release level on all; Bläser on tracks 0–3 (4/6 = majority).
+        tracks = [
+            self._make_track(
+                ensemble_names=[blaaser, bph] if i < 4 else [bph],
+                album_ensemble_names=[bph],
+            )
+            for i in range(6)
+        ]
+
+        sel23_ensemble_patch(tracks)
+
+        # Bläser must now be in cea_album_ensembles_list on every track.
+        for i, t in enumerate(tracks):
+            names = [e.name for e in t.cea_album_ensembles_list]
+            assert blaaser in names, (
+                f"Track {i}: expected '{blaaser}' in cea_album_ensembles_list after SEL-23 patch, got {names!r}"
+            )
+        # BPh must still be present (release-level credit preserved).
+        for i, t in enumerate(tracks):
+            names = [e.name for e in t.cea_album_ensembles_list]
+            assert bph in names, (
+                f"Track {i}: release-level ensemble '{bph}' must remain in cea_album_ensembles_list, got {names!r}"
+            )
+
+    # ------------------------------------------------------------------
+    # KAT 2: choral work with per-track chorus — chorus survives
+    # ------------------------------------------------------------------
+
+    def test_choral_majority_chorus_survives(self) -> None:
+        """KAT (choral): Don Cossack Choir on 3/4 tracks enters the path.
+
+        A 4-track release where the chorus appears on 3 tracks (strictly >50%) but is not
+        credited at release level.  After sel23_ensemble_patch, the chorus must be present in
+        ``cea_album_ensembles_list`` on every track.
+        """
+        chorus = "Don Cossack Choir"
+        orch = "Berliner Philharmoniker"
+
+        # 4 tracks: orchestra at release level on all; chorus on tracks 0–2 (3/4 = majority).
+        tracks = [
+            self._make_track(
+                ensemble_names=[chorus, orch] if i < 3 else [orch],
+                album_ensemble_names=[orch],
+            )
+            for i in range(4)
+        ]
+
+        sel23_ensemble_patch(tracks)
+
+        # Chorus must now be in cea_album_ensembles_list on every track.
+        for i, t in enumerate(tracks):
+            names = [e.name for e in t.cea_album_ensembles_list]
+            assert chorus in names, (
+                f"Track {i}: expected '{chorus}' in cea_album_ensembles_list after SEL-23 patch, got {names!r}"
+            )
+        # Orchestra must still be present.
+        for i, t in enumerate(tracks):
+            names = [e.name for e in t.cea_album_ensembles_list]
+            assert orch in names, (
+                f"Track {i}: release-level ensemble '{orch}' must remain in cea_album_ensembles_list, got {names!r}"
+            )
+
+    # ------------------------------------------------------------------
+    # KAT 3: anti-forking regression — minority subgroup does NOT enter
+    # ------------------------------------------------------------------
+
+    def test_minority_subgroup_does_not_enter(self) -> None:
+        """KAT (anti-forking): a subgroup on exactly 50% of tracks does NOT enter the path.
+
+        A 4-track release where a subgroup appears on exactly 2 tracks (50%, not strictly >50%).
+        After sel23_ensemble_patch, the subgroup must NOT be present in ``cea_album_ensembles_list``.
+
+        This is the anti-forking regression: per-track variation in soloists/subgroups must not
+        cause top-level directory forking.  The original fragmentation shape stays fixed.
+        """
+        subgroup = "Kammerensemble der Berliner Philharmoniker"
+        orch = "Berliner Philharmoniker"
+
+        # 4 tracks: orchestra at release level on all; subgroup on tracks 0–1 (2/4 = 50%, not majority).
+        tracks = [
+            self._make_track(
+                ensemble_names=[subgroup, orch] if i < 2 else [orch],
+                album_ensemble_names=[orch],
+            )
+            for i in range(4)
+        ]
+
+        sel23_ensemble_patch(tracks)
+
+        # Subgroup must NOT be in cea_album_ensembles_list (minority configuration).
+        for i, t in enumerate(tracks):
+            names = [e.name for e in t.cea_album_ensembles_list]
+            assert subgroup not in names, (
+                f"Track {i}: minority subgroup '{subgroup}' must NOT enter cea_album_ensembles_list "
+                f"(anti-forking property), got {names!r}"
+            )
+        # Orchestra must still be present.
+        for i, t in enumerate(tracks):
+            names = [e.name for e in t.cea_album_ensembles_list]
+            assert orch in names, (
+                f"Track {i}: release-level ensemble '{orch}' must remain in cea_album_ensembles_list, got {names!r}"
+            )
+
+    # ------------------------------------------------------------------
+    # Coverage: empty input
+    # ------------------------------------------------------------------
+
+    def test_empty_input_is_noop(self) -> None:
+        """sel23_ensemble_patch with an empty list is a no-op (returns immediately).
+
+        Covers the early-return branch when n_tracks == 0.
+        """
+        sel23_ensemble_patch([])  # must not raise
+
+    # ------------------------------------------------------------------
+    # Coverage: no per-track ensembles
+    # ------------------------------------------------------------------
+
+    def test_no_per_track_ensembles_is_noop(self) -> None:
+        """sel23_ensemble_patch with tracks that have no per-track ensembles is a no-op.
+
+        When all tracks have empty ``cea_ensembles_list``, no majority ensembles are found and
+        the function returns early without modifying ``cea_album_ensembles_list``.
+        """
+        orch = "Berliner Philharmoniker"
+        tracks = [self._make_track(ensemble_names=[], album_ensemble_names=[orch]) for _ in range(3)]
+        sel23_ensemble_patch(tracks)
+        # cea_album_ensembles_list must be unchanged.
+        for t in tracks:
+            names = [e.name for e in t.cea_album_ensembles_list]
+            assert names == [orch], f"Expected [{orch!r}], got {names!r}"
+
+    # ------------------------------------------------------------------
+    # Coverage: idempotency
+    # ------------------------------------------------------------------
+
+    def test_idempotent(self) -> None:
+        """sel23_ensemble_patch is idempotent: calling it twice produces the same result.
+
+        An ensemble already in ``cea_album_ensembles_list`` is not added again.
+        """
+        chorus = "Don Cossack Choir"
+        orch = "Berliner Philharmoniker"
+        tracks = [self._make_track(ensemble_names=[chorus, orch], album_ensemble_names=[orch]) for _ in range(3)]
+
+        sel23_ensemble_patch(tracks)
+        names_after_first = [e.name for e in tracks[0].cea_album_ensembles_list]
+
+        sel23_ensemble_patch(tracks)
+        names_after_second = [e.name for e in tracks[0].cea_album_ensembles_list]
+
+        assert names_after_first == names_after_second, (
+            f"sel23_ensemble_patch is not idempotent: first={names_after_first!r}, second={names_after_second!r}"
+        )
+        # Chorus must appear exactly once.
+        assert names_after_second.count(chorus) == 1, (
+            f"Chorus must appear exactly once after two patches, got {names_after_second!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Coverage: duplicate per-track ensemble entry (same name twice on one track)
+    # ------------------------------------------------------------------
+
+    def test_duplicate_per_track_entry_counts_once(self) -> None:
+        """A duplicate per-track ensemble entry (same name twice on one track) counts as one appearance.
+
+        When MB returns duplicate artist relations for the same ensemble on a single recording,
+        the ensemble should count as appearing on that track only once for the majority threshold.
+        This covers the ``entry.name not in seen_on_track`` false branch in the counting loop.
+        """
+        chorus = "Don Cossack Choir"
+        orch = "Berliner Philharmoniker"
+
+        # 3 tracks: chorus appears on track 0 twice (duplicate MB relation) and on track 1 once.
+        # Without deduplication, chorus would appear 3 times across 3 tracks (100% majority).
+        # With deduplication, chorus appears on 2 of 3 tracks (67% majority — still a majority).
+        track0 = TrackTags(
+            title="Movement 1",
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Symphony No. 1",
+            # Duplicate entry: same name appears twice (simulating duplicate MB relation).
+            cea_ensembles_list=[
+                ArtistEntry(name=chorus, sort=chorus, mbid="c1"),
+                ArtistEntry(name=chorus, sort=chorus, mbid="c1"),  # duplicate
+                ArtistEntry(name=orch, sort=orch, mbid="o1"),
+            ],
+            cea_album_ensembles_list=[ArtistEntry(name=orch, sort=orch, mbid="o1")],
+        )
+        track1 = TrackTags(
+            title="Movement 2",
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Symphony No. 1",
+            cea_ensembles_list=[
+                ArtistEntry(name=chorus, sort=chorus, mbid="c1"),
+                ArtistEntry(name=orch, sort=orch, mbid="o1"),
+            ],
+            cea_album_ensembles_list=[ArtistEntry(name=orch, sort=orch, mbid="o1")],
+        )
+        track2 = TrackTags(
+            title="Movement 3",
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Symphony No. 1",
+            cea_ensembles_list=[ArtistEntry(name=orch, sort=orch, mbid="o1")],
+            cea_album_ensembles_list=[ArtistEntry(name=orch, sort=orch, mbid="o1")],
+        )
+
+        sel23_ensemble_patch([track0, track1, track2])
+
+        # Chorus appears on 2/3 tracks (67% majority) — must be in cea_album_ensembles_list.
+        for i, t in enumerate([track0, track1, track2]):
+            names = [e.name for e in t.cea_album_ensembles_list]
+            assert chorus in names, f"Track {i}: chorus must be in cea_album_ensembles_list (2/3 majority), got {names!r}"
+        # Chorus must appear exactly once in each track's cea_album_ensembles_list (dedup).
+        for i, t in enumerate([track0, track1, track2]):
+            names = [e.name for e in t.cea_album_ensembles_list]
+            assert names.count(chorus) == 1, (
+                f"Track {i}: chorus must appear exactly once in cea_album_ensembles_list, got {names!r}"
+            )
