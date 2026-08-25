@@ -1930,64 +1930,104 @@ class TestMain:
 
 
 class TestReadJournal:
-    """Tests for read_journal."""
+    """Tests for read_journal.
 
-    def test_reads_existing_journal(self, fs: FakeFilesystem) -> None:
-        """read_journal parses a valid journal file correctly.
+    The journal is stored in JSONL format (one JSON object per line).  Legacy JSON-array journals
+    are migrated to JSONL on first read.  A single torn final line is tolerated with a warning;
+    any other malformation is a hard error.
+    """
+
+    def test_reads_existing_jsonl_journal(self, fs: FakeFilesystem) -> None:
+        """read_journal parses a valid JSONL journal file correctly.
 
         :param fs: pyfakefs fixture.
         """
-
+        entry = {
+            "timestamp": "2024-01-01T00:00:00Z",
+            "release_id": "r1",
+            "source": "/src/01.flac",
+            "destination": "/dest/Track/01.flac",
+            "action": "tagged",
+        }
         journal_path = Path("/dest/music_annotator_journal.json")
-        fs.create_file(
-            str(journal_path),
-            contents=json.dumps(
-                [
-                    {
-                        "timestamp": "2024-01-01T00:00:00Z",
-                        "release_id": "r1",
-                        "source": "/src/01.flac",
-                        "destination": "/dest/Track/01.flac",
-                        "action": "tagged",
-                    }
-                ]
-            ),
-        )
-        log = music_annotator.read_journal(journal_path)
-        assert len(log.entries) == 1
-        assert log.entries[0].action == "tagged"
-        assert log.entries[0].source == "/src/01.flac"
+        fs.create_file(str(journal_path), contents=json.dumps(entry) + "\n")
+        result = music_annotator.read_journal(journal_path)
+        assert len(result.entries) == 1
+        assert result.entries[0].action == "tagged"
+        assert result.entries[0].source == "/src/01.flac"
+
+    def test_reads_legacy_array_journal_and_migrates(self, fs: FakeFilesystem) -> None:
+        """read_journal migrates a legacy JSON-array journal to JSONL and returns entries.
+
+        The original array file is preserved as a read-only backup.
+
+        :param fs: pyfakefs fixture.
+        """
+        entry = {
+            "timestamp": "2024-01-01T00:00:00Z",
+            "release_id": "r1",
+            "source": "/src/01.flac",
+            "destination": "/dest/Track/01.flac",
+            "action": "tagged",
+        }
+        journal_path = Path("/dest/music_annotator_journal.json")
+        fs.create_file(str(journal_path), contents=json.dumps([entry]))
+        result = music_annotator.read_journal(journal_path)
+        assert len(result.entries) == 1
+        assert result.entries[0].action == "tagged"
+        assert result.entries[0].source == "/src/01.flac"
+        # Backup must exist after migration.
+        backup = journal_path.with_suffix(journal_path.suffix + music_annotator.JOURNAL_BACKUP_SUFFIX)
+        assert backup.exists()
 
     def test_returns_empty_when_file_absent(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
         """read_journal returns empty TransactionLog when the file does not exist.
 
         :param fs: pyfakefs fixture.
         """
+        result = music_annotator.read_journal(Path("/no/such/journal.json"))
+        assert result.entries == []
 
-        log = music_annotator.read_journal(Path("/no/such/journal.json"))
-        assert log.entries == []
+    def test_torn_tail_tolerated_with_warning(self, fs: FakeFilesystem) -> None:
+        """read_journal tolerates a single torn final line and returns the valid entries.
 
-    def test_returns_empty_on_corrupt_file(self, fs: FakeFilesystem) -> None:
-        """read_journal returns empty TransactionLog when the file contains invalid JSON.
-
-        :param fs: pyfakefs fixture.
-        """
-
-        journal_path = Path("/dest/journal.json")
-        fs.create_file(str(journal_path), contents="not valid json {{{")
-        log = music_annotator.read_journal(journal_path)
-        assert log.entries == []
-
-    def test_returns_empty_on_non_list_json(self, fs: FakeFilesystem) -> None:
-        """read_journal returns empty TransactionLog when the JSON root is not a list.
+        A torn tail (partial JSON on the last line) is logged at WARNING and ignored.
 
         :param fs: pyfakefs fixture.
         """
-
+        entry = {
+            "timestamp": "2024-01-01T00:00:00Z",
+            "release_id": "r1",
+            "source": "/src/01.flac",
+            "destination": "/dest/Track/01.flac",
+            "action": "tagged",
+        }
         journal_path = Path("/dest/journal.json")
-        fs.create_file(str(journal_path), contents='{"not": "a list"}')
-        log = music_annotator.read_journal(journal_path)
-        assert log.entries == []
+        # Valid entry followed by a torn (partial) final line.
+        fs.create_file(str(journal_path), contents=json.dumps(entry) + "\n{torn")
+        result = music_annotator.read_journal(journal_path)
+        assert len(result.entries) == 1
+        assert result.entries[0].action == "tagged"
+
+    def test_non_tail_malformation_is_hard_error(self, fs: FakeFilesystem) -> None:
+        """read_journal raises RuntimeError when a non-final line is malformed.
+
+        Corruption in the middle of the journal is a hard error, not a silent reset.
+
+        :param fs: pyfakefs fixture.
+        """
+        entry = {
+            "timestamp": "2024-01-01T00:00:00Z",
+            "release_id": "r1",
+            "source": "/src/01.flac",
+            "destination": "/dest/Track/01.flac",
+            "action": "tagged",
+        }
+        journal_path = Path("/dest/journal.json")
+        # Corrupt line in the middle, followed by a valid line.
+        fs.create_file(str(journal_path), contents="{corrupt\n" + json.dumps(entry) + "\n")
+        with pytest.raises(RuntimeError, match="journal corruption"):
+            music_annotator.read_journal(journal_path)
 
 
 # ---------------------------------------------------------------------------

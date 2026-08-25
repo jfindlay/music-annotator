@@ -118,8 +118,10 @@ from music_annotator._pipeline import (
     run,
 )
 from music_annotator._pipeline_io import (
+    JOURNAL_BACKUP_SUFFIX,
     JOURNAL_FILENAME,
     PROVENANCE_FILENAME,
+    append_journal_entry,
     enrich_origin_time,
     find_source_files,
     parse_disc_title,
@@ -222,11 +224,13 @@ __all__ = [
     "prune_sources",
     "read_journal",
     "write_transaction_log",
+    "append_journal_entry",
     "audit",
     "detect_fragmented_releases",
     "diff_journal",
     "enrich_origin_time",
     "rebuild_journal",
     "JOURNAL_FILENAME",
+    "JOURNAL_BACKUP_SUFFIX",
     "PROVENANCE_FILENAME",
 ]

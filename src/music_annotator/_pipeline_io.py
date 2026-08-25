@@ -12,6 +12,7 @@ import base64
 import datetime
 import hashlib
 import json
+import os
 import re
 import shutil
 import struct
@@ -50,7 +51,13 @@ log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
 AUDIO_EXTENSIONS: frozenset[str] = frozenset({".flac", ".mp3", ".ogg", ".m4a", ".aac", ".wav"})
 
 #: Filename of the JSON transaction journal written inside the destination root.
+#: The file is stored in append-only JSON Lines (JSONL) format: one JSON object per line.
+#: A legacy JSON-array journal at this path is automatically migrated on first read.
 JOURNAL_FILENAME: str = "music_annotator_journal.json"
+
+#: Suffix appended to the original JSON-array journal file when it is migrated to JSONL format.
+#: The backup is created once and never deleted by the tool.
+JOURNAL_BACKUP_SUFFIX: str = ".array-backup"
 
 #: CD table-of-contents audio file written by some rippers alongside the real tracks.  It has a
 #: ``.flac`` extension and would otherwise be picked up as a source track.
@@ -1202,63 +1209,183 @@ def parse_whipper_log(src_dir: Path) -> tuple[AccurateRipSummary, dict[int, Accu
     return summary, tracks
 
 
+def append_journal_entry(journal_path: Path, entry: TransactionEntry) -> None:
+    """Append a single entry to the JSONL transaction journal at ``journal_path``, durably.
+
+    Opens the file in append mode, writes one JSON object followed by a newline, then flushes
+    the Python buffer and calls ``os.fsync`` on the file descriptor to guarantee the write is
+    durable before returning.  This is an O(1) operation regardless of journal size.
+
+    The journal file must already be in JSONL format (or absent — the file is created on first
+    call).  Callers must not mix this function with :func:`write_transaction_log` on the same
+    journal path without first migrating the file to JSONL via :func:`read_journal`.
+
+    :param journal_path: Absolute path of the journal file (typically
+        ``<dest_root>/music_annotator_journal.json``).
+    :param entry: The :class:`~music_annotator.models.TransactionEntry` to append.
+    """
+    line = json.dumps(entry.model_dump(), ensure_ascii=False) + "\n"
+    with journal_path.open("a", encoding="utf-8") as fh:
+        fh.write(line)
+        fh.flush()
+        os.fsync(fh.fileno())
+    log.debug("journal_entry_appended", path=str(journal_path), action=entry.action)
+
+
+def _migrate_array_journal(journal_path: Path) -> None:
+    """Migrate a legacy JSON-array journal at ``journal_path`` to JSONL format in place.
+
+    Reads the existing JSON array, writes a backup of the original file (with
+    :data:`JOURNAL_BACKUP_SUFFIX` appended), then atomically replaces the journal with a JSONL
+    file containing one JSON object per line.  The backup is never deleted by the tool.
+
+    :param journal_path: Absolute path of the journal file containing a JSON array.
+    :raises RuntimeError: If the backup file already exists (migration was already attempted but
+        the journal was not replaced — indicates a partial failure on a previous run).
+    :raises json.JSONDecodeError: If the file cannot be parsed as JSON (should not happen since
+        the caller already parsed it, but guards against TOCTOU races).
+    :raises OSError: If the backup or replacement write fails.
+    """
+    raw = journal_path.read_text(encoding="utf-8")
+    parsed: object = json.loads(raw)
+    # Caller guarantees this is a list, but guard defensively.
+    if not isinstance(parsed, list):  # pragma: no cover
+        raise RuntimeError(f"journal_migrate: expected list, got {type(parsed).__name__}")
+
+    backup_path = journal_path.with_suffix(journal_path.suffix + JOURNAL_BACKUP_SUFFIX)
+    if not backup_path.exists():
+        # Write the backup before touching the live file.
+        backup_path.write_bytes(journal_path.read_bytes())
+        # Make the backup read-only so it is clearly an archive.
+        backup_path.chmod(0o444)
+
+    # Build the JSONL content and write atomically via a temp file + os.replace.
+    lines = [json.dumps(e, ensure_ascii=False) + "\n" for e in parsed]
+    tmp_path = journal_path.with_suffix(journal_path.suffix + ".tmp")
+    tmp_path.write_text("".join(lines), encoding="utf-8")
+    os.replace(str(tmp_path), str(journal_path))
+
+    log.info(
+        "journal_migrated_to_jsonl",
+        path=str(journal_path),
+        backup=str(backup_path),
+        entries=len(parsed),
+    )
+
+
+def _parse_jsonl_journal(journal_path: Path, raw: str) -> TransactionLog:
+    """Parse a JSONL journal string into a :class:`~music_annotator.models.TransactionLog`.
+
+    Reads the content line by line.  A final line that cannot be parsed as JSON is treated as a
+    torn write (the process was interrupted mid-line) and is silently ignored after emitting a
+    WARNING.  Any malformed line that is not the final line is a hard error — it indicates
+    corruption, not a torn tail, and raises :class:`RuntimeError`.
+
+    :param journal_path: Path used only for log messages and error context.
+    :param raw: The full text content of the JSONL file.
+    :returns: A :class:`~music_annotator.models.TransactionLog` with all valid entries.
+    :raises RuntimeError: If a non-final line cannot be parsed as JSON (corruption).
+    """
+    lines = raw.splitlines()
+    # Strip trailing empty lines so a file ending with "\n" does not produce a spurious torn-tail
+    # warning.  A genuinely torn tail is a non-empty line that fails JSON parsing.
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+    entries: list[TransactionEntry] = []
+    for i, line in enumerate(lines):
+        is_last = i == len(lines) - 1
+        try:
+            obj: object = json.loads(line)
+            entries.append(TransactionEntry.model_validate(obj))
+        except (json.JSONDecodeError, ValueError) as exc:
+            if is_last:
+                log.warning(
+                    "journal_torn_tail_ignored",
+                    path=str(journal_path),
+                    line_number=i + 1,
+                    error=str(exc),
+                )
+            else:
+                raise RuntimeError(f"journal corruption at line {i + 1} of '{journal_path}': {exc}") from exc
+
+    return TransactionLog(entries=entries)
+
+
 def write_transaction_log(journal_path: Path, new_entries: list[TransactionEntry]) -> None:
-    """Append ``new_entries`` to the JSON transaction journal at ``journal_path``.
+    """Append ``new_entries`` to the JSONL transaction journal at ``journal_path``.
 
-    If the journal file already exists and contains a valid JSON array of objects, the new entries are
-    merged into the existing list before writing.  If the file is absent, corrupt, or empty it is
-    (re-)created with only ``new_entries``.
+    If the journal file already exists and contains a valid JSONL journal, the new entries are
+    appended.  If the file contains a legacy JSON array, it is migrated to JSONL first.  If the
+    file is absent it is created.
 
-    The journal is written atomically: entries are serialised to a temporary in-memory string first
-    and the file is only opened for writing once the serialisation succeeds.
+    Each entry is written as a single JSON line.  After all entries are written the file is
+    flushed and ``os.fsync`` is called for durability.
 
     :param journal_path: Absolute path of the journal file (typically
         ``<dest_root>/music_annotator_journal.json``).
     :param new_entries: The :class:`~music_annotator.models.TransactionEntry` objects to append.
     """
-    existing: list[JSON] = []
+    # Ensure the journal is in JSONL format before appending.
     if journal_path.exists():
-        try:
-            raw = journal_path.read_text(encoding="utf-8")
-            parsed = json.loads(raw)
-            if isinstance(parsed, list):
-                existing = parsed
-        except (OSError, json.JSONDecodeError):
-            log.warning("journal_corrupt_reset", path=str(journal_path))
+        raw = journal_path.read_text(encoding="utf-8")
+        if raw.lstrip().startswith("["):
+            # Legacy JSON-array format — migrate first.  A corrupt array (invalid JSON) is reset
+            # to an empty file so the new entries are not lost.
+            try:
+                _migrate_array_journal(journal_path)
+            except json.JSONDecodeError:
+                log.warning("journal_corrupt_reset", path=str(journal_path))
+                journal_path.write_text("", encoding="utf-8")
 
-    combined = TransactionLog(entries=[TransactionEntry.model_validate(e) for e in existing] + new_entries)
-    journal_path.write_text(
-        json.dumps([e.model_dump() for e in combined.entries], indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    log.info("journal_written", path=str(journal_path), total=len(combined.entries))
+    for entry in new_entries:
+        append_journal_entry(journal_path, entry)
+
+    log.info("journal_written", path=str(journal_path), appended=len(new_entries))
 
 
 def read_journal(journal_path: Path) -> TransactionLog:
-    """Read and parse the JSON transaction journal at ``journal_path``.
+    """Read and parse the JSONL transaction journal at ``journal_path``.
 
-    Returns an empty :class:`~music_annotator.models.TransactionLog` when the file is absent (logged
-    at INFO level, as the source directory may simply have been pruned already) or when the file
-    cannot be parsed (logged at WARNING level, as this indicates unexpected corruption).
+    Handles two on-disk formats:
+
+    * **JSONL** (primary): one JSON object per line.  A single torn final line (the result of a
+      process being interrupted mid-write) is tolerated: it is logged at WARNING level and
+      ignored.  Any other malformed line is a hard error (:class:`RuntimeError`), never a silent
+      reset.
+    * **Legacy JSON array** (migration path): if the file begins with ``[``, it is parsed as a
+      JSON array, migrated to JSONL in place (with the original preserved as a read-only backup),
+      and the entries are returned.
+
+    Returns an empty :class:`~music_annotator.models.TransactionLog` only when the file is absent
+    (logged at INFO level).
 
     :param journal_path: Absolute path of the journal file (typically
         ``<dest_root>/music_annotator_journal.json``).
     :returns: A :class:`~music_annotator.models.TransactionLog` with all persisted entries, or an
-        empty one if the file is absent or unreadable.
+        empty one if the file is absent.
+    :raises RuntimeError: If a non-final line cannot be parsed (JSONL corruption).
+    :raises json.JSONDecodeError: If the file begins with ``[`` but is not valid JSON (legacy
+        array corruption).
+    :raises OSError: If the file cannot be read.
     """
     if not journal_path.exists():
         log.info("journal_not_found", path=str(journal_path))
         return TransactionLog()
-    try:
-        raw = journal_path.read_text(encoding="utf-8")
-        parsed = json.loads(raw)
-        if isinstance(parsed, list):
-            return TransactionLog(entries=[TransactionEntry.model_validate(e) for e in parsed])
-        log.warning("journal_invalid_format", path=str(journal_path))
-        return TransactionLog()
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
-        log.warning("journal_read_error", path=str(journal_path), error=str(exc))
-        return TransactionLog()
+
+    raw = journal_path.read_text(encoding="utf-8")
+    stripped = raw.lstrip()
+
+    if stripped.startswith("["):
+        # Legacy JSON-array format: parse, migrate, return entries.
+        # json.loads raises json.JSONDecodeError on corrupt input; a valid JSON "[…]" always
+        # produces a list, so no isinstance guard is needed here.
+        parsed_array: list[JSON] = json.loads(raw)  # raises json.JSONDecodeError on corrupt input
+        _migrate_array_journal(journal_path)
+        return TransactionLog(entries=[TransactionEntry.model_validate(e) for e in parsed_array])
+
+    # JSONL format.
+    return _parse_jsonl_journal(journal_path, raw)
 
 
 def _read_albumid_tag(path: Path) -> str:
@@ -1937,10 +2064,12 @@ def rebuild_journal(dest_root: Path, *, dry_run: bool = True) -> TransactionLog:
 
     if not dry_run:
         journal_path = dest_root / JOURNAL_FILENAME
-        journal_path.write_text(
-            json.dumps([e.model_dump() for e in rebuilt.entries], indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        # Write atomically: build JSONL content in a temp file, then os.replace to avoid a
+        # truncate-then-write window that would destroy the journal on crash or full disk.
+        tmp_path = journal_path.with_suffix(journal_path.suffix + ".tmp")
+        lines = [json.dumps(e.model_dump(), ensure_ascii=False) + "\n" for e in rebuilt.entries]
+        tmp_path.write_text("".join(lines), encoding="utf-8")
+        os.replace(str(tmp_path), str(journal_path))
         log.info("rebuild_journal_written", path=str(journal_path), total=len(entries))
 
     return rebuilt

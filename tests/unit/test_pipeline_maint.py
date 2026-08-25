@@ -74,13 +74,16 @@ from tests.conftest import _MINIMAL_FLAC, _MINIMAL_MP3
 
 
 def _write_library_journal(dest_root: Path, entries: list[dict[str, str]]) -> None:
-    """Write a journal JSON file to ``dest_root / music_annotator_journal.json``.
+    """Write a JSONL journal file to ``dest_root / music_annotator_journal.json``.
+
+    Writes one JSON object per line (JSONL format) so the file is in the format that
+    :func:`~music_annotator.read_journal` expects without triggering a migration.
 
     :param dest_root: Destination root directory (must already exist).
     :param entries: List of raw entry dicts to serialise.
     """
     journal_path = dest_root / "music_annotator_journal.json"
-    journal_path.write_text(json.dumps(entries), encoding="utf-8")
+    journal_path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
 
 
 def _make_library_flac(dest_root: Path, rel_path: str, tags: TrackTags) -> Path:
@@ -6079,7 +6082,9 @@ class TestMoveVerifyJournal:
         self._make_flac(src)
 
         journal_path = dest_root / JOURNAL_FILENAME
-        journal_path.write_text("[]", encoding="utf-8")
+        # Write an empty JSONL journal (not a legacy array) so migration does not call os.replace,
+        # which is patched below to raise EXDEV.
+        journal_path.write_text("", encoding="utf-8")
 
         # Patch os.replace to raise EXDEV so the cross-fs fallback is exercised.
         exdev_error = OSError(errno.EXDEV, "Cross-device link")
@@ -6121,7 +6126,9 @@ class TestMoveVerifyJournal:
         self._make_flac(src)
 
         journal_path = dest_root / JOURNAL_FILENAME
-        journal_path.write_text("[]", encoding="utf-8")
+        # Write an empty JSONL journal (not a legacy array) so migration does not call os.replace,
+        # which is patched below to raise EPERM.
+        journal_path.write_text("", encoding="utf-8")
 
         # Patch os.replace to raise a non-EXDEV OSError (e.g. EPERM).
         perm_error = OSError(errno.EPERM, "Operation not permitted")

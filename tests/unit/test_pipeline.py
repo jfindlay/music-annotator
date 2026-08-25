@@ -2,6 +2,8 @@
 find_source_files, check_duration_preflight, _prompt_duration_warnings, run (non-dry-run), and enrich_origin_time.
 """
 
+# pylint: disable=duplicate-code  # test helper factories intentionally mirror patterns in other test modules
+
 from __future__ import annotations
 
 import base64
@@ -27,8 +29,10 @@ import music_annotator
 import music_annotator._pipeline_io as _pio
 import music_annotator._tags
 from music_annotator import (
+    JOURNAL_BACKUP_SUFFIX,
     JOURNAL_FILENAME,
     CollisionPolicy,
+    append_journal_entry,
     apply_tags_flac,
     apply_tags_mp3,
     build_cea_performers,
@@ -65,6 +69,7 @@ from music_annotator._pipeline_io import (
     _find_freedb_sidecar,
     _find_whipper_log,
     _isrc_matches,
+    _migrate_array_journal,
     _mtime_iso,
     _parse_ar_track,
     _parse_ar_track_result,
@@ -112,6 +117,15 @@ from tests.conftest import _MINIMAL_FLAC, _MINIMAL_MP3, _rec, _rel, _trk, _w
 # ---------------------------------------------------------------------------
 # Shared fixtures / helpers
 # ---------------------------------------------------------------------------
+
+
+def _read_jsonl_journal(path: Path) -> list[dict[str, JSON]]:
+    """Read a JSONL journal file and return a list of parsed JSON objects.
+
+    :param path: Path to the JSONL journal file.
+    :returns: A list of JSON objects (dicts), one per non-empty line.
+    """
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def _make_release(n_tracks: int = 1) -> MBRelease:
@@ -1533,10 +1547,10 @@ class TestRunWritesFreedBYaml:
         assert "annotation_tier" in freedb_text
 
         # Journal must include a sidecar entry for the yaml.
-        journal_data = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
+        journal_data = _read_jsonl_journal(dest / JOURNAL_FILENAME)
         sidecar_entries = [e for e in journal_data if e["action"] == "sidecar"]
         assert len(sidecar_entries) == 1
-        assert sidecar_entries[0]["destination"].endswith("freedb_disc_1.yaml")
+        assert str(sidecar_entries[0]["destination"]).endswith("freedb_disc_1.yaml")
 
 
 # ---------------------------------------------------------------------------
@@ -3384,7 +3398,7 @@ class TestRunFullPipeline:
 
         journal_path = dest / JOURNAL_FILENAME
         assert journal_path.exists(), "Journal file must exist after a successful run"
-        journal_data = json.loads(journal_path.read_text(encoding="utf-8"))
+        journal_data = _read_jsonl_journal(journal_path)
         tagged_entries = [e for e in journal_data if e["action"] == "tagged"]
         assert len(tagged_entries) == 2, f"Expected 2 'tagged' journal entries (disc 1 only), got {len(tagged_entries)}"
 
@@ -5471,7 +5485,7 @@ class TestRunCollisionAndJournal:
         )
         journal_path = dest / JOURNAL_FILENAME
         assert journal_path.exists()
-        data = json.loads(journal_path.read_text(encoding="utf-8"))
+        data = _read_jsonl_journal(journal_path)
         assert len(data) == 1
         assert data[0]["action"] == "tagged"
         assert data[0]["release_id"] == "rel-1"
@@ -5590,7 +5604,7 @@ class TestRunCollisionAndJournal:
             dry_run=False,
             fetch_rels=False,
         )
-        data = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
+        data = _read_jsonl_journal(dest / JOURNAL_FILENAME)
         assert any(e["action"] == "tagged" for e in data)
 
     def test_collision_skip_skips_existing_and_copies_new(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -5651,7 +5665,7 @@ class TestRunCollisionAndJournal:
         assert mock_tag.call_count == 1
 
         # Journal should have one skipped and one copied
-        data = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
+        data = _read_jsonl_journal(dest / JOURNAL_FILENAME)
         actions = {e["action"] for e in data}
         assert "skipped" in actions
         assert "tagged" in actions
@@ -5759,7 +5773,7 @@ class TestRunCollisionAndJournal:
             dry_run=False,
             fetch_rels=False,
         )
-        data_after_first = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
+        data_after_first = _read_jsonl_journal(dest / JOURNAL_FILENAME)
         assert len(data_after_first) == 1
 
         # Patch so the second run doesn't try to re-copy (would be a no-op anyway in fake fs,
@@ -5778,7 +5792,7 @@ class TestRunCollisionAndJournal:
             dry_run=False,
             fetch_rels=False,
         )
-        data_after_second = json.loads((dest / JOURNAL_FILENAME).read_text(encoding="utf-8"))
+        data_after_second = _read_jsonl_journal(dest / JOURNAL_FILENAME)
         assert len(data_after_second) == 2
 
     def test_collision_policy_overwrite_skips_prompt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -9634,7 +9648,7 @@ class TestIngestAudioHash:
         # (b) Verify the journal entry carries the matching audio_hash field.
         journal_path = dest / JOURNAL_FILENAME
         assert journal_path.exists(), "Journal file was not written"
-        data = json.loads(journal_path.read_text(encoding="utf-8"))
+        data = _read_jsonl_journal(journal_path)
         tagged_entries = [e for e in data if e.get("action") == "tagged"]
         assert len(tagged_entries) == 1, f"Expected 1 tagged journal entry, found {len(tagged_entries)}"
         journal_audio_hash = tagged_entries[0].get("audio_hash", "")
@@ -9725,7 +9739,7 @@ class TestIngestAcoustidFingerprint:
         # (a) Verify the journal entry carries the acoustid_fingerprint field.
         journal_path = dest / JOURNAL_FILENAME
         assert journal_path.exists(), "Journal file was not written"
-        data = json.loads(journal_path.read_text(encoding="utf-8"))
+        data = _read_jsonl_journal(journal_path)
         tagged_entries = [e for e in data if e.get("action") == "tagged"]
         assert len(tagged_entries) == 1, f"Expected 1 tagged journal entry, found {len(tagged_entries)}"
         journal_fp = tagged_entries[0].get("acoustid_fingerprint", "")
@@ -9766,7 +9780,7 @@ class TestIngestAcoustidFingerprint:
         )
 
         journal_path = dest / JOURNAL_FILENAME
-        data = json.loads(journal_path.read_text(encoding="utf-8"))
+        data = _read_jsonl_journal(journal_path)
         tagged_entries = [e for e in data if e.get("action") == "tagged"]
         assert len(tagged_entries) == 1
         # acoustid_fingerprint should be "" (empty string, the default) when fpcalc is unavailable.
@@ -10736,8 +10750,8 @@ class TestRebuildJournal:
 
         result = rebuild_journal(dest_root, dry_run=False)
 
-        # Journal file must be replaced with the rebuilt entries
-        written = json.loads(journal_path.read_text(encoding="utf-8"))
+        # Journal file must be replaced with the rebuilt entries (JSONL format).
+        written = _read_jsonl_journal(journal_path)
         assert len(written) == 1
         assert written[0]["action"] == "tagged"
         assert written[0]["destination"] == str(flac_path)
@@ -13690,3 +13704,205 @@ class TestRepathExtensionRepair:
         journal = read_journal(dest_root / JOURNAL_FILENAME)
         repathed = [e for e in journal.entries if e.action == "repathed"]
         assert len(repathed) == 0, f"Expected no repathed entries in dry-run mode, got {repathed}"
+
+
+# ---------------------------------------------------------------------------
+# JSONL journal store: append primitive, torn-tail recovery, migration, atomic rewrite
+# ---------------------------------------------------------------------------
+
+
+def _make_entry(action: str = "tagged", src: str = "/src/01.flac", dest: str = "/dest/01.flac") -> TransactionEntry:
+    """Build a minimal TransactionEntry for JSONL journal tests.
+
+    :param action: The action string.
+    :param src: Source path string.
+    :param dest: Destination path string.
+    :returns: A :class:`~music_annotator.models.TransactionEntry`.
+    """
+    return TransactionEntry(
+        timestamp="2026-01-01T00:00:00+00:00",
+        release_id="rel-1",
+        source=src,
+        destination=dest,
+        action=action,
+    )
+
+
+class TestJournalJSONL:
+    """KAT tests for the JSONL journal store.
+
+    Covers: append→read round-trip, torn-tail recovery, non-tail malformation hard error,
+    array→JSONL migration (entry order, count, backup preservation), atomic rewrite via temp file,
+    and the backup-already-exists branch of migration.
+    """
+
+    def test_append_read_round_trip(self, fs: FakeFilesystem) -> None:
+        """append_journal_entry followed by read_journal returns entries in order.
+
+        Writes N entries via the append primitive and verifies that read_journal returns them
+        in the same order with the correct field values.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        journal_path = Path("/dest/music_annotator_journal.json")
+
+        entries = [_make_entry(src=f"/src/0{i}.flac", dest=f"/dest/0{i}.flac") for i in range(1, 4)]
+        for entry in entries:
+            append_journal_entry(journal_path, entry)
+
+        result = read_journal(journal_path)
+        assert len(result.entries) == 3
+        for i, entry in enumerate(result.entries):
+            assert entry.source == f"/src/0{i + 1}.flac"
+            assert entry.destination == f"/dest/0{i + 1}.flac"
+            assert entry.action == "tagged"
+
+    def test_torn_final_line_tolerated(self, fs: FakeFilesystem) -> None:
+        """A torn final line (partial JSON) is tolerated with a warning; valid entries are returned.
+
+        A file ending with a partial JSON line (simulating a process interrupted mid-write) is
+        read successfully.  The torn line is ignored and a WARNING is emitted.
+
+        :param fs: pyfakefs fixture.
+        """
+        entry = _make_entry()
+        journal_path = Path("/dest/journal.json")
+        fs.create_dir("/dest")
+        # Valid entry followed by a torn (partial) final line.
+        journal_path.write_text(json.dumps(entry.model_dump()) + "\n{torn", encoding="utf-8")
+
+        result = read_journal(journal_path)
+        assert len(result.entries) == 1
+        assert result.entries[0].action == "tagged"
+
+    def test_trailing_empty_lines_not_torn_tail(self, fs: FakeFilesystem) -> None:
+        """Trailing empty lines after the last valid entry are silently stripped, not treated as torn.
+
+        A JSONL file ending with one or more blank lines (as produced by append_journal_entry,
+        which writes a trailing newline) must not trigger a torn-tail warning.
+
+        :param fs: pyfakefs fixture.
+        """
+        entry = _make_entry()
+        journal_path = Path("/dest/journal.json")
+        fs.create_dir("/dest")
+        # Valid entry followed by two trailing newlines (one from the entry, one extra).
+        journal_path.write_text(json.dumps(entry.model_dump()) + "\n\n", encoding="utf-8")
+
+        result = read_journal(journal_path)
+        assert len(result.entries) == 1
+        assert result.entries[0].action == "tagged"
+
+    def test_non_tail_malformation_is_hard_error(self, fs: FakeFilesystem) -> None:
+        """A malformed non-final line raises RuntimeError (corruption, not torn tail).
+
+        A corrupt line in the middle of the journal is a hard error — it indicates data
+        corruption, not a torn write, and must never be silently ignored.
+
+        :param fs: pyfakefs fixture.
+        """
+        entry = _make_entry()
+        journal_path = Path("/dest/journal.json")
+        fs.create_dir("/dest")
+        # Corrupt line in the middle, followed by a valid line.
+        journal_path.write_text("{corrupt\n" + json.dumps(entry.model_dump()) + "\n", encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="journal corruption"):
+            read_journal(journal_path)
+
+    def test_migration_preserves_entry_order_and_count(self, fs: FakeFilesystem) -> None:
+        """Migration from JSON array to JSONL preserves entry order and count.
+
+        A fixture array journal with N entries is migrated to JSONL.  The resulting JSONL file
+        contains the same N entries in the same order.  The original ``.json`` backup is preserved
+        and untouched after migration.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        journal_path = Path("/dest/music_annotator_journal.json")
+
+        # Write a legacy JSON-array journal with 3 entries.
+        entries = [_make_entry(src=f"/src/0{i}.flac", dest=f"/dest/0{i}.flac") for i in range(1, 4)]
+        array_content = json.dumps([e.model_dump() for e in entries])
+        journal_path.write_text(array_content, encoding="utf-8")
+
+        # read_journal triggers migration.
+        result = read_journal(journal_path)
+
+        # Entry order and count are preserved.
+        assert len(result.entries) == 3
+        for i, entry in enumerate(result.entries):
+            assert entry.source == f"/src/0{i + 1}.flac"
+
+        # The backup file exists and contains the original array content.
+        backup_path = journal_path.with_suffix(journal_path.suffix + JOURNAL_BACKUP_SUFFIX)
+        assert backup_path.exists(), "Backup file must exist after migration"
+        assert backup_path.read_text(encoding="utf-8") == array_content, "Backup must contain original array content"
+
+        # The live journal is now JSONL (not a JSON array).
+        live_content = journal_path.read_text(encoding="utf-8")
+        assert not live_content.lstrip().startswith("["), "Migrated journal must not be a JSON array"
+        lines = [line for line in live_content.splitlines() if line.strip()]
+        assert len(lines) == 3, "Migrated JSONL must have one line per entry"
+
+    def test_migration_backup_already_exists_still_rewrites(self, fs: FakeFilesystem) -> None:
+        """Migration skips writing the backup when it already exists but still rewrites the journal.
+
+        This covers the case where a previous migration was interrupted after writing the backup
+        but before replacing the live journal.  The backup is left untouched; the live journal
+        is rewritten to JSONL.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        journal_path = Path("/dest/music_annotator_journal.json")
+        backup_path = journal_path.with_suffix(journal_path.suffix + JOURNAL_BACKUP_SUFFIX)
+
+        entry = _make_entry()
+        array_content = json.dumps([entry.model_dump()])
+        journal_path.write_text(array_content, encoding="utf-8")
+
+        # Pre-create the backup (simulating a previous interrupted migration).
+        backup_path.write_text("original backup content", encoding="utf-8")
+        backup_path.chmod(0o444)
+
+        # Call _migrate_array_journal directly to exercise the backup-exists branch.
+        _migrate_array_journal(journal_path)
+
+        # Backup is unchanged (not overwritten).
+        assert backup_path.read_text(encoding="utf-8") == "original backup content"
+
+        # Live journal is now JSONL.
+        live_content = journal_path.read_text(encoding="utf-8")
+        assert not live_content.lstrip().startswith("[")
+        lines = [line for line in live_content.splitlines() if line.strip()]
+        assert len(lines) == 1
+
+    def test_rebuild_journal_write_is_atomic(self, fs: FakeFilesystem) -> None:
+        """rebuild_journal(dry_run=False) writes via a temp file and os.replace (atomic rewrite).
+
+        Verifies that the temp file is not present after the rewrite completes (it was renamed
+        to the journal path) and that the journal contains the rebuilt entries.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        work_dir = dest_root / "Composer" / "Work [2024]"
+        fs.create_dir(str(work_dir))
+        flac_path = work_dir / "01 - Movement.flac"
+        fs.create_file(str(flac_path), contents=_MINIMAL_FLAC)
+        apply_tags_flac(flac_path, TrackTags(title="Movement", musicbrainz_albumid="rel-1"))
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        tmp_path = journal_path.with_suffix(journal_path.suffix + ".tmp")
+
+        rebuild_journal(dest_root, dry_run=False)
+
+        # The temp file must not exist after the atomic replace.
+        assert not tmp_path.exists(), "Temp file must not remain after atomic rewrite"
+        # The journal must contain the rebuilt entry.
+        result = read_journal(journal_path)
+        assert len(result.entries) == 1
+        assert result.entries[0].action == "tagged"

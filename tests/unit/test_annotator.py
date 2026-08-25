@@ -3762,13 +3762,16 @@ class TestExtractWorkArtistRelsNewTypes:
 
 
 def _write_journal(dest_root: Path, entries: list[dict[str, str]]) -> None:
-    """Write a journal JSON file to ``dest_root / JOURNAL_FILENAME``.
+    """Write a JSONL journal file to ``dest_root / JOURNAL_FILENAME``.
+
+    Writes one JSON object per line (JSONL format) so the file is in the format that
+    :func:`~music_annotator.read_journal` expects without triggering a migration.
 
     :param dest_root: Destination root directory (must already exist).
     :param entries: List of raw entry dicts to serialise.
     """
     journal_path = dest_root / JOURNAL_FILENAME
-    journal_path.write_text(json.dumps(entries), encoding="utf-8")
+    journal_path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
 
 
 class TestAuditTierPass:

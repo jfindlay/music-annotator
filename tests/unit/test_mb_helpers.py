@@ -47,7 +47,7 @@ from music_annotator._mb_api import (
 )
 from music_annotator._net import RetryDecision
 from music_annotator._pipeline_io import _check_collisions
-from music_annotator.models import MBArtist, MBAttribute, MBRecording, MBWork, TransactionEntry
+from music_annotator.models import JSON, MBArtist, MBAttribute, MBRecording, MBWork, TransactionEntry
 
 # ---------------------------------------------------------------------------
 # fetch_cover_art — retry behaviour
@@ -1743,8 +1743,21 @@ def _entry(action: str = "tagged", src: str = "/src/01.flac", dest: str = "/dest
     )
 
 
+def _read_jsonl(path: Path) -> list[dict[str, JSON]]:
+    """Read a JSONL file and return a list of parsed JSON objects.
+
+    :param path: Path to the JSONL journal file.
+    :returns: A list of JSON objects (dicts), one per non-empty line.
+    """
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 class TestWriteTransactionLog:
-    """Tests for write_transaction_log."""
+    """Tests for write_transaction_log.
+
+    The journal is stored in JSONL format (one JSON object per line).  Legacy JSON-array journals
+    are migrated to JSONL on first write.
+    """
 
     def test_creates_new_journal_file(self, fs: FakeFilesystem) -> None:
         """Creates the journal file when it does not yet exist.
@@ -1756,13 +1769,13 @@ class TestWriteTransactionLog:
         entry = _entry()
         write_transaction_log(journal, [entry])
         assert journal.exists()
-        data = json.loads(journal.read_text(encoding="utf-8"))
+        data = _read_jsonl(journal)
         assert len(data) == 1
         assert data[0]["action"] == "tagged"
         assert data[0]["source"] == "/src/01.flac"
 
     def test_appends_to_existing_journal(self, fs: FakeFilesystem) -> None:
-        """New entries are appended to existing journal contents.
+        """New entries are appended to existing JSONL journal contents.
 
         :param fs: pyfakefs fixture.
         """
@@ -1774,36 +1787,65 @@ class TestWriteTransactionLog:
         second = _entry(action="skipped", src="/src/02.flac", dest="/dest/02.flac")
         write_transaction_log(journal, [second])
 
-        data = json.loads(journal.read_text(encoding="utf-8"))
+        data = _read_jsonl(journal)
         assert len(data) == 2
         assert data[0]["action"] == "tagged"
         assert data[1]["action"] == "skipped"
 
-    def test_corrupt_journal_is_reset(self, fs: FakeFilesystem) -> None:
-        """A corrupt journal file is overwritten with only the new entries.
+    def test_legacy_array_journal_is_migrated(self, fs: FakeFilesystem) -> None:
+        """A legacy JSON-array journal is migrated to JSONL and the new entry is appended.
+
+        The original array file is preserved as a read-only backup.
 
         :param fs: pyfakefs fixture.
         """
         fs.create_dir("/dest")
         journal = Path("/dest/music_annotator_journal.json")
-        journal.write_text("NOT VALID JSON", encoding="utf-8")
-        entry = _entry()
-        write_transaction_log(journal, [entry])
-        data = json.loads(journal.read_text(encoding="utf-8"))
-        assert len(data) == 1
+        existing = _entry(action="tagged", src="/src/01.flac", dest="/dest/01.flac")
+        # Write a legacy JSON-array journal.
+        journal.write_text(json.dumps([existing.model_dump()], indent=2), encoding="utf-8")
 
-    def test_non_list_json_is_reset(self, fs: FakeFilesystem) -> None:
-        """A journal containing valid JSON but not a list is overwritten.
+        new_entry = _entry(action="skipped", src="/src/02.flac", dest="/dest/02.flac")
+        write_transaction_log(journal, [new_entry])
+
+        data = _read_jsonl(journal)
+        assert len(data) == 2
+        assert data[0]["action"] == "tagged"
+        assert data[1]["action"] == "skipped"
+        # Backup must exist and be read-only.
+        backup = Path("/dest/music_annotator_journal.json.array-backup")
+        assert backup.exists()
+
+    def test_corrupt_array_journal_is_reset(self, fs: FakeFilesystem) -> None:
+        """A corrupt JSON-array journal (starts with '[' but invalid JSON) is reset to empty.
+
+        The new entries are written to the now-empty file.
 
         :param fs: pyfakefs fixture.
         """
         fs.create_dir("/dest")
         journal = Path("/dest/music_annotator_journal.json")
-        journal.write_text('{"not": "a list"}', encoding="utf-8")
+        journal.write_text("[NOT VALID JSON", encoding="utf-8")
         entry = _entry()
         write_transaction_log(journal, [entry])
-        data = json.loads(journal.read_text(encoding="utf-8"))
+        data = _read_jsonl(journal)
         assert len(data) == 1
+
+    def test_non_array_jsonl_journal_appended(self, fs: FakeFilesystem) -> None:
+        """A JSONL journal (not starting with '[') has new entries appended directly.
+
+        :param fs: pyfakefs fixture.
+        """
+        fs.create_dir("/dest")
+        journal = Path("/dest/music_annotator_journal.json")
+        existing = _entry(action="tagged", src="/src/01.flac", dest="/dest/01.flac")
+        journal.write_text(json.dumps(existing.model_dump()) + "\n", encoding="utf-8")
+        new_entry = _entry(action="skipped", src="/src/02.flac", dest="/dest/02.flac")
+        write_transaction_log(journal, [new_entry])
+        data = _read_jsonl(journal)
+        assert len(data) == 2
+        assert data[0]["action"] == "tagged"
+        assert data[1]["action"] == "skipped"
 
     def test_multiple_entries_written(self, fs: FakeFilesystem) -> None:
         """Multiple entries are all written in a single call.
@@ -1814,7 +1856,7 @@ class TestWriteTransactionLog:
         journal = Path("/dest/music_annotator_journal.json")
         entries = [_entry(src=f"/src/0{i}.flac", dest=f"/dest/0{i}.flac") for i in range(1, 4)]
         write_transaction_log(journal, entries)
-        data = json.loads(journal.read_text(encoding="utf-8"))
+        data = _read_jsonl(journal)
         assert len(data) == 3
 
     def test_dry_run_entries_preserved(self, fs: FakeFilesystem) -> None:
@@ -1826,7 +1868,7 @@ class TestWriteTransactionLog:
         journal = Path("/dest/music_annotator_journal.json")
         entry = _entry(action="dry_run")
         write_transaction_log(journal, [entry])
-        data = json.loads(journal.read_text(encoding="utf-8"))
+        data = _read_jsonl(journal)
         assert data[0]["action"] == "dry_run"
 
 

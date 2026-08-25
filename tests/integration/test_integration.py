@@ -33,6 +33,7 @@ from music_annotator._pipeline_io import (
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import _work_top_dir, build_dest_path
 from music_annotator.models import (
+    JSON,
     AccurateRipSummary,
     AnnotationTier,
     CoverArt,
@@ -47,6 +48,20 @@ from music_annotator.models import (
     TrackTags,
     TransactionEntry,
 )
+
+# ---------------------------------------------------------------------------
+# Test helpers
+# ---------------------------------------------------------------------------
+
+
+def _read_jsonl_journal(path: Path) -> list[dict[str, JSON]]:
+    """Read a JSONL journal file and return a list of parsed JSON objects.
+
+    :param path: Path to the JSONL journal file.
+    :returns: A list of JSON objects (dicts), one per non-empty line.
+    """
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
 
 # ---------------------------------------------------------------------------
 # Minimal audio file byte sequences
@@ -441,7 +456,7 @@ class TestRunFullNonDryRunFlac:
         # Journal file should exist and record two "tagged" actions
         journal_path = dest_root / JOURNAL_FILENAME
         assert journal_path.exists()
-        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        entries = _read_jsonl_journal(journal_path)
         assert len(entries) == 2
         assert all(e["action"] == "tagged" for e in entries)
 
@@ -494,7 +509,7 @@ class TestRunFullNonDryRunMp3:
 
         journal_path = dest_root / JOURNAL_FILENAME
         assert journal_path.exists()
-        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        entries = _read_jsonl_journal(journal_path)
         assert len(entries) == 2
         assert all(e["action"] == "tagged" for e in entries)
 
@@ -730,7 +745,7 @@ class TestRunFastPath:
             assert tags.get("ALBUM"), f"ALBUM missing in {flac_path.name}"
 
         journal_path = dest_root / JOURNAL_FILENAME
-        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        entries = _read_jsonl_journal(journal_path)
         assert len(entries) == 2
 
 
@@ -1028,7 +1043,7 @@ class TestRunCollisionPolicySkip:
 
         # Journal must now contain four entries: 2 "tagged" + 2 "skipped".
         journal_path = dest_root / JOURNAL_FILENAME
-        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        entries = _read_jsonl_journal(journal_path)
         assert len(entries) == 4
         actions = [e["action"] for e in entries]
         assert actions.count("tagged") == 2
@@ -1089,7 +1104,7 @@ class TestRunCollisionPolicyOverwrite:
 
         # Journal: 4 entries total, all "tagged".
         journal_path = dest_root / JOURNAL_FILENAME
-        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        entries = _read_jsonl_journal(journal_path)
         assert len(entries) == 4
         assert all(e["action"] == "tagged" for e in entries)
 
@@ -1238,7 +1253,7 @@ class TestRunMultiDisc:
 
         # Journal should record 3 "tagged" entries.
         journal_path = dest_root / JOURNAL_FILENAME
-        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        entries = _read_jsonl_journal(journal_path)
         assert len(entries) == 3
         assert all(e["action"] == "tagged" for e in entries)
 
@@ -1429,7 +1444,7 @@ class TestJournalMerge:
         )
 
         journal_path = dest_root / JOURNAL_FILENAME
-        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        entries = _read_jsonl_journal(journal_path)
         assert len(entries) == 4
         assert all(e["action"] == "tagged" for e in entries)
 
@@ -1711,7 +1726,7 @@ class TestRebuildJournalIntegration:
 
         rebuild_journal(dest_root, dry_run=False)
 
-        written = json.loads(journal_path.read_text(encoding="utf-8"))
+        written = _read_jsonl_journal(journal_path)
         assert len(written) == 1
         assert written[0]["action"] == "tagged"
         assert written[0]["release_id"] == "rel-1"
@@ -2296,7 +2311,7 @@ class TestWhipperIntegration:
         # --- (f) Journal has a "sidecar" entry for the log ---
         journal_path = dest_root / JOURNAL_FILENAME
         assert journal_path.exists()
-        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        entries = _read_jsonl_journal(journal_path)
         sidecar_entries = [e for e in entries if e["action"] == "sidecar"]
         assert len(sidecar_entries) >= 1, "journal must have at least one 'sidecar' entry for the whipper log"
         sidecar_dests = [e["destination"] for e in sidecar_entries]
@@ -2640,7 +2655,7 @@ class TestOtherDownloadIsrcIntegration:
         # --- (e) Journal has "tagged" entries for both FLACs ---
         journal_path = dest_root / JOURNAL_FILENAME
         assert journal_path.exists()
-        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        entries = _read_jsonl_journal(journal_path)
         tagged_entries = [e for e in entries if e["action"] == "tagged"]
         assert len(tagged_entries) == 2, f"journal must have 2 'tagged' entries, got {len(tagged_entries)}"
         tagged_sources = {e["source"] for e in tagged_entries}
@@ -2648,7 +2663,7 @@ class TestOtherDownloadIsrcIntegration:
         assert str(flac2_path) in tagged_sources, f"source {flac2_path} not in tagged sources"
 
         # --- (f) No "sidecar" entries for a whipper log (download has no rip log) ---
-        sidecar_entries = [e for e in entries if e["action"] == "sidecar" and e["destination"].endswith(".log")]
+        sidecar_entries = [e for e in entries if e["action"] == "sidecar" and str(e["destination"]).endswith(".log")]
         assert not sidecar_entries, f"download dir must not produce whipper log sidecar entries, got {sidecar_entries}"
 
 
@@ -2819,13 +2834,13 @@ class TestRunMismatchOverrideIntegration:
         # --- (c) Journal has 2 'tagged' entries ---
         journal_path = dest_root / JOURNAL_FILENAME
         assert journal_path.exists()
-        entries = json.loads(journal_path.read_text(encoding="utf-8"))
+        entries = _read_jsonl_journal(journal_path)
         tagged_entries = [e for e in entries if e["action"] == "tagged"]
         assert len(tagged_entries) == 2, f"journal must have 2 'tagged' entries, got {len(tagged_entries)}"
 
         # --- (d) audit surfaces the mb-partial entries (one per tagged track) ---
         counts = _make_audit_counts()
-        _audit_tier_pass(dest_root, [TransactionEntry(**e) for e in tagged_entries], counts)
+        _audit_tier_pass(dest_root, [TransactionEntry.model_validate(e) for e in tagged_entries], counts)
         # 2 tagged files, each at mb-partial → tier_partial == 2
         assert counts["tier_partial"] == 2, (
             f"audit must count 2 mb-partial entries (one per tagged file), got tier_partial={counts['tier_partial']}"
