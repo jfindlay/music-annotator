@@ -2596,11 +2596,13 @@ class TestRunFullPipeline:
         tags1: TrackTags = mock_tag.call_args_list[0][0][1]
         tags2: TrackTags = mock_tag.call_args_list[1][0][1]
 
-        # Both movements should carry the primary composer from movement 1.
-        assert tags1.cwp_composers == tags2.cwp_composers == "Mozart"
-        assert tags1.cwp_composer_lastnames == tags2.cwp_composer_lastnames == "Mozart"
-        # Movement 2's additional composer (Süßmayr) must NOT have been erased from its own
-        # cwp_arrangers / arranger tags — the fix must only touch the missing-composer fields.
+        # Upward unification (SEL-8 / REND-27): both movements must carry the full author chain
+        # (primary + completer).  Movement 1 had only Mozart (primary); movement 2 had only
+        # Süßmayr (additional fallback).  After unification both carry "Mozart; Süßmayr".
+        assert tags1.cwp_composers == tags2.cwp_composers == "Mozart; Süßmayr"
+        assert tags1.cwp_composer_lastnames == tags2.cwp_composer_lastnames
+        assert "Mozart" in tags1.cwp_composer_lastnames
+        assert "Süßmayr" in tags1.cwp_composer_lastnames
         assert tags1.cwp_composers_sort == tags2.cwp_composers_sort
 
     def test_composer_unified_produces_same_top_dir(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
@@ -2734,7 +2736,8 @@ class TestRunFullPipeline:
         # C-UNIVERSAL: parts[0] = top_dir (<composer> - <performers>), no class prefix.
         tops = {p.relative_to(dest).parts[0] for p in captured_dests}
         assert len(tops) == 1, f"Movements landed in different top dirs: {sorted(tops)}"
-        # The shared top-level directory must be Mozart's, not Süßmayr's.
+        # The shared top-level directory must lead with Mozart (primary composer).
+        # With upward unification (SEL-8 / REND-27), the full chain "Mozart; Süßmayr" is used.
         assert "Mozart" in tops.pop()
 
     def test_composer_not_modified_when_all_movements_are_additional_only(
@@ -2856,6 +2859,327 @@ class TestRunFullPipeline:
         # should have occurred — the additional-only fallback values must be preserved.
         assert tags1.cwp_composers == "Arranger X"
         assert tags2.cwp_composers == "Arranger Y"
+
+    def test_composer_unification_upward_completion_shape(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT (SEL-8 / REND-27): composer unification propagates primary + completer to all movements.
+
+        Composer unification direction is upward: when some movements credit only the primary
+        composer and others credit only the completer (as "composer (additional)" fallback), the
+        unification pass builds the full author chain (primary + completer) and propagates it to
+        every movement in the group.  The path component renders the author chain plain, primary
+        leading (``Mozart; Süßmayr``), per REND-27.
+
+        Work group:
+        - Movement 1: plain primary composer Mozart only → ``cwp_composers = "Mozart"``,
+          ``cwp_composers_is_fallback = ""``
+        - Movement 2: only additional Süßmayr (completion credit, fallback) →
+          ``cwp_composers = "Süßmayr"``, ``cwp_composers_is_fallback = "1"``
+
+        After upward unification every movement must carry ``"Mozart; Süßmayr"``.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        top_work_id = "w-requiem"
+
+        # Movement 1: plain primary composer Mozart only.
+        work_mvt1 = _w(
+            {
+                "id": "w-mvt1",
+                "title": "I. Introitus",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-mozart", "name": "Mozart", "sort-name": "Mozart, Wolfgang Amadeus"},
+                        "attribute-list": [],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Requiem"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        # Movement 2: only additional Süßmayr (completion credit — no plain primary).
+        # build_track_tags will set cwp_composers = "Süßmayr" and cwp_composers_is_fallback = "1".
+        work_mvt2 = _w(
+            {
+                "id": "w-mvt2",
+                "title": "II. Lacrimosa",
+                "type": "",
+                "artist-relation-list": [
+                    {
+                        "type": "composer",
+                        "artist": {"id": "a-sussmayr", "name": "Süßmayr", "sort-name": "Süßmayr, Franz Xaver"},
+                        "attribute-list": ["additional"],
+                    }
+                ],
+                "work-relation-list": [
+                    {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Requiem"}},
+                ],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+        work_root = _w(
+            {
+                "id": top_work_id,
+                "title": "Requiem",
+                "type": "Requiem",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        call_count = [0]
+        work_map = {"w-mvt1": work_mvt1, "w-mvt2": work_mvt2, top_work_id: work_root}
+
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
+            call_count[0] += 1
+            work_id = "w-mvt1" if call_count[0] == 1 else "w-mvt2"
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "T",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [{"type": "performance", "work": {"id": work_id, "title": "Mvt"}}],
+                }
+            )
+
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
+            return work_map[work_id]
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+
+        # Upward unification: every movement must carry the full author chain (Mozart; Süßmayr).
+        # Movement 1 had only Mozart (primary); movement 2 had only Süßmayr (additional fallback).
+        # After unification both must carry the combined primary + completer chain.
+        assert tags1.cwp_composers == "Mozart; Süßmayr", (
+            f"Movement 1 (primary-only) must be upward-unified to 'Mozart; Süßmayr', got '{tags1.cwp_composers}'"
+        )
+        assert tags2.cwp_composers == "Mozart; Süßmayr", (
+            f"Movement 2 (fallback-only) must be upward-unified to 'Mozart; Süßmayr', got '{tags2.cwp_composers}'"
+        )
+        # All movements must share the same top-level directory (same cwp_composer_lastnames).
+        assert tags1.cwp_composer_lastnames == tags2.cwp_composer_lastnames
+        assert "Mozart" in tags1.cwp_composer_lastnames
+        assert "Süßmayr" in tags1.cwp_composer_lastnames
+
+    def test_composer_unification_plain_single_composer_unchanged(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT (SEL-8): a work group with only one composer is unchanged after unification.
+
+        When every movement in a work group has the same single primary composer and no completer,
+        the unification pass must not modify any tag — the single-composer value is already the
+        fullest chain and propagates to itself unchanged.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        top_work_id = "w-symphony"
+
+        def _make_mvt_work(work_id: str, title: str) -> MBWork:
+            return _w(
+                {
+                    "id": work_id,
+                    "title": title,
+                    "type": "",
+                    "artist-relation-list": [
+                        {
+                            "type": "composer",
+                            "artist": {"id": "a-beethoven", "name": "Beethoven", "sort-name": "Beethoven, Ludwig van"},
+                            "attribute-list": [],
+                        }
+                    ],
+                    "work-relation-list": [
+                        {"type": "parts", "direction": "backward", "work": {"id": top_work_id, "title": "Symphony"}},
+                    ],
+                    "attribute-list": [],
+                    "tag-list": [],
+                }
+            )
+
+        work_mvt1 = _make_mvt_work("w-mvt1", "I. Allegro")
+        work_mvt2 = _make_mvt_work("w-mvt2", "II. Andante")
+        work_root = _w(
+            {
+                "id": top_work_id,
+                "title": "Symphony",
+                "type": "Symphony",
+                "artist-relation-list": [],
+                "work-relation-list": [],
+                "attribute-list": [],
+                "tag-list": [],
+            }
+        )
+
+        call_count = [0]
+        work_map = {"w-mvt1": work_mvt1, "w-mvt2": work_mvt2, top_work_id: work_root}
+
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
+            call_count[0] += 1
+            work_id = "w-mvt1" if call_count[0] == 1 else "w-mvt2"
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "T",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [{"type": "performance", "work": {"id": work_id, "title": "Mvt"}}],
+                }
+            )
+
+        def _fetch_work(work_id: str, no_cache: bool = False) -> MBWork:  # pylint: disable=unused-argument
+            return work_map[work_id]
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+        mocker.patch("music_annotator._mb_api.fetch_work_detail", side_effect=_fetch_work)
+        mocker.patch("music_annotator._works.fetch_work_detail", side_effect=_fetch_work)
+
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+
+        # Single-composer work group: both movements must carry the same single composer unchanged.
+        assert tags1.cwp_composers == "Beethoven"
+        assert tags2.cwp_composers == "Beethoven"
+        assert tags1.cwp_composer_lastnames == "Beethoven"
+        assert tags2.cwp_composer_lastnames == "Beethoven"
+
+    def test_composer_unification_nonclassical_split_preprocessing_untouched(
+        self, mocker: MockerFixture, fs: FakeFilesystem
+    ) -> None:
+        """KAT (SEL-8): non-classical composer-split pre-processing is untouched by upward unification.
+
+        For a non-classical release where CEA_COMPOSER_LASTNAMES varies across tracks (the
+        composer-split shape), the W2b pre-processing in unify() patches every track to the
+        canonical composer component derived from ALBUMARTISTSORT.  The upward-unification pass
+        in _apply_workgroup_unification does not apply to non-classical releases (it operates on
+        cwp_composers_is_fallback, which is only set when a work hierarchy is present).
+
+        This test verifies that a non-classical release with no work hierarchy produces tags
+        where cwp_composers is empty (no work link → no composer unification), and that the
+        fetch_rels path does not erroneously apply the classical unification to non-classical
+        tracks.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        src = Path("/src")
+        dest = Path("/dest")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+        fs.create_file(str(src / "01.flac"), contents=_MINIMAL_FLAC)
+        fs.create_file(str(src / "02.flac"), contents=_MINIMAL_FLAC)
+
+        release = _make_release(n_tracks=2)
+        mocker.patch("music_annotator._mb_api.mb.set_useragent")
+        mocker.patch("music_annotator._pipeline.fetch_release", return_value=release)
+        mocker.patch("music_annotator._pipeline.fetch_cover_art", return_value=CoverArt())
+
+        # Non-classical recordings: no work-relation-list (no work hierarchy).
+        # Each track has a different composer credited at the recording level only.
+        def _fetch_rec(rec_id: str, no_cache: bool = False) -> MBRecording:  # pylint: disable=unused-argument
+            return _rec(
+                {
+                    "id": rec_id,
+                    "title": "T",
+                    "artist-credit": [],
+                    "artist-relation-list": [],
+                    "work-relation-list": [],  # no work link → non-classical
+                }
+            )
+
+        mocker.patch("music_annotator._pipeline.fetch_recording_detail", side_effect=_fetch_rec)
+
+        mock_tag = mocker.patch("music_annotator._pipeline.apply_tags_flac")
+        mocker.patch("music_annotator._pipeline._verify_copy")  # pylint: disable=protected-access
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+
+        music_annotator.run(
+            release_id="rel-1",
+            src_dir=src,
+            dest_root=dest,
+            user_agent="Test/1.0",
+            dry_run=False,
+            fetch_rels=True,
+        )
+
+        tags1: TrackTags = mock_tag.call_args_list[0][0][1]
+        tags2: TrackTags = mock_tag.call_args_list[1][0][1]
+
+        # Non-classical tracks with no work hierarchy: cwp_composers must be empty (no work link).
+        # The composer-split pre-processing (W2b) in unify() is a separate maintenance pass and
+        # does not run during ingest.  The upward-unification pass in _apply_workgroup_unification
+        # only fires when a non-fallback movement with cwp_composers exists — which requires a
+        # work hierarchy.  Without a work link, cwp_composers stays empty for both tracks.
+        assert tags1.cwp_composers == "", (
+            f"Non-classical track 1 must have empty cwp_composers (no work link), got '{tags1.cwp_composers}'"
+        )
+        assert tags2.cwp_composers == "", (
+            f"Non-classical track 2 must have empty cwp_composers (no work link), got '{tags2.cwp_composers}'"
+        )
+        # cwp_composers_is_fallback must also be empty (no fallback was triggered).
+        assert tags1.cwp_composers_is_fallback == ""
+        assert tags2.cwp_composers_is_fallback == ""
 
     def test_mp3_tagged_in_non_dry_run(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """MP3 files are tagged with apply_tags_mp3 in non-dry-run mode.
@@ -3111,7 +3435,7 @@ class TestRunFullPipeline:
         )
 
     def test_composer_unified_across_media(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """KAT: composer cross-disc fallback propagation spans all media via C-S0 substrate.
+        """KAT: composer cross-disc upward unification spans all media via C-S0 substrate.
 
         A 2-medium release where movements of one top work straddle the disc boundary.
         Disc 1 (the SELECTED/copied medium) has one movement whose work carries ONLY an
@@ -3121,14 +3445,14 @@ class TestRunFullPipeline:
 
         Because build_track_tags marks the disc-1 movement ``cwp_composers_is_fallback="1"``
         (it fell back to additional_composers in isolation), the cross-medium composer
-        unification pass MUST propagate Mozart's values from disc 2's movement to disc 1's
-        movement.  The final ``cwp_composers`` / ``cwp_composer_lastnames`` on the disc-1 track
-        must equal Mozart's — a value that is only reachable if disc 2's recording detail was
+        unification pass MUST build the full author chain (Mozart + Süßmayr) and propagate it
+        to disc 1's movement.  The final ``cwp_composers`` on the disc-1 track must be
+        ``"Mozart; Süßmayr"`` — a value that is only reachable if disc 2's recording detail was
         fetched and grouped alongside disc 1's during the C-S0 all-media aggregation pass.
 
         Assertions:
-        (a) Disc-1 track receives ``cwp_composers = "Mozart"`` and
-            ``cwp_composer_lastnames = "Mozart"`` — propagated from disc 2.
+        (a) Disc-1 track receives ``cwp_composers = "Mozart; Süßmayr"`` — upward-unified from
+            disc 2's primary (Mozart) + disc 1's additional (Süßmayr).
         (b) ``apply_tags_flac`` is called exactly once (disc 1 only; disc 2 is never copied).
         (c) ``fetch_recording_detail`` is called for both recordings (all media).
 
@@ -3263,15 +3587,20 @@ class TestRunFullPipeline:
             fetch_rels=True,
         )
 
-        # (a) Disc-1 track must carry Mozart's primary-composer values, propagated cross-medium.
-        # Without cross-medium aggregation, disc-1 would have Süßmayr (its own fallback).
+        # (a) Disc-1 track must carry the full author chain (Mozart; Süßmayr), built from
+        # disc 2's primary (Mozart) + disc 1's additional (Süßmayr).  Without cross-medium
+        # aggregation, disc-1 would have only Süßmayr (its own fallback).
         tags_d1: TrackTags = mock_tag.call_args_list[0][0][1]
-        assert tags_d1.cwp_composers == "Mozart", (
-            f"Expected 'Mozart' (cross-medium propagation from disc 2), got '{tags_d1.cwp_composers}'. "
+        assert tags_d1.cwp_composers == "Mozart; Süßmayr", (
+            f"Expected 'Mozart; Süßmayr' (upward unification from disc 2 primary + disc 1 additional), "
+            f"got '{tags_d1.cwp_composers}'. "
             "This indicates the composer unification pass did not span disc 2."
         )
-        assert tags_d1.cwp_composer_lastnames == "Mozart", (
-            f"Expected 'Mozart' for cwp_composer_lastnames, got '{tags_d1.cwp_composer_lastnames}'."
+        assert "Mozart" in tags_d1.cwp_composer_lastnames, (
+            f"Expected 'Mozart' in cwp_composer_lastnames, got '{tags_d1.cwp_composer_lastnames}'."
+        )
+        assert "Süßmayr" in tags_d1.cwp_composer_lastnames, (
+            f"Expected 'Süßmayr' in cwp_composer_lastnames, got '{tags_d1.cwp_composer_lastnames}'."
         )
 
         # (b) apply_tags_flac called exactly once — only disc 1's file is copied and tagged.

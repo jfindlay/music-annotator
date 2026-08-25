@@ -986,15 +986,29 @@ def _apply_workgroup_unification(
                     extras[f"cwp_inter_index_{i}"] = node_sibling_index[node_id]
 
         # Unify cwp_composer_lastnames / cwp_composers across all movements of this
-        # work.  When MB credits a completion or arranger as "composer" with the
-        # "additional" attribute on only some movements, those movements have an empty
+        # work.  Composer unification propagates primary + completer to all movements
+        # in the work group (SEL-8 / REND-27 upward-unification direction).
+        #
+        # When MB credits a completion or arranger as "composer" with the "additional"
+        # attribute on only some movements, those movements have an empty
         # role_buckets.composers and fall back to additional_composers.
-        # build_track_tags marks this case with cwp_composers_is_fallback="1".  The
-        # result is a different CWP_COMPOSER_LASTNAMES — and therefore a different
-        # top_dir — than the movements that carry a plain primary-composer relation.
-        # Fix: propagate the primary-composer values from any movement that has them
-        # (cwp_composers_is_fallback empty) to all movements that used the fallback,
-        # so every movement in the group lands in the same top-level directory.
+        # build_track_tags marks this case with cwp_composers_is_fallback="1".
+        # Other movements carry a plain primary-composer relation only (no completer).
+        #
+        # The correct unification direction is upward: build the full author chain
+        # (primary + completer) by combining the primary composer from non-fallback
+        # movements with the additional composers from fallback movements, then
+        # propagate that full chain to EVERY movement in the group.  This ensures
+        # every movement renders "Mozart; Süßmayr" in the path component, not just
+        # the ones that happened to credit the completer.
+        #
+        # Construction rule:
+        #   1. Collect the primary composer from the first non-fallback movement.
+        #   2. Collect additional composers from fallback movements (de-duplicated,
+        #      preserving first-appearance order).
+        #   3. Full chain = primary + "; " + additional (when both are present).
+        #   4. Propagate the full chain to every movement in the group.
+        #   Fallback-only groups (no primary anywhere) are left unchanged.
         #
         # group_idxs are global indices over all_media_pairs so this pass spans all
         # media of the release (C-S0 contract).
@@ -1009,17 +1023,41 @@ def _apply_workgroup_unification(
                 _primary_cwp_composer_lastnames = t.cwp_composer_lastnames
                 break
         if _primary_cwp_composers:
+            # Collect additional composers from fallback movements (de-duplicated, order-preserving).
+            # Each fallback movement's cwp_composers holds the additional-composer name(s); these
+            # are the completers that must be appended to the primary to form the full chain.
+            _seen_additional: set[str] = set()
+            _additional_names: list[str] = []
+            _additional_sorts: list[str] = []
+            _additional_lastnames: list[str] = []
             for grp_idx in group_idxs:
                 t = tags_map[grp_idx]
-                if t.cwp_composers_is_fallback:
-                    t.cwp_composers = _primary_cwp_composers
-                    t.cwp_composers_sort = _primary_cwp_composers_sort
-                    t.cwp_composer_lastnames = _primary_cwp_composer_lastnames
+                if t.cwp_composers_is_fallback and t.cwp_composers and t.cwp_composers not in _seen_additional:
+                    _seen_additional.add(t.cwp_composers)
+                    _additional_names.append(t.cwp_composers)
+                    _additional_sorts.append(t.cwp_composers_sort)
+                    _additional_lastnames.append(t.cwp_composer_lastnames)
+            # Build the full author chain: primary + completer (when completers exist).
+            if _additional_names:
+                _full_cwp_composers = _primary_cwp_composers + "; " + "; ".join(_additional_names)
+                _full_cwp_composers_sort = _primary_cwp_composers_sort + "; " + "; ".join(_additional_sorts)
+                _full_cwp_composer_lastnames = _primary_cwp_composer_lastnames + "; " + "; ".join(_additional_lastnames)
+            else:
+                _full_cwp_composers = _primary_cwp_composers
+                _full_cwp_composers_sort = _primary_cwp_composers_sort
+                _full_cwp_composer_lastnames = _primary_cwp_composer_lastnames
+            # Propagate the full chain to every movement in the group.
+            for grp_idx in group_idxs:
+                t = tags_map[grp_idx]
+                if t.cwp_composers != _full_cwp_composers:
+                    t.cwp_composers = _full_cwp_composers
+                    t.cwp_composers_sort = _full_cwp_composers_sort
+                    t.cwp_composer_lastnames = _full_cwp_composer_lastnames
                     t.cwp_composers_is_fallback = ""
-                    t.composer = t.composer or _primary_cwp_composers
-                    t.composersort = t.composersort or _primary_cwp_composers_sort
-                    t.cea_composers = t.cea_composers or _primary_cwp_composers
-                    t.cea_composer_lastnames = t.cea_composer_lastnames or _primary_cwp_composer_lastnames
+                    t.composer = _full_cwp_composers
+                    t.composersort = _full_cwp_composers_sort
+                    t.cea_composers = _full_cwp_composers
+                    t.cea_composer_lastnames = _full_cwp_composer_lastnames
 
         # Compute recording_date_work: the minimum interval spanning all movements of
         # this work across all media.  All tracks in the group use this unified value for

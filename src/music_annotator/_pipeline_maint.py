@@ -1607,7 +1607,7 @@ def _canonical_composer_component(group_tags: list[tuple[Path, TrackTags, dict[s
 
 
 def _unify_classical_composer_groups(group_tags: list[tuple[Path, TrackTags, dict[str, str]]]) -> None:
-    """Propagate the plurality ``cea_composer_lastnames`` within each top-work group for classical releases.
+    """Propagate the fullest author chain within each top-work group for classical releases.
 
     Implements the W2c arranger/finisher retroactive fix for already-annotated libraries.  When a
     classical release has movements where an arranger or finisher was credited as ``"composer"``
@@ -1617,15 +1617,17 @@ def _unify_classical_composer_groups(group_tags: list[tuple[Path, TrackTags, dic
 
     Because ``cwp_composers_is_fallback`` is never written to audio files (it is an in-memory
     pipeline flag only), the retroactive pass cannot distinguish primary from fallback credits
-    directly.  Instead, it uses the **plurality value** within each top-work group: the most
-    frequently occurring non-empty ``cea_composer_lastnames`` value across all movements of the
-    same ``cwp_workid_top`` is taken as the canonical composer, and all movements that differ are
-    patched to match.
+    directly.  Instead, it uses the **fullest author chain** within each top-work group: the
+    non-empty ``cea_composer_lastnames`` value with the most composers (most ``"; "``-separated
+    entries) across all movements of the same ``cwp_workid_top`` is taken as the canonical
+    composer chain, and all movements that differ are patched to match.  This is the upward
+    unification direction per SEL-8 / REND-27: primary + completer propagates to every movement,
+    including those that only credited the primary.  Ties (equal composer count) are broken by
+    first-appearance order (stable).
 
-    This mirrors the cross-medium composer pass in :func:`run` (which propagates the primary
-    composer from movements that have one to movements that used the fallback), but operates on
-    already-embedded tags rather than in-memory :class:`~music_annotator.models.TrackTags` objects
-    built during annotation.
+    This mirrors the cross-medium composer pass in :func:`run` (which propagates the fullest
+    author chain to all movements in the group), but operates on already-embedded tags rather
+    than in-memory :class:`~music_annotator.models.TrackTags` objects built during annotation.
 
     Mutates ``group_tags`` in-place (patches both ``tags.cea_composer_lastnames`` and
     ``tags.cwp_composer_lastnames`` on affected entries, since :func:`~music_annotator._tags.build_dest_path`
@@ -1646,29 +1648,37 @@ def _unify_classical_composer_groups(group_tags: list[tuple[Path, TrackTags, dic
         if not work_id:
             continue  # no work context — skip
 
-        # Count occurrences of each non-empty cea_composer_lastnames value in this work group.
-        composer_counts: dict[str, int] = {}
+        # Collect distinct non-empty cea_composer_lastnames values in this work group.
+        composer_values: set[str] = set()
         for i in idxs:
             _, tags, _ = group_tags[i]
             val = tags.cea_composer_lastnames
             if val:
-                composer_counts[val] = composer_counts.get(val, 0) + 1
+                composer_values.add(val)
 
-        if len(composer_counts) < 2:  # noqa: PLR2004 — 2 is the multi-value threshold
+        if len(composer_values) < 2:  # noqa: PLR2004 — 2 is the multi-value threshold
             continue  # all movements agree — nothing to unify
 
-        # Plurality value: most common non-empty cea_composer_lastnames in this work group.
-        # Ties are broken by first-appearance order (stable: dict preserves insertion order in
-        # Python 3.7+, and we iterate group_tags in file-path order).
-        # Use __getitem__ directly to avoid the cell-var-from-loop pylint warning that would
-        # arise from a lambda capturing composer_counts by reference inside the loop.
-        canonical = max(composer_counts, key=composer_counts.__getitem__)
+        # Fullest author chain: the non-empty cea_composer_lastnames value with the most
+        # composers (most "; "-separated entries).  Ties are broken by first-appearance order
+        # (stable: we iterate group_tags in file-path order and track the first occurrence).
+        canonical = ""
+        canonical_count = 0
+        for i in idxs:
+            _, tags, _ = group_tags[i]
+            val = tags.cea_composer_lastnames
+            if not val:
+                continue
+            count = val.count(";") + 1
+            if count > canonical_count:
+                canonical = val
+                canonical_count = count
 
         log.info(
             "unify_classical_composer_group",
             work_id=work_id,
             canonical=canonical,
-            counts=composer_counts,
+            distinct_values=sorted(composer_values),
         )
 
         for i in idxs:
