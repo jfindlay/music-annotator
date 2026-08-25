@@ -1,198 +1,197 @@
-<!-- Rolling action frame.  The previous sub-track (pre-R6d correctness fixes) closed 2026-08-24 at
-     commit 6ee245f; its plan and ledger live in this file's git history.  This sub-track was derived
-     2026-08-24 from the first full live-hades preflight analysis — see docs/NOTES.md § "Preflight
-     evidence analysis (2026-08-24)" for the evidence base.  Rewritten at the next boundary. -->
+<!-- Rolling action frame.  The previous sub-track (preflight-evidence corrective fixes) closed 2026-08-25 with its
+     acceptance gate passed and the repair turn unblocked; its plan and ledger live in this file's git history.  This
+     sub-track was derived 2026-08-25 from the first live repair-turn repath run on hades, which surfaced the journal-store
+     O(N²) per-move cost, an in-place-rewrite corruption window, and an unhandled same-audio collision outcome that aborted
+     the run 12 minutes into its move phase.  Rewritten at the next boundary. -->
 
-# PLAN — preflight-evidence corrective fixes (pre-repair-turn)
+# PLAN — repair-turn hardening: journal store, collision completeness, duplicate cross-referencing
 
 ## Why this sub-track exists
 
-The first full `preflight` against live hades produced the J3 evidence the roadmap asked for — and the analysis of its
-old→new move corpus found **six confirmed defects** in the maintenance recompute engine (defects A–F, root-caused with
-file:line evidence in `docs/NOTES.md` § "Preflight evidence analysis (2026-08-24)").  Three are actively destructive:
+The first live `repath` on hades (2026-08-25) ran 78 minutes and aborted mid-move-phase.  Root-caused defects and one
+capability gap, evidence in run logs and `~/Remote/hades/Music/Done/music_annotator_journal.json` (44 MB, 49k entries):
 
-- **C** — 410 planned moves degrade named performers to `Unknown Performers` (one-directional; zero recoveries).
-- **E** — completers erased from composer handles (`Mozart; Süßmayr → Mozart`), contradicting adjudicated SEL-8.
-- **F** — 164 of 176 collision suffixes are false positives from plan-blind collision assessment; the executor relies on
-  `os.replace` clobber semantics, so ordering accidents can silently overwrite library files.
-
-The remaining three degrade the handle layer: **A** (locale-blind canonical name resolution — arbitrary-locale alias
-picks), **B** (broken stability premise of the sanctioned fixed-MBID dereference + `repath` docstring drift), **D**
-(release-level-only ensemble rule drops true performing bodies: wind subgroups, choirs).
-
-**The operator repair turn (ROADMAP "Current state" step 2) is blocked until this sub-track closes.**  The legitimate
-backlog the repair turn should then execute: ~1,099 leaf renumberings + intermediate renumbering/collapse, 439 year-label
-normalisations, 12 genuine consolidations, 83 `mm.nn` eliminations, catalogue-token dir merges.
+- **Journal O(N²)** — `write_transaction_log` re-reads, re-validates (49k × `model_validate`), and fully rewrites the whole
+  array journal for **every single move** (~2.7 s/file, confirmed from log timestamps; called per-file from
+  `_execute_single_move`).  It also rewrites in place (truncate-then-write, no temp+rename), so a crash or full disk
+  mid-write destroys the entire journal.  The re-read defends nothing: there is no lock, so it provides zero concurrency
+  safety, and the tool is a single-process CLI.
+- **Collision-outcome incompleteness** — repath's plan handles only `match=False` (suffix; `_pipeline_maint.py:1183`).
+  `match=True` (same audio, different bytes — duplicate rips, e.g. the Greensleeves pair present in two Marriner/ASMF
+  releases) and `match=None` (inconclusive) fall through unhandled, reach execution, and die on C-NOCLOBBER — correctly
+  refusing the clobber, but discarding the remaining run.  Operator ruling: run-fatal stays (maximal integrity bias); the
+  obligation moves to the plan, which must never emit an unwinnable move.
+- **Duplicate releases are invisible in tags** — during ingest the operator destructively chose one release when whole
+  mediums were duplicated (SKIP/OVERWRITE collision policy).  Goal: reference *both* releases from tags — primary release
+  drives path + annotation; secondary releases are recorded as ID-only cross-references.  The journal holds complete
+  offline evidence for both destructive paths: SKIP wrote `action="skipped"` entries carrying the losing release_id;
+  OVERWRITE left both `tagged` entries at the same destination with different release_ids (chronological-last = primary).
+- **Re-run cost** — resume-for-correctness already works (per-move journal flush + `_resolve_current_lib` chain makes
+  re-runs idempotent), but every re-run pays ~an hour of tag re-reads over the full library before the first move.
+  Operator ruling: bring the tag-read cache into scope.
 
 ## Cross-session contracts
 
-Frozen at derivation:
+Frozen at derivation (operator rulings 2026-08-25):
 
-- **C-NOCLOBBER** — a maintenance move NEVER overwrites an existing destination file.  Enforced inside
-  `_move_verify_journal` (the single C-MOVE site) with atomic no-replace semantics (existence-check + exclusive-create
-  or link-then-unlink; implementation chosen in-session).  A refused move is an error surfaced to the operator, never a
-  silent skip and never a clobber.  Test-enforced: a KAT forces a stationary occupant and asserts refusal + no journal
-  entry + both files intact.  Rationale (operator, 2026-08-24): maximally protect the authority, provenance,
-  completeness, and correctness of written data.
-- **C-SEQ** — move plans execute in dependency order: a move whose destination is another plan entry's source runs after
-  that entry vacates it (topological order over the move graph; true swap cycles break via an in-directory temp hop that
-  stays inside the C-PROV verify-then-journal chain).  Collision assessment subtracts plan-vacated paths: the suffix
-  fires only when the occupant is NOT vacated by the same plan AND audio differs (acoustid/length).  Dry-run and real
-  execution share the same sequencing logic so preflight evidence is faithful to what execution would do.
-- **C-GUARD** — the last-resort ARTIST path fallback treats ARTIST as a release/edition title only on the
-  edition-title shape (ARTIST equals ALBUM); a performer name shared by ARTIST and ALBUMARTIST always survives to the
-  path.  The original edition-title regression fixture must keep passing.
-
-Frozen at S3 (2026-08-24), consumed by S4–S6:
-
-- **NORM-2 amendment (revised ruling)** — canonical form = the MB artist `name` field verbatim; native script
-  universally; aliases evidence-only, never a dereference target; fallbacks inherited from MB's editors (Ashkenazy's
-  Latin career name is MB's own judgment — no ru primary alias exists); patronymic-full native forms accepted.
-  Dissolution hypothesis verified live 6/6 (Ozawa 小澤征爾, Stravinsky Игорь Фёдорович Стравинский, Richter/Järvi/WPh
-  native-Latin names).  Consequence: alias hydration leaves the maintenance path entirely — S4 *deletes* the hydration
-  and reduces `canonical_artist_form` to the name field; `fetch_artist_aliases` leaves the path pipeline.
-- **Ensemble selection (SEL-23, new)** — ensemble position at release scope = release-level credits ∪ bodies present
-  on a modal majority (>50%) of the release's tracks, computed over the release's full track set identically at
-  ingest and recompute.  Minority configurations stay credits-only; soloists still never enter (SEL-11).
-- **SEL-8 path grammar (REND-27, new)** — composer path component renders the author chain plain, primary leading
-  (`Mozart; Süßmayr`); role annotations render in tags only (REND-3); unification direction is upward
-  (primary + completer everywhere) per SEL-8, as already adjudicated.
-- **C-DET premise repair** — dissolved by NORM-2-as-revised: the canonical form is a scalar MB field, stable under
-  alias-list reordering by construction; `repath` becomes genuinely offline again ("embedded tags alone" claim
-  restored in S4/S7).  No persistence tag, no backfill shard.
+- **C-JRNL** — journal storage: append-only JSON Lines, one entry per line.  Per-entry durable flush (write + flush +
+  fsync) before the next move — C-PROV ordering and timing are unchanged.  Reads tolerate exactly one torn final line
+  (warn and ignore); any other malformation is corruption and a hard error, never a silent reset.  Full rewrites
+  (rebuild/compaction/migration) are atomic: temp file + `os.replace`.  A one-time migration converts the existing array
+  journal; the original `.json` is preserved as a read-only backup the tool never deletes.  Maintenance passes hold the
+  journal in memory for the run and never re-read it between moves.
+- **C-FATAL** — data-integrity errors are always run-fatal (reaffirms C-NOCLOBBER exactly as frozen; no per-file skip
+  flex).  Corollary obligation, **plan-time completeness**: every collision outcome (`True`/`False`/`None`) is resolved at
+  plan time — cross-reference + plan-drop, suffix, or operator prompt — so an execution-time C-NOCLOBBER refusal indicates
+  a defect in plan construction, not a data condition to tolerate.
+- **C-XREF** — cross-references are ID-only, append-only, and inert: secondary release references never drive path
+  computation, annotation content, or medium selection; the primary release (single-valued `MUSICBRAINZ_ALBUMID`) remains
+  the sole annotation source.  Cross-reference tag mutations require operator confirmation and pass through the full
+  C-PROV chain (tag write → verify → journal) with a dedicated journal action.  Exact tag vocabulary and journal action
+  name are adjudicated in the schema session and appended to the STYLEGUIDE case register (C-CASE append-only discipline).
 
 ## Sessions
 
-Ordering rationale: S1/S2 are adjudication-free pure-bug fixes with self-contained KATs — they land first so the worst
-destruction vectors are closed even if adjudication stalls.  S3 gates the three policy-dependent builds.  Each build
-session is one conceptual unit, ~100–300 LOC, 2–4 files, `tox -m analyze` green (100% branch coverage, mypy strict,
-pylint 10.00).
+Ordering rationale: S1/S2 close the operational emergency (the journal store) and are adjudication-free — they land
+first.  S3 is the interactive adjudication that gates all cross-reference work.  S4 restores a completable repath; S5
+reconstructs past destructive choices from journal evidence; S6 is conditional on S5's census finding evidence gaps.
+S7 is independent and can interleave.  Each build session is one conceptual unit, ~150–400 LOC, `tox -m analyze` green
+(100% branch coverage, mypy strict, pylint 10.00).
 
-| ID | Type        | Deliverable (commit-title shape)                                                      | Deps | Status |
-|----|-------------|----------------------------------------------------------------------------------------|------|--------|
-| S1 | build       | Fix ARTIST-fallback guard: performer names never degrade to Unknown Performers (C-GUARD) | —    | todo   |
-| S2 | build       | Dependency-ordered move execution + vacancy-aware collision assessment (C-NOCLOBBER, C-SEQ) | — | todo   |
-| S3 | adjudication| STYLEGUIDE: NORM-2 amendment, ensemble selection case, SEL-8 path grammar, C-DET repair  | —    | todo   |
-| S4 | build       | Locale/script-aware canonical name resolution per amended NORM-2 (defects A+B)           | S3   | todo   |
-| S5 | build       | Ensemble path component per new selection ruling (defect D)                              | S3   | todo   |
-| S6 | build       | Composer-chain unification up to primary+completer per SEL-8 (defect E)                  | S3   | todo   |
-| S7 | build       | Register/doc reconciliation: repath docstring, C-DET note, cross-references              | S4   | todo   |
-| S8 | operator    | Re-run preflight on hades; acceptance gate; unblock the repair turn                      | all  | todo   |
+| ID | Type         | Deliverable (commit-title shape)                                                        | Deps   | Status |
+|----|--------------|------------------------------------------------------------------------------------------|--------|--------|
+| S1 | build        | JSONL journal store: O(1) durable appends, torn-tail recovery, atomic rewrite, migration (C-JRNL) | —      | todo   |
+| S2 | build        | Hold journal in memory across maintenance runs; retire per-move full rewrites (C-JRNL)     | S1     | todo   |
+| S3 | adjudication | STYLEGUIDE: cross-reference tag schema + repath collision interaction design (C-XREF)      | —      | todo   |
+| S4 | build        | Plan-time collision completeness in repath: cross-ref flow + inconclusive prompt (C-FATAL) | S2, S3 | todo   |
+| S5 | build        | Cross-reference reconstruction pass: journal census + confirmed secondary-ID tagging       | S3, S2 | todo   |
+| S6 | build        | (conditional) MB-backed cross-reference enrichment for evidence-gap cases                  | S5     | todo   |
+| S7 | build        | Tag-read cache for maintenance passes keyed on (path, size, mtime)                         | S2     | todo   |
+| S8 | operator     | Resume the repair turn: full repath on hades end-to-end; acceptance gate                   | all    | todo   |
 
-### S1 — ARTIST-fallback guard (defect C)
+### S1 — JSONL journal store (C-JRNL)
 
-Files: `src/music_annotator/_tags.py` (the last-resort fallback in `build_dest_path`), `tests/unit/test_annotator.py`.
-Investigate the original edition-title fixture (test_annotator.py ~4846–4933) to confirm its shape is ARTIST == ALBUM;
-narrow the guard per C-GUARD.  KATs: self-performed classical (Rachmaninoff shape), pop/jazz (ARTIST == ALBUMARTIST ≠
-ALBUM), edition-title regression (must still yield no performer), all asserting the rendered performers component.
+Files: `src/music_annotator/_pipeline_io.py` (new append primitive; `read_journal` gains JSONL + torn-tail handling and
+the one-time array→JSONL migration; the full-rewrite path used by rebuild becomes atomic temp+`os.replace`), tests.
+KATs: append→read round-trip; torn final line tolerated exactly once and logged; non-tail malformation is a hard error;
+migration preserves entry order and count against a fixture array journal and leaves the `.json` backup untouched;
+rewrite is atomic (temp visible only post-replace).  JSONL is pyfakefs-compatible (pure-Python I/O) — no test-harness
+change needed.
 
-### S2 — move sequencing + collision narrowing (defects F + clobber posture)
+### S2 — in-memory journal threading
 
-Files: `src/music_annotator/_pipeline_maint.py` (`_move_verify_journal`, plan execution in `repath`/`regroup`/`unify`),
-`src/music_annotator/_pipeline_io.py` (`_assess_collisions` gains the plan-vacated set), tests.  Implement C-NOCLOBBER
-and C-SEQ.  KATs: renumbering shift chain (no suffix, correct final layout), true two-file swap (temp hop, provenance
-chain intact), genuine occupant-stays collision (suffix applied), forced stationary-occupant clobber attempt (refused,
-no journal entry).  Preflight dry-run path must exercise the same sequencing so suffix counts in reports reflect
-genuine collisions only.
+Files: `src/music_annotator/_pipeline_maint.py` (`_move_verify_journal` and callers accept/mutate an in-memory
+`TransactionLog` + append handle instead of re-reading per move), `src/music_annotator/_pipeline.py` (ingest call site),
+tests (fixture churn: journal fixtures move to JSONL).  KATs: a multi-move run performs zero journal re-reads (mock-
+enforced); per-move append lands before the next move begins (C-PROV ordering preserved); crash simulation between moves
+leaves a complete, readable journal.  Expected effect: per-move journal cost drops from ~2.7 s to ~1 ms; the move phase
+becomes hashing-bound.
 
-### S3 — styleguide adjudication (interactive; operator present; architect/dialectic register)
+### S3 — cross-reference schema adjudication (interactive; operator present; architect/dialectic register)
 
-Deliverable: STYLEGUIDE case-register updates (C-CASE append-only discipline) + the frozen rules S4–S6 consume.
-Agenda, with the evidence to bring:
+Deliverable: STYLEGUIDE case-register updates + the frozen vocabulary S4–S6 consume.  Agenda, with evidence to bring:
 
-1. **NORM-2 amendment** — operator preference: native script universally, fallbacks for unknown/plural/problematic
-   forms.  Verify the dissolution hypothesis against live MB records for the observed artists (Ozawa, Stravinsky,
-   Richter, Järvi, Ashkenazy, Wiener Philharmoniker): is the MB artist `name` field already the native form?  If yes,
-   canonical-form = MB name (aliases as evidence only) both amends NORM-2 and dissolves defect B's hydration.
-2. **Ensemble selection case** — adjudicate admission rule for bodies absent from release-level credits: candidate rule
-   "release-level ∪ bodies present on all (or modal-majority of) tracks"; must keep the anti-forking property that
-   motivated the release-level rule while admitting the Bläser and chorus cases.
-3. **SEL-8 path grammar** — completer rendering in the composer component: plain (`Mozart; Süßmayr`) vs role-annotated;
-   interaction with the composer-dir dedup and `safe_name`.
-4. **C-DET premise repair** — pick the stability mechanism (locale-filtered resolver / MB-name canonical / persist
-   resolved form into a tag at annotation time).  If persistence is chosen, scope the backfill (an enrich-shaped
-   idempotent pass) as a follow-on shard, not part of this sub-track.
+1. **Tag vocabulary** — secondary-reference tag name(s) and payload: release MBID only vs + release-track MBID vs
+   + medium/position.  Check Classical Extras / Picard conventions for an existing multi-release idiom before minting one.
+   FLAC multi-value vs delimited scalar; the MP3 TXXX mapping.
+2. **Journal action** — name for a cross-reference tag mutation (extends the `TransactionEntry` action set; audit passes
+   must classify it; `_resolve_current_lib` must treat it as an in-place re-registration like "enriched").
+3. **Prompt UX** — repath `match=True`: confirm cross-reference per group or per file; `match=None`: suffix-or-abort
+   prompt wording; semantics under `--yes` (operator lean: prompts still shown — integrity prompts are not bulk-consent)
+   and `--dry-run` (report, never prompt).
+4. **Redundant-copy disposition** — in the repath `match=True` case both physical copies survive (occupant at the
+   canonical path, mover stays put).  Adjudicate the mover's disposition: stays in place cross-referenced, or flagged
+   into a future dedup adjudication pass.  Deletion is out unless the operator rules otherwise (C-NOCLOBBER rationale).
 
-### S4 — canonical name resolution (defects A + B)
+### S4 — plan-time collision completeness (C-FATAL corollary)
 
-Files: `src/music_annotator/_artists.py` (`canonical_artist_form`), possibly `src/music_annotator/_tags.py`
-(hydration removal if S3 dissolves it), `src/music_annotator/_mb_api.py` (only if the fetch surface changes), tests.
-Implement the S3 rule; deterministic under alias-list reordering (KAT: same artist, shuffled alias order, same result).
-Locale-rich alias fixtures for each observed failure shape.  If hydration leaves the maintenance path, restore the
-`repath` "embedded tags alone" claim and delete the now-dead `--user-agent` requirement from the offline passes'
-docstrings (the CLI flags stay — ingest still needs them).
+Files: `src/music_annotator/_pipeline_maint.py` (repath collision resolution gains the `match=True` and `match=None`
+arms per S3; regroup/unify audited for the same gap), `src/music_annotator/_tagger.py` (cross-reference tag write),
+tests.  KATs: same-audio occupant → operator-confirmed cross-reference + move dropped from plan + journal action
+recorded; inconclusive occupant → prompt suffix-or-abort, both arms; a plan that reaches `_move_verify_journal` contains
+no move whose destination is occupied by a non-vacated path (property test over generated plans); execution-time
+C-NOCLOBBER refusal still raises `RuntimeError` (unchanged, now bug-indicating).
 
-### S5 — ensemble path component (defect D)
+### S5 — cross-reference reconstruction pass
 
-Files: `src/music_annotator/_tags.py` (performers component), `src/music_annotator/_pipeline_maint.py` (unify's
-canonical-path recompute consumes the same rule), tests.  KATs: wind-subgroup release (subgroup survives), choral work
-with per-track chorus (chorus survives), the anti-forking regression (per-track soloist/subgroup variation must not
-fork top dirs — the original fragmentation shape stays fixed).
+Files: `src/music_annotator/_pipeline_maint.py` (new maintenance command), `src/music_annotator/__main__.py`, tests.
+Census the journal for both destructive-choice shapes: (a) `skipped` entries joined to the surviving `tagged` entry at
+the same destination (SKIP policy); (b) multiple `tagged` entries at one destination with distinct release_ids
+(OVERWRITE policy, chronological-last = primary).  Present grouped findings; on operator confirmation, write secondary
+references per C-XREF and journal each mutation.  Offline; dry-run supported.  The census also reports evidence-gap
+candidates (duplicates suspected but not journal-provable) as input to the S6 conditional.
 
-### S6 — composer chain per SEL-8 (defect E)
+### S6 — MB-backed enrichment (conditional)
 
-Files: `src/music_annotator/_pipeline.py` (work-group composer unification direction), `src/music_annotator/
-_pipeline_maint.py` (the classical arranger/finisher retroactive pass follows the same direction), tests.  KATs: the
-completion shape (some movements credit the completer as "composer (additional)") unifies UP — every movement renders
-primary + completer per the S3 grammar; a plain single-composer work is unchanged; the composer-split (non-classical)
-pre-processing is untouched.
+Gated on S5's census reporting evidence gaps (duplicates resolved outside the pipeline, e.g. never-ingested second
+source dirs).  Per affected recording, `recording → releases` MB lookups under the standard `@_mb_retry` + `_mb_call`
+posture; propose cross-references for operator confirmation.  Skip this session entirely if the census shows no gaps.
 
-### S7 — register/doc reconciliation
+### S7 — tag-read cache
 
-Files: docstrings in `_pipeline_maint.py` (repath), `docs/NOTES.md` (C-DET note updated to the repaired premise),
-`__main__.py` epilogs if the offline passes' network posture changed in S4.  No behaviour change; `tox -m analyze`
-still green.  Verify `__init__.py` `__all__` needs no update.
+Files: `src/music_annotator/_pipeline_maint.py` (Pass 1 of repath and the preflight/audit walks consult a cache keyed on
+`(path, size_bytes, mtime_ns)`), cache persistence sidecar under dest_root, tests.  KATs: hit returns identical tags
+without opening the audio file (mock-enforced); any key component change invalidates; cache corruption or absence
+degrades to a full read (never an error); moves via `_move_verify_journal` re-key the entry.  Expected effect: re-run
+planning drops from ~an hour to minutes on an unchanged library.
 
 ### S8 — operator acceptance gate
 
-Re-run `preflight` on hades.  Acceptance criteria against the fresh report and move corpus:
+Full `repath` on hades end-to-end.  Acceptance criteria:
 
-- `Unknown Performers` introductions: **0**.
-- Locale/alias swaps against the S3-adjudicated forms: **0**.
-- Collision suffixes: only genuine occupant-stays collisions (expected ≈ 12 from the 2026-08-24 corpus).
-- `mm.nn` double numberings in planned paths: **0**.
-- Completer and ensemble handles match the S3 rulings on the known cases (K.626/K.412 shapes, Bläser, choral works).
+- Run completes without abort; zero execution-time C-NOCLOBBER refusals.
+- Move-phase throughput reflects the journal fix (per-move time hashing-bound, not journal-bound).
+- Same-audio collisions resolved as cross-references per S3 rulings; inconclusive collisions prompted, not fatal.
+- Journal is valid JSONL afterward; `.json` backup intact; rebuild/audit commands read it cleanly.
+- Reconstruction pass run once over the historical evidence; secondary references verified on known duplicated mediums
+  (the Greensleeves pair as the canonical KAT case).
 
-On acceptance: proceed to the repair turn (ROADMAP "Current state" step 2 — `repath` first, then per the report), and
+On acceptance: continue the repair turn per ROADMAP (leaf renumberings, year-label normalisations, consolidations), and
 rewrite this PLAN at the boundary.
 
 ## Notes for executors
 
 - **Register rule** (repo AGENTS.md): durable files state the property/invariant, never the plan coordinate.  Anneal
-  denylist for this sub-track: `\bS[1-8]\b` (session ids), `preflight-evidence corrective`, `repair turn`,
-  `sub-track`, `plan-run`.  Contract names (C-NOCLOBBER, C-SEQ, C-GUARD, C-DET, C-MOVE, C-PROV, SEL-*, NORM-*) are
-  legitimate durable vocabulary.
+  denylist for this sub-track: `\bS[1-8]\b` (session ids), `repair-turn hardening`, `sub-track`, `plan-run`,
+  `boundary rewrite`.  Contract names (C-JRNL, C-XREF, C-FATAL, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, C-CASE, SEL-*,
+  NORM-*, REND-*) are legitimate durable vocabulary.
 - Full gate before declaring any session done: `~/.local/bin/tox -m analyze` (100% branch coverage, mypy strict,
   pylint 10.00/10, ruff, pyupgrade).
 - Patch targets bind where the name is imported, not where it originates (repo testing convention).
-- The C-PROV/C-MOVE provenance chain is inviolable: no journal entry before SHA + `_verify_copy` pass; S2's temp-hop
-  design must keep every hop inside that chain.
-- Evidence base for all defect claims: `docs/NOTES.md` § "Preflight evidence analysis (2026-08-24)"; raw artifacts on
-  the dev mount at `~/Remote/hades/Music/log.{json,out}` (hades paths: `/home/findlay/Music/`).
+- The C-PROV/C-MOVE provenance chain is inviolable: no journal entry before SHA + `_verify_copy` pass.  C-JRNL changes
+  the storage of the journal, never the ordering of verification relative to the append.
+- The 2026-08-25 failed-run evidence: hades run logs (`repathed_moved`/`journal_written` timestamps, the C-NOCLOBBER
+  traceback) and the 44 MB array journal on the dev mount at `~/Remote/hades/Music/Done/` (hades paths:
+  `/home/findlay/Music/`).  The Greensleeves collision pair is the canonical same-audio-different-bytes fixture shape.
+- Test-fixture churn in S2 is expected and mechanical (array-journal fixtures → JSONL); do not let it balloon the
+  session — if it exceeds the commit window, split fixture migration into its own follow-up commit within the session.
 
 ## Progress ledger
 
-VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch coverage + mypy strict + pylint 10.00 + ruff + pyupgrade). One green run satisfies tests, types, lint, format, and coverage.
+VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch coverage + mypy strict + pylint 10.00 + ruff +
+pyupgrade).  One green run satisfies tests, types, lint, format, and coverage.
 
-| ID | Title                                                                 | Status  | Commit | Notes |
-|----|-----------------------------------------------------------------------|---------|--------|-------|
-| S1 | Fix ARTIST-fallback guard (C-GUARD)                                   | done    | f09b31d | C-GUARD frozen |
-| S2 | Dependency-ordered move execution + vacancy-aware collision (C-NOCLOBBER, C-SEQ) | done    | e71256d | C-NOCLOBBER, C-SEQ frozen |
-| S3 | STYLEGUIDE adjudication (NORM-2, ensemble, SEL-8, C-DET)              | done    | f08468a | all four frozen; NORM-2-as-revised, SEL-23, REND-27, C-DET-dissolution |
-| S4 | Locale/script-aware canonical name resolution (defects A+B)           | done    | f95e953 | NORM-2-as-revised implemented; alias hydration deleted |
-| S5 | Ensemble path component per new selection ruling (defect D)           | done    | 99a9094 | SEL-23 implemented |
-| S6 | Composer-chain unification up to primary+completer per SEL-8 (defect E) | done    | 538b4f3 | REND-27 + SEL-8 upward unification implemented |
-| S7 | Register/doc reconciliation: repath docstring, C-DET note             | done    | 177e54b | docs-only; offline posture restored in all docstrings |
-| S8 | Re-run preflight on hades; acceptance gate                            | pending | —      | depends all; operator |
+| ID | Title                                                                          | Status | Commit | Notes |
+|----|--------------------------------------------------------------------------------|--------|--------|-------|
+| S1 | JSONL journal store: appends, torn-tail recovery, atomic rewrite, migration     | todo   |        |       |
+| S2 | In-memory journal threading; retire per-move full rewrites                      | todo   |        |       |
+| S3 | STYLEGUIDE: cross-reference tag schema + collision interaction design           | todo   |        |       |
+| S4 | Plan-time collision completeness in repath                                      | todo   |        |       |
+| S5 | Cross-reference reconstruction pass (journal census)                            | todo   |        |       |
+| S6 | (conditional) MB-backed cross-reference enrichment                              | todo   |        |       |
+| S7 | Tag-read cache for maintenance passes                                           | todo   |        |       |
+| S8 | Resume repair turn on hades; acceptance gate                                    | todo   |        |       |
 
-Frozen contracts: C-NOCLOBBER (implementation confirmed e71256d), C-SEQ (implementation confirmed e71256d), C-GUARD (implementation confirmed f09b31d), NORM-2-as-revised, SEL-23, REND-27, C-DET-repair-by-dissolution (all four frozen at S3, 2026-08-24; STYLEGUIDE register updated).
+Frozen contracts: C-JRNL, C-FATAL, C-XREF (all frozen at derivation, 2026-08-25); C-NOCLOBBER, C-SEQ, C-GUARD,
+NORM-2-as-revised, SEL-23, REND-27 inherited unchanged from the previous sub-track.
 
 ## Action-frame digest
 
 (append non-trivial discoveries, contract flexes, and notable texture here as sessions run)
 
-- S3 (2026-08-24): dissolution hypothesis verified live against MB, 6/6 — the artist `name` field is already the
-  native/preferred form for every observed artist, including the fallback shape (Ashkenazy has *no* ru primary alias;
-  MB's editors already chose the Latin career name).  All four rulings landed on the recommended options.  S4 shrinks
-  materially: delete hydration rather than build a locale resolver; no backfill shard.  STYLEGUIDE: NORM-2 revised in
-  place, SEL-23 + REND-27 appended, CE-divergence entry added, §3.1 and §2.3 body text aligned.
+- Derivation (2026-08-25): operator ruled run-fatal integrity posture over per-file skip (C-FATAL); chose cross-reference
+  tagging over suffix/dedup for same-audio collisions; journal census confirmed both destructive-choice shapes are fully
+  reconstructible offline (SKIP → `skipped` entries with loser release_id; OVERWRITE → dual `tagged` entries per
+  destination).  SQLite/LMDB/CBOR evaluated and rejected for the journal: SQLite loses pyfakefs compatibility and
+  greppability for query capability this workload doesn't need; JSONL + in-memory copy achieves O(1) appends with
+  stdlib-only, test-compatible mechanics.

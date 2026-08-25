@@ -898,6 +898,38 @@ everywhere) per SEL-8 as already adjudicated — the enacted primary-only direct
 chain as a rendering-exclusion rule.  (4) **C-DET repaired by dissolution**: the canonical form is a scalar MB field, stable under
 alias-list reordering by construction; the `repath` "embedded tags alone" claim becomes true again once the hydration is deleted.
 
+## Preflight acceptance (2026-08-25): corrective fixes validated against live hades
+
+Second full `preflight` against live hades (`Done/`, 47,559 journal entries; Reference/ present at 429 GB), run after all five
+corrective builds landed.  Cross-referenced the full old→new move corpus against the pre-fix corpus (above) and the frozen rulings.
+Verdict: the destruction vectors are closed and the remaining plan is legitimate backlog.  Confirmed against the artifacts:
+
+- **`Unknown Performers` introductions: 0** (was 410).  The named-performer degradation is eliminated; the self-performed-classical
+  shape (ARTIST == ALBUMARTIST) survives to the path.  C-GUARD holds.
+- **Collision suffixes: 14 warnings across exactly 2 works** (was 176, of which 164 were plan-blind false positives).  Both
+  remaining works are genuine occupant-stays path-identity conflicts: an opera with recitative leaves that truncate to identical
+  names (suffix is the correct disambiguation policy), and a catalogue-token directory merge (`[464 6602 5 PB17]` → MBID suffix).
+  No false positives from shift chains survive — vacancy-aware assessment and dependency-ordered execution hold (C-SEQ,
+  C-NOCLOBBER).
+- **`mm.nn` double-numbering in planned paths: 0.**
+- **Native-script handling is preservation-directional, not the reverse-locale defect.**  The apparent native→Latin transitions are
+  all soloist removals (Рахманинов, Гилельс, Стравинский credited as *performers*), dropped by SEL-11 — not canonical-form
+  corruptions.  Native script is preserved where it is the actual ensemble handle.
+- **SEL-23 fires observably**: e.g. the K.626 Marriner release gains `Academy of St Martin in the Fields Chorus` as a
+  modal-majority body.  The multi-movement completer control case preserves `Mozart; Süßmayr` (REND-27 upward unification).
+- Move-pass volumes dropped as spurious moves left the plan (repath 3620→3052, regroup 2864→2242, unify 2511→2203); the
+  tag-content passes untouched by the fixes are byte-identical (enrich 5111, repatch_acoustid 7035) — the expected control
+  signature.  Projected journal delta 19,643 entries (post-run 67,202).
+
+**Bounded residue — offline-unreachable tail of the completer-unification property (accepted).**  A single-file work (the Horn
+Concerto K.386b/412/514, Süßmayr completion, one movement) plans `Mozart; Süßmayr → Mozart`.  The offline maintenance path
+recomputes the composer component from that file's own embedded `CWP_COMPOSER_LASTNAMES` (= `Mozart`); the completer credit lives
+on sibling-movement MB relations that a single-file group cannot source.  Upward completer-unification is by construction unable to
+reach a group of size one offline — the ingest path (in-memory, with the MB relations in hand) is the only place this file's chain
+can be restored.  Repair is one re-ingest of that one release; accepted as known residue rather than blocking the repair turn (1
+file, below any correctness-material threshold).  Distinct from the pre-existing `[unknown]; Bach` composer-split tag-data issue
+(unchanged old→new; not in scope for the completer property).
+
 ## Dormant decisions register (consolidated 2026-08-24)
 
 One entry per open-but-deferred design path, with its firing trigger and where the design context
