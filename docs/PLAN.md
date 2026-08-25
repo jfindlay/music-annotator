@@ -180,7 +180,7 @@ VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch covera
 | S2 | Dependency-ordered move execution + vacancy-aware collision (C-NOCLOBBER, C-SEQ) | done    | e71256d | C-NOCLOBBER, C-SEQ frozen |
 | S3 | STYLEGUIDE adjudication (NORM-2, ensemble, SEL-8, C-DET)              | done    | f08468a | all four frozen; NORM-2-as-revised, SEL-23, REND-27, C-DET-dissolution |
 | S4 | Locale/script-aware canonical name resolution (defects A+B)           | done    | f95e953 | NORM-2-as-revised implemented; alias hydration deleted |
-| S5 | Ensemble path component per new selection ruling (defect D)           | pending | —      | depends S3 |
+| S5 | Ensemble path component per new selection ruling (defect D)           | done    | 99a9094 | SEL-23 implemented |
 | S6 | Composer-chain unification up to primary+completer per SEL-8 (defect E) | pending | —    | depends S3 |
 | S7 | Register/doc reconciliation: repath docstring, C-DET note             | pending | —      | depends S4 |
 | S8 | Re-run preflight on hades; acceptance gate                            | pending | —      | depends all; operator |
