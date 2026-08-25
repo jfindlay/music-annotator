@@ -699,6 +699,12 @@ a) Our extensions/revisions b) Picard APIv3.  We might have to take on/over CEv3
 
 ### Codebase maintenance cadence — next structural audit
 
+Rebase project on `https://github.com/jfindlay/python-template.git`: replace pylint with ruff+flags,
+use `uvx`, etc.  All aspects of `python-template` are project requirements: the tools used, how
+they're configured, project layout, etc.  pylint and non-uvx in this project are just two known
+deviations.  A complete housekeeping eval+overhaul should address all differences from the template
+project.
+
 Question raised 2026-07-18: is music-annotator due for another refactor?  **Assessment at raise
 time: not now.**  The three-axis structural audit (`PLAN-audit.md`, retired) completed 2026-06 —
 C-PROV/C-MOVE primitive extraction, `_pipeline_maint`/`_audit` module splits, `run()` decomposition
