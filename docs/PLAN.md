@@ -179,7 +179,7 @@ pyupgrade).  One green run satisfies tests, types, lint, format, and coverage.
 | S4 | Plan-time collision completeness in repath                                      | todo   |        |       |
 | S5 | Cross-reference reconstruction pass (journal census)                            | todo   |        |       |
 | S6 | (conditional) MB-backed cross-reference enrichment                              | todo   |        |       |
-| S7 | Tag-read cache for maintenance passes                                           | todo   |        |       |
+| S7 | Tag-read cache for maintenance passes                                           | done   | 05319dc |       |
 | S8 | Resume repair turn on hades; acceptance gate                                    | todo   |        |       |
 
 Frozen contracts: C-JRNL, C-FATAL, C-XREF (all frozen at derivation, 2026-08-25); C-NOCLOBBER, C-SEQ, C-GUARD,
