@@ -72,8 +72,8 @@ from music_annotator._pipeline_io import (
     _read_tags_mp3,
     _sha256_file,
     _verify_copy,
+    append_journal_entry,
     read_journal,
-    write_transaction_log,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import _CLASS_VOCAB, _NAME_MAX, _proposed_short, build_dest_path, sel23_ensemble_patch
@@ -513,6 +513,7 @@ def _topo_sort_moves(
 def _move_verify_journal(
     plan_pairs: list[tuple[Path, Path]],
     *,
+    journal: TransactionLog,
     journal_path: Path,
     action: str,
     dest_root: Path,
@@ -553,10 +554,19 @@ def _move_verify_journal(
     6. Read back the destination tags and run :func:`~music_annotator._pipeline_io._verify_copy`
        (raises :exc:`RuntimeError` on mismatch — **no journal entry is written**).
     7. **Only then** append a :class:`~music_annotator.models.TransactionEntry` with the given
-       ``action`` and ``release_id`` and flush it to the journal.
+       ``action`` and ``release_id`` via :func:`~music_annotator._pipeline_io.append_journal_entry`
+       (O(1) durable JSONL append with fsync) and add it to the in-memory ``journal`` so callers
+       see the updated state without re-reading the file.
     8. Clean up now-empty source directories (best-effort; non-empty directories are skipped).
 
+    The ``journal`` parameter is mutated in place: each successful move appends its entry to
+    ``journal.entries``.  Callers hold the journal in memory for the duration of the maintenance
+    pass and never call :func:`~music_annotator._pipeline_io.read_journal` again between moves —
+    the in-memory copy is always current after each append.
+
     :param plan_pairs: List of ``(src, dest)`` path pairs to move.
+    :param journal: In-memory :class:`~music_annotator.models.TransactionLog` loaded at the start
+        of the maintenance pass.  Mutated in place: each successful move appends its entry.
     :param journal_path: Path to the journal file (``<dest_root>/music_annotator_journal.json``).
     :param action: Journal action string (e.g. ``"repathed"``, ``"regrouped"``, ``"unified"``).
     :param dest_root: Root of the destination library; used for empty-directory cleanup and
@@ -585,6 +595,7 @@ def _move_verify_journal(
     if swap_pairs:
         moved_count += _execute_swap_cycles(
             swap_pairs,
+            journal=journal,
             journal_path=journal_path,
             action=action,
             dest_root=dest_root,
@@ -596,6 +607,7 @@ def _move_verify_journal(
         moved_count += _execute_single_move(
             src,
             dest,
+            journal=journal,
             journal_path=journal_path,
             action=action,
             dest_root=dest_root,
@@ -635,6 +647,7 @@ def _execute_single_move(
     src: Path,
     dest: Path,
     *,
+    journal: TransactionLog,
     journal_path: Path,
     action: str,
     dest_root: Path,
@@ -650,8 +663,15 @@ def _execute_single_move(
     This helper is factored out of :func:`_move_verify_journal` so that the swap-cycle temp-hop
     path can reuse the same provenance chain for each hop without duplicating the logic.
 
+    After verification passes, the entry is durably appended to the on-disk journal via
+    :func:`~music_annotator._pipeline_io.append_journal_entry` (O(1) JSONL append with fsync)
+    and also appended to the in-memory ``journal`` so the caller's view stays current without
+    re-reading the file.
+
     :param src: Source path.
     :param dest: Destination path.
+    :param journal: In-memory :class:`~music_annotator.models.TransactionLog`; mutated in place
+        by appending the new entry after verification passes.
     :param journal_path: Path to the journal file.
     :param action: Journal action string.
     :param dest_root: Library root for log messages and empty-dir cleanup.
@@ -688,7 +708,8 @@ def _execute_single_move(
                 destination=str(dest),
                 action=action,
             )
-            write_transaction_log(journal_path, [entry])
+            append_journal_entry(journal_path, entry)
+            journal.entries.append(entry)
             log.info(
                 f"{action}_dedup",
                 old=str(src.relative_to(dest_root)) if src.is_relative_to(dest_root) else str(src),
@@ -747,8 +768,10 @@ def _execute_single_move(
     # For cross-fs copy2+unlink, shutil.copy2 copies atime/mtime so src_mtime still holds.
     _verify_copy(src, dest, moved_tags, None, src_mtime)
 
-    # g. Journal the move and flush before proceeding to the next file (C-PROV invariant:
-    #    entry is written ONLY after _verify_copy passes).
+    # g. Durably append the journal entry before proceeding to the next file (C-PROV invariant:
+    #    entry is written ONLY after _verify_copy passes).  append_journal_entry performs an O(1)
+    #    JSONL append with fsync; the in-memory journal is updated so the caller's view stays
+    #    current without re-reading the file between moves.
     entry = TransactionEntry(
         timestamp=now_str,
         release_id=release_id,
@@ -756,7 +779,8 @@ def _execute_single_move(
         destination=str(dest),
         action=action,
     )
-    write_transaction_log(journal_path, [entry])
+    append_journal_entry(journal_path, entry)
+    journal.entries.append(entry)
     log.info(
         f"{action}_moved",
         old=str(src.relative_to(dest_root)) if src.is_relative_to(dest_root) else str(src),
@@ -779,6 +803,7 @@ def _execute_single_move(
 def _execute_swap_cycles(
     swap_pairs: list[tuple[Path, Path]],
     *,
+    journal: TransactionLog,
     journal_path: Path,
     action: str,
     dest_root: Path,
@@ -811,6 +836,8 @@ def _execute_swap_cycles(
 
     :param swap_pairs: List of ``(src, dest)`` pairs forming one or more swap cycles, as returned
         by :func:`_topo_sort_moves`.
+    :param journal: In-memory :class:`~music_annotator.models.TransactionLog`; mutated in place
+        by each successful hop via :func:`_execute_single_move`.
     :param journal_path: Path to the journal file.
     :param action: Journal action string.
     :param dest_root: Library root for log messages and empty-dir cleanup.
@@ -861,6 +888,7 @@ def _execute_swap_cycles(
         moved_count += _execute_single_move(
             first_src,
             tmp_path,
+            journal=journal,
             journal_path=journal_path,
             action=action,
             dest_root=dest_root,
@@ -884,6 +912,7 @@ def _execute_swap_cycles(
             moved_count += _execute_single_move(
                 chain_src,
                 actual_dest,
+                journal=journal,
                 journal_path=journal_path,
                 action=action,
                 dest_root=dest_root,
@@ -897,6 +926,7 @@ def _execute_swap_cycles(
         moved_count += _execute_single_move(
             tmp_path,
             first_dest,
+            journal=journal,
             journal_path=journal_path,
             action=action,
             dest_root=dest_root,
@@ -1015,9 +1045,11 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
                 continue
             # Repair move: hash → rename → verify → journal (C-PROV invariant: journal entry
             # is written only after _verify_copy passes inside _move_verify_journal).
+            # The in-memory journal is updated in place so no re-read is needed.
             repair_now = datetime.datetime.now(datetime.UTC)
             _move_verify_journal(
                 [(current_path, repaired_path)],
+                journal=journal,
                 journal_path=journal_path,
                 action="repathed",
                 dest_root=dest_root,
@@ -1234,10 +1266,13 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     # repath does not have a per-file release_id in the journal (the release is not known at
     # repath time for files that were never tagged with a release MBID); release_id="" is the
     # correct sentinel here.  The collision suffix was already derived from the real id above.
+    # The journal loaded at the start of this pass is threaded through so _move_verify_journal
+    # never re-reads it between moves — each append updates the in-memory copy in place.
     now = datetime.datetime.now(datetime.UTC)
     move_pairs = [(src, dest) for src, dest, _, _, _ in plan_pairs]
     moved = _move_verify_journal(
         move_pairs,
+        journal=journal,
         journal_path=journal_path,
         action="repathed",
         dest_root=dest_root,
@@ -1522,6 +1557,8 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
     # --- Perform moves, verify, journal ---
     # regroup is release-driven: each file may belong to a different release_id, so we call
     # _move_verify_journal once per unique release_id group to preserve the per-entry release_id.
+    # The journal loaded at the start of this pass is threaded through so _move_verify_journal
+    # never re-reads it between moves — each append updates the in-memory copy in place.
     now = datetime.datetime.now(datetime.UTC)
     total_moved = 0
     # Group plan_pairs by release_id so each batch shares the same journal release_id.
@@ -1532,6 +1569,7 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
     for rid, move_pairs in release_groups.items():
         total_moved += _move_verify_journal(
             move_pairs,
+            journal=journal,
             journal_path=journal_path,
             action="regrouped",
             dest_root=dest_root,
@@ -1759,6 +1797,9 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
         operations or writing journal entries.
     """
     journal_path = dest_root / JOURNAL_FILENAME
+    # Read the journal once at the start of the pass.  The in-memory copy is threaded through
+    # to _move_verify_journal so no re-read occurs between moves.
+    journal = read_journal(journal_path)
 
     # --- Detect fragmented releases by scanning embedded MUSICBRAINZ_ALBUMID tags ---
     fragmented = detect_fragmented_releases(dest_root)
@@ -1968,6 +2009,8 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
     # --- Perform moves, verify, journal ---
     # unify is release-driven: each file may belong to a different release_id, so we call
     # _move_verify_journal once per unique release_id group to preserve the per-entry release_id.
+    # The journal loaded at the start of this pass is threaded through so _move_verify_journal
+    # never re-reads it between moves — each append updates the in-memory copy in place.
     now = datetime.datetime.now(datetime.UTC)
     total_moved = 0
     release_groups: dict[str, list[tuple[Path, Path]]] = {}
@@ -1977,6 +2020,7 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
     for rid, move_pairs in release_groups.items():
         total_moved += _move_verify_journal(
             move_pairs,
+            journal=journal,
             journal_path=journal_path,
             action="unified",
             dest_root=dest_root,
@@ -2150,7 +2194,7 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
             acoustid_fingerprint=final_acoustid_fingerprint,
             acoustid_id=final_acoustid_id,
         )
-        write_transaction_log(journal_path, [entry])
+        append_journal_entry(journal_path, entry)
         log.info(
             "enrich_written",
             path=str(current_path.relative_to(dest_root)),
@@ -2349,7 +2393,7 @@ def repatch_catalogue_colon(dest_root: Path, *, dry_run: bool = False) -> DryRun
             destination=str(current_path),
             action="repatched",
         )
-        write_transaction_log(journal_path, [entry])
+        append_journal_entry(journal_path, entry)
         log.info(
             "repatch_catalogue_colon_written",
             path=str(current_path.relative_to(dest_root)),
@@ -2572,7 +2616,7 @@ def repatch_acoustid_tags(
             acoustid_fingerprint=final_fingerprint,
             acoustid_id=final_acoustid_id,
         )
-        write_transaction_log(journal, [entry])
+        append_journal_entry(journal, entry)
         appended.append(entry)
         log.info(
             "repatch_acoustid_tags_written",

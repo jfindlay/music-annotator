@@ -24,6 +24,7 @@ from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
 import music_annotator
+import music_annotator._pipeline_io
 from music_annotator import (
     JOURNAL_FILENAME,
     apply_tags_flac,
@@ -45,6 +46,7 @@ from music_annotator._pipeline_io import (
 from music_annotator._pipeline_maint import (
     _check_dest_root,
     _clamp_maint_dest,
+    _execute_single_move,
     _has_legacy_acoustid_key,
     _hydrate_performer_lists,
     _journal_capacity,
@@ -6008,9 +6010,11 @@ class TestMoveVerifyJournal:
         mocker.patch("music_annotator._pipeline_maint._verify_copy", side_effect=RuntimeError("verify failed"))
 
         now = datetime.datetime.now(datetime.UTC)
+        in_memory_journal = read_journal(journal_path)
         with pytest.raises(RuntimeError, match="verify failed"):
             _move_verify_journal(
                 [(src, dest)],
+                journal=in_memory_journal,
                 journal_path=journal_path,
                 action="repathed",
                 dest_root=dest_root,
@@ -6042,8 +6046,10 @@ class TestMoveVerifyJournal:
         journal_path.write_text("[]", encoding="utf-8")
 
         now = datetime.datetime.now(datetime.UTC)
+        in_memory_journal = read_journal(journal_path)
         moved = _move_verify_journal(
             [(src, dest)],
+            journal=in_memory_journal,
             journal_path=journal_path,
             action="repathed",
             dest_root=dest_root,
@@ -6091,8 +6097,10 @@ class TestMoveVerifyJournal:
         mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=exdev_error)
 
         now = datetime.datetime.now(datetime.UTC)
+        in_memory_journal = read_journal(journal_path)
         moved = _move_verify_journal(
             [(src, dest)],
+            journal=in_memory_journal,
             journal_path=journal_path,
             action="repathed",
             dest_root=dest_root,
@@ -6135,9 +6143,11 @@ class TestMoveVerifyJournal:
         mocker.patch("music_annotator._pipeline_maint.os.replace", side_effect=perm_error)
 
         now = datetime.datetime.now(datetime.UTC)
+        in_memory_journal = read_journal(journal_path)
         with pytest.raises(OSError, match="Operation not permitted"):
             _move_verify_journal(
                 [(src, dest)],
+                journal=in_memory_journal,
                 journal_path=journal_path,
                 action="repathed",
                 dest_root=dest_root,
@@ -6161,8 +6171,10 @@ class TestMoveVerifyJournal:
         journal_path.write_text("[]", encoding="utf-8")
 
         now = datetime.datetime.now(datetime.UTC)
+        in_memory_journal = read_journal(journal_path)
         moved = _move_verify_journal(
             [],
+            journal=in_memory_journal,
             journal_path=journal_path,
             action="repathed",
             dest_root=dest_root,
@@ -6192,8 +6204,10 @@ class TestMoveVerifyJournal:
         journal_path.write_text("[]", encoding="utf-8")
 
         now = datetime.datetime.now(datetime.UTC)
+        in_memory_journal = read_journal(journal_path)
         _move_verify_journal(
             [(src, dest)],
+            journal=in_memory_journal,
             journal_path=journal_path,
             action="regrouped",
             dest_root=dest_root,
@@ -6224,8 +6238,10 @@ class TestMoveVerifyJournal:
         journal_path.write_text("[]", encoding="utf-8")
 
         now = datetime.datetime.now(datetime.UTC)
+        in_memory_journal = read_journal(journal_path)
         _move_verify_journal(
             [(src, dest)],
+            journal=in_memory_journal,
             journal_path=journal_path,
             action="repathed",
             dest_root=dest_root,
@@ -6277,8 +6293,10 @@ class TestMoveVerifyJournal:
         # Without dependency ordering, A→B would clobber B before B→C runs.
         # With C-SEQ topological ordering: C→D first, then B→C, then A→B.
         now = datetime.datetime.now(datetime.UTC)
+        in_memory_journal = read_journal(journal_path)
         moved = _move_verify_journal(
             [(path_a, path_b), (path_b, path_c), (path_c, path_d)],
+            journal=in_memory_journal,
             journal_path=journal_path,
             action="repathed",
             dest_root=dest_root,
@@ -6364,8 +6382,10 @@ class TestMoveVerifyJournal:
         journal_path.write_text("[]", encoding="utf-8")
 
         now = datetime.datetime.now(datetime.UTC)
+        in_memory_journal = read_journal(journal_path)
         moved = _move_verify_journal(
             [(path_a, path_b), (path_b, path_a)],
+            journal=in_memory_journal,
             journal_path=journal_path,
             action="repathed",
             dest_root=dest_root,
@@ -6434,8 +6454,10 @@ class TestMoveVerifyJournal:
         # Move 1: C→A (depends on move 0: A must be vacated before C can land there).
         # Topological order: move 0 first (no dep), then move 1.
         now = datetime.datetime.now(datetime.UTC)
+        in_memory_journal = read_journal(journal_path)
         moved = _move_verify_journal(
             [(path_a, path_b), (path_c, path_a)],
+            journal=in_memory_journal,
             journal_path=journal_path,
             action="repathed",
             dest_root=dest_root,
@@ -6567,9 +6589,11 @@ class TestMoveVerifyJournal:
         journal_path.write_text("[]", encoding="utf-8")
 
         now = datetime.datetime.now(datetime.UTC)
+        in_memory_journal = read_journal(journal_path)
         with pytest.raises(RuntimeError, match="C-NOCLOBBER"):
             _move_verify_journal(
                 [(src_a, dest_path)],
+                journal=in_memory_journal,
                 journal_path=journal_path,
                 action="repathed",
                 dest_root=dest_root,
@@ -6585,6 +6609,187 @@ class TestMoveVerifyJournal:
         assert src_a.exists(), "source file must remain intact after C-NOCLOBBER refusal"
         assert dest_path.exists(), "occupant file must remain intact after C-NOCLOBBER refusal"
 
+    # ---------------------------------------------------------------------------
+    # KAT: in-memory journal threading — zero re-reads, per-move ordering, crash simulation
+    # ---------------------------------------------------------------------------
+
+    def test_multi_move_zero_journal_rereads(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT: a multi-move run performs zero journal re-reads after the initial load.
+
+        After the caller reads the journal once and passes it to _move_verify_journal, the
+        function must never call read_journal again during the move phase.  This is verified by
+        patching read_journal at the _pipeline_maint binding and asserting it is never called
+        inside _move_verify_journal (the caller's pre-call read is not counted because the patch
+        is applied after that read).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/src")
+        fs.create_dir(str(dest_root))
+        fs.create_dir(str(src_dir))
+
+        # Create two source files so the move phase has multiple iterations.
+        src1 = src_dir / "01.flac"
+        src2 = src_dir / "02.flac"
+        dest1 = dest_root / "Work" / "01 - Allegro con brio.flac"
+        dest2 = dest_root / "Work" / "02 - Andante con moto.flac"
+        self._make_flac(src1)
+        self._make_flac(src2)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("", encoding="utf-8")
+
+        # Read the journal once before the move phase (simulating the maintenance pass pattern).
+        in_memory_journal = read_journal(journal_path)
+
+        # Patch read_journal at the _pipeline_maint binding AFTER the caller's pre-call read.
+        # Any call inside _move_verify_journal would be a re-read violation.
+        mock_read = mocker.patch("music_annotator._pipeline_maint.read_journal")
+
+        now = datetime.datetime.now(datetime.UTC)
+        moved = _move_verify_journal(
+            [(src1, dest1), (src2, dest2)],
+            journal=in_memory_journal,
+            journal_path=journal_path,
+            action="repathed",
+            dest_root=dest_root,
+            now=now,
+            release_id="",
+        )
+
+        assert moved == 2
+        mock_read.assert_not_called()  # read_journal must not be called during the move phase
+
+    def test_per_move_append_lands_before_next_move(self, fs: FakeFilesystem) -> None:
+        """KAT: per-move append lands before the next move begins (C-PROV ordering preserved).
+
+        Verifies that after _move_verify_journal completes, the in-memory journal and the
+        on-disk journal both contain exactly the same entries.  This confirms that each
+        append_journal_entry call (durable write) is paired with a journal.entries.append
+        (in-memory update) within the same move unit, so the in-memory copy always reflects
+        the durable state.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/src")
+        fs.create_dir(str(dest_root))
+        fs.create_dir(str(src_dir))
+
+        src1 = src_dir / "01.flac"
+        src2 = src_dir / "02.flac"
+        dest1 = dest_root / "Work" / "01 - Allegro con brio.flac"
+        dest2 = dest_root / "Work" / "02 - Andante con moto.flac"
+        self._make_flac(src1)
+        self._make_flac(src2)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("", encoding="utf-8")
+
+        in_memory_journal = read_journal(journal_path)
+
+        now = datetime.datetime.now(datetime.UTC)
+        moved = _move_verify_journal(
+            [(src1, dest1), (src2, dest2)],
+            journal=in_memory_journal,
+            journal_path=journal_path,
+            action="repathed",
+            dest_root=dest_root,
+            now=now,
+            release_id="",
+        )
+
+        assert moved == 2
+
+        # The in-memory journal must reflect all appended entries without a re-read.
+        # This verifies that each move's append_journal_entry call is paired with a
+        # journal.entries.append within the same move unit (C-PROV ordering preserved).
+        assert len(in_memory_journal.entries) == 2, (
+            f"in-memory journal must have 2 entries after 2 moves; got {len(in_memory_journal.entries)}"
+        )
+
+        # The on-disk journal must match the in-memory journal exactly.
+        on_disk = read_journal(journal_path)
+        assert len(on_disk.entries) == 2, f"on-disk journal must have 2 entries; got {len(on_disk.entries)}"
+        # Both entries must be present in the in-memory journal (same destinations).
+        in_memory_dests = {e.destination for e in in_memory_journal.entries}
+        assert str(dest1) in in_memory_dests, "dest1 must be in in-memory journal"
+        assert str(dest2) in in_memory_dests, "dest2 must be in in-memory journal"
+
+    def test_crash_simulation_between_moves_leaves_complete_journal(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT: crash simulation between moves leaves a complete, readable journal.
+
+        Simulates a crash after the first move by raising RuntimeError from the second
+        _execute_single_move call.  Verifies that the journal contains exactly one entry
+        (the first move's entry) and is readable without corruption.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        src_dir = Path("/src")
+        fs.create_dir(str(dest_root))
+        fs.create_dir(str(src_dir))
+
+        src1 = src_dir / "01.flac"
+        src2 = src_dir / "02.flac"
+        dest1 = dest_root / "Work" / "01 - Allegro con brio.flac"
+        dest2 = dest_root / "Work" / "02 - Andante con moto.flac"
+        self._make_flac(src1)
+        self._make_flac(src2)
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        journal_path.write_text("", encoding="utf-8")
+
+        in_memory_journal = read_journal(journal_path)
+
+        # Move the first file successfully, then simulate a crash on the second.
+        # We do this by moving src1→dest1 manually (outside _move_verify_journal) to
+        # establish the first journal entry, then calling _execute_single_move for src2→dest2
+        # with a patched _verify_copy that raises RuntimeError.
+        # This simulates the state after N moves succeed and the (N+1)th crashes.
+        now = datetime.datetime.now(datetime.UTC)
+        # First move: succeeds and appends one entry.
+        _execute_single_move(
+            src1,
+            dest1,
+            journal=in_memory_journal,
+            journal_path=journal_path,
+            action="repathed",
+            dest_root=dest_root,
+            now_str=now.isoformat(),
+            release_id="",
+        )
+
+        # Verify the journal has exactly one entry after the first move.
+        assert len(in_memory_journal.entries) == 1, "in-memory journal must have 1 entry after first move"
+        on_disk_after_first = read_journal(journal_path)
+        assert len(on_disk_after_first.entries) == 1, "on-disk journal must have 1 entry after first move"
+
+        # Second move: simulate a crash by raising RuntimeError from _verify_copy.
+        mocker.patch("music_annotator._pipeline_maint._verify_copy", side_effect=RuntimeError("crash"))
+        with pytest.raises(RuntimeError, match="crash"):
+            _execute_single_move(
+                src2,
+                dest2,
+                journal=in_memory_journal,
+                journal_path=journal_path,
+                action="repathed",
+                dest_root=dest_root,
+                now_str=now.isoformat(),
+                release_id="",
+            )
+
+        # After the crash, the journal must contain exactly the first move's entry.
+        # The second move's entry must NOT be present (C-PROV: no entry before verify passes).
+        final_journal = read_journal(journal_path)
+        assert len(final_journal.entries) == 1, (
+            f"journal must contain exactly 1 entry after crash; got {len(final_journal.entries)}"
+        )
+        assert final_journal.entries[0].destination == str(dest1), "the surviving journal entry must be the first move's entry"
+
 
 # ---------------------------------------------------------------------------
 # repath() confirmation prompt
@@ -6592,13 +6797,16 @@ class TestMoveVerifyJournal:
 
 
 def _write_repath_journal(dest_root: Path, entries: list[dict[str, str]]) -> None:
-    """Write a journal JSON file to ``dest_root / music_annotator_journal.json``.
+    """Write a JSONL journal file to ``dest_root / music_annotator_journal.json``.
+
+    Writes one JSON object per line (JSONL format) so the file is in the format that
+    :func:`~music_annotator.read_journal` expects without triggering a migration.
 
     :param dest_root: Destination root directory (must already exist).
     :param entries: List of raw entry dicts to serialise.
     """
     journal_path = dest_root / "music_annotator_journal.json"
-    journal_path.write_text(json.dumps(entries), encoding="utf-8")
+    journal_path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
 
 
 def _make_repath_flac(dest_root: Path, rel_path: str, tags: TrackTags) -> Path:

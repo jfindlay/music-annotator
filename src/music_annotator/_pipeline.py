@@ -54,11 +54,11 @@ from music_annotator._pipeline_io import (
     _sha256_file,
     _verify_copy,
     _write_provenance_fields,
+    append_journal_entry,
     check_duration_preflight,
     find_source_files,
     parse_disc_title,
     parse_disc_toc,
-    write_transaction_log,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
 from music_annotator._tags import (
@@ -1969,7 +1969,9 @@ def run(
     )
 
     if not dry_run:
-        write_transaction_log(dest_root / JOURNAL_FILENAME, journal_entries)
+        journal_path = dest_root / JOURNAL_FILENAME
+        for _entry in journal_entries:
+            append_journal_entry(journal_path, _entry)
 
         # Count copied (not skipped/dry-run) entries and print a confirmation message so the user
         # knows it is safe to delete the source directory before they do so.
