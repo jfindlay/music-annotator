@@ -738,11 +738,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
             The join key is the embedded MUSICBRAINZ_ALBUMID tag, not the journal.  unify
             reads the embedded MUSICBRAINZ_ALBUMID join key and effects a determinate re-layout
-            of the current library state.  For each file with a MUSICBRAINZ_ARTISTID tag, it
-            dereferences the embedded artist MBID for its stable, primary-flagged canonical
-            name-form (a narrow, cached, fixed-MBID lookup — never a MusicBrainz search or
-            re-identification), so it makes no wildcard MB call but does require the user-agent
-            when the library contains files with MUSICBRAINZ_ARTISTID tags.
+            of the current library state.  The canonical name-form for each performer is the MB
+            artist name field, read from embedded tags alone — no MusicBrainz network calls are
+            made (NORM-2 as revised; alias hydration has been removed from the maintenance path).
 
             Use --dry-run first to preview all planned moves.  Use -y/--yes to skip the
             confirmation prompt.
@@ -782,8 +780,8 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="EMAIL",
         help=(
             "Contact e-mail address included in the MusicBrainz user-agent string.  "
-            "Required when the library contains files with MUSICBRAINZ_ARTISTID tags, "
-            "because unify calls fetch_artist_aliases for canonical name-forms."
+            "Accepted for forward compatibility; unify is genuinely offline and does not "
+            "require the user-agent for correct operation."
         ),
     )
 
@@ -906,8 +904,8 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="EMAIL",
         help=(
             "Contact e-mail address included in the MusicBrainz user-agent string.  "
-            "Required when the library contains files with MUSICBRAINZ_ARTISTID tags, "
-            "because the unify pass calls fetch_artist_aliases."
+            "Accepted for forward compatibility; all maintenance passes are genuinely offline "
+            "and do not require the user-agent for correct operation."
         ),
     )
     preflight_parser.add_argument(
@@ -945,17 +943,17 @@ def main() -> None:
     :func:`~music_annotator.diff_journal`.  The ``origin-time`` subcommand dispatches to
     :func:`~music_annotator.enrich_origin_time` with ``dry_run`` forwarded.  The ``rebuild``
     subcommand dispatches to :func:`~music_annotator.rebuild_journal` with ``dry_run=True``
-    (default) or ``dry_run=False`` when ``--apply`` is passed.  The ``unify`` subcommand
-    initialises the MusicBrainz user-agent via :func:`~music_annotator.init_mb` (required because
-    the unify pass dereferences each embedded artist MBID for its stable, primary-flagged canonical
-    name-form via :func:`~music_annotator._mb_api.fetch_artist_aliases`), then dispatches to
-    :func:`~music_annotator.unify`.  The ``repatch-acoustid`` subcommand dispatches
+    (default) or ``dry_run=False`` when ``--apply`` is passed.      The ``unify`` subcommand
+    calls :func:`~music_annotator.init_mb` when a user-agent email was supplied (for forward
+    compatibility), then dispatches to :func:`~music_annotator.unify`.  The unify pass is
+    genuinely offline — it reads embedded tags alone and does not call
+    :func:`~music_annotator._mb_api.fetch_artist_aliases` (NORM-2 as revised; alias hydration
+    has been removed from the maintenance path).  The ``repatch-acoustid`` subcommand dispatches
     to :func:`~music_annotator.repatch_acoustid_tags` with ``acoustid_key`` and ``dry_run``
     forwarded.  The ``repatch-catalogue-colon`` subcommand dispatches to
     :func:`~music_annotator.repatch_catalogue_colon` with ``dry_run`` forwarded.  The
-    ``preflight`` subcommand initialises the MusicBrainz user-agent via
-    :func:`~music_annotator.init_mb` (required because the unify pass calls
-    :func:`~music_annotator._mb_api.fetch_artist_aliases`), then dispatches to
+    ``preflight`` subcommand calls :func:`~music_annotator.init_mb` when a user-agent email was
+    supplied (for forward compatibility), then dispatches to
     :func:`~music_annotator.compose_preflight_report` and prints the consolidated report; when
     ``scan_ran`` is ``False`` (root not mounted or empty), prints a clear "scan not run" message
     and exits cleanly.
@@ -1096,13 +1094,13 @@ def main() -> None:
         case "unify":
 
             def _run_unify() -> None:
-                """Initialise the MusicBrainz user-agent and run the unify pass.
+                """Initialise the MusicBrainz user-agent (if supplied) and run the unify pass.
 
-                Calls :func:`~music_annotator.init_mb` before dispatching to
-                :func:`~music_annotator.unify`, because the unify pass dereferences each
-                embedded artist MBID for its stable, primary-flagged canonical name-form via
-                :func:`~music_annotator._mb_api.fetch_artist_aliases`, which requires the
-                user-agent to be set.
+                Calls :func:`~music_annotator.init_mb` when a user-agent email was supplied
+                (for forward compatibility), then dispatches to :func:`~music_annotator.unify`.
+                The unify pass is genuinely offline — it reads embedded tags alone and does not
+                call :func:`~music_annotator._mb_api.fetch_artist_aliases` (NORM-2 as revised;
+                alias hydration has been removed from the maintenance path).
                 """
                 music_annotator.init_mb(f"{args.user_agent_app} {args.user_agent_email}".strip())
                 music_annotator.unify(dest_root=args.dest_dir, yes=args.yes, dry_run=args.dry_run)
@@ -1141,9 +1139,10 @@ def main() -> None:
                 """Run compose_preflight_report and emit the consolidated report.
 
                 Initialises the MusicBrainz user-agent via :func:`~music_annotator.init_mb`
-                before calling :func:`~music_annotator.compose_preflight_report`, because the
-                unify pass calls :func:`~music_annotator._mb_api.fetch_artist_aliases` which
-                requires the user-agent to be set.
+                when a user-agent email was supplied (for forward compatibility), then calls
+                :func:`~music_annotator.compose_preflight_report`.  All maintenance passes
+                are genuinely offline — they read embedded tags alone and do not require the
+                user-agent for correct operation (NORM-2 as revised).
 
                 Calls :func:`~music_annotator.compose_preflight_report` with the resolved
                 ``dest_root`` and ``journal_path``, prints a human-readable summary, and

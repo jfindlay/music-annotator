@@ -180,18 +180,20 @@ embedded tags and local filesystem at the moment it runs.  What is forbidden is 
 `MB(*)` call — a MusicBrainz search, re-identification, or relationship refetch whose answer drifts
 with MB's catalog — because that would make A → A′ non-deterministic with respect to local state.
 
-A **narrow, fixed-MBID dereference** of a stable, primary-flagged canonical name-form is *not* a
-wildcard: it is a well-defined, two-layer-cached lookup of stable data (the entity's own canonical
-alias, keyed by an MBID already embedded in the file) that simply isn't local yet.  Such lookups are
-permitted in offline maintenance passes.  Concretely: `unify` calls `fetch_artist_aliases(mbid)` for
-each embedded `MUSICBRAINZ_ARTISTID` to resolve the canonical name-form used in path construction.
-This lookup is bounded by distinct artist MBIDs (not file count), cached in-process and on-disk, and
-operates on stable data — it is not a search and does not re-identify the recording.
+**C-DET premise (repaired by NORM-2 as revised).**  The canonical name-form used in path construction
+is the MB artist `name` field verbatim — a scalar, stable by construction, already embedded in the
+file's `CEA_ALBUM_CONDUCTORS` / `CEA_ALBUM_ENSEMBLES` / `CEA_ENSEMBLES` tags at annotation time.
+Alias hydration (`fetch_artist_aliases`) has been removed from the maintenance path entirely: the
+`_hydrate_performer_lists` helper reconstructs performer `ArtistEntry` lists from embedded string
+tags alone, and `canonical_artist_form` returns `entry.name` directly (no network fetch required).
+The dissolution hypothesis was verified live against MB for all six observed artists (Ozawa 小澤征爾,
+Stravinsky Игорь Фёдорович Стравинский, Richter, Järvi, Wiener Philharmoniker, Ashkenazy) — the
+`name` field is already the native/preferred form in every case.
 
-The practical consequence: offline maintenance passes that perform fixed-MBID name-form lookups
-require the MusicBrainz user-agent to be initialised (`init_mb()`), exactly as `apply`/`search`/
-`preflight` do.  The `unify` subcommand carries `--user-agent-app` / `--user-agent-email` flags for
-this reason.
+The practical consequence: all three offline maintenance passes (`repath`, `regroup`, `unify`) are
+**genuinely offline** — they read embedded tags alone and require no MusicBrainz user-agent.  The
+`--user-agent-app` / `--user-agent-email` flags remain on the `unify` and `preflight` subcommands
+for forward compatibility, but they are not required for correct operation.
 
 ## Database-as-infrastructure: tracks are authority, the journal is a regenerable cache
 

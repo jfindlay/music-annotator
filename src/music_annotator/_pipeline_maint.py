@@ -23,8 +23,9 @@ Also provides the shared primitives consumed by all commands:
   an on-disk tag dict.
 * :func:`_hydrate_performer_lists` — reconstruct performer :class:`~music_annotator.models.ArtistEntry`
   lists from embedded tags so that :func:`~music_annotator._tags.build_dest_path` can render
-  canonical entity name-forms (primary-flagged MB alias per STYLEGUIDE 3.1/NORM-2) in the
-  compact path projection.
+  canonical entity name-forms (the MB artist ``name`` field verbatim per NORM-2 as revised) in the
+  compact path projection.  No MusicBrainz network calls are made — the maintenance path reads
+  embedded tags alone.
 
 Private helpers used exclusively by :func:`unify`:
 
@@ -1042,10 +1043,10 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
         tags = _tags_from_file_dict(file_dict)
 
         # Reconstruct performer ArtistEntry lists from embedded tags so that build_dest_path
-        # can render canonical entity name-forms (primary-flagged MB alias per STYLEGUIDE
-        # 3.1/NORM-2) in the compact path projection.  The list fields are excluded from
-        # to_file_dict() and therefore absent from the embedded tag dict; without hydration,
-        # build_dest_path falls back to the raw CEA_ENSEMBLE_NAMES / ARTIST string.
+        # can render canonical entity name-forms (MB artist name field per NORM-2 as revised)
+        # in the compact path projection.  The list fields are excluded from to_file_dict()
+        # and therefore absent from the embedded tag dict; without hydration, build_dest_path
+        # falls back to the raw CEA_ENSEMBLE_NAMES / ARTIST string.  No network calls are made.
         _hydrate_performer_lists(tags, file_dict)
         _repath_file_data.append((current_path, tags, file_dict, ext, release_id))
 
@@ -1347,7 +1348,8 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
         tags = _tags_from_file_dict(file_dict)
 
         # Reconstruct performer ArtistEntry lists from embedded tags so that build_dest_path
-        # renders canonical entity name-forms (primary-flagged MB alias per STYLEGUIDE 3.1/NORM-2).
+        # renders canonical entity name-forms (MB artist name field per NORM-2 as revised).
+        # No network calls are made — the maintenance path reads embedded tags alone.
         _hydrate_performer_lists(tags, file_dict)
         _regroup_file_data.append((current_path, tags, file_dict, ext, release_id))
 
