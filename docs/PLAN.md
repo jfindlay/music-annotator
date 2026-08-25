@@ -174,7 +174,7 @@ pyupgrade).  One green run satisfies tests, types, lint, format, and coverage.
 | ID | Title                                                                          | Status | Commit | Notes |
 |----|--------------------------------------------------------------------------------|--------|--------|-------|
 | S1 | JSONL journal store: appends, torn-tail recovery, atomic rewrite, migration     | done   | 60189da | C-JRNL append primitive + read_journal JSONL frozen |
-| S2 | In-memory journal threading; retire per-move full rewrites                      | todo   |        |       |
+| S2 | In-memory journal threading; retire per-move full rewrites                      | done   | 235313d | in-memory threading pattern frozen for S4/S7 |
 | S3 | STYLEGUIDE: cross-reference tag schema + collision interaction design           | todo   |        |       |
 | S4 | Plan-time collision completeness in repath                                      | todo   |        |       |
 | S5 | Cross-reference reconstruction pass (journal census)                            | todo   |        |       |
