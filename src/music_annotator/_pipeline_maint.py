@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import datetime
 import errno
+import json
 import os
 import shutil
 import tempfile
@@ -84,6 +85,7 @@ from music_annotator._works import (
     work_group_modal_depth,
 )
 from music_annotator.models import (
+    JSON,
     ArtistEntry,
     CopyPlanEntry,
     DryRunEntry,
@@ -101,6 +103,216 @@ from music_annotator.models import (
 )
 
 log: structlog.stdlib.BoundLogger = structlog.get_logger(__name__)
+
+#: Filename of the tag-read cache sidecar written inside the destination root.
+#: The file is a JSON object mapping ``"path\x00size\x00mtime"`` keys to tag dicts.
+#: A missing or malformed sidecar degrades gracefully to a full tag read — never an error.
+_TAG_CACHE_FILENAME: str = ".music_annotator_tag_cache.json"
+
+
+class TagReadCache:
+    """In-memory tag-read cache keyed on ``(path, size_bytes, mtime_ns)``.
+
+    Avoids re-opening audio files whose path, byte size, and nanosecond mtime are all unchanged
+    from a previous read.  Any change to any key component (path, size, or mtime) is a cache miss
+    and triggers a full tag read.
+
+    The cache is loaded from a JSON sidecar file under ``dest_root`` at the start of a maintenance
+    pass and saved back at the end.  A missing or malformed sidecar degrades gracefully to an empty
+    cache — never an error.  The sidecar is pure-Python JSON I/O, compatible with pyfakefs.
+
+    After a file move via :func:`_move_verify_journal`, the cache entry is re-keyed to the new
+    path so subsequent reads at the new path are cache hits.  The old path key is removed.
+
+    The cache is read-only during planning: it is consulted only during tag reads and never
+    participates in the write/verify/journal provenance chain (C-PROV).
+
+    :ivar _store: Internal mapping from ``(path_str, size_bytes, mtime_ns)`` to tag dict.
+    :ivar sidecar_path: Path to the JSON sidecar file on disk.
+    """
+
+    def __init__(self, sidecar_path: Path) -> None:
+        """Initialise an empty cache bound to ``sidecar_path``.
+
+        :param sidecar_path: Path to the JSON sidecar file.  The file need not exist yet.
+        """
+        self._store: dict[tuple[str, int, int], dict[str, str]] = {}
+        self.sidecar_path = sidecar_path
+
+    def __len__(self) -> int:
+        """Return the number of entries in the cache.
+
+        :returns: The count of cached tag dicts.
+        """
+        return len(self._store)
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def load(cls, sidecar_path: Path) -> TagReadCache:
+        """Load a :class:`TagReadCache` from ``sidecar_path``, degrading gracefully on any error.
+
+        Reads the JSON sidecar and populates the in-memory store.  If the file is absent,
+        unreadable, or malformed (any exception), returns an empty cache and logs a warning.
+        The sidecar format is a JSON object whose keys are ``"<path>\\x00<size>\\x00<mtime>"``
+        strings and whose values are ``{TAG: value}`` dicts.
+
+        :param sidecar_path: Path to the JSON sidecar file.
+        :returns: A populated :class:`TagReadCache`, or an empty one on any read/parse error.
+        """
+        cache = cls(sidecar_path)
+        if not sidecar_path.exists():
+            return cache
+        try:
+            raw_text = sidecar_path.read_text(encoding="utf-8")
+            raw: JSON = json.loads(raw_text)
+            if not isinstance(raw, dict):
+                log.warning("tag_cache_load_malformed", sidecar=str(sidecar_path), reason="not a JSON object")
+                return cache
+            for composite_key, value in raw.items():
+                if not isinstance(composite_key, str) or not isinstance(value, dict):
+                    continue
+                parts = composite_key.split("\x00")
+                if len(parts) != 3:  # noqa: PLR2004 — 3 is the fixed key-component count
+                    continue
+                path_str, size_str, mtime_str = parts
+                try:
+                    size_bytes = int(size_str)
+                    mtime_ns = int(mtime_str)
+                except ValueError:
+                    continue
+                # Validate that all tag values are strings before storing.
+                tag_dict: dict[str, str] = {}
+                valid = True
+                for tag_key, tag_val in value.items():
+                    if not isinstance(tag_key, str) or not isinstance(tag_val, str):
+                        valid = False
+                        break
+                    tag_dict[tag_key] = tag_val
+                if valid:
+                    cache._store[(path_str, size_bytes, mtime_ns)] = tag_dict  # noqa: SLF001
+        except Exception as exc:  # noqa: BLE001 — any failure degrades to empty cache
+            log.warning("tag_cache_load_error", sidecar=str(sidecar_path), error=str(exc))
+        return cache
+
+    def save(self) -> None:
+        """Persist the in-memory cache to the sidecar JSON file.
+
+        Serialises the store to a JSON object with composite string keys
+        ``"<path>\\x00<size>\\x00<mtime>"``.  Any write error is logged and silently ignored —
+        a failed save means the next run pays full tag-read cost but is otherwise correct.
+        """
+        try:
+            serialisable: dict[str, dict[str, str]] = {
+                f"{path_str}\x00{size_bytes}\x00{mtime_ns}": tag_dict
+                for (path_str, size_bytes, mtime_ns), tag_dict in self._store.items()
+            }
+            self.sidecar_path.write_text(json.dumps(serialisable), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 — save failure is non-fatal
+            log.warning("tag_cache_save_error", sidecar=str(self.sidecar_path), error=str(exc))
+
+    # ------------------------------------------------------------------
+    # Cache operations
+    # ------------------------------------------------------------------
+
+    def get(self, path: Path) -> dict[str, str] | None:
+        """Return the cached tag dict for ``path`` if the key matches, or ``None`` on a miss.
+
+        A hit requires that the file's current ``st_size`` and ``st_mtime_ns`` both match the
+        stored key.  Any stat failure (e.g. file not found) is treated as a miss.
+
+        :param path: Path to the audio file.
+        :returns: The cached ``{TAG: value}`` dict on a hit, or ``None`` on a miss or stat error.
+        """
+        try:
+            st = path.stat()
+        except OSError:
+            return None
+        key = (str(path), st.st_size, st.st_mtime_ns)
+        return self._store.get(key)
+
+    def put(self, path: Path, tag_dict: dict[str, str]) -> None:
+        """Store ``tag_dict`` in the cache keyed on ``path``'s current stat.
+
+        Reads ``st_size`` and ``st_mtime_ns`` from the file's current stat.  Any stat failure
+        is silently ignored — a failed put means the next read is a cache miss, not an error.
+
+        :param path: Path to the audio file.
+        :param tag_dict: The ``{TAG: value}`` mapping to cache.
+        """
+        try:
+            st = path.stat()
+        except OSError:
+            return
+        self._store[(str(path), st.st_size, st.st_mtime_ns)] = tag_dict
+
+    def rekey(self, old_path: Path, new_path: Path) -> None:
+        """Move a cache entry from ``old_path`` to ``new_path`` after a successful file move.
+
+        Finds the entry whose path component matches ``old_path`` (regardless of size/mtime,
+        since the file has just been moved and its stat at the new path may differ from the
+        stored key).  Removes the old entry and inserts a new entry keyed on the new path's
+        current stat.  If no matching entry exists, or if the new path's stat fails, the
+        operation is a no-op.
+
+        :param old_path: The source path before the move.
+        :param new_path: The destination path after the move.
+        """
+        old_path_str = str(old_path)
+        # Find the entry for old_path (there is at most one, since path is part of the key).
+        old_key: tuple[str, int, int] | None = None
+        for key in self._store:
+            if key[0] == old_path_str:
+                old_key = key
+                break
+        if old_key is None:
+            return
+        tag_dict = self._store.pop(old_key)
+        # Re-key under the new path's current stat.
+        try:
+            st = new_path.stat()
+        except OSError:
+            return
+        self._store[(str(new_path), st.st_size, st.st_mtime_ns)] = tag_dict
+
+
+def _read_tags_cached(path: Path, ext: str, cache: TagReadCache | None) -> dict[str, str]:
+    """Read tags from ``path``, consulting ``cache`` first when provided.
+
+    On a cache hit (path, size, and mtime all match a stored entry), returns the cached tag dict
+    without opening the audio file.  On a miss, reads tags via
+    :func:`~music_annotator._pipeline_io._read_tags_flac` or
+    :func:`~music_annotator._pipeline_io._read_tags_mp3`, stores the result in the cache, and
+    returns it.
+
+    The cache is read-only with respect to the provenance chain: this function only reads tags
+    and populates the cache; it never writes audio files or journal entries.
+
+    :param path: Path to the audio file.
+    :param ext: Lowercase file extension (``".flac"`` or ``".mp3"``).
+    :param cache: Optional :class:`TagReadCache` to consult.  When ``None``, always reads from
+        the audio file directly.
+    :returns: The ``{TAG: value}`` mapping read from the file (or cache).
+    :raises Exception: Propagates any exception from the underlying tag-read function on a miss.
+    """
+    if cache is not None:
+        cached = cache.get(path)
+        if cached is not None:
+            return cached
+
+    match ext:
+        case ".flac":
+            tag_dict = _read_tags_flac(path)
+        case ".mp3":
+            tag_dict = _read_tags_mp3(path)
+        case _:  # pragma: no cover — callers always pass .flac or .mp3
+            tag_dict = {}
+
+    if cache is not None:
+        cache.put(path, tag_dict)
+    return tag_dict
 
 
 def _tags_from_file_dict(file_dict: dict[str, str]) -> TrackTags:
@@ -519,6 +731,7 @@ def _move_verify_journal(
     dest_root: Path,
     now: datetime.datetime,
     release_id: str = "",
+    cache: TagReadCache | None = None,
 ) -> int:
     """Move each ``(src, dest)`` pair atomically, verify integrity, and journal each success.
 
@@ -558,6 +771,9 @@ def _move_verify_journal(
        (O(1) durable JSONL append with fsync) and add it to the in-memory ``journal`` so callers
        see the updated state without re-reading the file.
     8. Clean up now-empty source directories (best-effort; non-empty directories are skipped).
+    9. Re-key the cache entry from the old path to the new path (C-JRNL: the file has moved;
+       the old key is stale).  The cache is updated only after verification passes — it is never
+       consulted during the write/verify/journal sequence (C-PROV).
 
     The ``journal`` parameter is mutated in place: each successful move appends its entry to
     ``journal.entries``.  Callers hold the journal in memory for the duration of the maintenance
@@ -575,6 +791,9 @@ def _move_verify_journal(
         this value).
     :param release_id: MusicBrainz release MBID for the journal entry.  Empty string for
         ``"repathed"`` entries (repath operates offline from embedded tags).
+    :param cache: Optional :class:`TagReadCache` to re-key after each successful move.  When
+        provided, the entry for ``src`` is moved to ``dest`` in the cache after verification
+        passes.  The cache is never consulted during the write/verify/journal sequence.
     :returns: Count of files successfully moved and journalled.
     :raises RuntimeError: If the destination already exists (C-NOCLOBBER), if the post-move
         SHA-256 check fails, or if :func:`_verify_copy` fails.
@@ -601,6 +820,7 @@ def _move_verify_journal(
             dest_root=dest_root,
             now_str=now_str,
             release_id=release_id,
+            cache=cache,
         )
 
     for src, dest in ordered_pairs:
@@ -613,6 +833,7 @@ def _move_verify_journal(
             dest_root=dest_root,
             now_str=now_str,
             release_id=release_id,
+            cache=cache,
         )
 
     return moved_count
@@ -653,6 +874,7 @@ def _execute_single_move(
     dest_root: Path,
     now_str: str,
     release_id: str,
+    cache: TagReadCache | None = None,
 ) -> int:
     """Execute one ``(src, dest)`` move through the full C-PROV + C-NOCLOBBER chain.
 
@@ -666,7 +888,9 @@ def _execute_single_move(
     After verification passes, the entry is durably appended to the on-disk journal via
     :func:`~music_annotator._pipeline_io.append_journal_entry` (O(1) JSONL append with fsync)
     and also appended to the in-memory ``journal`` so the caller's view stays current without
-    re-reading the file.
+    re-reading the file.  When ``cache`` is provided, the cache entry is re-keyed from ``src``
+    to ``dest`` after verification passes — the cache is never consulted during the
+    write/verify/journal sequence (C-PROV).
 
     :param src: Source path.
     :param dest: Destination path.
@@ -677,6 +901,8 @@ def _execute_single_move(
     :param dest_root: Library root for log messages and empty-dir cleanup.
     :param now_str: ISO-format UTC timestamp string for the journal entry.
     :param release_id: MusicBrainz release MBID for the journal entry.
+    :param cache: Optional :class:`TagReadCache` to re-key after the move succeeds.  The old
+        path entry is moved to the new path key.  Never consulted during the move itself.
     :returns: Always 1 (one file successfully moved and journalled).
     :raises RuntimeError: On C-NOCLOBBER violation, SHA-256 mismatch, or :func:`_verify_copy` failure.
     :raises OSError: On filesystem errors (except EXDEV, handled by cross-fs fallback).
@@ -787,7 +1013,13 @@ def _execute_single_move(
         new=str(dest.relative_to(dest_root)),
     )
 
-    # h. Clean up now-empty source directories (best-effort; non-empty dirs are skipped).
+    # h. Re-key the cache entry from src to dest (the file has moved; the old path key is stale).
+    #    This runs after journal append so the cache is only updated when the move is fully
+    #    committed — the cache is never consulted during the write/verify/journal sequence (C-PROV).
+    if cache is not None:
+        cache.rekey(src, dest)
+
+    # i. Clean up now-empty source directories (best-effort; non-empty dirs are skipped).
     src_dir = src.parent
     while src_dir != dest_root and src_dir.is_relative_to(dest_root):
         try:
@@ -809,6 +1041,7 @@ def _execute_swap_cycles(
     dest_root: Path,
     now_str: str,
     release_id: str,
+    cache: TagReadCache | None = None,
 ) -> int:
     """Execute swap-cycle moves via in-directory temp hops, keeping every hop inside C-PROV.
 
@@ -843,6 +1076,8 @@ def _execute_swap_cycles(
     :param dest_root: Library root for log messages and empty-dir cleanup.
     :param now_str: ISO-format UTC timestamp string for journal entries.
     :param release_id: MusicBrainz release MBID for journal entries.
+    :param cache: Optional :class:`TagReadCache` to re-key after each hop succeeds.  Passed
+        through to :func:`_execute_single_move` for each hop.
     :returns: Count of files successfully moved and journalled (each hop counts as one move).
     :raises RuntimeError: On C-NOCLOBBER violation, SHA-256 mismatch, or :func:`_verify_copy` failure.
     :raises OSError: On filesystem errors.
@@ -894,6 +1129,7 @@ def _execute_swap_cycles(
             dest_root=dest_root,
             now_str=now_str,
             release_id=release_id,
+            cache=cache,
         )
         log.info(
             f"{action}_swap_temp_hop",
@@ -918,6 +1154,7 @@ def _execute_swap_cycles(
                 dest_root=dest_root,
                 now_str=now_str,
                 release_id=release_id,
+                cache=cache,
             )
 
         # Step 3: Move temp to first_dest (the original destination of first_src).
@@ -932,6 +1169,7 @@ def _execute_swap_cycles(
             dest_root=dest_root,
             now_str=now_str,
             release_id=release_id,
+            cache=cache,
         )
 
     return moved_count
@@ -990,6 +1228,11 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     journal_path = dest_root / JOURNAL_FILENAME
     journal = read_journal(journal_path)
 
+    # Load the tag-read cache from the sidecar file.  A missing or malformed sidecar degrades
+    # gracefully to an empty cache — never an error.  The cache is read-only during planning
+    # and is saved back at the end of the pass (after all moves complete or on dry-run exit).
+    cache = TagReadCache.load(dest_root / _TAG_CACHE_FILENAME)
+
     # --- Determine the current canonical path for each logical file ---
     # _resolve_current_lib walks entries in chronological order; "tagged" seeds the map and
     # "repathed"/"regrouped" entries update it.  Multi-hop chains resolve naturally because
@@ -1003,6 +1246,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
 
     if not existing_files:
         log.info("repath_nothing_to_move", dest_root=str(dest_root))
+        cache.save()
         if dry_run:
             return DryRunPlan(pass_name="repath", entries=[], count=0)
         return None
@@ -1017,6 +1261,10 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     # shortening if the repaired leaf would exceed _NAME_MAX), and the file is moved via
     # _move_verify_journal before tag-reading continues.  After repair the file has a suffix
     # and is visible to all subsequent maintenance passes.
+    #
+    # The tag-read cache is consulted for each file: on a hit (path, size, mtime all match),
+    # the cached tag dict is returned without opening the audio file.  On a miss, the file is
+    # read and the result is stored in the cache for future runs.
     _repath_file_data: list[tuple[Path, TrackTags, dict[str, str], str, str]] = []
     for current_path, release_id in existing_files:
         ext = current_path.suffix.lower()
@@ -1046,6 +1294,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
             # Repair move: hash → rename → verify → journal (C-PROV invariant: journal entry
             # is written only after _verify_copy passes inside _move_verify_journal).
             # The in-memory journal is updated in place so no re-read is needed.
+            # The cache is threaded through so the entry is re-keyed to the repaired path.
             repair_now = datetime.datetime.now(datetime.UTC)
             _move_verify_journal(
                 [(current_path, repaired_path)],
@@ -1055,19 +1304,13 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
                 dest_root=dest_root,
                 now=repair_now,
                 release_id="",
+                cache=cache,
             )
             current_path = repaired_path
             ext = correct_suffix
 
         try:
-            match ext:
-                case ".flac":
-                    file_dict = _read_tags_flac(current_path)
-                case ".mp3":
-                    file_dict = _read_tags_mp3(current_path)
-                case _:  # pragma: no cover — unreachable: ext is always .flac or .mp3 here
-                    log.warning("repath_unsupported_format", path=str(current_path), ext=ext)
-                    continue
+            file_dict = _read_tags_cached(current_path, ext, cache)
         except Exception as exc:  # noqa: BLE001 — tag read failure: log and skip
             log.warning("repath_tag_read_error", path=str(current_path), error=str(exc))
             continue
@@ -1165,6 +1408,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
 
     if not plan_pairs:
         log.info("repath_all_current", dest_root=str(dest_root))
+        cache.save()
         if dry_run:
             return DryRunPlan(pass_name="repath", entries=[], count=0)
         return None
@@ -1200,6 +1444,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
         plan_pairs = [pair for _i, pair in enumerate(plan_pairs) if _i not in _intra_collision_indices]
         if not plan_pairs:
             log.info("repath_all_current", dest_root=str(dest_root))
+            cache.save()
             if dry_run:
                 return DryRunPlan(pass_name="repath", entries=[], count=0)
             return None
@@ -1245,6 +1490,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
                 new=str(new_dest.relative_to(dest_root)),
             )
             dry_run_entries.append(DryRunEntry(current_path=str(current_path), planned_path=str(new_dest)))
+        cache.save()
         return DryRunPlan(pass_name="repath", entries=dry_run_entries, count=len(dry_run_entries))
 
     # --- Confirmation prompt ---
@@ -1268,6 +1514,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     # correct sentinel here.  The collision suffix was already derived from the real id above.
     # The journal loaded at the start of this pass is threaded through so _move_verify_journal
     # never re-reads it between moves — each append updates the in-memory copy in place.
+    # The cache is threaded through so each successful move re-keys the entry to the new path.
     now = datetime.datetime.now(datetime.UTC)
     move_pairs = [(src, dest) for src, dest, _, _, _ in plan_pairs]
     moved = _move_verify_journal(
@@ -1278,7 +1525,9 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
         dest_root=dest_root,
         now=now,
         release_id="",
+        cache=cache,
     )
+    cache.save()
     log.info("repath_complete", dest_root=str(dest_root), moved=moved)
     return None
 
@@ -1336,6 +1585,10 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
     journal_path = dest_root / JOURNAL_FILENAME
     journal = read_journal(journal_path)
 
+    # Load the tag-read cache from the sidecar file.  A missing or malformed sidecar degrades
+    # gracefully to an empty cache — never an error.
+    cache = TagReadCache.load(dest_root / _TAG_CACHE_FILENAME)
+
     # --- Identify confirmed case-(b) split-release candidates ---
     # _confirm_fragmentation returns (case_a, case_b); we act on case_b only.
     _, case_b = _confirm_fragmentation(dest_root, journal)
@@ -1364,18 +1617,16 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
     # --- Pass 1: read tags for all existing files ---
     # Collect (path, tags, file_dict, ext, release_id) tuples so that the work-group modal
     # depth can be computed once per group before building the plan.
+    # The tag-read cache is consulted for each file: on a hit (path, size, mtime all match),
+    # the cached tag dict is returned without opening the audio file.
     _regroup_file_data: list[tuple[Path, TrackTags, dict[str, str], str, str]] = []
     for current_path, release_id in existing_files:
         ext = current_path.suffix.lower()
+        if ext not in {".flac", ".mp3"}:  # pragma: no cover — AUDIO_EXTENSIONS may include unsupported types
+            log.warning("regroup_unsupported_format", path=str(current_path), ext=ext)
+            continue
         try:
-            match ext:
-                case ".flac":
-                    file_dict = _read_tags_flac(current_path)
-                case ".mp3":
-                    file_dict = _read_tags_mp3(current_path)
-                case _:  # pragma: no cover — AUDIO_EXTENSIONS may include unsupported types
-                    log.warning("regroup_unsupported_format", path=str(current_path), ext=ext)
-                    continue
+            file_dict = _read_tags_cached(current_path, ext, cache)
         except Exception as exc:  # noqa: BLE001 — tag read failure: log and skip
             log.warning("regroup_tag_read_error", path=str(current_path), error=str(exc))
             continue
@@ -1463,6 +1714,7 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
 
     if not plan_pairs:
         log.info("regroup_nothing_to_regroup", dest_root=str(dest_root))
+        cache.save()
         if dry_run:
             return DryRunPlan(pass_name="regroup", entries=[], count=0)
         return None
@@ -1536,6 +1788,7 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
                 release_id=release_id,
             )
             regroup_dry_run_entries.append(DryRunEntry(current_path=str(current_path), planned_path=str(new_dest)))
+        cache.save()
         return DryRunPlan(pass_name="regroup", entries=regroup_dry_run_entries, count=len(regroup_dry_run_entries))
 
     # --- Confirmation prompt ---
@@ -1559,6 +1812,7 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
     # _move_verify_journal once per unique release_id group to preserve the per-entry release_id.
     # The journal loaded at the start of this pass is threaded through so _move_verify_journal
     # never re-reads it between moves — each append updates the in-memory copy in place.
+    # The cache is threaded through so each successful move re-keys the entry to the new path.
     now = datetime.datetime.now(datetime.UTC)
     total_moved = 0
     # Group plan_pairs by release_id so each batch shares the same journal release_id.
@@ -1575,7 +1829,9 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
             dest_root=dest_root,
             now=now,
             release_id=rid,
+            cache=cache,
         )
+    cache.save()
     log.info("regroup_complete", dest_root=str(dest_root), moved=total_moved)
     return None
 
@@ -1801,6 +2057,10 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
     # to _move_verify_journal so no re-read occurs between moves.
     journal = read_journal(journal_path)
 
+    # Load the tag-read cache from the sidecar file.  A missing or malformed sidecar degrades
+    # gracefully to an empty cache — never an error.
+    cache = TagReadCache.load(dest_root / _TAG_CACHE_FILENAME)
+
     # --- Detect fragmented releases by scanning embedded MUSICBRAINZ_ALBUMID tags ---
     fragmented = detect_fragmented_releases(dest_root)
 
@@ -1816,18 +2076,16 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
     for release_id, file_paths in sorted(fragmented.items()):
         # Read tags from all files in this release group.
         # Build a list of (file_path, tags, file_dict) for the group.
+        # The tag-read cache is consulted for each file: on a hit (path, size, mtime all match),
+        # the cached tag dict is returned without opening the audio file.
         group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = []
         for file_path in file_paths:
             ext = file_path.suffix.lower()
+            if ext not in {".flac", ".mp3"}:  # pragma: no cover — detect_fragmented_releases only returns .flac/.mp3
+                log.warning("unify_unsupported_format", path=str(file_path), ext=ext)
+                continue
             try:
-                match ext:
-                    case ".flac":
-                        file_dict = _read_tags_flac(file_path)
-                    case ".mp3":
-                        file_dict = _read_tags_mp3(file_path)
-                    case _:  # pragma: no cover — detect_fragmented_releases only returns .flac/.mp3
-                        log.warning("unify_unsupported_format", path=str(file_path), ext=ext)
-                        continue
+                file_dict = _read_tags_cached(file_path, ext, cache)
             except Exception as exc:  # noqa: BLE001 — tag read failure: log and skip
                 log.warning("unify_tag_read_error", path=str(file_path), error=str(exc))
                 continue
@@ -1912,6 +2170,7 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
 
     if not plan_pairs:
         log.info("unify_nothing_to_unify", dest_root=str(dest_root))
+        cache.save()
         if dry_run:
             return DryRunPlan(pass_name="unify", entries=[], count=0)
         return None
@@ -1988,6 +2247,7 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
                 release_id=release_id,
             )
             unify_dry_run_entries.append(DryRunEntry(current_path=str(current_path), planned_path=str(new_dest)))
+        cache.save()
         return DryRunPlan(pass_name="unify", entries=unify_dry_run_entries, count=len(unify_dry_run_entries))
 
     # --- Confirmation prompt ---
@@ -2011,6 +2271,7 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
     # _move_verify_journal once per unique release_id group to preserve the per-entry release_id.
     # The journal loaded at the start of this pass is threaded through so _move_verify_journal
     # never re-reads it between moves — each append updates the in-memory copy in place.
+    # The cache is threaded through so each successful move re-keys the entry to the new path.
     now = datetime.datetime.now(datetime.UTC)
     total_moved = 0
     release_groups: dict[str, list[tuple[Path, Path]]] = {}
@@ -2026,7 +2287,9 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
             dest_root=dest_root,
             now=now,
             release_id=rid,
+            cache=cache,
         )
+    cache.save()
     log.info("unify_complete", dest_root=str(dest_root), moved=total_moved)
     return None
 

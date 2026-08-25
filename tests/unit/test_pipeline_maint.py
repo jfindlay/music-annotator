@@ -14,6 +14,7 @@ import errno
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -44,6 +45,8 @@ from music_annotator._pipeline_io import (
     _sha256_file,
 )
 from music_annotator._pipeline_maint import (
+    _TAG_CACHE_FILENAME,
+    TagReadCache,
     _check_dest_root,
     _clamp_maint_dest,
     _execute_single_move,
@@ -51,6 +54,7 @@ from music_annotator._pipeline_maint import (
     _hydrate_performer_lists,
     _journal_capacity,
     _move_verify_journal,
+    _read_tags_cached,
     _reference_evidence,
     _resolve_current_lib,
     _tags_from_file_dict,
@@ -11835,3 +11839,528 @@ class TestRepathSel23EnsemblePatch:
         # Old paths should no longer exist.
         assert not old_path_mvt1.exists(), f"Old path should be gone after repath: {old_path_mvt1!r}"
         assert not old_path_mvt2.exists(), f"Old path should be gone after repath: {old_path_mvt2!r}"
+
+
+class TestTagReadCache:
+    """Unit tests for :class:`TagReadCache` and :func:`_read_tags_cached`.
+
+    Covers all cache paths: hit (no file open), miss (file read + store), key-component
+    invalidation, corruption/absence degradation, move re-keying, save failure, and the
+    ``_read_tags_cached`` helper with and without a cache.
+    """
+
+    def test_load_absent_sidecar_returns_empty_cache(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """TagReadCache.load returns an empty cache when the sidecar file does not exist.
+
+        Absence of the sidecar is a normal first-run condition; it must never raise.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        cache = TagReadCache.load(sidecar)
+        assert cache.get(Path("/lib/track.flac")) is None
+
+    def test_load_malformed_json_not_object_returns_empty_cache(self, fs: FakeFilesystem) -> None:
+        """TagReadCache.load returns an empty cache when the sidecar JSON is not an object.
+
+        A JSON array or scalar at the top level is treated as corruption; the cache degrades
+        gracefully to empty rather than raising.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        fs.create_file(str(sidecar), contents="[1, 2, 3]")
+        cache = TagReadCache.load(sidecar)
+        assert cache.get(Path("/lib/track.flac")) is None
+
+    def test_load_malformed_json_parse_error_returns_empty_cache(self, fs: FakeFilesystem) -> None:
+        """TagReadCache.load returns an empty cache when the sidecar is not valid JSON.
+
+        Any JSON parse error degrades gracefully to an empty cache — never an error.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        fs.create_file(str(sidecar), contents="{not valid json")
+        cache = TagReadCache.load(sidecar)
+        assert cache.get(Path("/lib/track.flac")) is None
+
+    def test_load_skips_entry_with_non_string_key(self, fs: FakeFilesystem) -> None:
+        """TagReadCache.load skips entries whose composite key is not a string.
+
+        Non-string keys in the JSON object are silently ignored; valid entries are still loaded.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        # One valid entry and one with a non-string value (dict instead of tag dict).
+        data = {
+            "/lib/track.flac\x00100\x001000": {"TITLE": "Test"},
+            "/lib/bad.flac\x00200\x002000": "not-a-dict",
+        }
+        fs.create_file(str(sidecar), contents=json.dumps(data))
+        cache = TagReadCache.load(sidecar)
+        # Valid entry is loaded; bad entry is skipped.
+        # Verify the bad entry was skipped (no crash) and the store has exactly 1 entry.
+        assert len(cache) == 1
+
+    def test_load_skips_entry_with_wrong_key_part_count(self, fs: FakeFilesystem) -> None:
+        """TagReadCache.load skips entries whose composite key does not have exactly 3 parts.
+
+        A key with fewer or more than 3 null-separated parts is silently ignored.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        data = {
+            "/lib/track.flac\x00100": {"TITLE": "Test"},  # only 2 parts
+        }
+        fs.create_file(str(sidecar), contents=json.dumps(data))
+        cache = TagReadCache.load(sidecar)
+        assert len(cache) == 0
+
+    def test_load_skips_entry_with_non_int_size_or_mtime(self, fs: FakeFilesystem) -> None:
+        """TagReadCache.load skips entries whose size or mtime cannot be parsed as integers.
+
+        A ValueError from int() conversion is silently ignored.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        data = {
+            "/lib/track.flac\x00notanint\x001000": {"TITLE": "Test"},
+        }
+        fs.create_file(str(sidecar), contents=json.dumps(data))
+        cache = TagReadCache.load(sidecar)
+        assert len(cache) == 0
+
+    def test_load_skips_entry_with_non_string_tag_value(self, fs: FakeFilesystem) -> None:
+        """TagReadCache.load skips entries whose tag dict contains a non-string value.
+
+        Tag values must be strings; an integer or None value causes the entire entry to be skipped.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        data = {
+            "/lib/track.flac\x00100\x001000": {"TITLE": 42},  # non-string tag value
+        }
+        fs.create_file(str(sidecar), contents=json.dumps(data))
+        cache = TagReadCache.load(sidecar)
+        assert len(cache) == 0
+
+    def test_save_and_load_round_trip(self, fs: FakeFilesystem) -> None:
+        """TagReadCache.save persists the store; TagReadCache.load restores it exactly.
+
+        A put → save → load → get round-trip must return the same tag dict.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        fs.create_dir("/lib")
+        cache = TagReadCache(sidecar)
+
+        # Create a fake file so put() can stat it.
+        track = Path("/lib/track.flac")
+        fs.create_file(str(track), contents=b"x" * 50)
+        tag_dict = {"TITLE": "Symphony No. 5", "ARTIST": "Karajan"}
+        cache.put(track, tag_dict)
+        cache.save()
+
+        # Load a fresh cache from the sidecar and verify the entry is present.
+        cache2 = TagReadCache.load(sidecar)
+        result = cache2.get(track)
+        assert result == tag_dict
+
+    def test_save_failure_is_non_fatal(self) -> None:
+        """TagReadCache.save silently ignores write errors.
+
+        A save failure must not raise; the cache is simply not persisted.
+        """
+        # Use a sidecar path in a non-existent directory so write_text raises.
+        sidecar = Path("/nonexistent/dir/.music_annotator_tag_cache.json")
+        cache = TagReadCache(sidecar)
+        # Must not raise even though the parent directory does not exist.
+        cache.save()
+
+    def test_get_returns_none_on_stat_failure(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """TagReadCache.get returns None when the file does not exist (stat fails).
+
+        A missing file is treated as a cache miss, not an error.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        cache = TagReadCache(sidecar)
+        result = cache.get(Path("/lib/nonexistent.flac"))
+        assert result is None
+
+    def test_put_ignores_stat_failure(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """TagReadCache.put silently ignores OSError when the file does not exist.
+
+        A failed put is a no-op; the cache remains empty.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        cache = TagReadCache(sidecar)
+        # Must not raise even though the file does not exist.
+        cache.put(Path("/lib/nonexistent.flac"), {"TITLE": "Test"})
+        assert len(cache) == 0
+
+    def test_get_returns_none_on_key_mismatch(self, fs: FakeFilesystem) -> None:
+        """TagReadCache.get returns None when size or mtime does not match the stored key.
+
+        Any change to size or mtime invalidates the cache entry.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        fs.create_dir("/lib")
+        cache = TagReadCache(sidecar)
+
+        track = Path("/lib/track.flac")
+        fs.create_file(str(track), contents=b"x" * 50)
+        cache.put(track, {"TITLE": "Test"})
+
+        # Overwrite the file with different content to change size and mtime.
+        track.write_bytes(b"y" * 100)
+        result = cache.get(track)
+        assert result is None
+
+    def test_get_returns_cached_dict_on_hit(self, fs: FakeFilesystem) -> None:
+        """TagReadCache.get returns the cached tag dict when path, size, and mtime all match.
+
+        A cache hit must return the exact dict stored by put().
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        fs.create_dir("/lib")
+        cache = TagReadCache(sidecar)
+
+        track = Path("/lib/track.flac")
+        fs.create_file(str(track), contents=b"x" * 50)
+        tag_dict = {"TITLE": "Allegro", "ARTIST": "Karajan"}
+        cache.put(track, tag_dict)
+
+        result = cache.get(track)
+        assert result == tag_dict
+
+    def test_rekey_moves_entry_to_new_path(self, fs: FakeFilesystem) -> None:
+        """TagReadCache.rekey moves the cache entry from old_path to new_path.
+
+        After rekey, get(new_path) returns the tag dict and get(old_path) returns None.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        fs.create_dir("/lib/A")
+        fs.create_dir("/lib/B")
+        cache = TagReadCache(sidecar)
+
+        old_path = Path("/lib/A/track.flac")
+        new_path = Path("/lib/B/track.flac")
+        fs.create_file(str(old_path), contents=b"x" * 50)
+        tag_dict = {"TITLE": "Andante"}
+        cache.put(old_path, tag_dict)
+
+        # Simulate the file move: create new_path, remove old_path.
+        fs.create_file(str(new_path), contents=b"x" * 50)
+        old_path.unlink()
+
+        cache.rekey(old_path, new_path)
+
+        # Old path entry is gone; new path entry is present.
+        assert cache.get(old_path) is None
+        result = cache.get(new_path)
+        assert result == tag_dict
+
+    def test_rekey_noop_when_old_path_not_in_cache(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """TagReadCache.rekey is a no-op when old_path has no cache entry.
+
+        A rekey for a path not in the cache must not raise.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        cache = TagReadCache(sidecar)
+        # Must not raise.
+        cache.rekey(Path("/lib/old.flac"), Path("/lib/new.flac"))
+        assert len(cache) == 0
+
+    def test_rekey_noop_when_new_path_stat_fails(self, fs: FakeFilesystem) -> None:
+        """TagReadCache.rekey is a no-op when new_path does not exist (stat fails).
+
+        The old entry is removed but the new entry is not inserted when stat fails.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        fs.create_dir("/lib")
+        cache = TagReadCache(sidecar)
+
+        old_path = Path("/lib/old.flac")
+        fs.create_file(str(old_path), contents=b"x" * 50)
+        cache.put(old_path, {"TITLE": "Test"})
+
+        # new_path does not exist — stat will fail.
+        cache.rekey(old_path, Path("/lib/nonexistent.flac"))
+
+        # Old entry removed; no new entry inserted.
+        assert len(cache) == 0
+
+    def test_read_tags_cached_hit_does_not_open_file(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """_read_tags_cached returns cached tags without opening the audio file on a hit.
+
+        When (path, size, mtime) matches a cached entry, _read_tags_flac and _read_tags_mp3
+        must never be called.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        fs.create_dir("/lib")
+        cache = TagReadCache(sidecar)
+
+        track = Path("/lib/track.flac")
+        fs.create_file(str(track), contents=b"x" * 50)
+        tag_dict = {"TITLE": "Allegro", "ARTIST": "Karajan"}
+        cache.put(track, tag_dict)
+
+        mock_read_flac = mocker.patch("music_annotator._pipeline_maint._read_tags_flac")
+        mock_read_mp3 = mocker.patch("music_annotator._pipeline_maint._read_tags_mp3")
+
+        result = _read_tags_cached(track, ".flac", cache)
+
+        assert result == tag_dict
+        mock_read_flac.assert_not_called()
+        mock_read_mp3.assert_not_called()
+
+    def test_read_tags_cached_miss_reads_file_and_stores(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """_read_tags_cached reads the audio file on a miss and stores the result in the cache.
+
+        After a miss, the cache is populated so a subsequent get() returns the same dict.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        fs.create_dir("/lib")
+        cache = TagReadCache(sidecar)
+
+        track = Path("/lib/track.flac")
+        fs.create_file(str(track), contents=b"x" * 50)
+        tag_dict = {"TITLE": "Andante"}
+
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", return_value=tag_dict)
+
+        result = _read_tags_cached(track, ".flac", cache)
+
+        assert result == tag_dict
+        # Cache is now populated.
+        assert cache.get(track) == tag_dict
+
+    def test_read_tags_cached_none_cache_always_reads_file(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """_read_tags_cached reads the audio file directly when cache is None.
+
+        When no cache is provided, the file is always opened regardless of previous calls.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        track = Path("/lib/track.flac")
+        fs.create_file(str(track), contents=b"x" * 50)
+        tag_dict = {"TITLE": "Allegro"}
+
+        mock_read = mocker.patch("music_annotator._pipeline_maint._read_tags_flac", return_value=tag_dict)
+
+        result = _read_tags_cached(track, ".flac", None)
+
+        assert result == tag_dict
+        mock_read.assert_called_once_with(track)
+
+    def test_repath_creates_and_saves_cache_sidecar(self, fs: FakeFilesystem) -> None:
+        """repath() creates the tag-read cache sidecar after a successful run.
+
+        After repath completes, the sidecar file must exist under dest_root.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+        )
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        repath(dest_root, yes=True)
+
+        sidecar = dest_root / _TAG_CACHE_FILENAME
+        assert sidecar.exists(), "Cache sidecar must be created after repath"
+
+    def test_repath_cache_hit_skips_file_open(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() uses the cache on a second run: the audio file is not opened again.
+
+        On the first run, tags are read from the file and stored in the cache.  On the second
+        run (dry_run=True to avoid moving), the cache is consulted and the file is not opened.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+        )
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "r1",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        # First run: populates the cache.
+        repath(dest_root, dry_run=True)
+
+        # Second run: the cache is warm; _read_tags_flac must not be called.
+        mock_read = mocker.patch("music_annotator._pipeline_maint._read_tags_flac")
+        repath(dest_root, dry_run=True)
+        mock_read.assert_not_called()
+
+    def test_move_verify_journal_rekeys_cache(self, fs: FakeFilesystem) -> None:
+        """_move_verify_journal re-keys the cache entry after a successful move.
+
+        After the move, get(new_path) returns the tag dict and get(old_path) returns None.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            cwp_composer_lastnames="Beethoven",
+            cwp_work_top="Symphony No. 5",
+            recording_date="2020",
+            cwp_movt_num="1",
+            movementtotal="1",
+            cwp_part_levels="1",
+            title="Allegro con brio",
+            artist="Karajan",
+        )
+        src = dest_root / "A" / "track.flac"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(src, tags)
+
+        dest = dest_root / "B" / "track.flac"
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("", encoding="utf-8")
+        journal = read_journal(journal_path)
+
+        sidecar = dest_root / _TAG_CACHE_FILENAME
+        cache = TagReadCache(sidecar)
+        tag_dict = {"TITLE": "Allegro"}
+        cache.put(src, tag_dict)
+
+        _move_verify_journal(
+            [(src, dest)],
+            journal=journal,
+            journal_path=journal_path,
+            action="repathed",
+            dest_root=dest_root,
+            now=datetime.datetime.now(datetime.UTC),
+            cache=cache,
+        )
+
+        # After the move, the cache entry is at the new path.
+        assert cache.get(src) is None
+        assert cache.get(dest) == tag_dict
+
+    def test_cache_key_invalidated_on_size_change(self, fs: FakeFilesystem) -> None:
+        """Cache entry is invalidated when the file size changes.
+
+        Writing different content to the file changes st_size, causing a cache miss.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        fs.create_dir("/lib")
+        cache = TagReadCache(sidecar)
+
+        track = Path("/lib/track.flac")
+        fs.create_file(str(track), contents=b"x" * 50)
+        cache.put(track, {"TITLE": "Original"})
+
+        # Change the file size.
+        track.write_bytes(b"y" * 200)
+
+        assert cache.get(track) is None
+
+    def test_cache_key_invalidated_on_mtime_change(self, fs: FakeFilesystem) -> None:
+        """Cache entry is invalidated when the file mtime changes.
+
+        Touching the file (same size, different mtime) causes a cache miss.
+
+        :param fs: pyfakefs fixture.
+        """
+        sidecar = Path("/lib/.music_annotator_tag_cache.json")
+        fs.create_dir("/lib")
+        cache = TagReadCache(sidecar)
+
+        track = Path("/lib/track.flac")
+        content = b"x" * 50
+        fs.create_file(str(track), contents=content)
+        cache.put(track, {"TITLE": "Original"})
+
+        # Change mtime without changing size.
+        time.sleep(0.01)
+        os.utime(str(track), (os.stat(str(track)).st_atime + 1, os.stat(str(track)).st_mtime + 1))
+
+        assert cache.get(track) is None
