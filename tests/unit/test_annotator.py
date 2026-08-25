@@ -4863,7 +4863,7 @@ class TestBoxSetPerformersComponent:
     4. **Pop/jazz (ARTIST == ALBUMARTIST ≠ ALBUM)**: the performer name must survive to the path.
     """
 
-    def test_boxset_with_cea_tags_renders_real_performer(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+    def test_boxset_with_cea_tags_renders_real_performer(self, fs: FakeFilesystem) -> None:
         """Box-set track with CEA_CONDUCTORS/CEA_ENSEMBLES renders <composer> - <conductor; ensemble>.
 
         KAT 1: the embedded CEA_CONDUCTORS and CEA_ENSEMBLES tags carry the real performers.
@@ -4871,20 +4871,13 @@ class TestBoxSetPerformersComponent:
         ARTIST tag (which carries the edition title "Complete Mozart Edition").
 
         The path must equal "Mozart - Sir Neville Marriner; Academy of St Martin in the Fields"
-        and must not contain the edition title.
+        and must not contain the edition title.  No MusicBrainz network calls are made — the
+        canonical name-form is the MB artist ``name`` field (NORM-2 as revised).
 
         :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-
-        # fetch_artist_aliases is called for the conductor (with a real MBID).
-        # The ensemble has no MBID (per-track ensemble MBID cannot be reliably derived from
-        # embedded tags — see _hydrate_performer_lists), so fetch_artist_aliases is not called
-        # for it; _canonical_name falls back to entry.name directly.
-        marriner = MBArtist.model_validate({"id": "marriner-mbid", "name": "Sir Neville Marriner"})
-        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=marriner)
 
         tags = TrackTags(
             title="I. Allegro",
@@ -5080,81 +5073,143 @@ class TestBoxSetPerformersComponent:
 
 
 class TestCanonicalArtistForm:
-    """Tests for canonical_artist_form — primary-alias selection per STYLEGUIDE 3.1/NORM-2.
+    """Tests for canonical_artist_form — MB artist name field per STYLEGUIDE 3.1/NORM-2.
 
-    The resolver is total: it always returns a non-empty string when the artist has a name.
-    It selects the primary-flagged MB alias (preferring substantive name-form types) and falls
-    back to ``MBArtist.name`` when no primary alias exists.
+    The canonical form is the MB artist ``name`` field verbatim.  Aliases are evidence-only and
+    are never dereferenced in path computation (NORM-2 as revised).  The resolver is total: it
+    always returns a non-empty string when the artist has a name.
+
+    KAT: determinism under alias-list reordering — the result depends only on ``artist.name``
+    and is unaffected by the order or content of ``alias_list``.
     """
 
-    def test_primary_native_latin_alias_preferred_over_display_name(self) -> None:
-        """An artist with a primary-flagged native-Latin alias resolves to the alias, not the display name.
+    def test_returns_name_field_verbatim(self) -> None:
+        """canonical_artist_form returns the MB artist name field, not any alias.
 
-        KAT (a): "Wiener Philharmoniker" is the primary alias; "Vienna Philharmonic" is the display
-        name.  The resolver must return the alias.
+        KAT (name-field): the MB ``name`` field is the canonical form regardless of what aliases
+        are present.  Even when a primary-flagged alias exists, the function returns ``artist.name``.
         """
         artist = MBArtist.model_validate(
             {
                 "id": "a1",
-                "name": "Vienna Philharmonic",
+                "name": "Wiener Philharmoniker",
                 "alias-list": [
-                    {"alias": "Wiener Philharmoniker", "type": "Artist name", "primary": "primary", "locale": "de"},
+                    {"alias": "Vienna Philharmonic", "type": "Artist name", "primary": "primary", "locale": "en"},
                 ],
             }
         )
         assert canonical_artist_form(artist) == "Wiener Philharmoniker"
 
-    def test_no_alias_falls_back_to_name(self) -> None:
-        """An artist with no aliases resolves to the display name.
+    def test_no_alias_returns_name(self) -> None:
+        """An artist with no aliases returns the display name.
 
-        KAT (b): fallback proof — when alias_list is empty, artist.name is returned.
+        KAT (no-alias): when alias_list is empty, artist.name is returned.
         """
         artist = MBArtist.model_validate({"id": "a2", "name": "Herbert von Karajan"})
         assert canonical_artist_form(artist) == "Herbert von Karajan"
 
-    def test_non_primary_alias_falls_back_to_name(self) -> None:
-        """An artist with only a non-primary alias resolves to the display name.
+    def test_determinism_under_alias_reordering(self) -> None:
+        """Same artist with shuffled alias list returns the same canonical name.
 
-        KAT (c): primary-only proof — a non-primary alias (primary is None) must not be selected;
-        the resolver falls back to artist.name.
+        KAT (determinism): the result depends only on ``artist.name``; alias-list reordering
+        has no effect.  Verified by constructing two artists with identical name but different
+        alias orderings and asserting equal results.
+        """
+        aliases_order_a = [
+            {"alias": "Vienna Philharmonic", "type": "Artist name", "primary": "primary", "locale": "en"},
+            {"alias": "Wiener Phil.", "primary": "primary", "locale": "de"},
+        ]
+        aliases_order_b = [
+            {"alias": "Wiener Phil.", "primary": "primary", "locale": "de"},
+            {"alias": "Vienna Philharmonic", "type": "Artist name", "primary": "primary", "locale": "en"},
+        ]
+        artist_a = MBArtist.model_validate({"id": "vp", "name": "Wiener Philharmoniker", "alias-list": aliases_order_a})
+        artist_b = MBArtist.model_validate({"id": "vp", "name": "Wiener Philharmoniker", "alias-list": aliases_order_b})
+        assert canonical_artist_form(artist_a) == canonical_artist_form(artist_b) == "Wiener Philharmoniker"
+
+    def test_locale_rich_ozawa(self) -> None:
+        """Ozawa: MB name field is the native Japanese form 小澤征爾.
+
+        KAT (locale-rich, Ozawa): the MB ``name`` field carries the native script form; the
+        function returns it verbatim regardless of any Latin-script aliases.
         """
         artist = MBArtist.model_validate(
             {
-                "id": "a3",
-                "name": "Berlin Philharmonic",
+                "id": "ozawa-id",
+                "name": "小澤征爾",
                 "alias-list": [
-                    {"alias": "Berliner Philharmoniker", "type": "Artist name", "locale": "de"},
+                    {"alias": "Seiji Ozawa", "type": "Artist name", "primary": "primary", "locale": "en"},
                 ],
             }
         )
-        assert canonical_artist_form(artist) == "Berlin Philharmonic"
+        assert canonical_artist_form(artist) == "小澤征爾"
 
-    def test_typed_primary_preferred_over_untyped_primary(self) -> None:
-        """When multiple primary aliases exist, a typed one (Artist name) is preferred over an untyped one."""
+    def test_locale_rich_stravinsky(self) -> None:
+        """Stravinsky: MB name field is the native Cyrillic form Игорь Фёдорович Стравинский.
+
+        KAT (locale-rich, Stravinsky): patronymic-full native form accepted as-is.
+        """
         artist = MBArtist.model_validate(
             {
-                "id": "a4",
-                "name": "Some Orchestra",
+                "id": "stravinsky-id",
+                "name": "Игорь Фёдорович Стравинский",
                 "alias-list": [
-                    {"alias": "Untyped Primary", "primary": "primary", "locale": "en"},
-                    {"alias": "Typed Primary", "type": "Artist name", "primary": "primary", "locale": "de"},
+                    {"alias": "Igor Stravinsky", "type": "Artist name", "primary": "primary", "locale": "en"},
                 ],
             }
         )
-        assert canonical_artist_form(artist) == "Typed Primary"
+        assert canonical_artist_form(artist) == "Игорь Фёдорович Стравинский"
 
-    def test_untyped_primary_used_when_no_typed_primary(self) -> None:
-        """When only an untyped primary alias exists, it is returned (any primary beats no primary)."""
+    def test_locale_rich_richter(self) -> None:
+        """Richter: MB name field is the native-Latin form Sviatoslav Richter.
+
+        KAT (locale-rich, Richter): when the MB name is already Latin-script, it is returned
+        verbatim.
+        """
+        artist = MBArtist.model_validate({"id": "richter-id", "name": "Sviatoslav Richter"})
+        assert canonical_artist_form(artist) == "Sviatoslav Richter"
+
+    def test_locale_rich_jarvi(self) -> None:
+        """Järvi: MB name field is the native-Latin form Neeme Järvi.
+
+        KAT (locale-rich, Järvi): diacritics in the MB name field are preserved verbatim.
+        """
+        artist = MBArtist.model_validate({"id": "jarvi-id", "name": "Neeme Järvi"})
+        assert canonical_artist_form(artist) == "Neeme Järvi"
+
+    def test_locale_rich_ashkenazy(self) -> None:
+        """Ashkenazy: MB name field is the Latin career name Vladimir Ashkenazy (no Russian primary alias).
+
+        KAT (locale-rich, Ashkenazy): the fallback shape — MB's editors chose the Latin career
+        name; no Russian primary alias exists.  The function returns the MB name field verbatim.
+        """
+        artist = MBArtist.model_validate({"id": "ashkenazy-id", "name": "Vladimir Ashkenazy"})
+        assert canonical_artist_form(artist) == "Vladimir Ashkenazy"
+
+    def test_locale_rich_wiener_philharmoniker(self) -> None:
+        """Wiener Philharmoniker: MB name field is the native German form.
+
+        KAT (locale-rich, WPh): the MB ``name`` field carries the native form; any English-language
+        alias is ignored.
+        """
         artist = MBArtist.model_validate(
             {
-                "id": "a5",
-                "name": "Some Ensemble",
+                "id": "wph-id",
+                "name": "Wiener Philharmoniker",
                 "alias-list": [
-                    {"alias": "Primary Alias", "primary": "primary", "locale": "en"},
+                    {"alias": "Vienna Philharmonic Orchestra", "type": "Artist name", "primary": "primary", "locale": "en"},
                 ],
             }
         )
-        assert canonical_artist_form(artist) == "Primary Alias"
+        assert canonical_artist_form(artist) == "Wiener Philharmoniker"
+
+    def test_empty_name_returns_empty_string(self) -> None:
+        """A default-constructed MBArtist with empty name returns empty string.
+
+        KAT (total): the function is total and never raises; an empty name yields an empty string.
+        """
+        artist = MBArtist()
+        assert canonical_artist_form(artist) == ""
 
 
 # ---------------------------------------------------------------------------
@@ -5165,16 +5220,18 @@ class TestCanonicalArtistForm:
 class TestBuildDestPathCanonicalPerformerForms:
     """KAT (C-CANON): build_dest_path renders canonical entity name-forms in the performers component.
 
-    The compact path projection uses the primary-flagged MB alias (per STYLEGUIDE 3.1/NORM-2) for
-    each conductor and ensemble, not the as-credited display name.  Preserved tag surfaces
-    (``ARTIST``, ``ALBUMARTIST``) are unaffected — they remain as-credited (D-A7 surface split).
+    The compact path projection uses the MB artist ``name`` field (per STYLEGUIDE 3.1/NORM-2 as
+    revised) for each conductor and ensemble — aliases are evidence-only and are never dereferenced
+    in path computation.  No MusicBrainz network calls are made; the path is derived from embedded
+    tags alone.  Preserved tag surfaces (``ARTIST``, ``ALBUMARTIST``) are unaffected — they remain
+    as-credited (D-A7 surface split).
 
     Two behavioural witnesses:
 
-    1. **Alias-present**: an ensemble whose hydrated ``MBArtist`` has a primary native-Latin alias
-       — the path performers component carries the alias form, not the anglicised display name.
-    2. **Alias-absent (no-regression)**: an ensemble with no aliases — the path carries the
-       as-credited display name unchanged, proving the resolver does not corrupt the no-alias case.
+    1. **Native-script name**: an ensemble whose ``ArtistEntry.name`` is the native form
+       "Wiener Philharmoniker" — the path carries that name verbatim.
+    2. **Latin-script name**: an ensemble whose ``ArtistEntry.name`` is "Berlin Philharmonic"
+       — the path carries that name verbatim.
 
     Both witnesses also assert that ``ARTIST`` / ``ALBUMARTIST`` in the tags are unchanged,
     freezing the D-A7 surface split.
@@ -5184,8 +5241,8 @@ class TestBuildDestPathCanonicalPerformerForms:
         self,
         *,
         ensemble_entry: ArtistEntry,
-        artist: str = "Vienna Philharmonic",
-        albumartist: str = "Vienna Philharmonic",
+        artist: str = "Wiener Philharmoniker",
+        albumartist: str = "Wiener Philharmoniker",
     ) -> TrackTags:
         """Build a minimal classical TrackTags with one album-level ensemble.
 
@@ -5210,35 +5267,23 @@ class TestBuildDestPathCanonicalPerformerForms:
             cea_album_ensembles_list=[ensemble_entry],
         )
 
-    def test_path_carries_alias_form_when_primary_alias_present(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """Path performers component carries the primary-flagged MB alias, not the display name.
+    def test_path_carries_native_name_form(self, fs: FakeFilesystem) -> None:
+        """Path performers component carries the MB artist name field verbatim.
 
-        KAT (alias-present): the ensemble "Vienna Philharmonic" has a primary native-Latin alias
-        "Wiener Philharmoniker".  After hydration via ``fetch_artist_aliases``, the resolver selects
-        the alias.  The path must contain "Wiener Philharmoniker", not "Vienna Philharmonic".
+        KAT (native-name): the ensemble ArtistEntry carries the native form "Wiener Philharmoniker"
+        as its ``name`` field.  The path must contain "Wiener Philharmoniker" — no network call is
+        made and no alias lookup is performed.
 
         :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        hydrated = MBArtist.model_validate(
-            {
-                "id": "vp-1",
-                "name": "Vienna Philharmonic",
-                "alias-list": [
-                    {"alias": "Wiener Philharmoniker", "type": "Artist name", "primary": "primary", "locale": "de"},
-                ],
-            }
-        )
-        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=hydrated)
-
-        ensemble_entry = ArtistEntry(name="Vienna Philharmonic", sort="Vienna Philharmonic", mbid="vp-1")
+        ensemble_entry = ArtistEntry(name="Wiener Philharmoniker", sort="Wiener Philharmoniker", mbid="vp-1")
         tags = self._make_classical_tags(
             ensemble_entry=ensemble_entry,
-            artist="Vienna Philharmonic",
-            albumartist="Vienna Philharmonic",
+            artist="Wiener Philharmoniker",
+            albumartist="Wiener Philharmoniker",
         )
         result = music_annotator.build_dest_path(
             dest_root,
@@ -5247,31 +5292,22 @@ class TestBuildDestPathCanonicalPerformerForms:
             tags,
         )
         path_str = str(result)
-        # Path performers component must carry the canonical alias form.
-        assert "Wiener Philharmoniker" in path_str, f"Expected canonical alias 'Wiener Philharmoniker' in path '{path_str}'"
-        # The anglicised display name must not appear in the path.
-        assert "Vienna Philharmonic" not in path_str, (
-            f"Display name 'Vienna Philharmonic' must not appear in path '{path_str}' (alias should replace it)"
-        )
+        # Path performers component must carry the MB name field verbatim.
+        assert "Wiener Philharmoniker" in path_str, f"Expected 'Wiener Philharmoniker' in path '{path_str}'"
         # Preserved tag surfaces are unchanged — ARTIST and ALBUMARTIST stay as-credited (D-A7).
-        assert tags.artist == "Vienna Philharmonic", "ARTIST tag must remain as-credited"
-        assert tags.albumartist == "Vienna Philharmonic", "ALBUMARTIST tag must remain as-credited"
+        assert tags.artist == "Wiener Philharmoniker", "ARTIST tag must remain as-credited"
+        assert tags.albumartist == "Wiener Philharmoniker", "ALBUMARTIST tag must remain as-credited"
 
-    def test_path_unchanged_when_no_primary_alias(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """Path performers component is unchanged when the ensemble has no primary alias.
+    def test_path_carries_latin_name_form(self, fs: FakeFilesystem) -> None:
+        """Path performers component carries the MB artist name field verbatim for Latin-script names.
 
-        KAT (alias-absent, no-regression): the ensemble "Berlin Philharmonic" has no primary alias.
-        The resolver falls back to ``MBArtist.name``.  The path must carry "Berlin Philharmonic"
-        unchanged, proving the canonical-form wiring does not corrupt the no-alias case.
+        KAT (latin-name): the ensemble ArtistEntry carries "Berlin Philharmonic" as its ``name``
+        field.  The path must carry "Berlin Philharmonic" unchanged.
 
         :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-
-        hydrated = MBArtist.model_validate({"id": "bp-1", "name": "Berlin Philharmonic"})
-        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=hydrated)
 
         ensemble_entry = ArtistEntry(name="Berlin Philharmonic", sort="Berlin Philharmonic", mbid="bp-1")
         tags = self._make_classical_tags(
@@ -5286,10 +5322,8 @@ class TestBuildDestPathCanonicalPerformerForms:
             tags,
         )
         path_str = str(result)
-        # No alias → resolver falls back to MBArtist.name → path unchanged from as-credited form.
-        assert "Berlin Philharmonic" in path_str, (
-            f"Expected as-credited name 'Berlin Philharmonic' in path '{path_str}' (no-alias fallback)"
-        )
+        # Path carries the MB name field verbatim.
+        assert "Berlin Philharmonic" in path_str, f"Expected 'Berlin Philharmonic' in path '{path_str}'"
         # Preserved tag surfaces are unchanged — ARTIST and ALBUMARTIST stay as-credited (D-A7).
         assert tags.artist == "Berlin Philharmonic", "ARTIST tag must remain as-credited"
         assert tags.albumartist == "Berlin Philharmonic", "ALBUMARTIST tag must remain as-credited"

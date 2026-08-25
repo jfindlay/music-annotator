@@ -1811,8 +1811,8 @@ class TestMain:
     def test_preflight_init_mb_called_with_user_agent(self, mocker: MockerFixture) -> None:
         """main() preflight calls init_mb with the assembled user-agent string before compose_preflight_report.
 
-        The unify pass calls fetch_artist_aliases which requires the MusicBrainz user-agent to be
-        initialised.  Verifies that init_mb is called with the combined app+email string before
+        The MusicBrainz user-agent must be initialised before any MB API calls (ingest still
+        needs it).  Verifies that init_mb is called with the combined app+email string before
         compose_preflight_report is invoked.
 
         :param mocker: pytest-mock fixture.
@@ -1870,12 +1870,11 @@ class TestMain:
     def test_unify_init_mb_called_before_unify(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """main() unify calls init_mb with the assembled user-agent string before music_annotator.unify.
 
-        The unify pass dereferences each embedded artist MBID for its stable, primary-flagged
-        canonical name-form via fetch_artist_aliases, which requires the MusicBrainz user-agent
-        to be initialised.  Verifies that init_mb is called once with the combined app+email
-        string before unify is invoked, and that the trailing space is stripped when email is
-        empty.  Also verifies that unify receives dest_root, yes, and dry_run forwarded correctly
-        (closes the pre-existing coverage gap on the case "unify": dispatch arm).
+        The MusicBrainz user-agent must be initialised before any MB API calls (ingest still
+        needs it).  Verifies that init_mb is called once with the combined app+email string before
+        unify is invoked, and that the trailing space is stripped when email is empty.  Also
+        verifies that unify receives dest_root, yes, and dry_run forwarded correctly (closes the
+        pre-existing coverage gap on the case "unify": dispatch arm).
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.

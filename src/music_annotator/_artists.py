@@ -7,7 +7,7 @@ MusicBrainz API.
 
 from __future__ import annotations
 
-from music_annotator.models import MBAlias, MBArtist, MBArtistCredit
+from music_annotator.models import MBArtist, MBArtistCredit
 
 #: Substrings identifying orchestral ensembles (from CEA_ORCHESTRAS).
 ORCHESTRA_STRINGS: frozenset[str] = frozenset(
@@ -167,41 +167,24 @@ def last_name(sort_name: str) -> str:
     return sort_name.split(",")[0].strip()
 
 
-#: Alias type strings that represent the entity's own name (native or legal form), as opposed to
-#: search hints or transliterations.  Used by :func:`canonical_artist_form` to prefer substantive
-#: name-form aliases over search-optimisation entries.
-_CANONICAL_ALIAS_TYPES: frozenset[str] = frozenset({"Artist name", "Legal name"})
-
-
 def canonical_artist_form(artist: MBArtist) -> str:
     """Return the canonical name-form for an artist per STYLEGUIDE 3.1/NORM-2.
 
-    Selects the entity's canonical name-form from MB's own primary-flagged aliases (authority-deference
-    posture: the resolved form is always a form MB itself asserts — never a locally-authored form,
-    editorial table, or new scholarly romanisation).
+    Returns the MB artist ``name`` field verbatim.  Aliases are evidence-only and are never
+    dereferenced in path computation (NORM-2 as revised): the MB ``name`` field is already the
+    native/preferred form for every observed artist, including the fallback shape (e.g. Ashkenazy
+    has no Russian primary alias — MB's editors already chose the Latin career name).  Patronymic-full
+    native forms are accepted as-is; fallbacks are inherited from MB's own editorial judgement.
 
-    Selection logic:
-
-    1. Collect all aliases where ``primary == "primary"``.
-    2. Among those, prefer aliases whose ``type`` is ``"Artist name"`` or ``"Legal name"`` (substantive
-       name-form entries, as opposed to search hints or transliterations).
-    3. If no typed primary alias exists, fall back to any primary alias regardless of type.
-    4. If no primary alias exists at all, fall back to ``artist.name`` (the MB display name).
-
-    The resolver is total: it never raises and always returns a non-empty string when ``artist.name``
-    is non-empty.  When both ``alias_list`` and ``name`` are empty (a default-constructed
+    The function is total: it never raises and always returns a non-empty string when
+    ``artist.name`` is non-empty.  When ``name`` is empty (a default-constructed
     :class:`~music_annotator.models.MBArtist`), it returns ``""`` — callers that need a guaranteed
     non-empty string should ensure the artist has a name.
 
-    :param artist: The :class:`~music_annotator.models.MBArtist` entity to resolve.
-    :returns: The canonical name-form string — a primary-flagged MB alias when one exists, otherwise
-        ``artist.name``.
-    """
-    primary_aliases: list[MBAlias] = [a for a in artist.alias_list if a.primary == "primary"]
-    if not primary_aliases:
-        return artist.name
+    Deterministic under any alias-list reordering: the result depends only on the scalar
+    ``artist.name`` field and is unaffected by the order or content of ``alias_list``.
 
-    # Prefer a substantive name-form alias (Artist name / Legal name) over other primary types.
-    typed = [a for a in primary_aliases if a.type in _CANONICAL_ALIAS_TYPES]
-    chosen = typed[0] if typed else primary_aliases[0]
-    return chosen.name or artist.name
+    :param artist: The :class:`~music_annotator.models.MBArtist` entity to resolve.
+    :returns: ``artist.name`` verbatim.
+    """
+    return artist.name

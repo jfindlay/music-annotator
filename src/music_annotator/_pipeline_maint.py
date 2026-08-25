@@ -165,19 +165,19 @@ def _hydrate_performer_lists(tags: TrackTags, file_dict: dict[str, str]) -> None
     empty and the path falls back to the raw ``CEA_ENSEMBLE_NAMES`` / ``ARTIST`` string — bypassing
     the canonical name-form resolver.
 
-    This function reconstructs the lists from the embedded string tags and MBID tags so that
-    :func:`~music_annotator._tags.build_dest_path` can call
-    :func:`~music_annotator._mb_api.fetch_artist_aliases` and
-    :func:`~music_annotator._artists.canonical_artist_form` on each entry, rendering the
-    primary-flagged MB alias (per STYLEGUIDE 3.1/NORM-2) in the compact path projection.
+    This function reconstructs the lists from the embedded string tags so that
+    :func:`~music_annotator._tags.build_dest_path` can render the canonical name-form for each
+    performer entry.  The canonical name-form is the MB artist ``name`` field (NORM-2 as revised);
+    no MusicBrainz network calls are made — the maintenance path (repath/regroup/unify) is
+    genuinely offline and operates on embedded tags alone.
 
-    MBID assignment strategy:
+    MBID assignment strategy (retained for provenance and future use; MBIDs are no longer
+    needed for canonical-name resolution):
 
     * **Album-level conductors**: ``MUSICBRAINZ_CONDUCTORID`` (slash-separated) holds the MBIDs
       of all per-track conductors.  When the count of album conductor names (from
       ``CEA_ALBUM_CONDUCTORS``) equals the count of conductor MBIDs, the two sequences are zipped
-      positionally.  Otherwise entries are created without MBIDs and the resolver falls back to the
-      as-credited name.
+      positionally.  Otherwise entries are created without MBIDs.
     * **Album-level ensembles**: ``MUSICBRAINZ_ALBUMARTISTID`` (slash-separated) holds the MBIDs
       of all album artists (from ``release.artist_credit``).  Conductor MBIDs are subtracted
       (order-preserving) to isolate ensemble MBIDs.  When the count of album ensemble names (from
@@ -188,10 +188,7 @@ def _hydrate_performer_lists(tags: TrackTags, file_dict: dict[str, str]) -> None
     * **Per-track ensembles** (``cea_ensembles_list``): entries are always created **without
       MBIDs**.  ``MUSICBRAINZ_ALBUMARTISTID`` is the release's artist-credit MBID pool; for
       box-sets and composer-credited releases this is the edition/collection entity's MBID, not
-      the ensemble's MBID.  Assigning the wrong MBID causes the canonical-form resolver to fetch
-      the edition entity's aliases and return the edition title instead of the ensemble name.
-      Without an MBID the resolver falls back to ``entry.name`` (the as-credited name from
-      ``CEA_ENSEMBLES``), which is always correct.
+      the ensemble's MBID.
 
     Mutates ``tags`` in-place; returns ``None``.  The function is idempotent: calling it on a
     ``TrackTags`` that already has non-empty lists is a no-op (the lists are only set when they
@@ -223,10 +220,9 @@ def _hydrate_performer_lists(tags: TrackTags, file_dict: dict[str, str]) -> None
     def _make_entries(names: list[str], sorts: list[str], mbids: list[str]) -> list[ArtistEntry]:
         """Build :class:`~music_annotator.models.ArtistEntry` objects from parallel name/sort/MBID lists.
 
-        When ``mbids`` has the same length as ``names``, each entry receives its MBID so that
-        :func:`~music_annotator._tags.build_dest_path` can hydrate it via
-        :func:`~music_annotator._mb_api.fetch_artist_aliases`.  When lengths differ, entries are
-        created without MBIDs and the canonical-form resolver falls back to the as-credited name.
+        When ``mbids`` has the same length as ``names``, each entry receives its MBID for provenance.
+        When lengths differ, entries are created without MBIDs.  The canonical name-form resolver
+        uses ``entry.name`` directly (NORM-2 as revised — no network fetch required).
 
         :param names: Display names (from ``CEA_ALBUM_CONDUCTORS`` etc.).
         :param sorts: Sort names (from ``CEA_ALBUM_CONDUCTORS_SORT`` etc.); padded with ``""`` when

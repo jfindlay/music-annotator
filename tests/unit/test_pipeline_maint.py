@@ -62,7 +62,6 @@ from music_annotator.models import (
     DryRunEntry,
     DryRunPlan,
     JournalCapacity,
-    MBArtist,
     MBRelease,
     MBTrack,
     PreflightReport,
@@ -6865,13 +6864,17 @@ class TestHydratePerformerLists:
     :func:`~music_annotator._pipeline_maint._hydrate_performer_lists`, the repath path falls back
     to the raw ``CEA_ENSEMBLE_NAMES`` / ``ARTIST`` string and cannot render canonical name-forms.
 
+    The canonical name-form is the MB artist ``name`` field (NORM-2 as revised): aliases are
+    evidence-only and are never dereferenced in path computation.  The maintenance path
+    (repath/regroup/unify) is genuinely offline — no MusicBrainz network calls are made.
+
     Two behavioural witnesses:
 
-    1. **Alias-present (ingest/repath parity)**: an ensemble whose hydrated ``MBArtist`` has a
-       primary native-Latin alias — after hydration, :func:`~music_annotator._tags.build_dest_path`
-       renders the alias form in the path, matching the ingest render byte-for-byte.
-    2. **Alias-absent (no-regression)**: an ensemble with no primary alias — the path carries the
-       as-credited display name unchanged, proving the resolver does not corrupt the no-alias case.
+    1. **Native-name (ingest/repath parity)**: an ensemble whose ``ArtistEntry.name`` is the
+       native form "Wiener Philharmoniker" — the path carries that name verbatim, matching the
+       ingest render byte-for-byte.
+    2. **Latin-name (no-regression)**: an ensemble whose ``ArtistEntry.name`` is "Berlin
+       Philharmonic" — the path carries that name verbatim.
 
     Both witnesses also verify that the ``ARTIST`` / ``ALBUMARTIST`` preserved tag surfaces are
     unchanged (the compact-path-only scope of canonical-form rendering).
@@ -6945,36 +6948,22 @@ class TestHydratePerformerLists:
         assert len(tags.cea_album_ensembles_list) == 1
         assert tags.cea_album_ensembles_list[0].mbid == "bp-1"
 
-    def test_repath_renders_canonical_alias_form(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """Repath path renders the primary-flagged MB alias, not the as-credited display name.
+    def test_repath_renders_canonical_name_form(self, fs: FakeFilesystem) -> None:
+        """Repath path renders the MB artist name field verbatim — no network calls made.
 
-        KAT (ingest/repath parity, alias-present): the ensemble "Vienna Philharmonic" has a
-        primary native-Latin alias "Wiener Philharmoniker".  After :func:`_hydrate_performer_lists`
-        reconstructs the ``cea_album_ensembles_list`` with the ensemble MBID, and
-        :func:`~music_annotator._tags.build_dest_path` calls
-        :func:`~music_annotator._mb_api.fetch_artist_aliases` on that MBID, the resolver selects
-        the alias.  The path must contain "Wiener Philharmoniker", not "Vienna Philharmonic" —
-        matching the ingest render byte-for-byte.
+        KAT (ingest/repath parity, native-name): the ensemble ArtistEntry carries the native form
+        "Wiener Philharmoniker" as its ``name`` field.  After :func:`_hydrate_performer_lists`
+        reconstructs the ``cea_album_ensembles_list``, :func:`~music_annotator._tags.build_dest_path`
+        uses ``entry.name`` directly (NORM-2 as revised — no MusicBrainz network calls).  The path
+        must contain "Wiener Philharmoniker" — matching the ingest render byte-for-byte.
 
         Preserved tag surfaces (``ARTIST``, ``ALBUMARTIST``) are asserted unchanged, freezing the
         compact-path-only scope of canonical-form rendering.
 
         :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-
-        hydrated = MBArtist.model_validate(
-            {
-                "id": "vp-1",
-                "name": "Vienna Philharmonic",
-                "alias-list": [
-                    {"alias": "Wiener Philharmoniker", "type": "Artist name", "primary": "primary", "locale": "de"},
-                ],
-            }
-        )
-        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=hydrated)
 
         tags = TrackTags(
             title="I. Allegro",
@@ -6984,12 +6973,12 @@ class TestHydratePerformerLists:
             cwp_workid_top="w1",
             cwp_composer_lastnames="Beethoven",
             cwp_worktype_genres_top="Classical",
-            artist="Vienna Philharmonic",
-            albumartist="Vienna Philharmonic",
+            artist="Wiener Philharmoniker",
+            albumartist="Wiener Philharmoniker",
         )
         file_dict = {
-            "CEA_ALBUM_ENSEMBLES": "Vienna Philharmonic",
-            "CEA_ALBUM_ENSEMBLES_SORT": "Vienna Philharmonic",
+            "CEA_ALBUM_ENSEMBLES": "Wiener Philharmoniker",
+            "CEA_ALBUM_ENSEMBLES_SORT": "Wiener Philharmoniker",
             "MUSICBRAINZ_ALBUMARTISTID": "vp-1",
             "MUSICBRAINZ_CONDUCTORID": "",
         }
@@ -7005,33 +6994,23 @@ class TestHydratePerformerLists:
         )
         path_str = str(result)
 
-        # Path performers component must carry the canonical alias form.
-        assert "Wiener Philharmoniker" in path_str, f"Expected canonical alias 'Wiener Philharmoniker' in path '{path_str}'"
-        # The anglicised display name must not appear in the path.
-        assert "Vienna Philharmonic" not in path_str, (
-            f"Display name 'Vienna Philharmonic' must not appear in path '{path_str}' (alias should replace it)"
-        )
+        # Path performers component must carry the MB name field verbatim.
+        assert "Wiener Philharmoniker" in path_str, f"Expected 'Wiener Philharmoniker' in path '{path_str}'"
         # Preserved tag surfaces are unchanged — ARTIST and ALBUMARTIST stay as-credited.
-        assert tags.artist == "Vienna Philharmonic", "ARTIST tag must remain as-credited"
-        assert tags.albumartist == "Vienna Philharmonic", "ALBUMARTIST tag must remain as-credited"
+        assert tags.artist == "Wiener Philharmoniker", "ARTIST tag must remain as-credited"
+        assert tags.albumartist == "Wiener Philharmoniker", "ALBUMARTIST tag must remain as-credited"
 
-    def test_repath_unchanged_when_no_primary_alias(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """Repath path is unchanged when the ensemble has no primary alias.
+    def test_repath_carries_name_form_verbatim(self, fs: FakeFilesystem) -> None:
+        """Repath path carries the MB artist name field verbatim for any name form.
 
-        KAT (alias-absent, no-regression): the ensemble "Berlin Philharmonic" has no primary alias.
-        After :func:`_hydrate_performer_lists` reconstructs the ``cea_album_ensembles_list`` with
-        the ensemble MBID, :func:`~music_annotator._tags.build_dest_path` calls
-        :func:`~music_annotator._mb_api.fetch_artist_aliases` on that MBID and the resolver falls
-        back to ``MBArtist.name``.  The path must carry "Berlin Philharmonic" unchanged.
+        KAT (name-form verbatim): the ensemble ArtistEntry carries "Berlin Philharmonic" as its
+        ``name`` field.  The path must carry "Berlin Philharmonic" unchanged — no network call is
+        made.
 
         :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-
-        hydrated = MBArtist.model_validate({"id": "bp-1", "name": "Berlin Philharmonic"})
-        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=hydrated)
 
         tags = TrackTags(
             title="I. Allegro",
@@ -7062,10 +7041,8 @@ class TestHydratePerformerLists:
         )
         path_str = str(result)
 
-        # No alias → resolver falls back to MBArtist.name → path unchanged from as-credited form.
-        assert "Berlin Philharmonic" in path_str, (
-            f"Expected as-credited name 'Berlin Philharmonic' in path '{path_str}' (no-alias fallback)"
-        )
+        # Path carries the MB name field verbatim.
+        assert "Berlin Philharmonic" in path_str, f"Expected 'Berlin Philharmonic' in path '{path_str}'"
         # Preserved tag surfaces are unchanged.
         assert tags.artist == "Berlin Philharmonic", "ARTIST tag must remain as-credited"
         assert tags.albumartist == "Berlin Philharmonic", "ALBUMARTIST tag must remain as-credited"
@@ -7198,28 +7175,22 @@ class TestHydratePerformerLists:
             f"Per-track ensemble entry must have mbid='' to prevent edition-title resolution, got {entry.mbid!r}"
         )
 
-    def test_hydrate_boxset_repath_renders_real_ensemble_name(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+    def test_hydrate_boxset_repath_renders_real_ensemble_name(self, fs: FakeFilesystem) -> None:
         """Box-set repath renders the real ensemble name, not the edition entity's name.
 
         KAT: when MUSICBRAINZ_ALBUMARTISTID is the edition/collection entity's MBID (not the
         ensemble's MBID), the per-track ensemble entry must be created without an MBID so that
-        _canonical_name returns entry.name (the as-credited ensemble name) rather than fetching
-        the edition entity's aliases and returning the edition title.
+        ``entry.name`` (the as-credited ensemble name) is used directly — no network call is made
+        (NORM-2 as revised: canonical form is the MB artist ``name`` field, offline).
 
         Simulates the "Complete Mozart Edition" box-set shape: conductor is Sir Neville Marriner
         (with a real MBID), ensemble is Academy of St Martin in the Fields (no MBID assigned),
         and MUSICBRAINZ_ALBUMARTISTID is the edition entity's MBID.
 
         :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-
-        # fetch_artist_aliases is called only for the conductor (which has a real MBID).
-        # The ensemble has no MBID, so fetch_artist_aliases is NOT called for it.
-        marriner = MBArtist.model_validate({"id": "marriner-mbid", "name": "Sir Neville Marriner"})
-        mocker.patch("music_annotator._tags.fetch_artist_aliases", return_value=marriner)
 
         tags = TrackTags(
             title="I. Allegro",
@@ -7263,6 +7234,45 @@ class TestHydratePerformerLists:
         assert top == "Mozart - Sir Neville Marriner; Academy of St Martin in the Fields", (
             f"Expected 'Mozart - Sir Neville Marriner; Academy of St Martin in the Fields', got {top!r}"
         )
+
+    def test_repath_makes_zero_mb_api_calls(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath (build_dest_path via _hydrate_performer_lists) makes zero MusicBrainz API calls.
+
+        KAT (zero-MB-calls): the maintenance path is genuinely offline — canonical name-form is
+        the MB artist ``name`` field (NORM-2 as revised); no alias fetch is needed.  Asserts that
+        ``fetch_artist_aliases`` is never called during a repath path computation.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        mock_fetch = mocker.patch("music_annotator._mb_api.fetch_artist_aliases")
+
+        tags = TrackTags(
+            title="I. Allegro",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_work_top="Symphony No. 9",
+            cwp_workid_top="w1",
+            cwp_composer_lastnames="Beethoven",
+            cwp_worktype_genres_top="Classical",
+            artist="Wiener Philharmoniker",
+            albumartist="Wiener Philharmoniker",
+        )
+        file_dict = {
+            "CEA_ALBUM_ENSEMBLES": "Wiener Philharmoniker",
+            "CEA_ALBUM_ENSEMBLES_SORT": "Wiener Philharmoniker",
+            "MUSICBRAINZ_ALBUMARTISTID": "vp-1",
+            "MUSICBRAINZ_CONDUCTORID": "",
+        }
+
+        _hydrate_performer_lists(tags, file_dict)
+        build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0)
+
+        # The maintenance path must make zero MusicBrainz API calls.
+        mock_fetch.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

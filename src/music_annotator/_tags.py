@@ -17,10 +17,9 @@ from music_annotator._artists import (
     artist_credit_phrase,
     artist_ids,
     artist_sort_names,
-    canonical_artist_form,
     last_name,
 )
-from music_annotator._mb_api import _extract_session_date, fetch_artist_aliases
+from music_annotator._mb_api import _extract_session_date
 from music_annotator._works import (
     WORKTYPE_GENRES,
     collect_work_dates,
@@ -1111,11 +1110,13 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
     others).  Support performers (credited per-track but not at release level) are captured in tags
     only, not in the directory path.
 
-    Each path performer is rendered as the entity's **canonical name-form** — the primary-flagged
-    MB alias per STYLEGUIDE 3.1/NORM-2 (native alias where Latin-script; established Latin-reception
-    alias where non-Latin), falling back to the MB display name when no qualifying primary alias
-    exists.  This canonicalisation applies only to the compact path projection; preserved tag
-    surfaces (``ARTIST``, ``ALBUMARTIST``) remain as-credited.
+    Each path performer is rendered as the entity's **canonical name-form** — the MB artist
+    ``name`` field per STYLEGUIDE 3.1/NORM-2 (as revised): the MB ``name`` field is already the
+    native/preferred form; aliases are evidence-only and are never dereferenced in path computation.
+    This makes ``build_dest_path`` genuinely offline — no MusicBrainz network calls are made in
+    the maintenance path (``repath``/``regroup``/``unify`` operate on embedded tags alone).
+    This canonicalisation applies only to the compact path projection; preserved tag surfaces
+    (``ARTIST``, ``ALBUMARTIST``) remain as-credited.
 
     Fallback when album-level yields no conductors or ensembles (e.g. composer-only or
     Various-Artists release): uses the per-track union of all conductors + ensembles from
@@ -1197,37 +1198,22 @@ def build_dest_path(  # pylint: disable=unused-argument  # release kept for API 
     # composer-only releases and Various-Artists compilations still produce a meaningful directory.
     # When even the fallback is empty, use CEA_ENSEMBLE_NAMES, then ARTIST.
     #
-    # Canonical name-form: each path performer is rendered as the entity's primary-flagged MB alias
-    # (per STYLEGUIDE 3.1/NORM-2) rather than the as-credited display name.  The credit-object
-    # MBArtist off a release fetch has alias_list == [] (the MB webservice does not propagate
-    # sub-entity aliases); hydration via fetch_artist_aliases is required before the resolver can
-    # select a primary alias.  When mbid is absent (join-phrase-only credit), the as-credited name
-    # is used directly.  This canonicalisation applies only to the compact path projection; preserved
-    # tag surfaces (ARTIST, ALBUMARTIST) remain as-credited.
+    # Canonical name-form: each path performer is rendered as the entity's MB ``name`` field
+    # (per STYLEGUIDE 3.1/NORM-2 as revised): the MB ``name`` field is already the native/preferred
+    # form; aliases are evidence-only and are never dereferenced in path computation.  This makes
+    # build_dest_path genuinely offline — no MusicBrainz network calls in the maintenance path
+    # (repath/regroup/unify operate on embedded tags alone).  This canonicalisation applies only
+    # to the compact path projection; preserved tag surfaces (ARTIST, ALBUMARTIST) remain as-credited.
 
-    def _canonical_name(entry: ArtistEntry) -> str:
-        """Return the canonical path name for one performer entry.
-
-        Hydrates the artist via ``fetch_artist_aliases`` when an MBID is available so that the
-        primary-flagged MB alias can be selected.  Falls back to the as-credited ``entry.name``
-        when no MBID is present (join-phrase-only credit) or when the artist has no primary alias.
-
-        :param entry: The :class:`~music_annotator.models.ArtistEntry` to resolve.
-        :returns: The canonical name string for use in the compact path.
-        """
-        if entry.mbid:
-            return canonical_artist_form(fetch_artist_aliases(entry.mbid))
-        return entry.name
-
-    album_conductors_path = [_canonical_name(e) for e in tags.cea_album_conductors_list]
-    album_ensembles_path = [_canonical_name(e) for e in tags.cea_album_ensembles_list]
+    album_conductors_path = [e.name for e in tags.cea_album_conductors_list]
+    album_ensembles_path = [e.name for e in tags.cea_album_ensembles_list]
     if album_conductors_path or album_ensembles_path:
         performers = "; ".join(album_conductors_path + album_ensembles_path)
     else:
         # Fallback: per-track union (mirrors existing behaviour for releases where no
         # conductor/ensemble is credited at release level).
-        all_conductors = [_canonical_name(e) for e in tags.cea_conductors_list]
-        all_ensembles = [_canonical_name(e) for e in tags.cea_ensembles_list]
+        all_conductors = [e.name for e in tags.cea_conductors_list]
+        all_ensembles = [e.name for e in tags.cea_ensembles_list]
         if all_conductors or all_ensembles:
             performers = "; ".join(all_conductors + all_ensembles)
         else:
