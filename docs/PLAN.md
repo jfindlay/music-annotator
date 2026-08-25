@@ -43,13 +43,23 @@ Frozen at derivation:
   edition-title shape (ARTIST equals ALBUM); a performer name shared by ARTIST and ALBUMARTIST always survives to the
   path.  The original edition-title regression fixture must keep passing.
 
-To be frozen at the adjudication session (S3) and consumed by S4–S6:
+Frozen at S3 (2026-08-24), consumed by S4–S6:
 
-- **NORM-2 amendment** (native-script rule; operator preference recorded in NOTES, pending adjudication).
-- **Ensemble selection case** (parent/subgroup/chorus admission — the defect-D ruling).
-- **SEL-8 path grammar** (completer rendering form in the composer component).
-- **C-DET premise repair** (stable canonical form: locale-filtered resolver, or MB-name-as-canonical, or persist the
-  resolved form into a tag and take hydration out of the maintenance path entirely).
+- **NORM-2 amendment (revised ruling)** — canonical form = the MB artist `name` field verbatim; native script
+  universally; aliases evidence-only, never a dereference target; fallbacks inherited from MB's editors (Ashkenazy's
+  Latin career name is MB's own judgment — no ru primary alias exists); patronymic-full native forms accepted.
+  Dissolution hypothesis verified live 6/6 (Ozawa 小澤征爾, Stravinsky Игорь Фёдорович Стравинский, Richter/Järvi/WPh
+  native-Latin names).  Consequence: alias hydration leaves the maintenance path entirely — S4 *deletes* the hydration
+  and reduces `canonical_artist_form` to the name field; `fetch_artist_aliases` leaves the path pipeline.
+- **Ensemble selection (SEL-23, new)** — ensemble position at release scope = release-level credits ∪ bodies present
+  on a modal majority (>50%) of the release's tracks, computed over the release's full track set identically at
+  ingest and recompute.  Minority configurations stay credits-only; soloists still never enter (SEL-11).
+- **SEL-8 path grammar (REND-27, new)** — composer path component renders the author chain plain, primary leading
+  (`Mozart; Süßmayr`); role annotations render in tags only (REND-3); unification direction is upward
+  (primary + completer everywhere) per SEL-8, as already adjudicated.
+- **C-DET premise repair** — dissolved by NORM-2-as-revised: the canonical form is a scalar MB field, stable under
+  alias-list reordering by construction; `repath` becomes genuinely offline again ("embedded tags alone" claim
+  restored in S4/S7).  No persistence tag, no backfill shard.
 
 ## Sessions
 
@@ -168,15 +178,21 @@ VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch covera
 |----|-----------------------------------------------------------------------|---------|--------|-------|
 | S1 | Fix ARTIST-fallback guard (C-GUARD)                                   | done    | f09b31d | C-GUARD frozen |
 | S2 | Dependency-ordered move execution + vacancy-aware collision (C-NOCLOBBER, C-SEQ) | done    | e71256d | C-NOCLOBBER, C-SEQ frozen |
-| S3 | STYLEGUIDE adjudication (NORM-2, ensemble, SEL-8, C-DET)              | pending | —      | operator-interactive |
+| S3 | STYLEGUIDE adjudication (NORM-2, ensemble, SEL-8, C-DET)              | done    | —      | all four frozen; docs-only, uncommitted by operator choice |
 | S4 | Locale/script-aware canonical name resolution (defects A+B)           | pending | —      | depends S3 |
 | S5 | Ensemble path component per new selection ruling (defect D)           | pending | —      | depends S3 |
 | S6 | Composer-chain unification up to primary+completer per SEL-8 (defect E) | pending | —    | depends S3 |
 | S7 | Register/doc reconciliation: repath docstring, C-DET note             | pending | —      | depends S4 |
 | S8 | Re-run preflight on hades; acceptance gate                            | pending | —      | depends all; operator |
 
-Frozen contracts: C-NOCLOBBER (implementation confirmed e71256d), C-SEQ (implementation confirmed e71256d), C-GUARD (implementation confirmed f09b31d). NORM-2 amendment, Ensemble selection case, SEL-8 path grammar, C-DET premise repair — to be frozen at S3.
+Frozen contracts: C-NOCLOBBER (implementation confirmed e71256d), C-SEQ (implementation confirmed e71256d), C-GUARD (implementation confirmed f09b31d), NORM-2-as-revised, SEL-23, REND-27, C-DET-repair-by-dissolution (all four frozen at S3, 2026-08-24; STYLEGUIDE register updated).
 
 ## Action-frame digest
 
 (append non-trivial discoveries, contract flexes, and notable texture here as sessions run)
+
+- S3 (2026-08-24): dissolution hypothesis verified live against MB, 6/6 — the artist `name` field is already the
+  native/preferred form for every observed artist, including the fallback shape (Ashkenazy has *no* ru primary alias;
+  MB's editors already chose the Latin career name).  All four rulings landed on the recommended options.  S4 shrinks
+  materially: delete hydration rather than build a locale resolver; no backfill shard.  STYLEGUIDE: NORM-2 revised in
+  place, SEL-23 + REND-27 appended, CE-divergence entry added, §3.1 and §2.3 body text aligned.

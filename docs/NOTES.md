@@ -879,6 +879,23 @@ without subtracting paths the same plan vacates, systematically manufactures fal
 positive rate here.  Any plan-then-execute mover needs vacancy-aware assessment and dependency-ordered execution before its
 dry-run evidence can be trusted for destructive go/no-go decisions.
 
+**Adjudication outcomes (2026-08-24, styleguide loop — closes the "adjudication pending" items above.)**  All four rulings landed;
+the STYLEGUIDE register carries the durable text.  (1) **NORM-2 revised**: canonical form = the MB artist `name` field verbatim —
+native script universally, aliases evidence-only and never a dereference target, fallbacks inherited from MB's editors.  The
+dissolution hypothesis was verified against live MB for all six observed artists: Ozawa 小澤征爾, Stravinsky Игорь Фёдорович
+Стравинский (patronymic-full form accepted by operator), Richter / Järvi / Wiener Philharmoniker native-Latin names, and Ashkenazy
+"Vladimir Ashkenazy" with *no* ru primary alias — MB's own fallback judgment, exactly the operator's fallback rule encoded at the
+source.  Every defect-A corruption reverses and none recurs; alias hydration leaves the maintenance path (defect B dissolves with
+it — no persistence tag, no backfill shard; `fetch_artist_aliases` leaves the path pipeline; the alias-fetch substrate fact below
+remains valid for any future alias *evidence* consumer).  (2) **SEL-23 (new)**: ensemble position at release scope = release-level
+credits ∪ bodies present on a modal majority (>50%) of the release's tracks, computed over the release's full track set
+identically at ingest and recompute; minority configurations stay credits-only; soloists still never enter (SEL-11).  (3)
+**REND-27 (new)**: the composer path component renders the author chain plain, primary leading (`Mozart; Süßmayr`); role
+annotations render in tags only (REND-3), per 5.3's ceiling clause.  Unification direction is upward (primary + completer
+everywhere) per SEL-8 as already adjudicated — the enacted primary-only direction was a misreading of SEL-19's source-priority
+chain as a rendering-exclusion rule.  (4) **C-DET repaired by dissolution**: the canonical form is a scalar MB field, stable under
+alias-list reordering by construction; the `repath` "embedded tags alone" claim becomes true again once the hydration is deleted.
+
 ## Dormant decisions register (consolidated 2026-08-24)
 
 One entry per open-but-deferred design path, with its firing trigger and where the design context

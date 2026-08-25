@@ -222,6 +222,9 @@ apply it:
   selection evidence only (ONT-1).
 - The principal–comprimario line in staged works follows reasonable confidence, with the release's
   own billing as the default descriptive evidence (SEL-7).
+- Performing bodies absent from release-level credits enter the ensemble position when present on a
+  modal majority of the release's tracks (SEL-23); minority-track configurations remain credits
+  only.
 
 **2.4 Composer-side selection.**  The authorial chain of the performed edition is canonical (1.7)
 and is always attributed: the primary composer leads; completers, orchestrators, and reconstructors
@@ -252,11 +255,13 @@ Which name-form renders an identity.  The layer's founding problem is fragmentat
 keyed on rendered forms scatters one entity across as many places as it has credit variants.
 
 **3.1 One canonical form per entity.**  Every entity has exactly one canonical name-form, selected
-once, not per release: the entity's native name where it is Latin-script (*Wiener Philharmoniker*,
-not "Vienna Philharmonic"); the established Latin reception form where the native script is not
-Latin (*Tchaikovsky*, *Shostakovich*) — the form a reader recognises, not a scholarly romanisation
+once, not per release: the MB artist name field, verbatim — native script universally (*Wiener
+Philharmoniker*, not "Vienna Philharmonic"; 小澤征爾, not "Seiji Ozawa"), with MB's own editorial
+judgment supplying the fallback where a native form is unestablished, plural, or problematic
 (NORM-2).  Aliases and credit variants are evidence for choosing this form, never per-release
-replacement mechanisms (NORM-3; NORM-4 dissolves).
+replacement mechanisms (NORM-3; NORM-4 dissolves), and never a dereference target: a form-selection
+rule that walks the alias list competes locales against each other and destabilises the canonical
+form.
 
 **3.2 Compact renders canonical; full preserves the credit.**  Compact projections render only
 canonical forms, so one entity occupies one place.  Full projections render the canonical form and
@@ -567,6 +572,15 @@ The register is seed, not closure: new cases append.
   and never subsumed into the choir credit.  Era sensitivity does not rebut constitutively named
   parts — that negative rule targets inference from prominence, and no inference is needed here.
   The choir remains the ensemble; the chorusmaster remains SEL-3.
+- **SEL-23 (adjudicated) — Performing-body admission beyond release-level credits.**  The ensemble
+  position at release scope admits the union of release-level-credited ensembles and bodies present
+  on a modal majority (>50%) of the release's tracks.  Release-level credits alone demonstrably
+  drop true performing bodies — a wind subgroup that is the release's actual performing body, a
+  chorus credited per-track in a choral work — while the anti-forking property that motivated the
+  release-level rule survives: minority-track configurations stay out, and no soloist enters
+  regardless (SEL-11).  Bodies below the threshold remain full-projection credits (2.1).  The
+  majority is computed over the release's full track set — the unit that shares a compact handle —
+  identically at annotation and at any later recompute.  Derives from 1.4, 2.2, 2.3; P1.
 
 ### Normalisation
 
@@ -576,12 +590,19 @@ The register is seed, not closure: new cases append.
   credit is preserved as-credited in full projections (P3: the credit is part of the claim's basis).
   The accepted cost is anachronism in the handle.  Contested by nature; carries its case-ID for 5.5
   marking.  Derives from 3.1, 3.2; P2, P3.
-- **NORM-2 (adjudicated) — Native language and script.**  The canonical form is the entity's native
-  name where Latin-script (*Wiener Philharmoniker*, never "Vienna Philharmonic"); non-Latin-script
-  names render in their established Latin reception form (*Tchaikovsky*, *Shostakovich*) — the
-  recognisable form, not a scholarly romanisation (P2) — with the native-script form available in
-  full projections.  Ratifies CE's script-boundary instinct while rejecting anglicisation of
-  native-Latin names.  Derives from 3.1; P2, P3.
+- **NORM-2 (adjudicated — revised 2026-08-24) — Native language and script.**  The canonical form
+  is the MB artist name field, verbatim: native script universally (小澤征爾, Игорь Фёдорович
+  Стравинский, *Wiener Philharmoniker* — never "Vienna Philharmonic"), as realised by MB's own
+  naming practice.  Aliases are evidence only, never dereferenced for form selection (NORM-3) and
+  never locale-competed: MB's primary flags are scoped per locale, so any first-primary rule selects
+  an arbitrary locale and the canonical form loses its fixed point.  Where an entity's native form
+  is unestablished, plural, or problematic, the fallback judgment is inherited from MB's editors
+  through the same field (a Latin career name for an émigré artist) — never re-implemented locally
+  (MB-authority deference: always a form MB asserts).  The original ruling's Latin-reception clause
+  for non-Latin scripts (*Tchaikovsky*) is overturned: full-length native forms render even where a
+  shorter reception form exists (the patronymic-full Стравинский is accepted).  Latin forms survive
+  in sort-names (3.5) and in last-name path components, which derive from the Latin sort-name.
+  Derives from 3.1; P2, P3.
 - **NORM-3 (adjudicated) — Alias vs. MB-standard name-form.**  Aliases are evidence for choosing the
   one canonical form per entity (3.1), never a per-release replacement mechanism.  CE's per-context
   credited-as toggles are platform machinery; its conservative defaults for the recording and
@@ -705,6 +726,12 @@ The register is seed, not closure: new cases append.
   track position — ratified as deliberate ordinal machinery for a stable handle.  Derives from 4.5.
 - **REND-26 (adjudicated) — Intermediate ordinal chain.**  Gap-free sibling rank from ordering keys,
   mirroring the leaf pattern — ratified.  Derives from 4.5.
+- **REND-27 (adjudicated) — Author-chain rendering in the path composer component.**  The composer
+  path component renders the canonical author chain plain, in chain order, primary composer leading
+  (`Mozart; Süßmayr`).  Completers and kin enter compact projections per SEL-8, but their role
+  annotations drop at the handle ceiling: 5.3 yields to ceilings, a "(compl.)" mark would deface a
+  compact surface, so the annotation renders in tags (REND-3) and the applied-case mark rides the
+  5.5 mechanism.  Derives from 4.5, 5.3; SEL-8.
 
 ### Epistemic register
 
@@ -741,6 +768,9 @@ carries its rationale.  Additive extensions and platform capability differences 
 
 - **SEL-13.**  CE suppresses the lyricist tag when no vocal performers are present; this styleguide
   carries the credit unconditionally — work-scope authorship survives instrumental performance.
+- **NORM-2 (revised).**  CE's practice renders established Latin reception forms for
+  non-Latin-script entities; the revised ruling renders the MB name field verbatim — native script
+  universally, with fallbacks inherited from MB's own editorial judgment.
 - **NORM-6.**  CE's "extended" style splices per-release title text into work names; rejected for
   canonical surfaces — titles are evidence and terminal fallback (3.4).
 - **ONT-2 (pending).**  CE includes editorial collections in the work hierarchy; the direction here
