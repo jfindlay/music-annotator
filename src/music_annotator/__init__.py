@@ -132,17 +132,21 @@ from music_annotator._pipeline_io import (
     write_transaction_log,
 )
 from music_annotator._pipeline_maint import (
+    DuplicateResolution,
     compose_preflight_report,
     enrich,
     regroup,
     repatch_acoustid_tags,
     repatch_catalogue_colon,
     repath,
+    resolve_duplicate_group,
     unify,
 )
 from music_annotator._tagger import (
     apply_tags_flac,
     apply_tags_mp3,
+    write_secondary_albumid_flac,
+    write_secondary_albumid_mp3,
 )
 from music_annotator._tags import (
     build_cea_performers,
@@ -202,6 +206,10 @@ __all__ = [
     "sel23_ensemble_patch",
     "apply_tags_flac",
     "apply_tags_mp3",
+    "write_secondary_albumid_flac",
+    "write_secondary_albumid_mp3",
+    "DuplicateResolution",
+    "resolve_duplicate_group",
     "find_source_files",
     "CollisionPolicy",
     "SelectionMethod",

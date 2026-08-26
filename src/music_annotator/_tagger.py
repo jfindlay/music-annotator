@@ -4,6 +4,12 @@ Provides :func:`apply_tags_flac` and :func:`apply_tags_mp3` which write the full
 Classical Extras tags to audio files using mutagen, and the helper tables :data:`_MP3_STD_KEYS`
 and :data:`_MP3_TXXX_MAP` that are shared with the verification functions in
 :mod:`music_annotator._pipeline_io`.
+
+Also provides :func:`write_secondary_albumid_flac` and :func:`write_secondary_albumid_mp3`
+which perform an append-only set-union write of a secondary release MBID into the
+``MUSICBRAINZ_SECONDARY_ALBUMID`` tag (TXXX ``"MusicBrainz Secondary Album Id"`` for MP3).
+These functions are the sole mutation site for the cross-reference tag and enforce idempotency:
+if the MBID is already present the file is not modified.
 """
 
 from __future__ import annotations
@@ -64,6 +70,7 @@ _MP3_STD_KEYS: frozenset[str] = frozenset(
 #: :func:`_read_tags_mp3` so that the same table drives both writing and read-back verification.
 _MP3_TXXX_MAP: dict[str, str] = {
     "MUSICBRAINZ_ALBUMID": "MusicBrainz Album Id",
+    "MUSICBRAINZ_SECONDARY_ALBUMID": "MusicBrainz Secondary Album Id",
     "MUSICBRAINZ_RECORDINGID": "MusicBrainz Track Id",
     "MUSICBRAINZ_RELEASEGROUPID": "MusicBrainz Release Group Id",
     "MUSICBRAINZ_ALBUMARTISTID": "MusicBrainz Album Artist Id",
@@ -377,3 +384,77 @@ def apply_tags_mp3(dest_file: Path, tags: TrackTags, cover: CoverArt | None = No
 
     id3_tags.save(str(dest_file), v2_version=4)
     log.debug("tagged_mp3", path=str(dest_file))
+
+
+def write_secondary_albumid_flac(dest_file: Path, secondary_mbid: str) -> bool:
+    """Append ``secondary_mbid`` to the ``MUSICBRAINZ_SECONDARY_ALBUMID`` Vorbis Comment tag.
+
+    Reads the existing value (if any), parses the ``"; "``-joined set, and adds ``secondary_mbid``
+    only when it is not already present (append-only set-union, idempotent).  When the MBID is
+    already present the file is not modified and ``False`` is returned.
+
+    The tag is stored as a ``"; "``-joined scalar (REND-17 separator) rather than a native
+    multi-value Vorbis Comment because the entire read path flattens to ``v[0]`` — a native
+    multi-value write would be silently truncated on read-back.
+
+    :param dest_file: Path to the FLAC file to update (must already exist).
+    :param secondary_mbid: The secondary release MBID to add.
+    :returns: ``True`` when the file was modified (MBID was not already present);
+        ``False`` when the MBID was already present (no-op, idempotent).
+    :raises mutagen.MutagenError: If the file cannot be read or written.
+    """
+    audio = FLAC(str(dest_file))
+    existing_raw: list[str] = audio.get("musicbrainz_secondary_albumid") or []
+    existing_val: str = existing_raw[0] if existing_raw else ""
+    existing_set: set[str] = {m.strip() for m in existing_val.split("; ") if m.strip()}
+    if secondary_mbid in existing_set:
+        return False
+    existing_set.add(secondary_mbid)
+    # Preserve insertion order: existing entries first, new MBID appended.
+    if existing_val:
+        new_val = existing_val + "; " + secondary_mbid
+    else:
+        new_val = secondary_mbid
+    audio["musicbrainz_secondary_albumid"] = new_val
+    audio.save()
+    log.debug("write_secondary_albumid_flac", path=str(dest_file), secondary_mbid=secondary_mbid)
+    return True
+
+
+def write_secondary_albumid_mp3(dest_file: Path, secondary_mbid: str) -> bool:
+    """Append ``secondary_mbid`` to the ``MusicBrainz Secondary Album Id`` TXXX frame.
+
+    Reads the existing TXXX frame (if any), parses the ``"; "``-joined set, and adds
+    ``secondary_mbid`` only when it is not already present (append-only set-union, idempotent).
+    When the MBID is already present the file is not modified and ``False`` is returned.
+
+    The tag is stored as a ``"; "``-joined scalar (REND-17 separator) in a single TXXX frame
+    because the read path uses ``frame.text[0]`` — a multi-text-value frame would be silently
+    truncated on read-back.
+
+    :param dest_file: Path to the MP3 file to update (must already exist).
+    :param secondary_mbid: The secondary release MBID to add.
+    :returns: ``True`` when the file was modified (MBID was not already present);
+        ``False`` when the MBID was already present (no-op, idempotent).
+    :raises mutagen.MutagenError: If the file cannot be read or written.
+    """
+    txxx_desc = _MP3_TXXX_MAP["MUSICBRAINZ_SECONDARY_ALBUMID"]
+    id3 = ID3(str(dest_file))  # type: ignore[no-untyped-call]
+    existing_val = ""
+    for frame in id3.getall("TXXX"):  # type: ignore[no-untyped-call]
+        if frame.desc == txxx_desc and frame.text:
+            existing_val = str(frame.text[0])
+            break
+    existing_set: set[str] = {m.strip() for m in existing_val.split("; ") if m.strip()}
+    if secondary_mbid in existing_set:
+        return False
+    if existing_val:
+        new_val = existing_val + "; " + secondary_mbid
+    else:
+        new_val = secondary_mbid
+    # Remove any existing frame with this description before adding the updated one.
+    id3.delall("TXXX:" + txxx_desc)  # type: ignore[no-untyped-call]
+    id3.add(TXXX(encoding=3, desc=txxx_desc, text=new_val))  # type: ignore[no-untyped-call]
+    id3.save(str(dest_file), v2_version=4)
+    log.debug("write_secondary_albumid_mp3", path=str(dest_file), secondary_mbid=secondary_mbid)
+    return True

@@ -17,9 +17,14 @@ AcoustID API key is supplied):
 
 Also provides the shared primitives consumed by all commands:
 
-* :func:`_move_verify_journal`  — the single journal-append site for move-type entries (C-PROV).
-* :func:`_resolve_current_lib`  — lineage walk that resolves the current on-disk path per file.
-* :func:`_tags_from_file_dict`  — reconstruct a :class:`~music_annotator.models.TrackTags` from
+* :func:`_move_verify_journal`    — the single journal-append site for move-type entries (C-PROV).
+* :func:`_resolve_current_lib`    — lineage walk that resolves the current on-disk path per file.
+* :func:`resolve_duplicate_group` — shared group-resolution flow for same-audio collisions (C-DEDUP):
+  prompts the operator (survivor / keep-both / abort) and executes the C-DEDUP ordering (xref write +
+  verify + journal before any deletion).  Reused by the library-wide dedup command.
+* :func:`_write_xref_and_journal` — write a secondary MBID cross-reference and journal the mutation
+  (C-PROV chain: tag write → verify → journal entry with action ``"cross-referenced"``).
+* :func:`_tags_from_file_dict`    — reconstruct a :class:`~music_annotator.models.TrackTags` from
   an on-disk tag dict.
 * :func:`_hydrate_performer_lists` — reconstruct performer :class:`~music_annotator.models.ArtistEntry`
   lists from embedded tags so that :func:`~music_annotator._tags.build_dest_path` can render
@@ -76,7 +81,7 @@ from music_annotator._pipeline_io import (
     append_journal_entry,
     read_journal,
 )
-from music_annotator._tagger import apply_tags_flac, apply_tags_mp3
+from music_annotator._tagger import apply_tags_flac, apply_tags_mp3, write_secondary_albumid_flac, write_secondary_albumid_mp3
 from music_annotator._tags import _CLASS_VOCAB, _NAME_MAX, _proposed_short, build_dest_path, sel23_ensemble_patch
 from music_annotator._works import (
     _Rederivation,
@@ -498,8 +503,14 @@ def _resolve_current_lib(journal: TransactionLog) -> dict[Path, str]:
     * ``"tagged"`` entries seed the map (destination → release_id).
     * ``"repathed"`` and ``"regrouped"`` entries update the map: the old path is removed and the
       new path is registered with the same release_id.
-    * ``"enriched"`` and ``"repatched"`` entries are in-place updates (source == destination);
-      they re-register the path to keep the release_id current.
+    * ``"enriched"``, ``"repatched"``, and ``"acoustid-repatched"`` entries are in-place updates
+      (source == destination); they re-register the path to keep the release_id current.
+    * ``"cross-referenced"`` entries are in-place updates (source == destination); they
+      re-register the path to keep the primary release_id current.  The ``release_id`` field
+      of a ``"cross-referenced"`` entry carries the *secondary* MBID being added, not the
+      file's primary MBID — so the primary MBID is preserved from the existing map entry.
+    * ``"deduplicated"`` entries pop the source path from the map (the deleted copy is gone);
+      the destination (surviving copy) is already registered and is not modified here.
 
     Multi-hop chains (a file that was repathed and then regrouped) resolve correctly because
     entries are processed in chronological order: each move pops the old path and registers the
@@ -514,16 +525,361 @@ def _resolve_current_lib(journal: TransactionLog) -> dict[Path, str]:
         dest_path = Path(entry.destination)
         if entry.action == "tagged":
             current_lib[dest_path] = entry.release_id
-        elif entry.action in {"repathed", "regrouped"}:
+        elif entry.action in {"repathed", "regrouped", "unified"}:
             old_path = Path(entry.source)
             release_id_for_path = current_lib.pop(old_path, entry.release_id)
             current_lib[dest_path] = release_id_for_path
-        elif entry.action in {"enriched", "repatched", "acoustid-repatched"}:
+        elif entry.action in {"enriched", "repatched", "acoustid-repatched", "cross-referenced"}:
             # In-place update: source == destination, path unchanged.
-            # Re-register to keep release_id current.
-            current_lib[dest_path] = entry.release_id
+            # Re-register to keep the primary release_id current.  For "cross-referenced"
+            # entries the entry.release_id carries the secondary MBID, so we preserve the
+            # existing primary MBID from the map rather than overwriting with the secondary.
+            existing_primary = current_lib.get(dest_path, entry.release_id)
+            current_lib[dest_path] = existing_primary
+        elif entry.action == "deduplicated":
+            # The source path (deleted copy) is removed from the map; the destination
+            # (surviving copy) is already registered and is not modified here.
+            src_path = Path(entry.source)
+            current_lib.pop(src_path, None)
 
     return current_lib
+
+
+class DuplicateResolution:
+    """Result of :func:`resolve_duplicate_group` for one duplicate group.
+
+    Carries the operator's choice (survivor / keep-both / abort) and the derived plan:
+    which file to delete, which file to cross-reference, and whether the mover's move
+    should proceed.
+
+    :ivar choice: ``"survivor_occupant"`` — occupant wins, mover deleted, move dropped;
+        ``"survivor_mover"`` — mover wins, occupant deleted first, move proceeds;
+        ``"keep_both"`` — cross-reference only, move dropped;
+        ``"abort"`` — operator aborted the run.
+    :ivar survivor_path: Absolute path of the surviving file (the one that stays on disk).
+    :ivar deleted_path: Absolute path of the file to delete (``None`` for keep-both / abort).
+    :ivar deleted_release_id: Release MBID of the deleted copy (``""`` when no deletion).
+    :ivar secondary_mbid: The secondary MBID to cross-reference onto the survivor
+        (``""`` when no cross-reference is needed, e.g. abort).
+    :ivar proceed_with_move: ``True`` when the mover's move should proceed after the occupant
+        is deleted (survivor_mover arm only).
+    """
+
+    def __init__(
+        self,
+        *,
+        choice: str,
+        survivor_path: Path,
+        deleted_path: Path | None,
+        deleted_release_id: str,
+        secondary_mbid: str,
+        proceed_with_move: bool,
+    ) -> None:
+        """Initialise a :class:`DuplicateResolution`.
+
+        :param choice: One of ``"survivor_occupant"``, ``"survivor_mover"``, ``"keep_both"``,
+            ``"abort"``.
+        :param survivor_path: Path of the surviving file.
+        :param deleted_path: Path of the file to delete, or ``None``.
+        :param deleted_release_id: Release MBID of the deleted copy.
+        :param secondary_mbid: Secondary MBID to cross-reference onto the survivor.
+        :param proceed_with_move: Whether the mover's move should proceed.
+        """
+        self.choice = choice
+        self.survivor_path = survivor_path
+        self.deleted_path = deleted_path
+        self.deleted_release_id = deleted_release_id
+        self.secondary_mbid = secondary_mbid
+        self.proceed_with_move = proceed_with_move
+
+
+def _write_xref_and_journal(
+    survivor_path: Path,
+    secondary_mbid: str,
+    *,
+    journal: TransactionLog,
+    journal_path: Path,
+    now_str: str,
+) -> None:
+    """Write a secondary MBID cross-reference to ``survivor_path`` and journal the mutation.
+
+    Performs the full C-PROV chain for a cross-reference tag write:
+
+    1. Write ``secondary_mbid`` into ``MUSICBRAINZ_SECONDARY_ALBUMID`` via
+       :func:`~music_annotator._tagger.write_secondary_albumid_flac` or
+       :func:`~music_annotator._tagger.write_secondary_albumid_mp3` (append-only set-union;
+       no-op if already present).
+    2. Read back the tag to verify the write landed correctly.
+    3. Append a ``"cross-referenced"`` journal entry with ``release_id = secondary_mbid``
+       (the secondary MBID being added, not the file's primary) and
+       ``source == destination == str(survivor_path)``.
+
+    This function is the sole site that writes ``"cross-referenced"`` journal entries.
+    It must be called before any deletion executes (C-DEDUP ordering invariant: the reference
+    must exist durably before the bytes disappear).
+
+    :param survivor_path: Path to the surviving file to cross-reference.
+    :param secondary_mbid: The secondary release MBID to add.
+    :param journal: In-memory :class:`~music_annotator.models.TransactionLog`; mutated in place.
+    :param journal_path: Path to the journal file.
+    :param now_str: ISO-format UTC timestamp string for the journal entry.
+    :raises RuntimeError: If the tag write or read-back verification fails.
+    :raises mutagen.MutagenError: If the file cannot be read or written.
+    """
+    ext = survivor_path.suffix.lower()
+    match ext:
+        case ".flac":
+            write_secondary_albumid_flac(survivor_path, secondary_mbid)
+            # Verify: read back and confirm the MBID is present.
+            verify_dict = _read_tags_flac(survivor_path)
+        case ".mp3":
+            write_secondary_albumid_mp3(survivor_path, secondary_mbid)
+            verify_dict = _read_tags_mp3(survivor_path)
+        case _:  # pragma: no cover — callers always pass .flac or .mp3
+            raise RuntimeError(f"unsupported extension for cross-reference write: {ext}")
+    written_val = verify_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
+    written_set = {m.strip() for m in written_val.split("; ") if m.strip()}
+    if secondary_mbid not in written_set:
+        raise RuntimeError(
+            f"cross-reference write verification failed for '{survivor_path.name}': "
+            f"secondary MBID '{secondary_mbid}' not found in read-back value '{written_val}'"
+        )
+    entry = TransactionEntry(
+        timestamp=now_str,
+        release_id=secondary_mbid,
+        source=str(survivor_path),
+        destination=str(survivor_path),
+        action="cross-referenced",
+    )
+    append_journal_entry(journal_path, entry)
+    journal.entries.append(entry)
+    log.info(
+        "cross_referenced",
+        path=str(survivor_path),
+        secondary_mbid=secondary_mbid,
+    )
+
+
+def resolve_duplicate_group(
+    occupant_path: Path,
+    occupant_release_id: str,
+    mover_path: Path,
+    mover_release_id: str,
+    evidence_method: str,
+    *,
+    journal: TransactionLog,
+    journal_path: Path,
+    dest_root: Path,
+    now: datetime.datetime,
+    dry_run: bool = False,
+) -> DuplicateResolution:
+    """Prompt the operator to resolve one duplicate group and execute the C-DEDUP ordering.
+
+    Called when a planned move's destination is already occupied by a file with the same audio
+    content (``match=True``).  Presents the group members, their release MBIDs, and the evidence
+    method to the operator, then executes the chosen resolution:
+
+    * **Survivor = occupant**: the occupant wins.  The mover is cross-referenced onto the
+      occupant (secondary MBID written + verified + journalled) before the mover is deleted
+      (``"deduplicated"`` journal entry).  The move is dropped from the plan.
+    * **Survivor = mover**: the mover wins.  The occupant is cross-referenced (secondary MBID
+      written + verified + journalled) before the occupant is deleted (``"deduplicated"``
+      journal entry).  The move then proceeds through the normal C-PROV chain into the vacated
+      path (caller is responsible for executing the move).
+    * **Keep both**: cross-reference only — the mover's release MBID is written as a secondary
+      MBID on the occupant (or vice-versa, whichever is the "survivor" in the keep-both sense).
+      The move is dropped.  On a later re-run the existing secondary MBID is detected and the
+      group is silently dropped (idempotency, no re-prompt).
+    * **Abort**: the operator aborts the run.  No changes are made.
+
+    C-DEDUP ordering invariant: the survivor's cross-reference write + verify + journal entry
+    complete **before** any deletion executes.
+
+    ``--yes`` does **not** suppress this prompt (integrity prompts are not bulk consent).
+    ``--dry-run`` reports the group but never prompts and never deletes.
+
+    This function is the shared group-resolution flow reused by the library-wide dedup command.
+
+    :param occupant_path: Path of the file already at the planned destination.
+    :param occupant_release_id: Release MBID of the occupant file.
+    :param mover_path: Path of the file being moved (the planned source).
+    :param mover_release_id: Release MBID of the mover file.
+    :param evidence_method: How identity was established (e.g. ``"sha256"``, ``"acoustid"``).
+    :param journal: In-memory :class:`~music_annotator.models.TransactionLog`; mutated in place
+        when cross-reference or deduplicated entries are written.
+    :param journal_path: Path to the journal file.
+    :param dest_root: Library root for relative-path display in the prompt.
+    :param now: UTC datetime for journal entry timestamps.
+    :param dry_run: When ``True``, report the group and return a keep-both result without
+        prompting or modifying any files.
+    :returns: A :class:`DuplicateResolution` describing the operator's choice and the derived plan.
+    """
+    now_str = now.isoformat()
+
+    # Check idempotency: if the mover's release MBID is already in the occupant's secondary
+    # MBID set, this group was already resolved as keep-both on a previous run.  Drop silently.
+    try:
+        ext = occupant_path.suffix.lower()
+        match ext:
+            case ".flac":
+                occ_dict = _read_tags_flac(occupant_path)
+            case ".mp3":
+                occ_dict = _read_tags_mp3(occupant_path)
+            case _:  # pragma: no cover
+                occ_dict = {}
+        existing_secondary = occ_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
+        existing_set = {m.strip() for m in existing_secondary.split("; ") if m.strip()}
+        if mover_release_id and mover_release_id in existing_set:
+            log.info(
+                "duplicate_group_already_cross_referenced",
+                occupant=str(occupant_path),
+                mover=str(mover_path),
+                secondary_mbid=mover_release_id,
+            )
+            return DuplicateResolution(
+                choice="keep_both",
+                survivor_path=occupant_path,
+                deleted_path=None,
+                deleted_release_id="",
+                secondary_mbid="",
+                proceed_with_move=False,
+            )
+    except Exception:  # noqa: BLE001 — tag read failure: treat as not-yet-cross-referenced
+        existing_set = set()
+
+    if dry_run:
+        # Dry-run: report the group without prompting or modifying files.
+        _occ_dry = str(occupant_path.relative_to(dest_root) if occupant_path.is_relative_to(dest_root) else occupant_path)
+        _mov_dry = str(mover_path.relative_to(dest_root) if mover_path.is_relative_to(dest_root) else mover_path)
+        _console.print(
+            f"\n[bold yellow]duplicate group[/] (evidence: {_markup_escape(evidence_method)}):\n"
+            f"  occupant: [dim]{_markup_escape(_occ_dry)}[/]"
+            f"  (release {_markup_escape(occupant_release_id)})\n"
+            f"  mover:    [dim]{_markup_escape(_mov_dry)}[/]"
+            f"  (release {_markup_escape(mover_release_id)})\n"
+            f"  [dim](dry-run: no changes made)[/]"
+        )
+        return DuplicateResolution(
+            choice="keep_both",
+            survivor_path=occupant_path,
+            deleted_path=None,
+            deleted_release_id="",
+            secondary_mbid="",
+            proceed_with_move=False,
+        )
+
+    # Interactive prompt — survives --yes (integrity prompts are not bulk consent).
+    occ_rel = str(occupant_path.relative_to(dest_root)) if occupant_path.is_relative_to(dest_root) else str(occupant_path)
+    mov_rel = str(mover_path.relative_to(dest_root)) if mover_path.is_relative_to(dest_root) else str(mover_path)
+    _console.print(
+        f"\n[bold yellow]Duplicate audio detected[/] (evidence: {_markup_escape(evidence_method)})\n"
+        f"  [bold]1[/] occupant: [dim]{_markup_escape(occ_rel)}[/]  (release {_markup_escape(occupant_release_id)})\n"
+        f"  [bold]2[/] mover:    [dim]{_markup_escape(mov_rel)}[/]  (release {_markup_escape(mover_release_id)})\n"
+        f"\nChoose:\n"
+        f"  [bold]1[/] — keep occupant (delete mover)\n"
+        f"  [bold]2[/] — keep mover (delete occupant)\n"
+        f"  [bold]b[/] — keep both (cross-reference only, no deletion)\n"
+        f"  [bold]a[/] — abort run\n"
+    )
+    _console.print("[bold cyan]>[/] ", end="")
+    answer = input("").strip().lower()
+
+    match answer:
+        case "1":
+            # Survivor = occupant.  Cross-reference mover's MBID onto occupant, then delete mover.
+            _write_xref_and_journal(
+                occupant_path,
+                mover_release_id,
+                journal=journal,
+                journal_path=journal_path,
+                now_str=now_str,
+            )
+            dedup_entry = TransactionEntry(
+                timestamp=now_str,
+                release_id=mover_release_id,
+                source=str(mover_path),
+                destination=str(occupant_path),
+                action="deduplicated",
+            )
+            os.unlink(mover_path)
+            append_journal_entry(journal_path, dedup_entry)
+            journal.entries.append(dedup_entry)
+            log.info(
+                "deduplicated",
+                deleted=str(mover_path),
+                survivor=str(occupant_path),
+                deleted_release_id=mover_release_id,
+            )
+            return DuplicateResolution(
+                choice="survivor_occupant",
+                survivor_path=occupant_path,
+                deleted_path=mover_path,
+                deleted_release_id=mover_release_id,
+                secondary_mbid=mover_release_id,
+                proceed_with_move=False,
+            )
+        case "2":
+            # Survivor = mover.  Cross-reference occupant's MBID onto the mover (at its current
+            # source path), then delete the occupant.  The move itself proceeds afterward.
+            _write_xref_and_journal(
+                mover_path,
+                occupant_release_id,
+                journal=journal,
+                journal_path=journal_path,
+                now_str=now_str,
+            )
+            dedup_entry = TransactionEntry(
+                timestamp=now_str,
+                release_id=occupant_release_id,
+                source=str(occupant_path),
+                destination=str(mover_path),
+                action="deduplicated",
+            )
+            os.unlink(occupant_path)
+            append_journal_entry(journal_path, dedup_entry)
+            journal.entries.append(dedup_entry)
+            log.info(
+                "deduplicated",
+                deleted=str(occupant_path),
+                survivor=str(mover_path),
+                deleted_release_id=occupant_release_id,
+            )
+            return DuplicateResolution(
+                choice="survivor_mover",
+                survivor_path=mover_path,
+                deleted_path=occupant_path,
+                deleted_release_id=occupant_release_id,
+                secondary_mbid=occupant_release_id,
+                proceed_with_move=True,
+            )
+        case "b":
+            # Keep both: cross-reference mover's MBID onto occupant; drop the move.
+            _write_xref_and_journal(
+                occupant_path,
+                mover_release_id,
+                journal=journal,
+                journal_path=journal_path,
+                now_str=now_str,
+            )
+            return DuplicateResolution(
+                choice="keep_both",
+                survivor_path=occupant_path,
+                deleted_path=None,
+                deleted_release_id="",
+                secondary_mbid=mover_release_id,
+                proceed_with_move=False,
+            )
+        case _:
+            # Any other input (including "a") aborts the run.
+            log.info("duplicate_group_aborted", occupant=str(occupant_path), mover=str(mover_path))
+            return DuplicateResolution(
+                choice="abort",
+                survivor_path=occupant_path,
+                deleted_path=None,
+                deleted_release_id="",
+                secondary_mbid="",
+                proceed_with_move=False,
+            )
 
 
 def _detect_audio_suffix(path: Path) -> str | None:
@@ -1457,6 +1813,115 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     _repath_vacated: frozenset[Path] = frozenset(src for src, _, _, _, _ in plan_pairs)
     collision_pairs = [(src, dest, acust, length) for src, dest, acust, length, _ in plan_pairs]
     collision_results = _assess_collisions(collision_pairs, vacated_paths=_repath_vacated)
+
+    # Build a dest→(src, rid) lookup for collision resolution.
+    _dest_to_src_rid: dict[Path, tuple[Path, str]] = {dest: (src, rid) for src, dest, _, _, rid in plan_pairs}
+
+    # --- match=True arm: same-audio occupant → shared group-resolution flow (C-DEDUP) ---
+    # For each confirmed same-audio collision, invoke resolve_duplicate_group() which prompts
+    # the operator (survivor / keep-both / abort) and executes the C-DEDUP ordering:
+    # xref write + verify + journal on the survivor before any deletion.
+    # Entries whose move is dropped (survivor_occupant or keep_both) are removed from plan_pairs.
+    # Entries whose move proceeds (survivor_mover) remain in plan_pairs — the occupant was deleted.
+    # An abort result terminates the entire repath run immediately.
+    _repath_drop_indices: set[int] = set()
+    _src_to_plan_idx: dict[Path, int] = {src: i for i, (src, _, _, _, _) in enumerate(plan_pairs)}
+    now_for_dedup = datetime.datetime.now(datetime.UTC)
+    confirmed_matches = [r for r in collision_results if r.match is True]
+    for _match_result in confirmed_matches:
+        _mover_src, _mover_rid = _dest_to_src_rid.get(_match_result.dest, (Path(""), ""))
+        if not _mover_src.name:
+            continue  # pragma: no cover — dest always in plan
+        _plan_idx = _src_to_plan_idx.get(_mover_src, -1)
+        if _plan_idx < 0:
+            continue  # pragma: no cover — src always in plan
+        _occupant_path = _match_result.dest
+        _occupant_rid = _resolve_current_lib(journal).get(_occupant_path, "")
+        resolution = resolve_duplicate_group(
+            _occupant_path,
+            _occupant_rid,
+            _mover_src,
+            _mover_rid,
+            _match_result.method,
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=now_for_dedup,
+            dry_run=dry_run,
+        )
+        match resolution.choice:
+            case "abort":
+                log.info("repath_aborted_by_operator", dest_root=str(dest_root))
+                cache.save()
+                return None
+            case "survivor_occupant" | "keep_both":
+                # Move dropped: occupant stays, mover deleted (or kept at source for keep_both).
+                _repath_drop_indices.add(_plan_idx)
+            case "survivor_mover":
+                # Occupant deleted; move proceeds — keep the entry in plan_pairs.
+                pass
+            case _:  # pragma: no cover
+                pass
+
+    # --- match=None arm: inconclusive occupant → prompt suffix-or-abort ---
+    # When audio comparison is inconclusive (no fingerprint, no AcoustID, duration within
+    # tolerance), the operator is prompted to choose between applying a collision suffix
+    # (keeping both files) or aborting the run.  No deletion is performed for inconclusive
+    # collisions (C-DEDUP: match=None never deletes).
+    confirmed_inconclusives = [r for r in collision_results if r.match is None]
+    for _inc_result in confirmed_inconclusives:
+        _mover_src_inc, _mover_rid_inc = _dest_to_src_rid.get(_inc_result.dest, (Path(""), ""))
+        if not _mover_src_inc.name:
+            continue  # pragma: no cover
+        _plan_idx_inc = _src_to_plan_idx.get(_mover_src_inc, -1)
+        if _plan_idx_inc < 0:
+            continue  # pragma: no cover
+        if _plan_idx_inc in _repath_drop_indices:
+            continue  # already resolved by a match=True arm
+        _occ_rel_inc = (
+            str(_inc_result.dest.relative_to(dest_root))
+            if _inc_result.dest.is_relative_to(dest_root)
+            else str(_inc_result.dest)
+        )
+        _mov_rel_inc = (
+            str(_mover_src_inc.relative_to(dest_root)) if _mover_src_inc.is_relative_to(dest_root) else str(_mover_src_inc)
+        )
+        if dry_run:
+            _console.print(
+                f"\n[bold yellow]Inconclusive collision[/] (evidence: {_markup_escape(_inc_result.method)})\n"
+                f"  occupant: [dim]{_markup_escape(_occ_rel_inc)}[/]\n"
+                f"  mover:    [dim]{_markup_escape(_mov_rel_inc)}[/]\n"
+                f"  [dim](dry-run: would prompt suffix-or-abort)[/]"
+            )
+            # In dry-run, report as a suffix (keep both) without prompting.
+            continue
+        _console.print(
+            f"\n[bold yellow]Inconclusive collision[/] (evidence: {_markup_escape(_inc_result.method)})\n"
+            f"  occupant: [dim]{_markup_escape(_occ_rel_inc)}[/]\n"
+            f"  mover:    [dim]{_markup_escape(_mov_rel_inc)}[/]\n"
+            f"\nChoose:\n"
+            f"  [bold]s[/] — apply collision suffix (keep both files)\n"
+            f"  [bold]a[/] — abort run\n"
+        )
+        _console.print("[bold cyan]>[/] ", end="")
+        _inc_answer = input("").strip().lower()
+        if _inc_answer != "s":
+            log.info("repath_aborted_by_operator_inconclusive", dest_root=str(dest_root))
+            cache.save()
+            return None
+        # Apply suffix: rewrite the destination for this mover.
+        _stub_plan_inc = [CopyPlanEntry(idx=0, src_file=src, dest_file=dest) for src, dest, _, _, _ in plan_pairs]
+        _apply_collision_suffix(_stub_plan_inc, [_inc_result], MBRelease(id=_mover_rid_inc), dest_root)
+        plan_pairs = [
+            (entry.src_file, entry.dest_file, acust, length, rid)
+            for entry, (_, _, acust, length, rid) in zip(_stub_plan_inc, plan_pairs)
+        ]
+        # Rebuild the lookup after suffix application.
+        _dest_to_src_rid = {dest: (src, rid) for src, dest, _, _, rid in plan_pairs}
+        _src_to_plan_idx = {src: i for i, (src, _, _, _, _) in enumerate(plan_pairs)}
+        log.warning("repath_inconclusive_suffix_applied", mover=str(_mover_src_inc))
+
+    # --- match=False arm: confirmed non-match → apply release-identifying suffix ---
     confirmed_nonmatches = [r for r in collision_results if r.match is False]
     if confirmed_nonmatches:
         # Rewrite destinations for confirmed non-matches using a release-identifying suffix
@@ -1480,6 +1945,16 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
             for entry, (_, _, acust, length, rid) in zip(stub_plan, plan_pairs)
         ]
         log.warning("repath_collision_suffix_applied", count=len(confirmed_nonmatches))
+
+    # Drop entries resolved by the match=True arm (survivor_occupant or keep_both).
+    if _repath_drop_indices:
+        plan_pairs = [pair for _i, pair in enumerate(plan_pairs) if _i not in _repath_drop_indices]
+        if not plan_pairs:
+            log.info("repath_all_current", dest_root=str(dest_root))
+            cache.save()
+            if dry_run:
+                return DryRunPlan(pass_name="repath", entries=[], count=0)
+            return None
 
     if dry_run:
         dry_run_entries: list[DryRunEntry] = []

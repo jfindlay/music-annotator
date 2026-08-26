@@ -1407,6 +1407,16 @@ class TrackTags(BaseModel):
     musicbrainz_conductorid: str = ""
     musicbrainz_composerid: str = ""
     musicbrainz_releasetrackid: str = ""
+    musicbrainz_secondary_albumid: str = ""
+    """Secondary release MBIDs, ``"; "``-joined (REND-17 separator), append-only set-union.
+
+    Records every additional release MBID for which this file's audio is a physical copy —
+    duplicate rips, destructive ingest choices, deduplicated copies.  The tag is inert: it
+    never drives path computation, annotation content, or medium selection.  The primary
+    release (``musicbrainz_albumid``) remains the sole annotation source.  Mutations pass
+    through the full tag-write → verify → journal provenance chain under the dedicated
+    journal action ``"cross-referenced"``.
+    """
 
     # CEA tags
     cea_recording_artist: str = ""

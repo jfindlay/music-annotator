@@ -46,6 +46,7 @@ from music_annotator._pipeline_io import (
 )
 from music_annotator._pipeline_maint import (
     _TAG_CACHE_FILENAME,
+    DuplicateResolution,
     TagReadCache,
     _check_dest_root,
     _clamp_maint_dest,
@@ -59,9 +60,12 @@ from music_annotator._pipeline_maint import (
     _resolve_current_lib,
     _tags_from_file_dict,
     _unify_classical_composer_groups,
+    _write_xref_and_journal,
     compose_preflight_report,
     repatch_acoustid_tags,
+    resolve_duplicate_group,
 )
+from music_annotator._tagger import write_secondary_albumid_flac, write_secondary_albumid_mp3
 from music_annotator._tags import _NAME_MAX, _proposed_short, _work_top_dir
 from music_annotator._works import work_group_modal_depth
 from music_annotator.models import (
@@ -12364,3 +12368,1710 @@ class TestTagReadCache:
         os.utime(str(track), (os.stat(str(track)).st_atime + 1, os.stat(str(track)).st_mtime + 1))
 
         assert cache.get(track) is None
+
+
+class TestWriteSecondaryAlbumId:
+    """Unit tests for :func:`write_secondary_albumid_flac` and :func:`write_secondary_albumid_mp3`.
+
+    Verifies append-only set-union semantics, idempotency, and multi-value accumulation for
+    both FLAC and MP3 formats.
+    """
+
+    def test_write_secondary_albumid_flac_adds_new_mbid(self, fs: FakeFilesystem) -> None:
+        """write_secondary_albumid_flac adds a new MBID and returns True.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/track.flac")
+        fs.create_dir("/lib")
+        path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path, TrackTags(title="Test"))
+
+        result = write_secondary_albumid_flac(path, "mbid-secondary-1")
+
+        assert result is True
+        audio = MutagenFLAC(str(path))
+        vals = audio.get("musicbrainz_secondary_albumid") or []
+        assert vals[0] == "mbid-secondary-1"
+
+    def test_write_secondary_albumid_flac_idempotent(self, fs: FakeFilesystem) -> None:
+        """write_secondary_albumid_flac returns False when MBID already present (no-op).
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/track.flac")
+        fs.create_dir("/lib")
+        path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path, TrackTags(title="Test"))
+
+        write_secondary_albumid_flac(path, "mbid-secondary-1")
+        result = write_secondary_albumid_flac(path, "mbid-secondary-1")
+
+        assert result is False
+
+    def test_write_secondary_albumid_flac_appends_second_mbid(self, fs: FakeFilesystem) -> None:
+        """write_secondary_albumid_flac appends a second MBID with '; ' separator.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/track.flac")
+        fs.create_dir("/lib")
+        path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path, TrackTags(title="Test"))
+
+        write_secondary_albumid_flac(path, "mbid-a")
+        write_secondary_albumid_flac(path, "mbid-b")
+
+        audio = MutagenFLAC(str(path))
+        vals = audio.get("musicbrainz_secondary_albumid") or []
+        assert vals[0] == "mbid-a; mbid-b"
+
+    def test_write_secondary_albumid_mp3_adds_new_mbid(self, fs: FakeFilesystem) -> None:
+        """write_secondary_albumid_mp3 adds a new MBID and returns True.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/track.mp3")
+        fs.create_dir("/lib")
+        path.write_bytes(_MINIMAL_MP3)
+        apply_tags_mp3(path, TrackTags(title="Test"))
+
+        result = write_secondary_albumid_mp3(path, "mbid-secondary-1")
+
+        assert result is True
+        id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+        found = ""
+        for frame in id3.getall("TXXX"):  # type: ignore[no-untyped-call]
+            if frame.desc == "MusicBrainz Secondary Album Id":
+                found = str(frame.text[0])
+        assert found == "mbid-secondary-1"
+
+    def test_write_secondary_albumid_mp3_idempotent(self, fs: FakeFilesystem) -> None:
+        """write_secondary_albumid_mp3 returns False when MBID already present (no-op).
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/track.mp3")
+        fs.create_dir("/lib")
+        path.write_bytes(_MINIMAL_MP3)
+        apply_tags_mp3(path, TrackTags(title="Test"))
+
+        write_secondary_albumid_mp3(path, "mbid-secondary-1")
+        result = write_secondary_albumid_mp3(path, "mbid-secondary-1")
+
+        assert result is False
+
+    def test_write_secondary_albumid_mp3_appends_second_mbid(self, fs: FakeFilesystem) -> None:
+        """write_secondary_albumid_mp3 appends a second MBID with '; ' separator.
+
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/track.mp3")
+        fs.create_dir("/lib")
+        path.write_bytes(_MINIMAL_MP3)
+        apply_tags_mp3(path, TrackTags(title="Test"))
+
+        write_secondary_albumid_mp3(path, "mbid-a")
+        write_secondary_albumid_mp3(path, "mbid-b")
+
+        id3 = ID3(str(path))  # type: ignore[no-untyped-call]
+        found = ""
+        for frame in id3.getall("TXXX"):  # type: ignore[no-untyped-call]
+            if frame.desc == "MusicBrainz Secondary Album Id":
+                found = str(frame.text[0])
+        assert found == "mbid-a; mbid-b"
+
+
+class TestResolveCurrentLibNewActions:
+    """Tests for :func:`_resolve_current_lib` with ``"cross-referenced"`` and ``"deduplicated"`` actions.
+
+    Verifies that the new journal actions are handled correctly in the lineage walk.
+    """
+
+    def test_cross_referenced_preserves_primary_release_id(self) -> None:
+        """'cross-referenced' entry preserves the file's primary release_id in the map.
+
+        The entry.release_id carries the secondary MBID; the primary MBID must not be overwritten.
+        """
+        journal = TransactionLog(
+            entries=[
+                TransactionEntry(
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    release_id="primary-rel-1",
+                    source="/src/01.flac",
+                    destination="/lib/A/01.flac",
+                    action="tagged",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-02T00:00:00+00:00",
+                    release_id="secondary-rel-2",  # secondary MBID, not the primary
+                    source="/lib/A/01.flac",
+                    destination="/lib/A/01.flac",
+                    action="cross-referenced",
+                ),
+            ]
+        )
+        result = _resolve_current_lib(journal)
+        assert result[Path("/lib/A/01.flac")] == "primary-rel-1"
+
+    def test_deduplicated_pops_source_path(self) -> None:
+        """'deduplicated' entry removes the deleted copy's path from the map.
+
+        The surviving copy's path remains registered; the deleted copy's path is gone.
+        """
+        journal = TransactionLog(
+            entries=[
+                TransactionEntry(
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    release_id="rel-survivor",
+                    source="/src/survivor.flac",
+                    destination="/lib/A/survivor.flac",
+                    action="tagged",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    release_id="rel-deleted",
+                    source="/src/deleted.flac",
+                    destination="/lib/B/deleted.flac",
+                    action="tagged",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-02T00:00:00+00:00",
+                    release_id="rel-deleted",
+                    source="/lib/B/deleted.flac",
+                    destination="/lib/A/survivor.flac",
+                    action="deduplicated",
+                ),
+            ]
+        )
+        result = _resolve_current_lib(journal)
+        assert Path("/lib/A/survivor.flac") in result
+        assert result[Path("/lib/A/survivor.flac")] == "rel-survivor"
+        assert Path("/lib/B/deleted.flac") not in result
+
+
+class TestWriteXrefAndJournal:
+    """Tests for :func:`_write_xref_and_journal`.
+
+    Verifies the C-PROV chain: tag write → verify → journal entry with action ``"cross-referenced"``.
+    """
+
+    def test_write_xref_flac_journals_cross_referenced(self, fs: FakeFilesystem) -> None:
+        """_write_xref_and_journal writes the secondary MBID and journals a 'cross-referenced' entry.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        survivor = dest_root / "A" / "track.flac"
+        survivor.parent.mkdir(parents=True)
+        survivor.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(survivor, TrackTags(title="Test", musicbrainz_albumid="primary-rel"))
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("", encoding="utf-8")
+        journal = TransactionLog()
+
+        _write_xref_and_journal(
+            survivor,
+            "secondary-rel-1",
+            journal=journal,
+            journal_path=journal_path,
+            now_str="2024-01-01T00:00:00+00:00",
+        )
+
+        # Journal has one cross-referenced entry with the secondary MBID.
+        assert len(journal.entries) == 1
+        entry = journal.entries[0]
+        assert entry.action == "cross-referenced"
+        assert entry.release_id == "secondary-rel-1"
+        assert entry.source == str(survivor)
+        assert entry.destination == str(survivor)
+
+        # Tag is written to the file.
+        audio = MutagenFLAC(str(survivor))
+        vals = audio.get("musicbrainz_secondary_albumid") or []
+        assert "secondary-rel-1" in vals[0]
+
+    def test_write_xref_mp3_journals_cross_referenced(self, fs: FakeFilesystem) -> None:
+        """_write_xref_and_journal works for MP3 files.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        survivor = dest_root / "A" / "track.mp3"
+        survivor.parent.mkdir(parents=True)
+        survivor.write_bytes(_MINIMAL_MP3)
+        apply_tags_mp3(survivor, TrackTags(title="Test", musicbrainz_albumid="primary-rel"))
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("", encoding="utf-8")
+        journal = TransactionLog()
+
+        _write_xref_and_journal(
+            survivor,
+            "secondary-rel-1",
+            journal=journal,
+            journal_path=journal_path,
+            now_str="2024-01-01T00:00:00+00:00",
+        )
+
+        assert len(journal.entries) == 1
+        assert journal.entries[0].action == "cross-referenced"
+        assert journal.entries[0].release_id == "secondary-rel-1"
+
+
+class TestResolveDuplicateGroup:
+    """Tests for :func:`resolve_duplicate_group` — the shared group-resolution flow.
+
+    Covers all three operator arms (survivor_occupant, survivor_mover, keep_both, abort),
+    dry-run reporting, and idempotency (keep-both re-run → silent drop, no prompt).
+    """
+
+    @staticmethod
+    def _make_flac(dest_root: Path, rel_path: str, release_id: str) -> Path:
+        """Create a minimal FLAC file with the given release_id tag.
+
+        :param dest_root: Library root.
+        :param rel_path: Relative path within the library.
+        :param release_id: MUSICBRAINZ_ALBUMID to embed.
+        :returns: Full absolute path of the created file.
+        """
+        full_path = dest_root / rel_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(full_path, TrackTags(title="Test", musicbrainz_albumid=release_id))
+        return full_path
+
+    @staticmethod
+    def _make_journal(dest_root: Path, entries: list[dict[str, str]]) -> tuple[TransactionLog, Path]:
+        """Write a JSONL journal and return the in-memory TransactionLog and journal path.
+
+        :param dest_root: Library root.
+        :param entries: List of raw entry dicts.
+        :returns: Tuple of (TransactionLog, journal_path).
+        """
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+        return read_journal(journal_path), journal_path
+
+    def test_survivor_occupant_deletes_mover_and_journals(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """resolve_duplicate_group choice '1' (survivor=occupant): mover deleted, xref journalled.
+
+        Verifies:
+        - Mover file is deleted from disk.
+        - 'cross-referenced' journal entry precedes 'deduplicated' entry (C-DEDUP ordering).
+        - DuplicateResolution.choice == 'survivor_occupant', proceed_with_move == False.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        occupant = self._make_flac(dest_root, "A/occupant.flac", "rel-occupant")
+        mover = self._make_flac(dest_root, "B/mover.flac", "rel-mover")
+
+        journal, journal_path = self._make_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occupant",
+                    "source": "/src/occ.flac",
+                    "destination": str(occupant),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(mover),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="1")
+
+        resolution = resolve_duplicate_group(
+            occupant,
+            "rel-occupant",
+            mover,
+            "rel-mover",
+            "sha256",
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=datetime.datetime(2024, 1, 2, tzinfo=datetime.UTC),
+        )
+
+        assert resolution.choice == "survivor_occupant"
+        assert resolution.proceed_with_move is False
+        assert not mover.exists(), "Mover must be deleted"
+        assert occupant.exists(), "Occupant must survive"
+
+        # C-DEDUP ordering: cross-referenced before deduplicated.
+        new_entries = [e for e in journal.entries if e.action in {"cross-referenced", "deduplicated"}]
+        assert len(new_entries) == 2
+        assert new_entries[0].action == "cross-referenced"
+        assert new_entries[0].release_id == "rel-mover"
+        assert new_entries[1].action == "deduplicated"
+        assert new_entries[1].release_id == "rel-mover"
+        assert new_entries[1].source == str(mover)
+        assert new_entries[1].destination == str(occupant)
+
+    def test_survivor_mover_deletes_occupant_and_journals(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """resolve_duplicate_group choice '2' (survivor=mover): occupant deleted, xref journalled.
+
+        Verifies:
+        - Occupant file is deleted from disk.
+        - 'cross-referenced' journal entry precedes 'deduplicated' entry (C-DEDUP ordering).
+        - DuplicateResolution.choice == 'survivor_mover', proceed_with_move == True.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        occupant = self._make_flac(dest_root, "A/occupant.flac", "rel-occupant")
+        mover = self._make_flac(dest_root, "B/mover.flac", "rel-mover")
+
+        journal, journal_path = self._make_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occupant",
+                    "source": "/src/occ.flac",
+                    "destination": str(occupant),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(mover),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="2")
+
+        resolution = resolve_duplicate_group(
+            occupant,
+            "rel-occupant",
+            mover,
+            "rel-mover",
+            "sha256",
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=datetime.datetime(2024, 1, 2, tzinfo=datetime.UTC),
+        )
+
+        assert resolution.choice == "survivor_mover"
+        assert resolution.proceed_with_move is True
+        assert not occupant.exists(), "Occupant must be deleted"
+        assert mover.exists(), "Mover must survive"
+
+        # C-DEDUP ordering: cross-referenced before deduplicated.
+        new_entries = [e for e in journal.entries if e.action in {"cross-referenced", "deduplicated"}]
+        assert len(new_entries) == 2
+        assert new_entries[0].action == "cross-referenced"
+        assert new_entries[0].release_id == "rel-occupant"
+        assert new_entries[1].action == "deduplicated"
+        assert new_entries[1].release_id == "rel-occupant"
+        assert new_entries[1].source == str(occupant)
+        assert new_entries[1].destination == str(mover)
+
+    def test_keep_both_cross_references_and_drops_move(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """resolve_duplicate_group choice 'b' (keep-both): xref written, no deletion.
+
+        Verifies:
+        - Both files remain on disk.
+        - 'cross-referenced' journal entry written with mover's MBID as secondary.
+        - DuplicateResolution.choice == 'keep_both', proceed_with_move == False.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        occupant = self._make_flac(dest_root, "A/occupant.flac", "rel-occupant")
+        mover = self._make_flac(dest_root, "B/mover.flac", "rel-mover")
+
+        journal, journal_path = self._make_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occupant",
+                    "source": "/src/occ.flac",
+                    "destination": str(occupant),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(mover),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="b")
+
+        resolution = resolve_duplicate_group(
+            occupant,
+            "rel-occupant",
+            mover,
+            "rel-mover",
+            "sha256",
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=datetime.datetime(2024, 1, 2, tzinfo=datetime.UTC),
+        )
+
+        assert resolution.choice == "keep_both"
+        assert resolution.proceed_with_move is False
+        assert occupant.exists()
+        assert mover.exists()
+
+        xref_entries = [e for e in journal.entries if e.action == "cross-referenced"]
+        assert len(xref_entries) == 1
+        assert xref_entries[0].release_id == "rel-mover"
+
+    def test_abort_returns_abort_choice(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """resolve_duplicate_group choice 'a' (abort): no changes, choice == 'abort'.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        occupant = self._make_flac(dest_root, "A/occupant.flac", "rel-occupant")
+        mover = self._make_flac(dest_root, "B/mover.flac", "rel-mover")
+
+        journal, journal_path = self._make_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occupant",
+                    "source": "/src/occ.flac",
+                    "destination": str(occupant),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="a")
+
+        resolution = resolve_duplicate_group(
+            occupant,
+            "rel-occupant",
+            mover,
+            "rel-mover",
+            "sha256",
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=datetime.datetime(2024, 1, 2, tzinfo=datetime.UTC),
+        )
+
+        assert resolution.choice == "abort"
+        assert resolution.proceed_with_move is False
+        assert occupant.exists()
+        assert mover.exists()
+        # No new journal entries.
+        assert not any(e.action in {"cross-referenced", "deduplicated"} for e in journal.entries)
+
+    def test_keep_both_rerun_silent_drop_no_prompt(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """keep-both re-run: mover's MBID already in occupant's secondary set → silent drop, no prompt.
+
+        Idempotency: if the mover's release MBID is already in the occupant's secondary MBID set,
+        the group is silently dropped without prompting the operator.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        occupant = self._make_flac(dest_root, "A/occupant.flac", "rel-occupant")
+        mover = self._make_flac(dest_root, "B/mover.flac", "rel-mover")
+
+        # Pre-write the mover's MBID as a secondary on the occupant (simulating a prior keep-both).
+        write_secondary_albumid_flac(occupant, "rel-mover")
+
+        journal, journal_path = self._make_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occupant",
+                    "source": "/src/occ.flac",
+                    "destination": str(occupant),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mock_input = mocker.patch("builtins.input")
+
+        resolution = resolve_duplicate_group(
+            occupant,
+            "rel-occupant",
+            mover,
+            "rel-mover",
+            "sha256",
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=datetime.datetime(2024, 1, 2, tzinfo=datetime.UTC),
+        )
+
+        # No prompt shown — idempotent silent drop.
+        mock_input.assert_not_called()
+        assert resolution.choice == "keep_both"
+        assert resolution.proceed_with_move is False
+
+    def test_dry_run_reports_without_prompting(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """resolve_duplicate_group dry_run=True reports the group without prompting or modifying files.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        occupant = self._make_flac(dest_root, "A/occupant.flac", "rel-occupant")
+        mover = self._make_flac(dest_root, "B/mover.flac", "rel-mover")
+
+        journal, journal_path = self._make_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occupant",
+                    "source": "/src/occ.flac",
+                    "destination": str(occupant),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mock_input = mocker.patch("builtins.input")
+
+        resolution = resolve_duplicate_group(
+            occupant,
+            "rel-occupant",
+            mover,
+            "rel-mover",
+            "sha256",
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=datetime.datetime(2024, 1, 2, tzinfo=datetime.UTC),
+            dry_run=True,
+        )
+
+        mock_input.assert_not_called()
+        assert resolution.choice == "keep_both"
+        assert resolution.proceed_with_move is False
+        # No journal mutations in dry-run.
+        assert not any(e.action in {"cross-referenced", "deduplicated"} for e in journal.entries)
+
+
+class TestDuplicateResolutionInit:
+    """Tests for :class:`DuplicateResolution` initialisation.
+
+    Verifies that all attributes are set correctly from constructor arguments.
+    """
+
+    def test_all_attributes_set(self) -> None:
+        """DuplicateResolution stores all constructor arguments as attributes.
+
+        :returns: None.
+        """
+        survivor = Path("/lib/survivor.flac")
+        deleted = Path("/lib/deleted.flac")
+        res = DuplicateResolution(
+            choice="survivor_occupant",
+            survivor_path=survivor,
+            deleted_path=deleted,
+            deleted_release_id="rel-deleted",
+            secondary_mbid="rel-secondary",
+            proceed_with_move=False,
+        )
+        assert res.choice == "survivor_occupant"
+        assert res.survivor_path == survivor
+        assert res.deleted_path == deleted
+        assert res.deleted_release_id == "rel-deleted"
+        assert res.secondary_mbid == "rel-secondary"
+        assert res.proceed_with_move is False
+
+
+class TestWriteXrefAndJournalVerificationFailure:
+    """Tests for :func:`_write_xref_and_journal` verification failure path.
+
+    Verifies that a RuntimeError is raised when the tag write does not land correctly.
+    """
+
+    def test_verification_failure_raises_runtime_error(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """_write_xref_and_journal raises RuntimeError when read-back does not contain the MBID.
+
+        Simulates a write that succeeds but the read-back does not contain the expected MBID
+        (e.g. a bug in the write function).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        survivor = dest_root / "A" / "track.flac"
+        survivor.parent.mkdir(parents=True)
+        survivor.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(survivor, TrackTags(title="Test"))
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("", encoding="utf-8")
+        journal = TransactionLog()
+
+        # Patch write_secondary_albumid_flac to be a no-op (doesn't actually write).
+        mocker.patch("music_annotator._pipeline_maint.write_secondary_albumid_flac", return_value=False)
+
+        with pytest.raises(RuntimeError, match="cross-reference write verification failed"):
+            _write_xref_and_journal(
+                survivor,
+                "secondary-rel-1",
+                journal=journal,
+                journal_path=journal_path,
+                now_str="2024-01-01T00:00:00+00:00",
+            )
+
+
+class TestResolveDuplicateGroupEdgeCases:
+    """Edge-case tests for :func:`resolve_duplicate_group`.
+
+    Covers MP3 idempotency check and tag-read exception handling.
+    """
+
+    def test_mp3_occupant_idempotency_check(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """resolve_duplicate_group checks MP3 occupant's secondary MBID set for idempotency.
+
+        When the mover's MBID is already in the MP3 occupant's secondary MBID set, the group
+        is silently dropped without prompting.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        occupant = dest_root / "A" / "occupant.mp3"
+        occupant.parent.mkdir(parents=True)
+        occupant.write_bytes(_MINIMAL_MP3)
+        apply_tags_mp3(occupant, TrackTags(title="Test", musicbrainz_albumid="rel-occupant"))
+
+        mover = dest_root / "B" / "mover.mp3"
+        mover.parent.mkdir(parents=True)
+        mover.write_bytes(_MINIMAL_MP3)
+        apply_tags_mp3(mover, TrackTags(title="Test", musicbrainz_albumid="rel-mover"))
+
+        # Pre-write the mover's MBID as a secondary on the MP3 occupant.
+        write_secondary_albumid_mp3(occupant, "rel-mover")
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("", encoding="utf-8")
+        journal = TransactionLog()
+
+        mock_input = mocker.patch("builtins.input")
+
+        resolution = resolve_duplicate_group(
+            occupant,
+            "rel-occupant",
+            mover,
+            "rel-mover",
+            "sha256",
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=datetime.datetime(2024, 1, 2, tzinfo=datetime.UTC),
+        )
+
+        mock_input.assert_not_called()
+        assert resolution.choice == "keep_both"
+
+    def test_tag_read_exception_treated_as_not_cross_referenced(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """resolve_duplicate_group treats tag-read exception as not-yet-cross-referenced.
+
+        When reading the occupant's tags raises an exception during the idempotency check,
+        the function proceeds to prompt the operator rather than silently dropping.
+        The operator chooses abort so no further tag reads are needed.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        occupant = dest_root / "A" / "occupant.flac"
+        occupant.parent.mkdir(parents=True)
+        occupant.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(occupant, TrackTags(title="Test", musicbrainz_albumid="rel-occupant"))
+
+        mover = dest_root / "B" / "mover.flac"
+        mover.parent.mkdir(parents=True)
+        mover.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(mover, TrackTags(title="Test", musicbrainz_albumid="rel-mover"))
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("", encoding="utf-8")
+        journal = TransactionLog()
+
+        # Patch _read_tags_flac to raise an exception only on the first call (idempotency check).
+        # Subsequent calls (from _write_xref_and_journal) use the real function.
+        call_count = [0]
+
+        def _patched_read(path: Path) -> dict[str, str]:
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RuntimeError("read error")
+            return _read_tags_flac(path)
+
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=_patched_read)
+        # Operator aborts — no further file writes needed.
+        mocker.patch("builtins.input", return_value="a")
+
+        resolution = resolve_duplicate_group(
+            occupant,
+            "rel-occupant",
+            mover,
+            "rel-mover",
+            "sha256",
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=datetime.datetime(2024, 1, 2, tzinfo=datetime.UTC),
+        )
+
+        # Exception treated as not-yet-cross-referenced; operator was prompted and chose abort.
+        assert resolution.choice == "abort"
+
+
+class TestRepathMatchTrueAndNoneArms:
+    """Tests for repath() match=True (same-audio) and match=None (inconclusive) collision arms.
+
+    Verifies the plan-time completeness property: every collision outcome is resolved at plan
+    time so no execution-time C-NOCLOBBER refusal occurs.
+    """
+
+    @staticmethod
+    def _make_tags(composer: str, work: str, mvt: str, title: str) -> TrackTags:
+        """Build minimal TrackTags for repath testing.
+
+        :param composer: CEA/CWP composer last name.
+        :param work: CWP work top name.
+        :param mvt: CWP movement number.
+        :param title: Track title.
+        :returns: A :class:`TrackTags` instance.
+        """
+        return TrackTags(
+            cwp_composer_lastnames=composer,
+            cwp_work_top=work,
+            recording_date="2020",
+            cwp_movt_num=mvt,
+            movementtotal="1",
+            cwp_part_levels="1",
+            title=title,
+            artist="Karajan",
+        )
+
+    def test_match_true_survivor_occupant_drops_move(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() match=True arm: survivor=occupant → mover deleted, move dropped from plan.
+
+        Sets up a library where the mover's planned destination is already occupied by a file
+        with the same SHA-256 (same audio).  Operator chooses '1' (keep occupant).
+        Asserts: mover deleted, occupant survives, 'cross-referenced' + 'deduplicated' journalled.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        # The mover is at an old path; its planned destination is already occupied.
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        # Compute the planned destination.
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        # Occupant at the planned destination with the same bytes (same SHA-256).
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Patch _assess_collisions to return match=True for the planned destination.
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_dest, match=True, method="sha256", detail="same")],
+        )
+        mocker.patch("builtins.input", return_value="1")
+
+        repath(dest_root, yes=True)
+
+        # Mover is deleted; occupant survives.
+        assert not old_path.exists()
+        assert new_dest.exists()
+
+        # Journal has cross-referenced + deduplicated entries.
+        journal = read_journal(dest_root / "music_annotator_journal.json")
+        actions = [e.action for e in journal.entries]
+        assert "cross-referenced" in actions
+        assert "deduplicated" in actions
+        # C-DEDUP ordering: cross-referenced before deduplicated.
+        xref_idx = next(i for i, e in enumerate(journal.entries) if e.action == "cross-referenced")
+        dedup_idx = next(i for i, e in enumerate(journal.entries) if e.action == "deduplicated")
+        assert xref_idx < dedup_idx
+
+    def test_match_true_survivor_mover_deletes_occupant_and_moves(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() match=True arm: survivor=mover → occupant deleted, move proceeds.
+
+        Operator chooses '2' (keep mover).  Asserts: occupant deleted, mover moved to destination.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_dest, match=True, method="sha256", detail="same")],
+        )
+        mocker.patch("builtins.input", return_value="2")
+
+        repath(dest_root, yes=True)
+
+        # Occupant deleted; mover moved to destination.
+        assert not old_path.exists()
+        assert new_dest.exists()
+
+        journal = read_journal(dest_root / "music_annotator_journal.json")
+        actions = [e.action for e in journal.entries]
+        assert "cross-referenced" in actions
+        assert "deduplicated" in actions
+        assert "repathed" in actions
+
+    def test_match_true_keep_both_drops_move_no_deletion(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() match=True arm: keep-both → xref written, move dropped, no deletion.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_dest, match=True, method="sha256", detail="same")],
+        )
+        mocker.patch("builtins.input", return_value="b")
+
+        repath(dest_root, yes=True)
+
+        # Both files remain on disk.
+        assert old_path.exists()
+        assert new_dest.exists()
+
+        journal = read_journal(dest_root / "music_annotator_journal.json")
+        actions = [e.action for e in journal.entries]
+        assert "cross-referenced" in actions
+        assert "deduplicated" not in actions
+        assert "repathed" not in actions
+
+    def test_match_true_abort_returns_none(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() match=True arm: abort → repath returns None, no files moved.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_dest, match=True, method="sha256", detail="same")],
+        )
+        mocker.patch("builtins.input", return_value="a")
+
+        result = repath(dest_root, yes=True)
+
+        assert result is None
+        assert old_path.exists()
+        assert new_dest.exists()
+
+    def test_match_true_keep_both_rerun_silent_drop(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() keep-both re-run: mover's MBID already in occupant's secondary set → silent drop.
+
+        On a second run after keep-both, the mover's MBID is already in the occupant's secondary
+        MBID set.  The group is silently dropped without prompting.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        # Pre-write the mover's MBID as a secondary on the occupant (simulating a prior keep-both).
+        write_secondary_albumid_flac(new_dest, "rel-mover")
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_dest, match=True, method="sha256", detail="same")],
+        )
+        mock_input = mocker.patch("builtins.input")
+
+        repath(dest_root, yes=True)
+
+        # No prompt — silent drop.
+        mock_input.assert_not_called()
+        # Both files remain.
+        assert old_path.exists()
+        assert new_dest.exists()
+
+    def test_match_none_suffix_arm(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() match=None arm: operator chooses 's' (suffix) → collision suffix applied.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_dest, match=None, method="unknown", detail="inconclusive")],
+        )
+        mocker.patch("builtins.input", return_value="s")
+
+        repath(dest_root, yes=True)
+
+        # Mover moved to a suffixed destination (not the original new_dest).
+        assert not old_path.exists()
+        assert new_dest.exists()  # Occupant untouched.
+
+        journal = read_journal(dest_root / "music_annotator_journal.json")
+        repathed = [e for e in journal.entries if e.action == "repathed"]
+        assert len(repathed) == 1
+        # The destination must differ from new_dest (suffix was applied).
+        assert repathed[0].destination != str(new_dest)
+
+    def test_match_none_abort_arm(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() match=None arm: operator chooses 'a' (abort) → repath returns None.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_dest, match=None, method="unknown", detail="inconclusive")],
+        )
+        mocker.patch("builtins.input", return_value="a")
+
+        result = repath(dest_root, yes=True)
+
+        assert result is None
+        assert old_path.exists()
+        assert new_dest.exists()
+
+    def test_match_none_dry_run_reports_without_prompting(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() match=None dry_run=True: reports inconclusive collision without prompting.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_dest, match=None, method="unknown", detail="inconclusive")],
+        )
+        mock_input = mocker.patch("builtins.input")
+
+        result = repath(dest_root, dry_run=True)
+
+        mock_input.assert_not_called()
+        # dry_run returns a DryRunPlan (the mover is still in the plan, just reported).
+        assert result is not None
+
+    def test_plan_completeness_property_no_unresolved_collision(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Property: a plan reaching _move_verify_journal has no move whose destination is occupied.
+
+        After all collision arms resolve, no move in the final plan has a destination that is
+        occupied by a non-vacated path.  This test verifies the property by checking that
+        _move_verify_journal is called with a plan where no destination is occupied.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_dest, match=True, method="sha256", detail="same")],
+        )
+        # Operator chooses survivor=occupant → mover dropped from plan.
+        mocker.patch("builtins.input", return_value="1")
+
+        captured_plan: list[list[tuple[Path, Path]]] = []
+
+        def capturing_mvj(
+            plan_pairs: list[tuple[Path, Path]],
+            *,
+            journal: TransactionLog,
+            journal_path: Path,
+            action: str,
+            dest_root: Path,
+            now: datetime.datetime,
+            release_id: str = "",
+            cache: TagReadCache | None = None,
+        ) -> int:
+            captured_plan.append(list(plan_pairs))
+            return _move_verify_journal(
+                plan_pairs,
+                journal=journal,
+                journal_path=journal_path,
+                action=action,
+                dest_root=dest_root,
+                now=now,
+                release_id=release_id,
+                cache=cache,
+            )
+
+        mocker.patch("music_annotator._pipeline_maint._move_verify_journal", side_effect=capturing_mvj)
+
+        repath(dest_root, yes=True)
+
+        # _move_verify_journal was not called (plan was empty after drop).
+        # OR if called, no destination in the plan is occupied by a non-vacated path.
+        for plan in captured_plan:
+            vacated = {src for src, _ in plan}
+            for _, dest in plan:
+                if dest.exists() and dest not in vacated:
+                    raise AssertionError(f"Plan contains move to occupied non-vacated destination: {dest}")
+
+    def test_match_true_all_dropped_empty_plan_returns_none(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() match=True arm: all entries dropped → empty plan → returns None.
+
+        When all plan entries are resolved as survivor_occupant or keep_both, the plan becomes
+        empty after dropping.  repath() returns None (nothing to move).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_dest, match=True, method="sha256", detail="same")],
+        )
+        # Operator chooses survivor=occupant → mover dropped from plan → plan empty.
+        mocker.patch("builtins.input", return_value="1")
+
+        result = repath(dest_root, yes=True)
+
+        assert result is None
+        # Mover deleted; occupant survives.
+        assert not old_path.exists()
+        assert new_dest.exists()
+
+    def test_match_true_all_dropped_empty_plan_dry_run_returns_empty(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() match=True arm dry_run: all entries dropped → empty DryRunPlan returned.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path, dest=new_dest, match=True, method="sha256", detail="same")],
+        )
+        # In dry-run, resolve_duplicate_group returns keep_both without prompting.
+
+        result = repath(dest_root, dry_run=True)
+
+        # Dry-run with all entries dropped → empty DryRunPlan.
+        assert result is not None
+        assert result.count == 0
+
+    def test_match_true_and_none_same_entry_skips_none_arm(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() match=None arm skips entries already resolved by match=True arm.
+
+        When a plan entry is resolved by the match=True arm (dropped), the match=None arm
+        must not re-process it.  This test verifies that the _plan_idx_inc in _repath_drop_indices
+        guard prevents double-processing.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        new_dest.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest, tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ",
+                    "source": "/src/occ.flac",
+                    "destination": str(new_dest),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Return both match=True and match=None for the same destination.
+        # The match=True arm resolves first (survivor_occupant → drop), so the match=None arm
+        # must skip the already-dropped entry.
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[
+                AudioCompareResult(src=old_path, dest=new_dest, match=True, method="sha256", detail="same"),
+                AudioCompareResult(src=old_path, dest=new_dest, match=None, method="unknown", detail="inconclusive"),
+            ],
+        )
+        # Only one prompt for the match=True arm; match=None arm skips.
+        input_calls: list[str] = ["1"]
+        mocker.patch("builtins.input", side_effect=input_calls)
+
+        repath(dest_root, yes=True)
+
+        # Only one input call (for the match=True arm); match=None arm did not prompt.
+        # Mover deleted; occupant survives.
+        assert not old_path.exists()
+        assert new_dest.exists()
+
+    def test_match_true_partial_drop_remaining_entries_proceed(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """repath() match=True arm: some entries dropped, remaining entries proceed normally.
+
+        When only some plan entries are resolved as survivor_occupant (dropped), the remaining
+        entries are not dropped and proceed through _move_verify_journal.  This exercises the
+        branch where plan_pairs is non-empty after the drop.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File 1: will be dropped (match=True, survivor=occupant).
+        tags1 = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+        old_rel1 = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path1 = dest_root / old_rel1
+        old_path1.parent.mkdir(parents=True, exist_ok=True)
+        old_path1.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path1, tags1)
+
+        new_dest1 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags1, global_track_idx=0).with_suffix(".flac")
+        new_dest1.parent.mkdir(parents=True, exist_ok=True)
+        new_dest1.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(new_dest1, tags1)
+
+        # File 2: will proceed normally (no collision).
+        tags2 = self._make_tags("Mozart", "Symphony No. 40", "1", "Molto allegro")
+        old_rel2 = "Mozart - Karajan/OldWork2 [rec 2020]/01 - Molto allegro.flac"
+        old_path2 = dest_root / old_rel2
+        old_path2.parent.mkdir(parents=True, exist_ok=True)
+        old_path2.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path2, tags2)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occ1",
+                    "source": "/src/occ1.flac",
+                    "destination": str(new_dest1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover1",
+                    "source": "/src/mov1.flac",
+                    "destination": str(old_path1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover2",
+                    "source": "/src/mov2.flac",
+                    "destination": str(old_path2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Only file 1 has a match=True collision; file 2 has no collision.
+        mocker.patch(
+            "music_annotator._pipeline_maint._assess_collisions",
+            return_value=[AudioCompareResult(src=old_path1, dest=new_dest1, match=True, method="sha256", detail="same")],
+        )
+        # Operator chooses survivor=occupant for file 1 → drop file 1 from plan.
+        mocker.patch("builtins.input", return_value="1")
+
+        repath(dest_root, yes=True)
+
+        # File 1 mover deleted; file 2 moved to its new destination.
+        assert not old_path1.exists()
+        assert new_dest1.exists()
+        assert not old_path2.exists()  # File 2 was moved.
+
+        journal = read_journal(dest_root / "music_annotator_journal.json")
+        actions = [e.action for e in journal.entries]
+        assert "cross-referenced" in actions
+        assert "deduplicated" in actions
+        assert "repathed" in actions  # File 2 was repathed.
+
+    def test_execution_time_noclobber_still_raises(self, fs: FakeFilesystem) -> None:
+        """Execution-time C-NOCLOBBER refusal still raises RuntimeError (bug-indicating).
+
+        When a destination is occupied at execution time (not caught at plan time), the
+        C-NOCLOBBER check in _execute_single_move raises RuntimeError.  This is unchanged
+        and now indicates a defect in plan construction.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = self._make_tags("Beethoven", "Symphony No. 5", "1", "Allegro con brio")
+
+        old_rel = "Beethoven - Karajan/OldWork [rec 2020]/01 - Allegro con brio.flac"
+        old_path = dest_root / old_rel
+        old_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(old_path, tags)
+
+        new_dest = build_dest_path(dest_root, MBRelease(), MBTrack(), tags, global_track_idx=0).with_suffix(".flac")
+        new_dest.parent.mkdir(parents=True, exist_ok=True)
+        # Occupant with DIFFERENT content (not same SHA-256) — non-dedup collision.
+        new_dest.write_bytes(_MINIMAL_FLAC + b"\x00extra")
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(old_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # _assess_collisions returns match=False (different content) → suffix applied.
+        # But then we force the destination to be occupied at execution time by patching
+        # _move_verify_journal to call _execute_single_move directly with the original dest.
+        # Instead, test _execute_single_move directly with a pre-existing different-content dest.
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("", encoding="utf-8")
+        journal = read_journal(journal_path)
+
+        with pytest.raises(RuntimeError, match="C-NOCLOBBER"):
+            _execute_single_move(
+                old_path,
+                new_dest,
+                journal=journal,
+                journal_path=journal_path,
+                action="repathed",
+                dest_root=dest_root,
+                now_str="2024-01-01T00:00:00+00:00",
+                release_id="",
+            )
