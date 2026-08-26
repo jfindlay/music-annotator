@@ -758,6 +758,40 @@ The register is seed, not closure: new cases append.
 - **EPIST-8 (adjudicated) — Provenance sidecar.**  The sidecar mechanism, monotonically upgradeable
   only, is ratified as the library-partition realisation of 5.1 and 5.5; monotonicity is 5.2
   enforced structurally — degradation cannot be recorded as progress.
+- **EPIST-9 (adjudicated) — Secondary release cross-references.**  When one physical copy backs
+  audio that belongs to more than one release — duplicate rips, destructive ingest choices,
+  deduplicated copies — the surviving file references every additional release by MBID in
+  `MUSICBRAINZ_SECONDARY_ALBUMID` (TXXX description `"MusicBrainz Secondary Album Id"`), an
+  additive own-namespace extension per standing rule 2: neither CE nor Picard carries a
+  multi-release idiom to adopt, and the release-group id does not cover the case (the duplicated
+  releases need not share a release group).  Payload is release MBIDs only, `"; "`-joined
+  (REND-17), append-only set-union.  The tag is inert: it never drives path computation,
+  annotation content, or medium selection — the single-valued `MUSICBRAINZ_ALBUMID` remains the
+  sole annotation source.  Mutations require operator confirmation and pass through the full
+  tag-write → verify → journal provenance chain under the dedicated journal action
+  `"cross-referenced"`, whose journal `release_id` carries the *secondary* MBID being added —
+  deliberately not the file's primary, so audit passes that compare embedded album ids to journal
+  entries exclude this action.  ID-only is a deliberate floor: track-level correspondence is
+  recoverable by a recording→release join against MB, and medium/position payloads are
+  annotation-shaped and would erode inertness.  Derives from 5.4, 5.1; standing rule 2; P3.
+- **EPIST-10 (adjudicated) — Duplicate-recording deletion (bounded completionism exception).**
+  Physical copies of the same audio — identity established by AcoustID-cluster match, byte
+  identity qualifying a fortiori; inconclusive evidence never qualifies — may be deleted on
+  per-group operator confirmation, the operator choosing the surviving copy.  The survivor gains
+  the deleted copies' release MBIDs per EPIST-9 *before* any deletion executes: the reference
+  must exist durably before the bytes disappear.  Each deletion is journaled under the dedicated
+  action `"deduplicated"` (source = deleted path, destination = surviving path, release_id = the
+  deleted copy's release MBID), preserving the deleted copy's complete lineage.  Identity
+  tolerance explicitly covers production-process variation — lead-in/lead-out silence length,
+  minor post-final-mixdown gain adjustment: different bytes, same performance.  The ruling is a
+  deliberate, bounded exception to this library's completionist and lossless posture, and the
+  tension is recorded rather than smoothed: the contrary principle is convenience — one physical
+  copy per performance, plus the set of release MBIDs in which it appears, is adjudged
+  sufficient record.  The higher goal beyond rigorous scholarship is the experience of the
+  natural virtues of a fine library; the creativity assembled and organized is ultimately
+  incomplete, in the same way that life itself is always incomplete.  Declining deletion is always
+  available (keep both copies, cross-referenced) and is never fatal.  Derives from 5.4, 5.1; P2, P3;
+  realises EPIST-9.
 
 ## CE-divergence register
 

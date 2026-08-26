@@ -47,16 +47,32 @@ Frozen at derivation (operator rulings 2026-08-25):
 - **C-XREF** — cross-references are ID-only, append-only, and inert: secondary release references never drive path
   computation, annotation content, or medium selection; the primary release (single-valued `MUSICBRAINZ_ALBUMID`) remains
   the sole annotation source.  Cross-reference tag mutations require operator confirmation and pass through the full
-  C-PROV chain (tag write → verify → journal) with a dedicated journal action.  Exact tag vocabulary and journal action
-  name are adjudicated in the schema session and appended to the STYLEGUIDE case register (C-CASE append-only discipline).
+  C-PROV chain (tag write → verify → journal) with a dedicated journal action.  **Adjudicated (S3, 2026-08-26; EPIST-9):**
+  tag `MUSICBRAINZ_SECONDARY_ALBUMID` / TXXX `"MusicBrainz Secondary Album Id"`; payload release MBIDs only, `"; "`-joined
+  scalar (REND-17 separator; the read plumbing is `str→str` and native multi-value would be truncated by `v[0]` read-back),
+  append-only set-union; journal action `"cross-referenced"` with `release_id` = the *secondary* MBID being added;
+  `_resolve_current_lib` treats it as an in-place re-registration (like `"enriched"`); audit primary-id equality checks
+  exclude the action.
+- **C-DEDUP** — frozen at S3 (2026-08-26; EPIST-10, operator ruling): physical copies of the same audio may be deleted,
+  bounded by (1) `match=True` identity evidence — AcoustID cluster, byte identity a fortiori; `match=None` never deletes —
+  and (2) per-group operator confirmation with the operator choosing the survivor.  Ordering invariant: the survivor's
+  cross-reference write + verify + `"cross-referenced"` journal entry complete **before** any deletion executes (the
+  reference exists durably before the bytes disappear).  Deletions are journaled per file with action `"deduplicated"`
+  (source = deleted path, destination = surviving path, release_id = deleted copy's release MBID);
+  `_resolve_current_lib` gains a pop-the-source arm for it (neither a move nor an in-place update).  The group prompt
+  always offers keep-both (cross-reference only, non-fatal decline) and abort; prompts survive `--yes` (integrity
+  prompts are not bulk consent); `--dry-run` reports, never prompts, never deletes.  Identity tolerance covers
+  production-process variation (lead-in/out silence, minor post-mixdown gain).  This is a deliberate bounded exception
+  to the completionist posture — rationale recorded in EPIST-10.
 
 ## Sessions
 
 Ordering rationale: S1/S2 close the operational emergency (the journal store) and are adjudication-free — they land
 first.  S3 is the interactive adjudication that gates all cross-reference work.  S4 restores a completable repath; S5
 reconstructs past destructive choices from journal evidence; S6 is conditional on S5's census finding evidence gaps.
-S7 is independent and can interleave.  Each build session is one conceptual unit, ~150–400 LOC, `tox -m analyze` green
-(100% branch coverage, mypy strict, pylint 10.00).
+S7 is independent and can interleave.  S9 (added at S3: operator extended dedup to the general case) sweeps the whole
+library for same-audio duplicates that never collide, reusing S4's group-resolution flow.  Each build session is one
+conceptual unit, ~150–400 LOC, `tox -m analyze` green (100% branch coverage, mypy strict, pylint 10.00).
 
 | ID | Type         | Deliverable (commit-title shape)                                                        | Deps   | Status |
 |----|--------------|------------------------------------------------------------------------------------------|--------|--------|
@@ -67,6 +83,7 @@ S7 is independent and can interleave.  Each build session is one conceptual unit
 | S5 | build        | Cross-reference reconstruction pass: journal census + confirmed secondary-ID tagging       | S3, S2 | todo   |
 | S6 | build        | (conditional) MB-backed cross-reference enrichment for evidence-gap cases                  | S5     | todo   |
 | S7 | build        | Tag-read cache for maintenance passes keyed on (path, size, mtime)                         | S2     | todo   |
+| S9 | build        | Library-wide dedup command: AcoustID-cluster census + survivor-choice deletion (C-DEDUP)   | S4     | todo   |
 | S8 | operator     | Resume the repair turn: full repath on hades end-to-end; acceptance gate                   | all    | todo   |
 
 ### S1 — JSONL journal store (C-JRNL)
@@ -87,30 +104,34 @@ enforced); per-move append lands before the next move begins (C-PROV ordering pr
 leaves a complete, readable journal.  Expected effect: per-move journal cost drops from ~2.7 s to ~1 ms; the move phase
 becomes hashing-bound.
 
-### S3 — cross-reference schema adjudication (interactive; operator present; architect/dialectic register)
+### S3 — cross-reference schema adjudication (adjudicated 2026-08-26)
 
-Deliverable: STYLEGUIDE case-register updates + the frozen vocabulary S4–S6 consume.  Agenda, with evidence to bring:
-
-1. **Tag vocabulary** — secondary-reference tag name(s) and payload: release MBID only vs + release-track MBID vs
-   + medium/position.  Check Classical Extras / Picard conventions for an existing multi-release idiom before minting one.
-   FLAC multi-value vs delimited scalar; the MP3 TXXX mapping.
-2. **Journal action** — name for a cross-reference tag mutation (extends the `TransactionEntry` action set; audit passes
-   must classify it; `_resolve_current_lib` must treat it as an in-place re-registration like "enriched").
-3. **Prompt UX** — repath `match=True`: confirm cross-reference per group or per file; `match=None`: suffix-or-abort
-   prompt wording; semantics under `--yes` (operator lean: prompts still shown — integrity prompts are not bulk-consent)
-   and `--dry-run` (report, never prompt).
-4. **Redundant-copy disposition** — in the repath `match=True` case both physical copies survive (occupant at the
-   canonical path, mover stays put).  Adjudicate the mover's disposition: stays in place cross-referenced, or flagged
-   into a future dedup adjudication pass.  Deletion is out unless the operator rules otherwise (C-NOCLOBBER rationale).
+All four agenda items ruled; vocabulary frozen into C-XREF/C-DEDUP above and registered as EPIST-9/EPIST-10 in the
+STYLEGUIDE.  Outcomes: (1) tag `MUSICBRAINZ_SECONDARY_ALBUMID`, release-MBID-only `"; "`-joined scalar; (2) journal
+actions `"cross-referenced"` (in-place, release_id = secondary MBID) and `"deduplicated"` (pop-source);
+(3) per-group prompts; `match=None` is suffix-or-abort only (no xref without identity evidence); prompts survive
+`--yes`; `--dry-run` reports only; (4) **deletion ruled in** (supersedes the mover-stays-put default and the
+flag-for-later option): survivor-choice per group under C-DEDUP, keep-both as the non-fatal decline arm.  The operator
+additionally extended dedup from collision-surfaced cases to the general library-wide case → S9 added.
 
 ### S4 — plan-time collision completeness (C-FATAL corollary)
 
 Files: `src/music_annotator/_pipeline_maint.py` (repath collision resolution gains the `match=True` and `match=None`
-arms per S3; regroup/unify audited for the same gap), `src/music_annotator/_tagger.py` (cross-reference tag write),
-tests.  KATs: same-audio occupant → operator-confirmed cross-reference + move dropped from plan + journal action
-recorded; inconclusive occupant → prompt suffix-or-abort, both arms; a plan that reaches `_move_verify_journal` contains
-no move whose destination is occupied by a non-vacated path (property test over generated plans); execution-time
-C-NOCLOBBER refusal still raises `RuntimeError` (unchanged, now bug-indicating).
+arms; regroup/unify audited for the same gap), `src/music_annotator/_tagger.py` (cross-reference tag write), tests.
+
+The `match=True` arm is the **shared group-resolution flow** (S9 reuses it): per duplicate group, prompt with member
+files, releases, and evidence method (sha256 vs acoustid); operator chooses survivor / keep-both / abort.  Survivor
+choice determines the plan: survivor = occupant → mover deleted, move dropped; survivor = mover → occupant deleted
+first, then the move executes through the normal C-PROV chain into the vacated path.  Keep-both → survivor xref'd,
+move dropped, and later runs detect the existing secondary MBID and drop silently (idempotency, no re-prompt).
+C-DEDUP ordering throughout: xref write + verify + journal on the survivor before any deletion.
+
+KATs: same-audio occupant → survivor-choice flow, all three arms (each deletion preceded by the survivor's
+`"cross-referenced"` entry; `"deduplicated"` entries carry deleted-path/surviving-path/deleted-release-id);
+keep-both re-run → silent drop, no prompt; inconclusive occupant → prompt suffix-or-abort, both arms; a plan that
+reaches `_move_verify_journal` contains no move whose destination is occupied by a non-vacated path (property test
+over generated plans); execution-time C-NOCLOBBER refusal still raises `RuntimeError` (unchanged, now bug-indicating);
+`_resolve_current_lib` handles both new actions (in-place re-registration; pop-source).
 
 ### S5 — cross-reference reconstruction pass
 
@@ -135,16 +156,33 @@ without opening the audio file (mock-enforced); any key component change invalid
 degrades to a full read (never an error); moves via `_move_verify_journal` re-key the entry.  Expected effect: re-run
 planning drops from ~an hour to minutes on an unchanged library.
 
+### S9 — library-wide dedup command (C-DEDUP general case)
+
+Files: `src/music_annotator/_pipeline_maint.py` (new maintenance command), `src/music_annotator/__main__.py`, tests.
+Offline census over the live library: group files by embedded `ACOUSTID_ID` cluster (via the tag-read cache), with
+`AUDIO_HASH` equality as the byte-identity fast path; files lacking both are out of scope (inconclusive — C-DEDUP
+never deletes without identity evidence).  Aggregate contiguous per-recording pairs up to medium-level groups before
+prompting (the observed duplication shape is whole mediums).  Each group runs the S4 group-resolution flow
+(survivor / keep-both / abort).  The prompt must surface the structural consequence when duplication scatters across
+releases: deleting a compilation's member guts the compilation's directory — the release becomes partially virtual,
+represented only by secondary MBIDs on files in other albums' directories.  Keep-both is always available; dry-run
+reports the full census without prompting.  KATs: cluster grouping (cache-driven, no audio opens on cache hits);
+medium-level aggregation; all three resolution arms with C-DEDUP ordering; scatter-consequence surfaced in prompt
+text; files without acoustid/hash never enter a group.
+
 ### S8 — operator acceptance gate
 
 Full `repath` on hades end-to-end.  Acceptance criteria:
 
 - Run completes without abort; zero execution-time C-NOCLOBBER refusals.
 - Move-phase throughput reflects the journal fix (per-move time hashing-bound, not journal-bound).
-- Same-audio collisions resolved as cross-references per S3 rulings; inconclusive collisions prompted, not fatal.
+- Same-audio collisions resolved per S3 rulings (survivor-choice deletion, keep-both, or abort — operator's call per
+  group); inconclusive collisions prompted, not fatal.
 - Journal is valid JSONL afterward; `.json` backup intact; rebuild/audit commands read it cleanly.
 - Reconstruction pass run once over the historical evidence; secondary references verified on known duplicated mediums
   (the Greensleeves pair as the canonical KAT case).
+- Library-wide dedup run once; every surviving duplicate group is either operator-kept (cross-referenced) or collapsed
+  to one physical copy carrying its secondary MBIDs; deleted lineages intact in the journal.
 
 On acceptance: continue the repair turn per ROADMAP (leaf renumberings, year-label normalisations, consolidations), and
 rewrite this PLAN at the boundary.
@@ -152,9 +190,9 @@ rewrite this PLAN at the boundary.
 ## Notes for executors
 
 - **Register rule** (repo AGENTS.md): durable files state the property/invariant, never the plan coordinate.  Anneal
-  denylist for this sub-track: `\bS[1-8]\b` (session ids), `repair-turn hardening`, `sub-track`, `plan-run`,
-  `boundary rewrite`.  Contract names (C-JRNL, C-XREF, C-FATAL, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, C-CASE, SEL-*,
-  NORM-*, REND-*) are legitimate durable vocabulary.
+  denylist for this sub-track: `\bS[1-9]\b` (session ids), `repair-turn hardening`, `sub-track`, `plan-run`,
+  `boundary rewrite`.  Contract names (C-JRNL, C-XREF, C-DEDUP, C-FATAL, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, C-CASE,
+  SEL-*, NORM-*, REND-*, EPIST-*) are legitimate durable vocabulary.
 - Full gate before declaring any session done: `~/.local/bin/tox -m analyze` (100% branch coverage, mypy strict,
   pylint 10.00/10, ruff, pyupgrade).
 - Patch targets bind where the name is imported, not where it originates (repo testing convention).
@@ -175,15 +213,17 @@ pyupgrade).  One green run satisfies tests, types, lint, format, and coverage.
 |----|--------------------------------------------------------------------------------|--------|--------|-------|
 | S1 | JSONL journal store: appends, torn-tail recovery, atomic rewrite, migration     | done   | 60189da | C-JRNL append primitive + read_journal JSONL frozen |
 | S2 | In-memory journal threading; retire per-move full rewrites                      | done   | 235313d | in-memory threading pattern frozen for S4/S7 |
-| S3 | STYLEGUIDE: cross-reference tag schema + collision interaction design           | todo   |        |       |
-| S4 | Plan-time collision completeness in repath                                      | todo   |        |       |
+| S3 | STYLEGUIDE: cross-reference tag schema + collision interaction design           | done   |        | EPIST-9/EPIST-10 registered; C-XREF adjudicated; C-DEDUP minted; deletion in scope; S9 added |
+| S4 | Plan-time collision completeness in repath                                      | todo   |        | scope grew at S3: shared group-resolution flow + deletion arm |
 | S5 | Cross-reference reconstruction pass (journal census)                            | todo   |        |       |
 | S6 | (conditional) MB-backed cross-reference enrichment                              | todo   |        |       |
 | S7 | Tag-read cache for maintenance passes                                           | done   | 05319dc |       |
+| S9 | Library-wide dedup command (AcoustID-cluster census + survivor-choice deletion) | todo   |        | added at S3 (operator extended dedup to the general case) |
 | S8 | Resume repair turn on hades; acceptance gate                                    | todo   |        |       |
 
-Frozen contracts: C-JRNL, C-FATAL, C-XREF (all frozen at derivation, 2026-08-25); C-NOCLOBBER, C-SEQ, C-GUARD,
-NORM-2-as-revised, SEL-23, REND-27 inherited unchanged from the previous sub-track.
+Frozen contracts: C-JRNL, C-FATAL, C-XREF (frozen at derivation 2026-08-25; vocabulary adjudicated 2026-08-26),
+C-DEDUP (frozen 2026-08-26); C-NOCLOBBER, C-SEQ, C-GUARD, NORM-2-as-revised, SEL-23, REND-27 inherited unchanged from
+the previous sub-track.
 
 ## Action-frame digest
 
@@ -195,3 +235,13 @@ NORM-2-as-revised, SEL-23, REND-27 inherited unchanged from the previous sub-tra
   destination).  SQLite/LMDB/CBOR evaluated and rejected for the journal: SQLite loses pyfakefs compatibility and
   greppability for query capability this workload doesn't need; JSONL + in-memory copy achieves O(1) appends with
   stdlib-only, test-compatible mechanics.
+- S3 adjudication (2026-08-26): all four agenda items ruled (EPIST-9/EPIST-10; C-XREF vocabulary; C-DEDUP).  Two posture
+  shifts beyond the agenda: **deletion ruled in** — the derivation's "deletion is out" default was operator-overturned
+  as a bounded completionist exception (rationale preserved verbatim-in-spirit in EPIST-10: secondary MBIDs suffice;
+  "completion is practically forbidden by nature"); and **dedup generalised** from collision-surfaced cases to a
+  library-wide census command (S9).  Substrate finding that shaped the tag encoding: FLAC Vorbis comments are natively
+  multi-valued and mutagen always yields lists, but the entire read path flattens to `v[0]`
+  (`_read_tags_flac`, MP3 `frame.text[0]`) — a native multi-value write would be silently truncated by `_verify_copy`
+  round-trip, so the `"; "`-joined scalar is a safety ruling, not merely convenience.  Checked before minting: neither
+  CE (in-repo census) nor Picard carries a multi-release idiom; nearest shape is Picard's `musicbrainz_originalalbumid`
+  (different semantics); release-group id does not cover cross-RG duplication.
