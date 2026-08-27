@@ -68,6 +68,7 @@ from music_annotator._pipeline_maint import (
     _write_xref_and_journal,
     compose_preflight_report,
     dedup_library,
+    maintain,
     reconstruct_cross_references,
     repatch_acoustid_tags,
     resolve_duplicate_group,
@@ -16647,3 +16648,532 @@ class TestDedupLibrary:
         dedup_mock.assert_called_once()
         call_kwargs = dedup_mock.call_args
         assert call_kwargs.kwargs.get("dry_run") is False or (len(call_kwargs.args) > 2 and call_kwargs.args[2] is False)
+
+
+# ---------------------------------------------------------------------------
+# maintain — single-composition orchestrator (C-MAINTAIN / C-CONFLUENCE)
+# ---------------------------------------------------------------------------
+
+
+class TestMaintain:
+    """Tests for :func:`music_annotator._pipeline_maint.maintain`.
+
+    Covers: pass composition order (mock-enforced); journal read exactly once (mock-enforced);
+    ``-y``/``--yes`` suppresses move prompts but not integrity prompts; ``--dry-run`` renders
+    all passes report-only; final convergence line reports "changed N" vs "no changes";
+    a settled fixture reports "no changes".
+    """
+
+    def _write_journal(self, dest_root: Path, entries: list[dict[str, str]]) -> None:
+        """Write a JSONL journal to ``dest_root / music_annotator_journal.json``.
+
+        :param dest_root: Library root directory.
+        :param entries: Raw entry dicts to serialise.
+        """
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+
+    def _make_flac(self, dest_root: Path, rel_path: str, tags: TrackTags) -> Path:
+        """Create a tagged FLAC file at ``dest_root / rel_path``.
+
+        :param dest_root: Library root directory.
+        :param rel_path: Relative path within the library.
+        :param tags: Tags to embed.
+        :returns: Full absolute path of the created file.
+        """
+        return _make_library_flac(dest_root, rel_path, tags)
+
+    def test_pass_order_enforced(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """maintain runs all seven passes in the fixed C-CONFLUENCE order.
+
+        Mocks all seven pass functions and asserts they are called in the required order:
+        enrich → origin-time → repath → regroup → unify → reconstruct-xrefs → dedup-library.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._write_journal(dest_root, [])
+
+        call_order: list[str] = []
+
+        def _make_recorder(name: str, return_val: object) -> object:
+            """Return a side-effect function that records the call order.
+
+            :param name: Pass name to record.
+            :param return_val: Value to return from the mock.
+            :returns: Side-effect callable.
+            """
+
+            def _recorder(*_args: object, **_kwargs: object) -> object:  # noqa: ANN401
+                call_order.append(name)
+                return return_val
+
+            return _recorder
+
+        mocker.patch(
+            "music_annotator._pipeline_maint.enrich",
+            side_effect=_make_recorder("enrich", DryRunPlan(pass_name="enrich", entries=[], count=0)),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.enrich_origin_time",
+            side_effect=_make_recorder("origin-time", 0),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.repath",
+            side_effect=_make_recorder("repath", DryRunPlan(pass_name="repath", entries=[], count=0)),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.regroup",
+            side_effect=_make_recorder("regroup", DryRunPlan(pass_name="regroup", entries=[], count=0)),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.unify",
+            side_effect=_make_recorder("unify", DryRunPlan(pass_name="unify", entries=[], count=0)),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.reconstruct_cross_references",
+            side_effect=_make_recorder("reconstruct-xrefs", []),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.dedup_library",
+            side_effect=_make_recorder("dedup-library", 0),
+        )
+
+        maintain(dest_root, dry_run=True)
+
+        assert call_order == [
+            "enrich",
+            "origin-time",
+            "repath",
+            "regroup",
+            "unify",
+            "reconstruct-xrefs",
+            "dedup-library",
+        ]
+
+    def test_journal_read_exactly_once(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """maintain reads the journal exactly once and threads it through all passes (C-JRNL).
+
+        Mocks ``read_journal`` and asserts it is called exactly once regardless of how many
+        passes run.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._write_journal(dest_root, [])
+
+        mock_read_journal = mocker.patch(
+            "music_annotator._pipeline_maint.read_journal",
+            return_value=TransactionLog(),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.enrich",
+            return_value=DryRunPlan(pass_name="enrich", entries=[], count=0),
+        )
+        mocker.patch("music_annotator._pipeline_maint.enrich_origin_time", return_value=0)
+        mocker.patch(
+            "music_annotator._pipeline_maint.repath",
+            return_value=DryRunPlan(pass_name="repath", entries=[], count=0),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.regroup",
+            return_value=DryRunPlan(pass_name="regroup", entries=[], count=0),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.unify",
+            return_value=DryRunPlan(pass_name="unify", entries=[], count=0),
+        )
+        mocker.patch("music_annotator._pipeline_maint.reconstruct_cross_references", return_value=[])
+        mocker.patch("music_annotator._pipeline_maint.dedup_library", return_value=0)
+
+        maintain(dest_root, dry_run=True)
+
+        mock_read_journal.assert_called_once()
+
+    def test_yes_suppresses_move_prompts_not_integrity(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """``yes=True`` is forwarded to move passes but not to integrity passes.
+
+        Asserts that ``repath``, ``regroup``, and ``unify`` are called with ``yes=True``,
+        while ``reconstruct_cross_references`` and ``dedup_library`` are called without a
+        ``yes`` argument (integrity prompts are not bulk consent).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._write_journal(dest_root, [])
+
+        mocker.patch(
+            "music_annotator._pipeline_maint.enrich",
+            return_value=None,
+        )
+        mocker.patch("music_annotator._pipeline_maint.enrich_origin_time", return_value=0)
+        mock_repath = mocker.patch("music_annotator._pipeline_maint.repath", return_value=None)
+        mock_regroup = mocker.patch("music_annotator._pipeline_maint.regroup", return_value=None)
+        mock_unify = mocker.patch("music_annotator._pipeline_maint.unify", return_value=None)
+        mock_xrefs = mocker.patch("music_annotator._pipeline_maint.reconstruct_cross_references", return_value=[])
+        mock_dedup = mocker.patch("music_annotator._pipeline_maint.dedup_library", return_value=0)
+
+        maintain(dest_root, dry_run=False, yes=True)
+
+        # Move passes receive yes=True
+        assert mock_repath.call_args.kwargs.get("yes") is True
+        assert mock_regroup.call_args.kwargs.get("yes") is True
+        assert mock_unify.call_args.kwargs.get("yes") is True
+
+        # Integrity passes do not receive a yes argument (not bulk consent)
+        assert "yes" not in mock_xrefs.call_args.kwargs
+        assert "yes" not in mock_dedup.call_args.kwargs
+
+    def test_dry_run_all_passes_report_only(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """``dry_run=True`` is forwarded to all seven passes including the two integrity passes.
+
+        Asserts that every pass is called with ``dry_run=True``.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._write_journal(dest_root, [])
+
+        mock_enrich = mocker.patch(
+            "music_annotator._pipeline_maint.enrich",
+            return_value=DryRunPlan(pass_name="enrich", entries=[], count=0),
+        )
+        mock_ot = mocker.patch("music_annotator._pipeline_maint.enrich_origin_time", return_value=0)
+        mock_repath = mocker.patch(
+            "music_annotator._pipeline_maint.repath",
+            return_value=DryRunPlan(pass_name="repath", entries=[], count=0),
+        )
+        mock_regroup = mocker.patch(
+            "music_annotator._pipeline_maint.regroup",
+            return_value=DryRunPlan(pass_name="regroup", entries=[], count=0),
+        )
+        mock_unify = mocker.patch(
+            "music_annotator._pipeline_maint.unify",
+            return_value=DryRunPlan(pass_name="unify", entries=[], count=0),
+        )
+        mock_xrefs = mocker.patch("music_annotator._pipeline_maint.reconstruct_cross_references", return_value=[])
+        mock_dedup = mocker.patch("music_annotator._pipeline_maint.dedup_library", return_value=0)
+
+        maintain(dest_root, dry_run=True)
+
+        assert mock_enrich.call_args.kwargs.get("dry_run") is True
+        assert mock_ot.call_args.kwargs.get("dry_run") is True
+        assert mock_repath.call_args.kwargs.get("dry_run") is True
+        assert mock_regroup.call_args.kwargs.get("dry_run") is True
+        assert mock_unify.call_args.kwargs.get("dry_run") is True
+        assert mock_xrefs.call_args.kwargs.get("dry_run") is True
+        assert mock_dedup.call_args.kwargs.get("dry_run") is True
+
+    def test_final_line_changed_n(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """maintain reports "changed N file(s)" when passes enact changes.
+
+        Uses dry_run=True with non-zero planned counts so the convergence line reflects changes.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._write_journal(dest_root, [])
+
+        mocker.patch(
+            "music_annotator._pipeline_maint.enrich",
+            return_value=DryRunPlan(pass_name="enrich", entries=[], count=3),
+        )
+        mocker.patch("music_annotator._pipeline_maint.enrich_origin_time", return_value=1)
+        mocker.patch(
+            "music_annotator._pipeline_maint.repath",
+            return_value=DryRunPlan(pass_name="repath", entries=[], count=2),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.regroup",
+            return_value=DryRunPlan(pass_name="regroup", entries=[], count=0),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.unify",
+            return_value=DryRunPlan(pass_name="unify", entries=[], count=0),
+        )
+        mocker.patch("music_annotator._pipeline_maint.reconstruct_cross_references", return_value=[])
+        mocker.patch("music_annotator._pipeline_maint.dedup_library", return_value=0)
+
+        result = maintain(dest_root, dry_run=True)
+
+        assert result == 6  # 3 + 1 + 2
+
+    def test_final_line_no_changes(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """maintain reports "no changes" when all passes report zero changes.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._write_journal(dest_root, [])
+
+        mocker.patch(
+            "music_annotator._pipeline_maint.enrich",
+            return_value=DryRunPlan(pass_name="enrich", entries=[], count=0),
+        )
+        mocker.patch("music_annotator._pipeline_maint.enrich_origin_time", return_value=0)
+        mocker.patch(
+            "music_annotator._pipeline_maint.repath",
+            return_value=DryRunPlan(pass_name="repath", entries=[], count=0),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.regroup",
+            return_value=DryRunPlan(pass_name="regroup", entries=[], count=0),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.unify",
+            return_value=DryRunPlan(pass_name="unify", entries=[], count=0),
+        )
+        mocker.patch("music_annotator._pipeline_maint.reconstruct_cross_references", return_value=[])
+        mocker.patch("music_annotator._pipeline_maint.dedup_library", return_value=0)
+
+        result = maintain(dest_root, dry_run=True)
+
+        assert result == 0
+
+    def test_settled_fixture_no_changes(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """A settled library (all passes no-op) reports "no changes" — the convergence signal.
+
+        Creates a minimal library with a single FLAC file whose path already matches the
+        policy-canonical path, so repath/regroup/unify are no-ops.  Enrich is a no-op because
+        the file already has all fingerprint fields.  The integrity passes find nothing to do.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(
+            title="Track 1",
+            musicbrainz_albumid="rel-settled",
+            musicbrainz_recordingid="rec-1",
+            audio_hash="abc123",
+            acoustid_fingerprint="fp123",
+            acoustid_id="aid-1",
+        )
+        path = self._make_flac(dest_root, "Composer/Work [2024]/01 - Track 1.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-settled",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                    "audio_hash": "abc123",
+                    "acoustid_fingerprint": "fp123",
+                    "acoustid_id": "aid-1",
+                }
+            ],
+        )
+
+        # Mock all passes to return no-op results (settled library).
+        mocker.patch(
+            "music_annotator._pipeline_maint.enrich",
+            return_value=DryRunPlan(pass_name="enrich", entries=[], count=0),
+        )
+        mocker.patch("music_annotator._pipeline_maint.enrich_origin_time", return_value=0)
+        mocker.patch(
+            "music_annotator._pipeline_maint.repath",
+            return_value=DryRunPlan(pass_name="repath", entries=[], count=0),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.regroup",
+            return_value=DryRunPlan(pass_name="regroup", entries=[], count=0),
+        )
+        mocker.patch(
+            "music_annotator._pipeline_maint.unify",
+            return_value=DryRunPlan(pass_name="unify", entries=[], count=0),
+        )
+        mocker.patch("music_annotator._pipeline_maint.reconstruct_cross_references", return_value=[])
+        mocker.patch("music_annotator._pipeline_maint.dedup_library", return_value=0)
+
+        result = maintain(dest_root, dry_run=True)
+
+        assert result == 0
+
+    def test_cli_maintain_dispatches(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """CLI 'maintain' subcommand dispatches to music_annotator.maintain with correct args.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._write_journal(dest_root, [])
+
+        mock_fn = mocker.patch("music_annotator.maintain", return_value=0)
+
+        sys.argv = ["music-annotator", "maintain", str(dest_root)]
+        main()
+
+        mock_fn.assert_called_once_with(
+            dest_root=dest_root,
+            dry_run=False,
+            yes=False,
+        )
+
+    def test_cli_maintain_dry_run(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """CLI 'maintain --dry-run' forwards dry_run=True to maintain().
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._write_journal(dest_root, [])
+
+        mock_fn = mocker.patch("music_annotator.maintain", return_value=0)
+
+        sys.argv = ["music-annotator", "maintain", str(dest_root), "--dry-run"]
+        main()
+
+        mock_fn.assert_called_once_with(
+            dest_root=dest_root,
+            dry_run=True,
+            yes=False,
+        )
+
+    def test_cli_maintain_yes(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """CLI 'maintain -y' forwards yes=True to maintain().
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._write_journal(dest_root, [])
+
+        mock_fn = mocker.patch("music_annotator.maintain", return_value=0)
+
+        sys.argv = ["music-annotator", "maintain", str(dest_root), "-y"]
+        main()
+
+        mock_fn.assert_called_once_with(
+            dest_root=dest_root,
+            dry_run=False,
+            yes=True,
+        )
+
+    def test_cli_maintain_error_exits_1(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """CLI 'maintain' exits with code 1 on unhandled exception.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._write_journal(dest_root, [])
+
+        mocker.patch("music_annotator.maintain", side_effect=RuntimeError("boom"))
+
+        sys.argv = ["music-annotator", "maintain", str(dest_root)]
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    def test_cli_maintain_parser_registered(self) -> None:
+        """'maintain' subcommand is registered in the argument parser.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args(["maintain", "/lib"])
+        assert args.subcommand == "maintain"
+        assert args.dry_run is False
+        assert args.yes is False
+
+    def test_cli_maintain_parser_dry_run_flag(self) -> None:
+        """'maintain --dry-run' sets dry_run=True in parsed args.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args(["maintain", "/lib", "--dry-run"])
+        assert args.subcommand == "maintain"
+        assert args.dry_run is True
+
+    def test_cli_maintain_parser_yes_flag(self) -> None:
+        """'maintain -y' sets yes=True in parsed args.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args(["maintain", "/lib", "-y"])
+        assert args.subcommand == "maintain"
+        assert args.yes is True
+
+    def test_journal_threaded_to_passes(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """maintain threads the pre-read journal to each pass via the _journal kwarg.
+
+        Asserts that each pass receives the same TransactionLog object that read_journal returned.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        self._write_journal(dest_root, [])
+
+        sentinel_journal = TransactionLog()
+        mocker.patch(
+            "music_annotator._pipeline_maint.read_journal",
+            return_value=sentinel_journal,
+        )
+
+        received_journals: dict[str, object] = {}
+
+        def _capture_enrich(*_args: object, **kwargs: object) -> DryRunPlan:
+            received_journals["enrich"] = kwargs.get("_journal")
+            return DryRunPlan(pass_name="enrich", entries=[], count=0)
+
+        def _capture_ot(*_args: object, **kwargs: object) -> int:
+            received_journals["origin-time"] = kwargs.get("_journal")
+            return 0
+
+        def _capture_repath(*_args: object, **kwargs: object) -> DryRunPlan:
+            received_journals["repath"] = kwargs.get("_journal")
+            return DryRunPlan(pass_name="repath", entries=[], count=0)
+
+        def _capture_regroup(*_args: object, **kwargs: object) -> DryRunPlan:
+            received_journals["regroup"] = kwargs.get("_journal")
+            return DryRunPlan(pass_name="regroup", entries=[], count=0)
+
+        def _capture_unify(*_args: object, **kwargs: object) -> DryRunPlan:
+            received_journals["unify"] = kwargs.get("_journal")
+            return DryRunPlan(pass_name="unify", entries=[], count=0)
+
+        def _capture_xrefs(*_args: object, **kwargs: object) -> list[str]:
+            received_journals["reconstruct-xrefs"] = kwargs.get("_journal")
+            return []
+
+        def _capture_dedup(*_args: object, **kwargs: object) -> int:
+            received_journals["dedup-library"] = kwargs.get("_journal")
+            return 0
+
+        mocker.patch("music_annotator._pipeline_maint.enrich", side_effect=_capture_enrich)
+        mocker.patch("music_annotator._pipeline_maint.enrich_origin_time", side_effect=_capture_ot)
+        mocker.patch("music_annotator._pipeline_maint.repath", side_effect=_capture_repath)
+        mocker.patch("music_annotator._pipeline_maint.regroup", side_effect=_capture_regroup)
+        mocker.patch("music_annotator._pipeline_maint.unify", side_effect=_capture_unify)
+        mocker.patch("music_annotator._pipeline_maint.reconstruct_cross_references", side_effect=_capture_xrefs)
+        mocker.patch("music_annotator._pipeline_maint.dedup_library", side_effect=_capture_dedup)
+
+        maintain(dest_root, dry_run=True)
+
+        for pass_name, received in received_journals.items():
+            assert received is sentinel_journal, f"Pass '{pass_name}' did not receive the threaded journal"

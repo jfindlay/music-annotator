@@ -1,6 +1,6 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes sixteen subcommands:
+Configures structlog for human-friendly console output and exposes seventeen subcommands:
 
 * ``apply``                    — copy and tag a directory of tracks for a known MusicBrainz release MBID.
 * ``search``                   — search MusicBrainz for a release matching a source directory, prompt for
@@ -40,6 +40,11 @@ Configures structlog for human-friendly console output and exposes sixteen subco
   fast path; files lacking both are out of scope.  Aggregate per-recording pairs up to medium-level
   groups before prompting.  Each group runs the shared group-resolution flow (survivor / keep-both /
   abort).  Supports ``--dry-run`` to report the full census without prompting or deleting.
+* ``maintain``                 — run all recurring maintenance passes (``enrich``, ``origin-time``,
+  ``repath``, ``regroup``, ``unify``, ``reconstruct-xrefs``, ``dedup-library``) as a single
+  composition over ``dest_dir``.  The journal is read once and threaded through all passes.
+  Move-confirmation prompts are suppressible by ``-y``/``--yes``; integrity prompts are never
+  suppressed.  Supports ``--dry-run`` to preview all passes without mutations.
 
 Usage::
 
@@ -111,6 +116,10 @@ Usage::
     music-annotator dedup-library \\
         <dest_dir> \\
         [--dry-run]
+
+    music-annotator maintain \\
+        <dest_dir> \\
+        [--dry-run] [-y/--yes]
 """
 
 from __future__ import annotations
@@ -309,6 +318,8 @@ def _build_parser() -> argparse.ArgumentParser:
     computes the canonical top_dir for each, and moves the fragments.  Supports ``--dry-run`` and ``-y``/``--yes``.
     ``repatch-acoustid`` migrates the legacy ``CHROMAPRINT_FP`` fingerprint key to the Picard-aligned
     ``ACOUSTID_FINGERPRINT`` key; accepts ``--acoustid-key`` and ``--dry-run``.
+    ``maintain`` runs all recurring maintenance passes as a single composition; accepts ``--dry-run`` and
+    ``-y``/``--yes``.  Move-confirmation prompts are suppressible by ``--yes``; integrity prompts are not.
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -1037,6 +1048,65 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Report duplicate groups without prompting or deleting any files.",
     )
 
+    # ------------------------------------------------------------------
+    # maintain subcommand
+    # ------------------------------------------------------------------
+    maintain_parser = subparsers.add_parser(
+        "maintain",
+        help="Run all recurring maintenance passes as a single composition (C-MAINTAIN).",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Runs all recurring maintenance passes in the fixed C-CONFLUENCE order:
+
+              1. enrich         — backfill fingerprint fields (audio_hash, acoustid_fingerprint, acoustid_id)
+              2. origin-time    — migrate rip/download origin-time into authoritative sidecar YAML files
+              3. repath         — re-path files to corrected destinations under the current path policy
+              4. regroup        — consolidate confirmed split-release files into canonical destinations
+              5. unify          — consolidate performer-split and composer-split fragmented releases
+              6. reconstruct-xrefs — write secondary release MBIDs for destructive-choice collision shapes
+              7. dedup-library  — resolve duplicate files grouped by AcoustID cluster
+
+            The journal is read once at the top and threaded through all passes in memory (C-JRNL).
+
+            Move-confirmation prompts (repath, regroup, unify) are suppressible by -y/--yes.
+            Integrity prompts (reconstruct-xrefs, dedup-library) are NEVER suppressed by --yes
+            (integrity prompts are not bulk consent).
+
+            --dry-run renders every pass report-only, including the two integrity passes (census-only,
+            no prompts, no mutations).  This is a preview of the current library state, not a rehearsal
+            of a live run: a pass downstream of a mutating pass may plan differently in a live run.
+
+            The final line reports "changed N file(s)" or "no changes".  A run that changes nothing is
+            the practical convergence signal.  Some cases legitimately need a second run (e.g. enrich
+            adds an acoustid this run, so dedup-library can cluster it only next run) — this is normal.
+
+            Examples:
+              music-annotator maintain /tmp/music_library --dry-run
+              music-annotator maintain /tmp/music_library
+              music-annotator maintain /tmp/music_library --yes
+            """),
+    )
+    maintain_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    maintain_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run every pass in report-only mode (no mutations, no prompts).",
+    )
+    maintain_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help=(
+            "Skip move-confirmation prompts for repath, regroup, and unify.  "
+            "Has no effect on integrity prompts (reconstruct-xrefs, dedup-library)."
+        ),
+    )
+
     return parser
 
 
@@ -1045,7 +1115,8 @@ def main() -> None:
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
     ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``, ``repatch-acoustid``,
-    ``repatch-catalogue-colon``, ``preflight``, ``reconstruct-xrefs``, ``dedup-library``.
+    ``repatch-catalogue-colon``, ``preflight``, ``reconstruct-xrefs``, ``dedup-library``,
+    ``maintain``.
 
     The ``repath`` subcommand dispatches to :func:`~music_annotator.repath` with ``dry_run`` and
     ``yes`` forwarded from the parsed arguments.  The ``regroup`` subcommand dispatches to
@@ -1072,7 +1143,9 @@ def main() -> None:
     and exits cleanly.  The ``reconstruct-xrefs`` subcommand dispatches to
     :func:`~music_annotator.reconstruct_cross_references` with ``dry_run`` forwarded; the
     operator confirmation prompt is never suppressed by ``--yes`` (integrity prompts are not
-    bulk consent).
+    bulk consent).  The ``maintain`` subcommand dispatches to :func:`~music_annotator.maintain`
+    with ``dry_run`` and ``yes`` forwarded; move-confirmation prompts are suppressible by
+    ``--yes`` but integrity prompts are never suppressed.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating.  All subcommands except ``prune`` use :func:`_dispatch` to convert any unhandled exception or keyboard
@@ -1325,6 +1398,17 @@ def main() -> None:
                     dry_run=args.dry_run,
                 ),
                 "dedup_library_error",
+                dest_root=str(args.dest_dir),
+            )
+
+        case "maintain":
+            _dispatch(
+                lambda: music_annotator.maintain(
+                    dest_root=args.dest_dir,
+                    dry_run=args.dry_run,
+                    yes=args.yes,
+                ),
+                "maintain_error",
                 dest_root=str(args.dest_dir),
             )
 

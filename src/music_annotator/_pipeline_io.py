@@ -1760,7 +1760,12 @@ def _find_freedb_sidecar(work_top_dir: Path) -> Path | None:
     return candidates[0] if candidates else None
 
 
-def enrich_origin_time(dest_root: Path, *, dry_run: bool = False) -> None:
+def enrich_origin_time(
+    dest_root: Path,
+    *,
+    dry_run: bool = False,
+    _journal: TransactionLog | None = None,
+) -> int:
     """Migrate rip/download origin-time from the journal into authoritative sidecar YAML files.
 
     Reads the transaction journal at ``dest_root``, groups ``action == "tagged"`` entries by
@@ -1777,18 +1782,25 @@ def enrich_origin_time(dest_root: Path, *, dry_run: bool = False) -> None:
     populate ``origin_time`` on reconstructed :class:`~music_annotator.models.TransactionEntry`
     objects.
 
+    When called from the ``maintain`` orchestrator, ``_journal`` carries the pre-read
+    :class:`~music_annotator.models.TransactionLog` so the journal is not re-read from disk
+    (C-JRNL: journal read once at the top of ``maintain`` and threaded through all passes).
+
     :param dest_root: Root of the annotated music library (contains
         ``music_annotator_journal.json``).
     :param dry_run: When ``True``, log planned writes without modifying any files.
+    :param _journal: Pre-read journal to use instead of reading from disk.  When ``None``
+        (the default), the journal is read from ``dest_root / JOURNAL_FILENAME``.
+    :returns: Count of sidecar files written (0 when dry-run or nothing to do).
     """
     journal_path = dest_root / JOURNAL_FILENAME
-    journal = read_journal(journal_path)
+    journal = _journal if _journal is not None else read_journal(journal_path)
 
     provenance_map = _collect_work_dir_provenance(dest_root, journal)
 
     if not provenance_map:
         log.info("enrich_origin_time_nothing_to_do", dest_root=str(dest_root))
-        return
+        return 0
 
     count_written = 0
     count_noop = 0
@@ -1834,6 +1846,7 @@ def enrich_origin_time(dest_root: Path, *, dry_run: bool = False) -> None:
         noop=count_noop,
         dry_run=count_dry_run,
     )
+    return count_written
 
 
 #: Audio file extensions that ``rebuild_journal`` reconstructs as ``action="tagged"`` entries.

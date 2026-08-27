@@ -87,6 +87,7 @@ from music_annotator._pipeline_io import (
     _sha256_file,
     _verify_copy,
     append_journal_entry,
+    enrich_origin_time,
     read_journal,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3, write_secondary_albumid_flac, write_secondary_albumid_mp3
@@ -1539,7 +1540,13 @@ def _execute_swap_cycles(
     return moved_count
 
 
-def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryRunPlan | None:  # pylint: disable=too-many-return-statements
+def repath(  # pylint: disable=too-many-return-statements
+    dest_root: Path,
+    *,
+    dry_run: bool = False,
+    yes: bool = False,
+    _journal: TransactionLog | None = None,
+) -> DryRunPlan | None:
     """Re-path all verified library files under ``dest_root`` to their corrected destinations.
 
     Walks the already-annotated library at ``dest_root``, reads the transaction journal to
@@ -1590,7 +1597,7 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     :param yes: When ``True``, skip the confirmation prompt and move files immediately.
     """
     journal_path = dest_root / JOURNAL_FILENAME
-    journal = read_journal(journal_path)
+    journal = _journal if _journal is not None else read_journal(journal_path)
 
     # Load the tag-read cache from the sidecar file.  A missing or malformed sidecar degrades
     # gracefully to an empty cache — never an error.  The cache is read-only during planning
@@ -2015,7 +2022,13 @@ def repath(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> DryR
     return None
 
 
-def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRunPlan | None:  # pylint: disable=too-many-return-statements
+def regroup(  # pylint: disable=too-many-return-statements
+    dest_root: Path,
+    *,
+    yes: bool = False,
+    dry_run: bool = False,
+    _journal: TransactionLog | None = None,
+) -> DryRunPlan | None:
     """Consolidate confirmed split-release files into their canonical destinations.
 
     Reads the transaction journal, runs the tag-confirmation fragmentation audit
@@ -2066,7 +2079,7 @@ def regroup(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> Dry
         operations or writing journal entries.
     """
     journal_path = dest_root / JOURNAL_FILENAME
-    journal = read_journal(journal_path)
+    journal = _journal if _journal is not None else read_journal(journal_path)
 
     # Load the tag-read cache from the sidecar file.  A missing or malformed sidecar degrades
     # gracefully to an empty cache — never an error.
@@ -2471,7 +2484,13 @@ def _unify_classical_composer_groups(group_tags: list[tuple[Path, TrackTags, dic
                 tags.cwp_composer_lastnames = canonical
 
 
-def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRunPlan | None:  # pylint: disable=too-many-return-statements
+def unify(  # pylint: disable=too-many-return-statements
+    dest_root: Path,
+    *,
+    yes: bool = False,
+    dry_run: bool = False,
+    _journal: TransactionLog | None = None,
+) -> DryRunPlan | None:
     """Consolidate performer-split and composer-split fragmented releases into their canonical top_dirs.
 
     Scans ``dest_root`` for releases whose tracks are spread across ≥2 distinct top_dirs due to
@@ -2536,9 +2555,9 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
         operations or writing journal entries.
     """
     journal_path = dest_root / JOURNAL_FILENAME
-    # Read the journal once at the start of the pass.  The in-memory copy is threaded through
-    # to _move_verify_journal so no re-read occurs between moves.
-    journal = read_journal(journal_path)
+    # Use the pre-read journal when provided (C-JRNL: journal read once at the top of maintain
+    # and threaded through all passes); otherwise read from disk.
+    journal = _journal if _journal is not None else read_journal(journal_path)
 
     # Load the tag-read cache from the sidecar file.  A missing or malformed sidecar degrades
     # gracefully to an empty cache — never an error.
@@ -2777,7 +2796,14 @@ def unify(dest_root: Path, *, yes: bool = False, dry_run: bool = False) -> DryRu
     return None
 
 
-def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, acoustid_key: str = "") -> DryRunPlan | None:
+def enrich(
+    dest_root: Path,
+    *,
+    re_resolve: bool = False,
+    dry_run: bool = False,
+    acoustid_key: str = "",
+    _journal: TransactionLog | None = None,
+) -> DryRunPlan | None:
     """Retroactively backfill fingerprint fields (``audio_hash``, ``acoustid_fingerprint``, ``acoustid_id``) into library files.
 
     Reads the transaction journal at ``dest_root``, resolves the current on-disk path for each
@@ -2809,7 +2835,7 @@ def enrich(dest_root: Path, *, re_resolve: bool = False, dry_run: bool = False, 
         ``False``.
     """
     journal_path = dest_root / JOURNAL_FILENAME
-    journal = read_journal(journal_path)
+    journal = _journal if _journal is not None else read_journal(journal_path)
 
     # --- Resolve current on-disk path for each logical library file ---
     # _resolve_current_lib walks entries in chronological order; "tagged" seeds the map;
@@ -3688,6 +3714,7 @@ def reconstruct_cross_references(
     dest_root: Path,
     *,
     dry_run: bool = False,
+    _journal: TransactionLog | None = None,
 ) -> list[str]:
     """Census the journal for destructive-choice shapes and write secondary release MBIDs.
 
@@ -3732,7 +3759,7 @@ def reconstruct_cross_references(
         duplication is suspected but not journal-provable).  Empty when no gaps are found.
     :raises RuntimeError: If a tag write or read-back verification fails (C-PROV chain).
     """
-    journal = read_journal(journal_path)
+    journal = _journal if _journal is not None else read_journal(journal_path)
     groups, evidence_gap_dests = _census_journal_for_xrefs(journal)
 
     # --- Resolve current on-disk paths ---
@@ -4065,6 +4092,7 @@ def dedup_library(
     journal_path: Path,
     *,
     dry_run: bool = False,
+    _journal: TransactionLog | None = None,
 ) -> int:
     """Offline census over the live library: group files by AcoustID cluster and resolve duplicates.
 
@@ -4104,7 +4132,7 @@ def dedup_library(
     :param dry_run: When ``True``, report duplicate groups without prompting or deleting.
     :returns: Count of files deleted (``"deduplicated"`` journal entries written).
     """
-    journal = read_journal(journal_path)
+    journal = _journal if _journal is not None else read_journal(journal_path)
     cache = TagReadCache.load(dest_root / _TAG_CACHE_FILENAME)
     current_lib = _resolve_current_lib(journal)
 
@@ -4285,3 +4313,122 @@ def dedup_library(
     log.info("dedup_library_complete", dest_root=str(dest_root), deleted=deleted_count)
     cache.save()
     return deleted_count
+
+
+# ---------------------------------------------------------------------------
+# maintain — single-composition run of all recurring maintenance passes
+# ---------------------------------------------------------------------------
+
+
+def maintain(dest_root: Path, *, dry_run: bool = False, yes: bool = False) -> int:
+    """Run all recurring maintenance passes as a single composition over ``dest_root``.
+
+    Reads the journal once at the top and threads it through all passes in memory (C-JRNL).
+    Passes execute in the fixed C-CONFLUENCE order: content-before-path passes first
+    (``enrich``, ``origin-time``), then the move passes (``repath``, ``regroup``, ``unify``),
+    then the integrity passes last (``reconstruct-xrefs``, ``dedup-library``).
+
+    The pass order is load-bearing: tag-content rewrites must precede path-moves because the
+    destination path is computed from the tags.  Integrity passes run last because they may
+    delete files and nothing downstream may depend on their operator-divergent outcome.
+
+    **Live mode (``dry_run=False``):** each pass runs interactively.  Move-confirmation prompts
+    (``repath``, ``regroup``, ``unify``) are suppressible by ``yes=True``.  Integrity prompts
+    (``reconstruct-xrefs``, ``dedup-library``) are **never** suppressed by ``yes`` — integrity
+    prompts are not bulk consent (INSTR + C-XREF/C-DEDUP).
+
+    **Dry-run mode (``dry_run=True``):** every pass runs in report-only mode.  The two integrity
+    passes degrade to census-only (no prompts, no mutations).  This is a preview of the current
+    library state, not a rehearsal of a live run: each pass plans against the current (unmutated)
+    state, so a pass downstream of a mutating pass may plan differently in a live run.  Files
+    appearing in more than one pass's plan are flagged as cross-pass overlap candidates.
+
+    **Convergence:** the final line reports ``"changed N file(s)"`` or ``"no changes"``.  A run
+    that changes nothing is the practical convergence signal.  Some legitimate cases need a second
+    run (e.g. ``enrich`` adds an acoustid this run, so ``dedup-library`` can cluster it only next
+    run) — this is normal, not a defect.
+
+    **Change counting:** in live mode, changes are counted as new journal entries appended during
+    the composition (each move, enrich, cross-reference, and dedup-delete appends one entry) plus
+    sidecar writes from ``origin-time`` (which does not append journal entries).  In dry-run mode,
+    the count is the sum of planned-change counts from each pass's :class:`DryRunPlan`.
+
+    :param dest_root: Root of the annotated music library (contains
+        ``music_annotator_journal.json``).
+    :param dry_run: When ``True``, run every pass in report-only mode (no mutations, no prompts).
+    :param yes: When ``True``, suppress move-confirmation prompts for ``repath``, ``regroup``,
+        and ``unify``.  Has no effect on integrity prompts (``reconstruct-xrefs``,
+        ``dedup-library``), which are never suppressed by bulk consent.
+    :returns: Total count of changes enacted across all passes (0 means no changes — the
+        practical convergence signal).
+    """
+    journal_path = dest_root / JOURNAL_FILENAME
+    # C-JRNL: read the journal exactly once and thread it through all passes in memory.
+    journal = read_journal(journal_path)
+
+    # Snapshot the journal length before any pass runs.  In live mode, each mutation appends
+    # a new entry; the delta gives the total journal-tracked change count.
+    journal_len_before = len(journal.entries)
+
+    total_changed: int = 0
+
+    # --- Pass 1: enrich (content pass — backfill fingerprint fields) ---
+    enrich_plan = enrich(dest_root, dry_run=dry_run, _journal=journal)
+    if dry_run and enrich_plan is not None:
+        total_changed += enrich_plan.count
+
+    # --- Pass 2: origin-time (content pass — migrate provenance into sidecars) ---
+    # origin-time writes sidecar files, not journal entries; count its return value directly.
+    origin_time_changed = enrich_origin_time(dest_root, dry_run=dry_run, _journal=journal)
+    if dry_run:
+        total_changed += origin_time_changed
+
+    # --- Pass 3: repath (move pass — re-path files to corrected destinations) ---
+    repath_plan = repath(dest_root, dry_run=dry_run, yes=yes, _journal=journal)
+    if dry_run and repath_plan is not None:
+        total_changed += repath_plan.count
+
+    # --- Pass 4: regroup (move pass — consolidate confirmed split-release files) ---
+    regroup_plan = regroup(dest_root, dry_run=dry_run, yes=yes, _journal=journal)
+    if dry_run and regroup_plan is not None:
+        total_changed += regroup_plan.count
+
+    # --- Pass 5: unify (move pass — consolidate performer-split fragmented releases) ---
+    unify_plan = unify(dest_root, dry_run=dry_run, yes=yes, _journal=journal)
+    if dry_run and unify_plan is not None:
+        total_changed += unify_plan.count
+
+    # --- Pass 6: reconstruct-xrefs (integrity pass — write secondary release MBIDs) ---
+    # Integrity prompts are never suppressed by --yes (INSTR + C-XREF).
+    reconstruct_cross_references(
+        journal_path=journal_path,
+        dest_root=dest_root,
+        dry_run=dry_run,
+        _journal=journal,
+    )
+
+    # --- Pass 7: dedup-library (integrity pass — resolve duplicate files) ---
+    # Integrity prompts are never suppressed by --yes (INSTR + C-DEDUP).
+    dedup_deleted = dedup_library(
+        dest_root=dest_root,
+        journal_path=journal_path,
+        dry_run=dry_run,
+        _journal=journal,
+    )
+    if dry_run:
+        total_changed += dedup_deleted
+
+    if not dry_run:
+        # In live mode: count new journal entries (each mutation appends one) plus sidecar writes.
+        journal_delta = len(journal.entries) - journal_len_before
+        total_changed = journal_delta + origin_time_changed
+
+    # --- Convergence line ---
+    if total_changed:
+        _console.print(f"\n[bold]maintain[/] — changed {total_changed} file(s).\n")
+        log.info("maintain_complete", dest_root=str(dest_root), changed=total_changed)
+    else:
+        _console.print("\n[bold]maintain[/] — no changes.\n")
+        log.info("maintain_complete", dest_root=str(dest_root), changed=0)
+
+    return total_changed
