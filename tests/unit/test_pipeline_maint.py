@@ -42,12 +42,14 @@ from music_annotator._pipeline_io import (
     _needs_enrich,
     _read_albumid_tag,
     _read_tags_flac,
+    _read_tags_mp3,
     _sha256_file,
 )
 from music_annotator._pipeline_maint import (
     _TAG_CACHE_FILENAME,
     DuplicateResolution,
     TagReadCache,
+    _census_journal_for_xrefs,
     _check_dest_root,
     _clamp_maint_dest,
     _execute_single_move,
@@ -62,6 +64,7 @@ from music_annotator._pipeline_maint import (
     _unify_classical_composer_groups,
     _write_xref_and_journal,
     compose_preflight_report,
+    reconstruct_cross_references,
     repatch_acoustid_tags,
     resolve_duplicate_group,
 )
@@ -14075,3 +14078,1256 @@ class TestRepathMatchTrueAndNoneArms:
                 now_str="2024-01-01T00:00:00+00:00",
                 release_id="",
             )
+
+
+# ---------------------------------------------------------------------------
+# _census_journal_for_xrefs
+# ---------------------------------------------------------------------------
+
+
+class TestCensusJournalForXrefs:
+    """Unit tests for :func:`_census_journal_for_xrefs`.
+
+    Verifies that the census correctly identifies SKIP-policy and OVERWRITE-policy secondary
+    MBIDs, enforces idempotency against already-journalled cross-references, and identifies
+    evidence-gap candidates.
+    """
+
+    @staticmethod
+    def _make_journal(entries: list[dict[str, str]]) -> TransactionLog:
+        """Build a :class:`TransactionLog` from a list of raw entry dicts.
+
+        :param entries: List of raw entry dicts.
+        :returns: A :class:`TransactionLog` with the entries validated.
+        """
+        return TransactionLog(entries=[TransactionEntry(**e) for e in entries])
+
+    def test_skip_policy_secondary_mbid_identified(self) -> None:
+        """SKIP policy: skipped entry at same destination as tagged entry → secondary MBID found.
+
+        The skipped entry's release_id is the secondary MBID for the surviving tagged file.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "skipped",
+                },
+            ]
+        )
+        groups, gaps = _census_journal_for_xrefs(journal)
+        assert "/lib/Work/01.flac" in groups
+        primary, secondary = groups["/lib/Work/01.flac"]
+        assert primary == "primary-rel"
+        assert "secondary-rel" in secondary
+        assert gaps == []
+
+    def test_overwrite_policy_secondary_mbid_identified(self) -> None:
+        """OVERWRITE policy: multiple tagged entries at same destination → earlier is secondary.
+
+        The chronological-last tagged entry's release_id is the primary; earlier entries'
+        release_ids are secondary MBIDs.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "first-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "second-rel",
+                    "source": "/src/b.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+            ]
+        )
+        groups, gaps = _census_journal_for_xrefs(journal)
+        assert "/lib/Work/01.flac" in groups
+        primary, secondary = groups["/lib/Work/01.flac"]
+        assert primary == "second-rel"
+        assert "first-rel" in secondary
+        assert gaps == []
+
+    def test_already_journalled_xref_excluded_from_secondary(self) -> None:
+        """Idempotency: a secondary MBID already journalled as cross-referenced is excluded.
+
+        When a cross-referenced entry already exists for a secondary MBID at the destination,
+        that MBID is not included in the returned secondary list.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "skipped",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/lib/Work/01.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "cross-referenced",
+                },
+            ]
+        )
+        groups, gaps = _census_journal_for_xrefs(journal)
+        # secondary-rel is already cross-referenced → no actionable group.
+        assert "/lib/Work/01.flac" not in groups
+        assert gaps == []
+
+    def test_evidence_gap_single_tagged_no_skip(self) -> None:
+        """Evidence-gap: single tagged entry with no skip → destination is a gap candidate.
+
+        A destination with exactly one unique tagged release_id and no skipped entries is an
+        evidence-gap candidate (the journal cannot prove a secondary MBID).
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+            ]
+        )
+        groups, gaps = _census_journal_for_xrefs(journal)
+        assert "/lib/Work/01.flac" not in groups
+        assert "/lib/Work/01.flac" in gaps
+
+    def test_no_secondary_when_skip_matches_primary(self) -> None:
+        """SKIP policy: skipped entry with same release_id as primary is not a secondary MBID.
+
+        When the skipped entry's release_id equals the primary (tagged) release_id, no secondary
+        MBID is added.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "same-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "same-rel",
+                    "source": "/src/b.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "skipped",
+                },
+            ]
+        )
+        groups, gaps = _census_journal_for_xrefs(journal)
+        assert "/lib/Work/01.flac" not in groups
+        # Single unique tagged id + skip with same id → not a gap candidate either
+        # (the skip is present, so it's not a pure single-tagged-no-skip case).
+        assert "/lib/Work/01.flac" not in gaps
+
+    def test_empty_journal_returns_empty(self) -> None:
+        """Empty journal returns empty groups and gaps.
+
+        No entries → no groups, no evidence-gap candidates.
+        """
+        journal = self._make_journal([])
+        groups, gaps = _census_journal_for_xrefs(journal)
+        assert groups == {}
+        assert gaps == []
+
+    def test_both_skip_and_overwrite_at_same_dest(self) -> None:
+        """Both SKIP and OVERWRITE shapes at the same destination are merged correctly.
+
+        When a destination has both multiple tagged entries (OVERWRITE) and skipped entries
+        (SKIP), all secondary MBIDs are collected and deduplicated.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "first-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "second-rel",
+                    "source": "/src/b.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "skipped-rel",
+                    "source": "/src/c.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "skipped",
+                },
+            ]
+        )
+        groups, gaps = _census_journal_for_xrefs(journal)
+        assert "/lib/Work/01.flac" in groups
+        primary, secondary = groups["/lib/Work/01.flac"]
+        assert primary == "second-rel"
+        assert "first-rel" in secondary
+        assert "skipped-rel" in secondary
+        assert gaps == []
+
+    def test_empty_release_ids_ignored(self) -> None:
+        """Tagged entries with empty release_id are ignored in the census.
+
+        Empty release_ids (e.g. from repathed entries) must not produce spurious secondary MBIDs.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "real-rel",
+                    "source": "/src/b.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+            ]
+        )
+        groups, gaps = _census_journal_for_xrefs(journal)
+        # Only one unique non-empty release_id → no secondary MBIDs.
+        assert "/lib/Work/01.flac" not in groups
+        # Single unique non-empty tagged id → gap candidate.
+        assert "/lib/Work/01.flac" in gaps
+
+    def test_all_empty_release_ids_skipped(self) -> None:
+        """Destination with only empty release_ids in tagged entries is skipped entirely.
+
+        When all tagged entries at a destination have empty release_ids, the destination
+        produces no unique_ids and is skipped (the continue branch in the census loop).
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "",
+                    "source": "/src/b.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+            ]
+        )
+        groups, gaps = _census_journal_for_xrefs(journal)
+        # All empty release_ids → no groups, no gap candidates.
+        assert "/lib/Work/01.flac" not in groups
+        assert "/lib/Work/01.flac" not in gaps
+
+
+# ---------------------------------------------------------------------------
+# reconstruct_cross_references
+# ---------------------------------------------------------------------------
+
+
+class TestReconstructCrossReferences:
+    """Integration tests for :func:`reconstruct_cross_references`.
+
+    Exercises the full pass: journal census, live-file tag reads, operator confirmation,
+    C-PROV chain (tag write → verify → journal), idempotency, dry-run, and evidence-gap
+    reporting.  Uses pyfakefs for filesystem isolation and real mutagen tag writes.
+    """
+
+    @staticmethod
+    def _make_flac(dest_root: Path, rel_path: str, tags: TrackTags) -> Path:
+        """Create a FLAC file with the given tags applied.
+
+        :param dest_root: Library root directory.
+        :param rel_path: Relative path within the library.
+        :param tags: Tags to embed.
+        :returns: The full absolute path of the created FLAC file.
+        """
+        full_path = dest_root / rel_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(full_path, tags)
+        return full_path
+
+    @staticmethod
+    def _make_mp3(dest_root: Path, rel_path: str, tags: TrackTags) -> Path:
+        """Create an MP3 file with the given tags applied.
+
+        :param dest_root: Library root directory.
+        :param rel_path: Relative path within the library.
+        :param tags: Tags to embed.
+        :returns: The full absolute path of the created MP3 file.
+        """
+        full_path = dest_root / rel_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_bytes(_MINIMAL_MP3)
+        apply_tags_mp3(full_path, tags)
+        return full_path
+
+    @staticmethod
+    def _write_journal(dest_root: Path, entries: list[dict[str, str]]) -> None:
+        """Write a JSONL journal file to ``dest_root / music_annotator_journal.json``.
+
+        :param dest_root: Destination root directory (must already exist).
+        :param entries: List of raw entry dicts to serialise.
+        """
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+
+    def test_skip_policy_writes_secondary_mbid_flac(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """SKIP policy: secondary MBID written to surviving FLAC file and journalled.
+
+        A skipped entry at the same destination as a tagged entry causes the skipped entry's
+        release_id to be written as a secondary MBID on the surviving file.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": str(flac_path),
+                    "action": "skipped",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        # Secondary MBID written to the file.
+        tag_dict = _read_tags_flac(flac_path)
+        assert "secondary-rel" in tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
+
+        # Journal entry written.
+        journal = read_journal(journal_path)
+        xref_entries = [e for e in journal.entries if e.action == "cross-referenced"]
+        assert len(xref_entries) == 1
+        assert xref_entries[0].release_id == "secondary-rel"
+        assert xref_entries[0].source == str(flac_path)
+        assert xref_entries[0].destination == str(flac_path)
+
+        assert gaps == []
+
+    def test_overwrite_policy_writes_secondary_mbid_flac(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """OVERWRITE policy: earlier tagged release_id written as secondary MBID on FLAC file.
+
+        Multiple tagged entries at the same destination with distinct release_ids cause the
+        earlier entries' release_ids to be written as secondary MBIDs.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="second-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "first-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "second-rel",
+                    "source": "/src/b.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        tag_dict = _read_tags_flac(flac_path)
+        assert "first-rel" in tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
+        assert gaps == []
+
+    def test_skip_policy_writes_secondary_mbid_mp3(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """SKIP policy: secondary MBID written to surviving MP3 file and journalled.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        mp3_path = self._make_mp3(dest_root, "Work/01.mp3", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.mp3",
+                    "destination": str(mp3_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.mp3",
+                    "destination": str(mp3_path),
+                    "action": "skipped",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        tag_dict = _read_tags_mp3(mp3_path)
+        assert "secondary-rel" in tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
+        assert gaps == []
+
+    def test_dry_run_reports_without_writing(self, fs: FakeFilesystem) -> None:
+        """Dry-run: findings reported without writing tags or journal entries.
+
+        In dry-run mode, the function prints findings but does not write any tags or append
+        any journal entries.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": str(flac_path),
+                    "action": "skipped",
+                },
+            ],
+        )
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root, dry_run=True)
+
+        # No tag written.
+        tag_dict = _read_tags_flac(flac_path)
+        assert tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "") == ""
+
+        # No journal entry appended.
+        journal = read_journal(journal_path)
+        xref_entries = [e for e in journal.entries if e.action == "cross-referenced"]
+        assert xref_entries == []
+
+        assert gaps == []
+
+    def test_idempotency_already_present_in_tag_skipped(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Idempotency: secondary MBID already in the file's tag is silently skipped.
+
+        When the secondary MBID is already present in MUSICBRAINZ_SECONDARY_ALBUMID, the pass
+        does not write it again and does not prompt the operator.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+        # Pre-write the secondary MBID into the file.
+        write_secondary_albumid_flac(flac_path, "secondary-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": str(flac_path),
+                    "action": "skipped",
+                },
+            ],
+        )
+
+        input_mock = mocker.patch("builtins.input")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        # No prompt shown (nothing to write).
+        input_mock.assert_not_called()
+        assert gaps == []
+
+    def test_operator_decline_aborts_without_writing(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Operator declining the confirmation prompt aborts without writing any tags.
+
+        When the operator answers 'n' to the confirmation prompt, no tags are written and no
+        journal entries are appended.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": str(flac_path),
+                    "action": "skipped",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="n")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        tag_dict = _read_tags_flac(flac_path)
+        assert tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "") == ""
+
+        journal = read_journal(journal_path)
+        xref_entries = [e for e in journal.entries if e.action == "cross-referenced"]
+        assert xref_entries == []
+        assert gaps == []
+
+    def test_evidence_gap_candidate_reported(self, fs: FakeFilesystem) -> None:
+        """Evidence-gap candidate: file with secondary MBID tag but no journal evidence reported.
+
+        When a file has only one tagged journal entry but carries a MUSICBRAINZ_SECONDARY_ALBUMID
+        tag (written outside the journal), it is reported as an evidence-gap candidate.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="only-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+        # Write a secondary MBID directly (simulating out-of-journal write).
+        write_secondary_albumid_flac(flac_path, "mystery-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root, dry_run=True)
+
+        assert str(flac_path) in gaps
+
+    def test_evidence_gap_no_secondary_tag_not_reported(self, fs: FakeFilesystem) -> None:
+        """Evidence-gap candidate not reported when file has no secondary MBID tag.
+
+        A file with only one tagged journal entry and no MUSICBRAINZ_SECONDARY_ALBUMID tag is
+        not an evidence-gap candidate (the journal is consistent with the file state).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="only-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root, dry_run=True)
+
+        assert str(flac_path) not in gaps
+
+    def test_file_not_found_skipped_with_warning(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """File not found at journal destination is skipped with a warning log.
+
+        When the file at the journal destination does not exist on disk, the group is skipped
+        and a warning is logged.  No RuntimeError is raised.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Journal references a file that does not exist on disk.
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/missing.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": "/lib/Work/missing.flac",
+                    "action": "skipped",
+                },
+            ],
+        )
+
+        input_mock = mocker.patch("builtins.input")
+        journal_path = dest_root / "music_annotator_journal.json"
+        # Should not raise; file not found → skipped.
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        input_mock.assert_not_called()
+        assert gaps == []
+
+    def test_nothing_to_write_no_prompt(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """No actionable groups → no prompt shown, function returns empty gaps.
+
+        When the journal has no SKIP or OVERWRITE shapes, the function returns immediately
+        without prompting the operator.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="only-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        input_mock = mocker.patch("builtins.input")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        input_mock.assert_not_called()
+        assert gaps == []
+
+    def test_repathed_file_current_path_resolved(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Repathed file: secondary MBID written to the current (post-repath) path.
+
+        When a file has been repathed, the journal destination in the tagged entry is the old
+        path.  The function resolves the current path via the journal lineage and writes the
+        secondary MBID to the current file.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        # Create the file at the new (post-repath) path.
+        new_path = self._make_flac(dest_root, "Work/01-new.flac", tags)
+        old_path_str = "/lib/Work/01-old.flac"
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": old_path_str,
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": old_path_str,
+                    "action": "skipped",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "",
+                    "source": old_path_str,
+                    "destination": str(new_path),
+                    "action": "repathed",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        tag_dict = _read_tags_flac(new_path)
+        assert "secondary-rel" in tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
+        assert gaps == []
+
+    def test_dry_run_nothing_to_write_prints_message(self, fs: FakeFilesystem) -> None:
+        """Dry-run with no actionable groups prints a 'nothing to write' message.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="only-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        # No actionable groups → dry-run returns empty gaps without prompting.
+        gaps = reconstruct_cross_references(journal_path, dest_root, dry_run=True)
+        assert gaps == []
+
+    def test_evidence_gap_reported_in_non_dry_run(self, fs: FakeFilesystem) -> None:
+        """Evidence-gap candidate reported in non-dry-run mode when no actionable groups exist.
+
+        When there are no actionable groups but evidence-gap candidates exist, they are reported
+        and returned without prompting.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="only-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+        write_secondary_albumid_flac(flac_path, "mystery-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        assert str(flac_path) in gaps
+
+    def test_tag_read_error_in_actionable_loop_skipped(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Tag read failure in actionable loop is logged and the file is skipped.
+
+        When reading tags from a file in the actionable loop raises an exception, the file is
+        skipped with a warning log and no RuntimeError is raised.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": str(flac_path),
+                    "action": "skipped",
+                },
+            ],
+        )
+
+        # Patch _read_tags_flac to raise in the actionable loop.
+        mocker.patch(
+            "music_annotator._pipeline_maint._read_tags_flac",
+            side_effect=OSError("corrupt"),
+        )
+        input_mock = mocker.patch("builtins.input")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        # File skipped → no prompt, no write.
+        input_mock.assert_not_called()
+        assert gaps == []
+
+    def test_mp3_evidence_gap_candidate_reported(self, fs: FakeFilesystem) -> None:
+        """Evidence-gap candidate: MP3 file with secondary MBID tag but no journal evidence.
+
+        Exercises the .mp3 branch in the evidence-gap check loop.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="only-rel", title="Track 1")
+        mp3_path = self._make_mp3(dest_root, "Work/01.mp3", tags)
+        write_secondary_albumid_mp3(mp3_path, "mystery-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/a.mp3",
+                    "destination": str(mp3_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root, dry_run=True)
+
+        assert str(mp3_path) in gaps
+
+    def test_evidence_gap_file_not_found_skipped(self, fs: FakeFilesystem) -> None:
+        """Evidence-gap candidate file not found on disk is silently skipped.
+
+        When a gap candidate's file does not exist on disk, it is not added to the gap list.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Journal references a file that does not exist on disk.
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/missing.flac",
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root, dry_run=True)
+
+        # File not found → not in gaps.
+        assert "/lib/Work/missing.flac" not in gaps
+
+    def test_evidence_gap_tag_read_error_skipped(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Evidence-gap tag read failure is silently skipped.
+
+        When reading tags from a gap candidate raises an exception, the file is not added to
+        the gap list.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="only-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch(
+            "music_annotator._pipeline_maint._read_tags_flac",
+            side_effect=OSError("corrupt"),
+        )
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root, dry_run=True)
+
+        # Tag read error → file not in gaps.
+        assert str(flac_path) not in gaps
+
+    def test_dry_run_with_actionable_and_gap_reports_both(self, fs: FakeFilesystem) -> None:
+        """Dry-run with both actionable groups and gap candidates reports both.
+
+        Exercises the dry-run path where both actionable items and gap candidates exist.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File 1: has SKIP-policy secondary MBID to write.
+        tags1 = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac1 = self._make_flac(dest_root, "Work/01.flac", tags1)
+
+        # File 2: evidence-gap candidate.
+        tags2 = TrackTags(musicbrainz_albumid="only-rel", title="Track 2")
+        flac2 = self._make_flac(dest_root, "Work/02.flac", tags2)
+        write_secondary_albumid_flac(flac2, "mystery-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": str(flac1),
+                    "action": "skipped",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/c.flac",
+                    "destination": str(flac2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root, dry_run=True)
+
+        # No tags written (dry-run).
+        tag_dict = _read_tags_flac(flac1)
+        assert tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "") == ""
+
+        # Gap candidate reported.
+        assert str(flac2) in gaps
+
+    def test_repath_unrelated_file_does_not_affect_tracked_dests(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Repath of an unrelated file does not corrupt tracked tagged destinations.
+
+        When a repath entry's source does not match any tracked tagged destination, the inner
+        loop runs but the condition is False for all items — no tracked dest is updated.
+        This exercises the branch where current_str != entry.source for all tracked dests.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File 1: has SKIP-policy secondary MBID to write (tracked tagged dest).
+        tags1 = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac1 = self._make_flac(dest_root, "Work/01.flac", tags1)
+
+        # File 2: an unrelated file that gets repathed (not in our groups).
+        tags2 = TrackTags(musicbrainz_albumid="other-rel", title="Track 2")
+        flac2 = self._make_flac(dest_root, "Work/02-new.flac", tags2)
+        old_path2_str = "/lib/Work/02-old.flac"
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": str(flac1),
+                    "action": "skipped",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "other-rel",
+                    "source": "/src/c.flac",
+                    "destination": old_path2_str,
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:03+00:00",
+                    "release_id": "",
+                    "source": old_path2_str,
+                    "destination": str(flac2),
+                    "action": "repathed",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        # flac1 gets its secondary MBID written correctly.
+        tag_dict = _read_tags_flac(flac1)
+        assert "secondary-rel" in tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
+        assert gaps == []
+
+    def test_repath_multi_hop_lineage_resolved(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Multi-hop repath: secondary MBID written to the final current path.
+
+        When a file has been repathed twice (A→B→C), the function resolves the current path
+        to C and writes the secondary MBID there.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        # Create the file at the final (post-two-repath) path.
+        final_path = self._make_flac(dest_root, "Work/01-final.flac", tags)
+        old_path_str = "/lib/Work/01-old.flac"
+        mid_path_str = "/lib/Work/01-mid.flac"
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": old_path_str,
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": old_path_str,
+                    "action": "skipped",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "",
+                    "source": old_path_str,
+                    "destination": mid_path_str,
+                    "action": "repathed",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:03+00:00",
+                    "release_id": "",
+                    "source": mid_path_str,
+                    "destination": str(final_path),
+                    "action": "repathed",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        tag_dict = _read_tags_flac(final_path)
+        assert "secondary-rel" in tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
+        assert gaps == []
+
+    def test_evidence_gap_reported_after_write(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Evidence-gap candidates reported after writing secondary MBIDs.
+
+        When both actionable groups and evidence-gap candidates exist, the gaps are reported
+        after the writes complete.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File 1: has SKIP-policy secondary MBID to write.
+        tags1 = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac1 = self._make_flac(dest_root, "Work/01.flac", tags1)
+
+        # File 2: evidence-gap candidate (secondary MBID in tag, not in journal).
+        tags2 = TrackTags(musicbrainz_albumid="only-rel", title="Track 2")
+        flac2 = self._make_flac(dest_root, "Work/02.flac", tags2)
+        write_secondary_albumid_flac(flac2, "mystery-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/src/b.flac",
+                    "destination": str(flac1),
+                    "action": "skipped",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/c.flac",
+                    "destination": str(flac2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        # Secondary MBID written to flac1.
+        tag_dict = _read_tags_flac(flac1)
+        assert "secondary-rel" in tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
+
+        # flac2 is an evidence-gap candidate.
+        assert str(flac2) in gaps

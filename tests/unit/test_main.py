@@ -2808,3 +2808,107 @@ class TestReadAcoustidFingerprintTag:
 
 
 # ---------------------------------------------------------------------------
+# reconstruct-xrefs subcommand
+# ---------------------------------------------------------------------------
+
+
+class TestReconstructXrefsSubcommand:
+    """Tests for the ``reconstruct-xrefs`` CLI subcommand.
+
+    Verifies that the subcommand dispatches to :func:`~music_annotator.reconstruct_cross_references`
+    with the correct arguments, and that ``--dry-run`` is forwarded correctly.
+    """
+
+    def test_reconstruct_xrefs_dispatches_to_function(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """reconstruct-xrefs subcommand dispatches to reconstruct_cross_references.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("", encoding="utf-8")
+
+        mock_fn = mocker.patch(
+            "music_annotator.reconstruct_cross_references",
+            return_value=[],
+        )
+
+        sys.argv = ["music-annotator", "reconstruct-xrefs", str(dest_root)]
+        main()
+
+        mock_fn.assert_called_once_with(
+            journal_path=journal_path,
+            dest_root=dest_root,
+            dry_run=False,
+        )
+
+    def test_reconstruct_xrefs_dry_run_forwarded(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """reconstruct-xrefs --dry-run forwards dry_run=True to reconstruct_cross_references.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("", encoding="utf-8")
+
+        mock_fn = mocker.patch(
+            "music_annotator.reconstruct_cross_references",
+            return_value=[],
+        )
+
+        sys.argv = ["music-annotator", "reconstruct-xrefs", str(dest_root), "--dry-run"]
+        main()
+
+        mock_fn.assert_called_once_with(
+            journal_path=journal_path,
+            dest_root=dest_root,
+            dry_run=True,
+        )
+
+    def test_reconstruct_xrefs_error_exits_1(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """reconstruct-xrefs subcommand exits with code 1 on unhandled exception.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("", encoding="utf-8")
+
+        mocker.patch(
+            "music_annotator.reconstruct_cross_references",
+            side_effect=RuntimeError("tag write failed"),
+        )
+
+        sys.argv = ["music-annotator", "reconstruct-xrefs", str(dest_root)]
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    def test_reconstruct_xrefs_parser_registered(self) -> None:
+        """reconstruct-xrefs subcommand is registered in the argument parser.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args(["reconstruct-xrefs", "/lib"])
+        assert args.subcommand == "reconstruct-xrefs"
+        assert args.dry_run is False
+
+    def test_reconstruct_xrefs_parser_dry_run_flag(self) -> None:
+        """reconstruct-xrefs --dry-run sets dry_run=True in parsed args.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args(["reconstruct-xrefs", "/lib", "--dry-run"])
+        assert args.subcommand == "reconstruct-xrefs"
+        assert args.dry_run is True
+
+
+# ---------------------------------------------------------------------------

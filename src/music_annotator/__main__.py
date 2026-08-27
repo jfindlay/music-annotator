@@ -1,6 +1,6 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes fourteen subcommands:
+Configures structlog for human-friendly console output and exposes fifteen subcommands:
 
 * ``apply``                    — copy and tag a directory of tracks for a known MusicBrainz release MBID.
 * ``search``                   — search MusicBrainz for a release matching a source directory, prompt for
@@ -32,6 +32,9 @@ Configures structlog for human-friendly console output and exposes fourteen subc
 * ``preflight``                — run all maintenance passes with ``dry_run=True`` over ``dest_dir`` and
   emit a consolidated report of planned changes, cross-pass overlaps, journal capacity, and
   ``Reference/`` snapshot evidence.  Supports ``--json PATH`` to serialise the report to JSON.
+* ``reconstruct-xrefs``        — census the journal for destructive-choice shapes (SKIP and OVERWRITE
+  collision policies) and write secondary release MBIDs as cross-reference tags on surviving files.
+  Offline; supports ``--dry-run`` to preview findings without writing tags or journal entries.
 
 Usage::
 
@@ -95,6 +98,10 @@ Usage::
         <dest_dir> \\
         [--user-agent-app "AppName/Version"] [--user-agent-email contact@example.com] \\
         [--journal-path PATH] [--json PATH]
+
+    music-annotator reconstruct-xrefs \\
+        <dest_dir> \\
+        [--dry-run]
 """
 
 from __future__ import annotations
@@ -924,6 +931,57 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Serialise the preflight report to JSON at the given path.",
     )
 
+    # ------------------------------------------------------------------
+    # reconstruct-xrefs subcommand
+    # ------------------------------------------------------------------
+    reconstruct_xrefs_parser = subparsers.add_parser(
+        "reconstruct-xrefs",
+        help="Census the journal for destructive-choice shapes and write secondary release MBIDs.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Reads the journal at <dest_dir>/music_annotator_journal.json and identifies two
+            shapes of destructive collision choices made during ingest:
+
+              SKIP policy:      a "skipped" entry at the same destination as a surviving
+                                "tagged" entry.  The skipped entry's release MBID is a
+                                secondary MBID for the surviving file.
+              OVERWRITE policy: multiple "tagged" entries at one destination with distinct
+                                release_ids.  The chronological-last entry is the primary;
+                                earlier entries' release_ids are secondary MBIDs.
+
+            Presents grouped findings; on operator confirmation, writes secondary release MBIDs
+            into MUSICBRAINZ_SECONDARY_ALBUMID on each surviving file and journals each mutation
+            as action="cross-referenced".
+
+            Idempotent: secondary MBIDs already present in the file's tag or already journalled
+            as "cross-referenced" are silently skipped.
+
+            Also reports evidence-gap candidates: files where the journal shows only one
+            "tagged" entry but the file currently carries a MUSICBRAINZ_SECONDARY_ALBUMID tag
+            (suggesting a cross-reference was written outside the journal).
+
+            The operator confirmation prompt is NOT suppressed by --yes (integrity prompts are
+            not bulk consent).  Use --dry-run to preview findings without writing or prompting.
+
+            Offline: no MusicBrainz network calls are made.
+
+            Examples:
+              music-annotator reconstruct-xrefs /tmp/music_library --dry-run
+              music-annotator reconstruct-xrefs /tmp/music_library
+            """),
+    )
+    reconstruct_xrefs_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    reconstruct_xrefs_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report findings without writing tags, prompting, or appending journal entries.",
+    )
+
     return parser
 
 
@@ -932,7 +990,7 @@ def main() -> None:
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
     ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``, ``repatch-acoustid``,
-    ``repatch-catalogue-colon``, ``preflight``.
+    ``repatch-catalogue-colon``, ``preflight``, ``reconstruct-xrefs``.
 
     The ``repath`` subcommand dispatches to :func:`~music_annotator.repath` with ``dry_run`` and
     ``yes`` forwarded from the parsed arguments.  The ``regroup`` subcommand dispatches to
@@ -956,7 +1014,10 @@ def main() -> None:
     supplied (for forward compatibility), then dispatches to
     :func:`~music_annotator.compose_preflight_report` and prints the consolidated report; when
     ``scan_ran`` is ``False`` (root not mounted or empty), prints a clear "scan not run" message
-    and exits cleanly.
+    and exits cleanly.  The ``reconstruct-xrefs`` subcommand dispatches to
+    :func:`~music_annotator.reconstruct_cross_references` with ``dry_run`` forwarded; the
+    operator confirmation prompt is never suppressed by ``--yes`` (integrity prompts are not
+    bulk consent).
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating.  All subcommands except ``prune`` use :func:`_dispatch` to convert any unhandled exception or keyboard
@@ -1189,6 +1250,17 @@ def main() -> None:
                     print(f"\nReport written to: {_preflight_json_path}")
 
             _dispatch(_run_preflight, "preflight_error", dest_root=str(args.dest_dir))
+
+        case "reconstruct-xrefs":
+            _dispatch(
+                lambda: music_annotator.reconstruct_cross_references(
+                    journal_path=args.dest_dir / music_annotator.JOURNAL_FILENAME,
+                    dest_root=args.dest_dir,
+                    dry_run=args.dry_run,
+                ),
+                "reconstruct_xrefs_error",
+                dest_root=str(args.dest_dir),
+            )
 
         case _:  # pragma: no cover
             parser.print_help()

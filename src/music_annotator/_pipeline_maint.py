@@ -4,16 +4,19 @@ Provides the six maintenance-mode commands that operate on an already-annotated 
 without making MusicBrainz network calls (except :func:`repatch_acoustid_tags` when an
 AcoustID API key is supplied):
 
-* :func:`repath`                  — re-path all verified library files to their corrected destinations.
-* :func:`regroup`                 — consolidate confirmed split-release files into their canonical destinations.
-* :func:`unify`                   — consolidate performer-split and composer-split fragmented releases.
-* :func:`enrich`                  — retroactively backfill fingerprint fields into library files.
-* :func:`repatch_catalogue_colon` — rewrite ``CWP_PART_*`` / ``CWP_GROUPHEADING`` tags corrupted by the
+* :func:`repath`                      — re-path all verified library files to their corrected destinations.
+* :func:`regroup`                     — consolidate confirmed split-release files into their canonical destinations.
+* :func:`unify`                       — consolidate performer-split and composer-split fragmented releases.
+* :func:`enrich`                      — retroactively backfill fingerprint fields into library files.
+* :func:`repatch_catalogue_colon`     — rewrite ``CWP_PART_*`` / ``CWP_GROUPHEADING`` tags corrupted by the
   pre-fix bare-``":"`` split (catalogue-colon labels such as Hoboken ``"Hob. III:31"``), re-deriving each
   label offline from the embedded ``CWP_WORK`` pair per the shipped ``": "`` rule (NORM-9 / STYLEGUIDE 4.x).
-* :func:`repatch_acoustid_tags`   — migrate the legacy ``CHROMAPRINT_FP`` fingerprint key to the
+* :func:`repatch_acoustid_tags`       — migrate the legacy ``CHROMAPRINT_FP`` fingerprint key to the
   Picard-aligned ``ACOUSTID_FINGERPRINT`` key, and (when an AcoustID API key is supplied) re-source
   ``ACOUSTID_ID`` from the fingerprint ``/v2/lookup`` endpoint.
+* :func:`reconstruct_cross_references` — census the journal for destructive-choice shapes (SKIP and
+  OVERWRITE collision policies) and write secondary release MBIDs as cross-reference tags on surviving
+  files.  Offline; dry-run supported.  Also reports evidence-gap candidates for operator review.
 
 Also provides the shared primitives consumed by all commands:
 
@@ -3576,3 +3579,312 @@ def compose_preflight_report(dest_root: Path, journal_path: Path) -> PreflightRe
         reference_evidence=ref_evidence,
         scan_ran=True,
     )
+
+
+# ---------------------------------------------------------------------------
+# Cross-reference reconstruction pass
+# ---------------------------------------------------------------------------
+
+
+def _census_journal_for_xrefs(
+    journal: TransactionLog,
+) -> tuple[dict[str, tuple[str, list[str]]], list[str]]:
+    """Census the journal for destructive-choice shapes that imply secondary release MBIDs.
+
+    Scans journal entries to identify two shapes:
+
+    * **SKIP policy**: a ``"skipped"`` entry whose ``destination`` matches the ``destination``
+      of a later ``"tagged"`` entry.  The skipped entry's ``release_id`` is a secondary MBID
+      for the surviving file at that destination.
+    * **OVERWRITE policy**: multiple ``"tagged"`` entries at the same ``destination`` with
+      distinct ``release_id`` values.  The chronological-last ``"tagged"`` entry is the primary;
+      all earlier entries' ``release_id`` values are secondary MBIDs.
+
+    Cross-reference entries already written (``"cross-referenced"`` actions) are collected per
+    destination so that idempotency can be enforced: a secondary MBID already journalled as
+    ``"cross-referenced"`` at a destination is excluded from the returned secondary sets.
+
+    :param journal: The :class:`~music_annotator.models.TransactionLog` to census.
+    :returns: A tuple ``(groups, evidence_gap_dests)`` where:
+
+        * ``groups`` maps each destination path string to a ``(primary_mbid, [secondary_mbids])``
+          tuple.  Only destinations with at least one secondary MBID to add are included.
+          Secondary MBIDs are already de-duplicated and exclude any MBID already present in a
+          ``"cross-referenced"`` journal entry at that destination.
+        * ``evidence_gap_dests`` is a list of destination path strings where the journal shows
+          only one ``"tagged"`` entry but the file currently carries a
+          ``MUSICBRAINZ_SECONDARY_ALBUMID`` tag (suggesting a cross-reference was written outside
+          the journal), or where the journal evidence is otherwise ambiguous.  These are reported
+          for operator review.
+    """
+    # Collect tagged entries per destination (in chronological order).
+    tagged_by_dest: dict[str, list[str]] = {}  # dest → [release_id, ...]
+    # Collect skipped entries per destination.
+    skipped_by_dest: dict[str, list[str]] = {}  # dest → [release_id, ...]
+    # Collect already-journalled cross-references per destination.
+    xref_by_dest: dict[str, set[str]] = {}  # dest → {secondary_mbid, ...}
+
+    for entry in journal.entries:
+        dest = entry.destination
+        if entry.action == "tagged":
+            tagged_by_dest.setdefault(dest, []).append(entry.release_id)
+        elif entry.action == "skipped":
+            skipped_by_dest.setdefault(dest, []).append(entry.release_id)
+        elif entry.action == "cross-referenced":
+            xref_by_dest.setdefault(dest, set()).add(entry.release_id)
+
+    groups: dict[str, tuple[str, list[str]]] = {}
+
+    for dest, tagged_ids in tagged_by_dest.items():
+        # Deduplicate while preserving order; last unique value is the primary.
+        seen: dict[str, None] = {}
+        for rid in tagged_ids:
+            if rid:
+                seen[rid] = None
+        unique_ids = list(seen)
+        if not unique_ids:
+            continue
+
+        primary_mbid = unique_ids[-1]
+        already_xref = xref_by_dest.get(dest, set())
+
+        # OVERWRITE policy: multiple distinct release_ids in tagged entries.
+        secondary_from_overwrite = [rid for rid in unique_ids[:-1] if rid and rid not in already_xref]
+
+        # SKIP policy: skipped entries at the same destination.
+        secondary_from_skip = [
+            rid for rid in skipped_by_dest.get(dest, []) if rid and rid != primary_mbid and rid not in already_xref
+        ]
+
+        # Merge and deduplicate secondary MBIDs (preserve order: overwrite first, then skip).
+        merged: dict[str, None] = {}
+        for rid in secondary_from_overwrite + secondary_from_skip:
+            merged[rid] = None
+        secondary_mbids = list(merged)
+
+        if secondary_mbids:
+            groups[dest] = (primary_mbid, secondary_mbids)
+
+    # Evidence-gap candidates: destinations with exactly one unique tagged release_id and no
+    # skipped entries — the journal alone cannot prove a secondary MBID, but the file may carry
+    # one (written outside the journal).  Reported for operator review; the caller reads the
+    # live file to check for an existing MUSICBRAINZ_SECONDARY_ALBUMID tag.
+    evidence_gap_dests: list[str] = []
+    for dest, tagged_ids in tagged_by_dest.items():
+        seen_ids: set[str] = {rid for rid in tagged_ids if rid}
+        if len(seen_ids) == 1 and dest not in skipped_by_dest and dest not in groups:
+            evidence_gap_dests.append(dest)
+
+    return groups, evidence_gap_dests
+
+
+def reconstruct_cross_references(
+    journal_path: Path,
+    dest_root: Path,
+    *,
+    dry_run: bool = False,
+) -> list[str]:
+    """Census the journal for destructive-choice shapes and write secondary release MBIDs.
+
+    Reads the journal at ``journal_path`` and identifies two shapes of destructive collision
+    choices made during ingest:
+
+    * **SKIP policy**: a ``"skipped"`` entry at the same destination as a surviving ``"tagged"``
+      entry.  The skipped entry's ``release_id`` is a secondary MBID for the surviving file.
+    * **OVERWRITE policy**: multiple ``"tagged"`` entries at one destination with distinct
+      ``release_id`` values.  The chronological-last ``"tagged"`` entry is the primary; all
+      earlier entries' ``release_id`` values are secondary MBIDs.
+
+    Presents grouped findings to the operator and, on confirmation, writes secondary release
+    MBIDs into the ``MUSICBRAINZ_SECONDARY_ALBUMID`` tag of each surviving file via the full
+    C-PROV chain (tag write → verify → ``"cross-referenced"`` journal entry).
+
+    **Idempotency**: secondary MBIDs already present in the file's tag or already journalled as
+    ``"cross-referenced"`` at that destination are silently skipped — the pass is safe to re-run.
+
+    **Dry-run**: when ``dry_run=True``, findings are printed without prompting or writing any
+    tags or journal entries.  The evidence-gap candidate list is still returned.
+
+    **Operator confirmation**: the operator is shown the grouped findings (file path, primary
+    MBID, secondary MBIDs to add) and must confirm before any writes occur.  ``--yes`` does
+    **not** suppress this prompt (integrity prompts are not bulk consent).
+
+    **Evidence-gap candidates**: files where the journal shows only one ``"tagged"`` entry but
+    the file currently carries a ``MUSICBRAINZ_SECONDARY_ALBUMID`` tag (suggesting a
+    cross-reference was written outside the journal), or where the journal evidence is otherwise
+    ambiguous.  These are printed for operator review and returned as a list of path strings.
+
+    This function is offline: it reads the journal and live library files, but makes no
+    MusicBrainz network calls.
+
+    :param journal_path: Path to the journal file
+        (``<dest_root>/music_annotator_journal.json``).
+    :param dest_root: Root of the annotated music library.  Used for relative-path display
+        in the operator prompt.
+    :param dry_run: When ``True``, report findings without writing tags, prompting, or
+        appending journal entries.
+    :returns: A list of destination path strings that are evidence-gap candidates (files where
+        duplication is suspected but not journal-provable).  Empty when no gaps are found.
+    :raises RuntimeError: If a tag write or read-back verification fails (C-PROV chain).
+    """
+    journal = read_journal(journal_path)
+    groups, evidence_gap_dests = _census_journal_for_xrefs(journal)
+
+    # --- Resolve current on-disk paths ---
+    # The census groups are keyed on the "tagged" destination as it appears in the journal.
+    # When a file has been subsequently repathed, the tagged destination is the old (legacy)
+    # path; we need the current on-disk path to read and write the live file.
+    #
+    # Build tagged_dest_to_current: for each "tagged" destination, track its current path by
+    # walking journal entries in chronological order.  On each move (repathed/regrouped/unified),
+    # update all tracked destinations that currently point to the old path.
+    tagged_dest_to_current: dict[str, Path] = {}  # tagged_dest_str → current Path
+    # Intermediate tracking: tagged_dest_str → current_path_str (updated on each move).
+    _current_by_tagged: dict[str, str] = {}
+    for entry in journal.entries:
+        if entry.action == "tagged":
+            _current_by_tagged[entry.destination] = entry.destination
+        elif entry.action in {"repathed", "regrouped", "unified"}:
+            # Update all tracked tagged dests that currently point to entry.source.
+            for tagged_dest, current_str in list(_current_by_tagged.items()):
+                if current_str == entry.source:
+                    _current_by_tagged[tagged_dest] = entry.destination
+
+    for tagged_dest, current_str in _current_by_tagged.items():
+        tagged_dest_to_current[tagged_dest] = Path(current_str)
+
+    # --- Filter groups to files that exist on disk ---
+    actionable: list[tuple[Path, str, list[str]]] = []  # (current_path, primary_mbid, [secondary_mbids])
+    for dest, (primary_mbid, secondary_mbids) in groups.items():
+        current_path = tagged_dest_to_current.get(dest, Path(dest))
+        if not current_path.exists():
+            log.warning(
+                "reconstruct_xref_file_not_found",
+                dest=dest,
+                current_path=str(current_path),
+            )
+            continue
+        # Filter secondary MBIDs: skip any already present in the live file's tag.
+        ext = current_path.suffix.lower()
+        try:
+            match ext:
+                case ".flac":
+                    live_dict = _read_tags_flac(current_path)
+                case ".mp3":
+                    live_dict = _read_tags_mp3(current_path)
+                case _:  # pragma: no cover — only .flac/.mp3 in library
+                    live_dict = {}
+        except Exception as exc:  # noqa: BLE001 — tag read failure: log and skip
+            log.warning("reconstruct_xref_tag_read_error", path=str(current_path), error=str(exc))
+            continue
+        existing_secondary_raw = live_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
+        existing_secondary_set = {m.strip() for m in existing_secondary_raw.split("; ") if m.strip()}
+        filtered_secondary = [rid for rid in secondary_mbids if rid not in existing_secondary_set]
+        if filtered_secondary:
+            actionable.append((current_path, primary_mbid, filtered_secondary))
+
+    # --- Evidence-gap candidates: check live files for unexpected secondary MBIDs ---
+    # A file is an evidence-gap candidate when the journal shows only one "tagged" entry
+    # (no journal-provable secondary) but the live file carries a MUSICBRAINZ_SECONDARY_ALBUMID.
+    gap_paths: list[str] = []
+    for dest in evidence_gap_dests:
+        current_path = tagged_dest_to_current.get(dest, Path(dest))
+        if not current_path.exists():
+            continue
+        ext = current_path.suffix.lower()
+        try:
+            match ext:
+                case ".flac":
+                    gap_dict = _read_tags_flac(current_path)
+                case ".mp3":
+                    gap_dict = _read_tags_mp3(current_path)
+                case _:  # pragma: no cover
+                    gap_dict = {}
+        except Exception:  # noqa: BLE001
+            continue
+        existing_secondary_raw = gap_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
+        if existing_secondary_raw.strip():
+            gap_paths.append(str(current_path))
+
+    # --- Dry-run: report findings without prompting or writing ---
+    if dry_run:
+        if actionable:
+            _console.print("\n[bold yellow]reconstruct-xrefs[/] (dry-run) — secondary MBIDs to write:\n")
+            for current_path, primary_mbid, secondary_mbids in actionable:
+                rel = str(current_path.relative_to(dest_root)) if current_path.is_relative_to(dest_root) else str(current_path)
+                _console.print(
+                    f"  [dim]{_markup_escape(rel)}[/]\n"
+                    f"    primary:   {_markup_escape(primary_mbid)}\n"
+                    f"    secondary: {_markup_escape('; '.join(secondary_mbids))}"
+                )
+        else:
+            _console.print("\n[bold green]reconstruct-xrefs[/] (dry-run) — no secondary MBIDs to write.\n")
+        if gap_paths:
+            _console.print("\n[bold yellow]Evidence-gap candidates[/] (secondary MBID present but not journal-provable):\n")
+            for gp in gap_paths:
+                rel = str(Path(gp).relative_to(dest_root)) if Path(gp).is_relative_to(dest_root) else gp
+                _console.print(f"  [dim]{_markup_escape(rel)}[/]")
+        log.info(
+            "reconstruct_xref_dry_run_complete",
+            actionable=len(actionable),
+            evidence_gaps=len(gap_paths),
+        )
+        return gap_paths
+
+    if not actionable:
+        _console.print("\n[bold green]reconstruct-xrefs[/] — no secondary MBIDs to write.\n")
+        if gap_paths:
+            _console.print("\n[bold yellow]Evidence-gap candidates[/] (secondary MBID present but not journal-provable):\n")
+            for gp in gap_paths:
+                rel = str(Path(gp).relative_to(dest_root)) if Path(gp).is_relative_to(dest_root) else gp
+                _console.print(f"  [dim]{_markup_escape(rel)}[/]")
+        log.info("reconstruct_xref_nothing_to_write", dest_root=str(dest_root))
+        return gap_paths
+
+    # --- Interactive prompt: present grouped findings and ask for confirmation ---
+    # This prompt survives --yes (integrity prompts are not bulk consent).
+    _console.print("\n[bold yellow]reconstruct-xrefs[/] — secondary MBIDs to write:\n")
+    for current_path, primary_mbid, secondary_mbids in actionable:
+        rel = str(current_path.relative_to(dest_root)) if current_path.is_relative_to(dest_root) else str(current_path)
+        _console.print(
+            f"  [dim]{_markup_escape(rel)}[/]\n"
+            f"    primary:   {_markup_escape(primary_mbid)}\n"
+            f"    secondary: {_markup_escape('; '.join(secondary_mbids))}"
+        )
+    _console.print(
+        f"\n[bold]{len(actionable)} file(s) will receive secondary MBID cross-references.[/]  Proceed? [dim](y/n)[/]"
+    )
+    _console.print("\n[bold cyan]>[/] ", end="")
+    answer = input("").strip().lower()
+    if answer not in {"y", "yes"}:
+        log.info("reconstruct_xref_aborted", dest_root=str(dest_root))
+        return gap_paths
+
+    # --- Write cross-references through the full C-PROV chain ---
+    now = datetime.datetime.now(datetime.UTC)
+    now_str = now.isoformat()
+    written_count = 0
+    for current_path, _primary_mbid, secondary_mbids in actionable:
+        for secondary_mbid in secondary_mbids:
+            _write_xref_and_journal(
+                current_path,
+                secondary_mbid,
+                journal=journal,
+                journal_path=journal_path,
+                now_str=now_str,
+            )
+            written_count += 1
+
+    _console.print(f"\n[bold green]reconstruct-xrefs complete[/] — {written_count} secondary MBID(s) written.\n")
+    if gap_paths:
+        _console.print("\n[bold yellow]Evidence-gap candidates[/] (secondary MBID present but not journal-provable):\n")
+        for gp in gap_paths:
+            rel = str(Path(gp).relative_to(dest_root)) if Path(gp).is_relative_to(dest_root) else gp
+            _console.print(f"  [dim]{_markup_escape(rel)}[/]")
+    log.info(
+        "reconstruct_xref_complete",
+        dest_root=str(dest_root),
+        written=written_count,
+        evidence_gaps=len(gap_paths),
+    )
+    return gap_paths
