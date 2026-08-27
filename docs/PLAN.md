@@ -218,7 +218,7 @@ pyupgrade).  One green run satisfies tests, types, lint, format, and coverage.
 | S5 | Cross-reference reconstruction pass (journal census)                            | done   | 147cd40 | extra: __init__.py (export); evidence-gap reporting included |
 | S6 | (conditional) MB-backed cross-reference enrichment                              | todo   |        |       |
 | S7 | Tag-read cache for maintenance passes                                           | done   | 05319dc |       |
-| S9 | Library-wide dedup command (AcoustID-cluster census + survivor-choice deletion) | todo   |        | added at S3 (operator extended dedup to the general case) |
+| S9 | Library-wide dedup command (AcoustID-cluster census + survivor-choice deletion) | done   | 0eaca73 | extra: __init__.py (export); scatter-consequence warning included |
 | S8 | Resume repair turn on hades; acceptance gate                                    | todo   |        |       |
 
 Frozen contracts: C-JRNL, C-FATAL, C-XREF (frozen at derivation 2026-08-25; vocabulary adjudicated 2026-08-26),
