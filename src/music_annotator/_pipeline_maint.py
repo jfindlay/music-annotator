@@ -1,6 +1,6 @@
 """Library maintenance operations for music-annotator.
 
-Provides the six maintenance-mode commands that operate on an already-annotated library
+Provides the seven maintenance-mode commands that operate on an already-annotated library
 without making MusicBrainz network calls (except :func:`repatch_acoustid_tags` when an
 AcoustID API key is supplied):
 
@@ -17,6 +17,11 @@ AcoustID API key is supplied):
 * :func:`reconstruct_cross_references` — census the journal for destructive-choice shapes (SKIP and
   OVERWRITE collision policies) and write secondary release MBIDs as cross-reference tags on surviving
   files.  Offline; dry-run supported.  Also reports evidence-gap candidates for operator review.
+* :func:`dedup_library`               — offline census over the live library: group files by embedded
+  ``ACOUSTID_ID`` cluster (via the tag-read cache), with ``AUDIO_HASH`` equality as the byte-identity
+  fast path; files lacking both are out of scope.  Aggregate per-recording pairs up to medium-level
+  groups before prompting.  Each group runs the shared group-resolution flow (survivor / keep-both /
+  abort) with C-DEDUP ordering.  Dry-run reports the full census without prompting.
 
 Also provides the shared primitives consumed by all commands:
 
@@ -3888,3 +3893,395 @@ def reconstruct_cross_references(
         evidence_gaps=len(gap_paths),
     )
     return gap_paths
+
+
+# ---------------------------------------------------------------------------
+# Library-wide dedup command (C-DEDUP general case)
+# ---------------------------------------------------------------------------
+
+
+def _build_dedup_census(
+    current_lib: dict[Path, str],
+    cache: TagReadCache,
+) -> tuple[dict[str, list[tuple[Path, str]]], dict[str, list[tuple[Path, str]]]]:
+    """Build two identity indexes over the live library for the dedup census.
+
+    Reads ``ACOUSTID_ID`` and ``AUDIO_HASH`` from every file in ``current_lib`` via the
+    tag-read cache (no audio file opens on cache hits).  Files lacking both tags are out of
+    scope and are excluded from both indexes.
+
+    Returns two indexes:
+
+    * ``acoustid_index``: maps each non-empty ``ACOUSTID_ID`` value to the list of
+      ``(path, release_id)`` pairs that carry it.  Files in the same cluster share the same
+      audio identity (within production-process variation — lead-in/out silence, minor gain).
+    * ``hash_index``: maps each non-empty ``AUDIO_HASH`` value to the list of
+      ``(path, release_id)`` pairs that carry it.  Files in the same hash cluster are
+      byte-identical (identity a fortiori).
+
+    The two indexes are complementary: ``hash_index`` is the fast path (byte identity);
+    ``acoustid_index`` covers production-process variation.  The caller merges them into
+    duplicate groups.
+
+    :param current_lib: Mapping from current on-disk path to release MBID, as returned by
+        :func:`_resolve_current_lib`.
+    :param cache: Tag-read cache to consult before opening audio files.
+    :returns: A ``(acoustid_index, hash_index)`` tuple.
+    """
+    acoustid_index: dict[str, list[tuple[Path, str]]] = {}
+    hash_index: dict[str, list[tuple[Path, str]]] = {}
+
+    for path, release_id in current_lib.items():
+        if not path.exists():
+            continue
+        ext = path.suffix.lower()
+        if ext not in {".flac", ".mp3"}:
+            continue
+        try:
+            tag_dict = _read_tags_cached(path, ext, cache)
+        except Exception:  # noqa: BLE001 — tag read failure: skip file
+            continue
+
+        acoustid = tag_dict.get("ACOUSTID_ID", "").strip()
+        audio_hash = tag_dict.get("AUDIO_HASH", "").strip()
+
+        # Files lacking both identity tags are out of scope (C-DEDUP: match=None never deletes).
+        if not acoustid and not audio_hash:
+            continue
+
+        if acoustid:
+            acoustid_index.setdefault(acoustid, []).append((path, release_id))
+        if audio_hash:
+            hash_index.setdefault(audio_hash, []).append((path, release_id))
+
+    return acoustid_index, hash_index
+
+
+def _build_dedup_groups(
+    acoustid_index: dict[str, list[tuple[Path, str]]],
+    hash_index: dict[str, list[tuple[Path, str]]],
+) -> list[tuple[list[tuple[Path, str]], str]]:
+    """Merge the AcoustID and hash indexes into medium-level duplicate groups.
+
+    A duplicate group is a set of files that share the same audio identity.  The merge
+    strategy is:
+
+    1. Hash clusters (byte-identical files) are the highest-confidence groups.  Each hash
+       cluster with ≥2 members is a group with evidence method ``"audio_hash"``.
+    2. AcoustID clusters with ≥2 members that are not already fully covered by a hash cluster
+       are groups with evidence method ``"acoustid"``.
+
+    Within each cluster, files are further aggregated by release (``MUSICBRAINZ_ALBUMID``
+    embedded in the file's tags, inferred from the release_id in ``current_lib``).  The
+    observed duplication shape is whole mediums: two complete mediums from different releases,
+    all tracks duplicated.  Aggregating to medium-level groups before prompting reduces the
+    number of prompts from N (one per track pair) to 1 (one per medium pair).
+
+    Medium-level aggregation: within each cluster, group files by release_id.  If the cluster
+    contains files from exactly two releases, the entire cluster is one group (the canonical
+    Greensleeves shape).  If the cluster contains files from more than two releases, each
+    pair of releases forms a separate group.
+
+    :param acoustid_index: Maps ``ACOUSTID_ID`` → ``[(path, release_id), …]``.
+    :param hash_index: Maps ``AUDIO_HASH`` → ``[(path, release_id), …]``.
+    :returns: A list of ``(members, evidence_method)`` tuples where ``members`` is the list
+        of ``(path, release_id)`` pairs in the group and ``evidence_method`` is ``"audio_hash"``
+        or ``"acoustid"``.
+    """
+    groups: list[tuple[list[tuple[Path, str]], str]] = []
+    # Track which paths have already been assigned to a hash group so they are not
+    # double-counted in the AcoustID pass.
+    hash_covered: set[Path] = set()
+
+    # --- Hash clusters (byte-identity fast path) ---
+    for _hash_val, members in hash_index.items():
+        if len(members) < 2:  # noqa: PLR2004 — 2 is the minimum group size
+            continue
+        groups.append((list(members), "audio_hash"))
+        for path, _ in members:
+            hash_covered.add(path)
+
+    # --- AcoustID clusters (production-process variation) ---
+    for _acoustid_val, members in acoustid_index.items():
+        # Filter out paths already covered by a hash group.
+        uncovered = [(p, rid) for p, rid in members if p not in hash_covered]
+        if len(uncovered) < 2:  # noqa: PLR2004 — 2 is the minimum group size
+            continue
+        groups.append((uncovered, "acoustid"))
+
+    return groups
+
+
+def _scatter_consequence_note(
+    group_members: list[tuple[Path, str]],
+    dest_root: Path,
+    current_lib: dict[Path, str],
+) -> str:
+    """Derive a scatter-consequence note for the operator prompt.
+
+    When deleting one release's files from a group would leave that release's directory
+    partially empty (some tracks deleted, others remaining in the same directory), the
+    operator must be warned: the release becomes partially virtual, represented only by
+    secondary MBIDs on files in other albums' directories.
+
+    A release's directory is "partially emptied" when the group contains some but not all
+    files from that release that reside in the same parent directory.
+
+    :param group_members: List of ``(path, release_id)`` pairs in the group.
+    :param dest_root: Library root for relative-path display.
+    :param current_lib: Full current-library mapping (all paths, not just group members).
+    :returns: A warning string to append to the prompt, or ``""`` when no scatter consequence
+        applies.
+    """
+    # Build a mapping from release_id → set of parent directories for group members.
+    release_dirs: dict[str, set[Path]] = {}
+    for path, release_id in group_members:
+        if release_id:
+            release_dirs.setdefault(release_id, set()).add(path.parent)
+
+    # For each release in the group, count how many files from that release are in each
+    # parent directory (across the whole library, not just the group).
+    scatter_notes: list[str] = []
+    for release_id, dirs_in_group in release_dirs.items():
+        for parent_dir in dirs_in_group:
+            # Count all library files from this release in this directory.
+            total_in_dir = sum(1 for p, rid in current_lib.items() if rid == release_id and p.parent == parent_dir)
+            # Count group members from this release in this directory.
+            group_in_dir = sum(1 for p, rid in group_members if rid == release_id and p.parent == parent_dir)
+            if total_in_dir > group_in_dir:
+                # Deleting the group members from this directory would leave it partially populated.
+                rel_dir = str(parent_dir.relative_to(dest_root)) if parent_dir.is_relative_to(dest_root) else str(parent_dir)
+                scatter_notes.append(
+                    f"  ⚠ Deleting files from release {release_id[:8]}… in '{rel_dir}' would leave "
+                    f"{total_in_dir - group_in_dir} track(s) behind — the release becomes partially "
+                    f"virtual (represented only by secondary MBIDs on surviving files)."
+                )
+
+    return "\n".join(scatter_notes)
+
+
+def dedup_library(
+    dest_root: Path,
+    journal_path: Path,
+    *,
+    dry_run: bool = False,
+) -> int:
+    """Offline census over the live library: group files by AcoustID cluster and resolve duplicates.
+
+    Reads the live library via the tag-read cache (no audio file opens on cache hits), groups
+    files by embedded ``ACOUSTID_ID`` cluster with ``AUDIO_HASH`` equality as the byte-identity
+    fast path, aggregates per-recording pairs up to medium-level groups, and runs the shared
+    group-resolution flow (survivor / keep-both / abort) for each group.
+
+    Files lacking both ``ACOUSTID_ID`` and ``AUDIO_HASH`` are out of scope: C-DEDUP never
+    deletes without identity evidence (``match=None`` never deletes).
+
+    **Medium-level aggregation**: the observed duplication shape is whole mediums (e.g. two
+    complete mediums from different releases, all tracks duplicated).  Files are aggregated
+    by release within each cluster before prompting, reducing the number of prompts from N
+    (one per track pair) to 1 (one per medium pair).
+
+    **Scatter consequence**: when deleting one release's files from a group would leave that
+    release's directory partially empty (some tracks deleted, others remaining), the prompt
+    surfaces this consequence explicitly.  The release becomes partially virtual — represented
+    only by secondary MBIDs on files in other albums' directories.
+
+    **C-DEDUP ordering invariant**: the survivor's cross-reference write + verify + journal
+    entry complete before any deletion executes.  Deletions are journaled per file with
+    action ``"deduplicated"``.
+
+    **Operator prompts**: the group-resolution prompt is never suppressed by ``--yes``
+    (integrity prompts are not bulk consent).  ``--dry-run`` reports the full census without
+    prompting or deleting.
+
+    **Tag-read cache**: the census reads tags via the cache keyed on ``(path, size_bytes,
+    mtime_ns)``; audio files are not opened on cache hits.  The cache is saved back at the
+    end of the pass.
+
+    :param dest_root: Root of the annotated music library.
+    :param journal_path: Path to the journal file
+        (``<dest_root>/music_annotator_journal.json``).
+    :param dry_run: When ``True``, report duplicate groups without prompting or deleting.
+    :returns: Count of files deleted (``"deduplicated"`` journal entries written).
+    """
+    journal = read_journal(journal_path)
+    cache = TagReadCache.load(dest_root / _TAG_CACHE_FILENAME)
+    current_lib = _resolve_current_lib(journal)
+
+    # --- Census: build identity indexes ---
+    acoustid_index, hash_index = _build_dedup_census(current_lib, cache)
+
+    # --- Build duplicate groups ---
+    groups = _build_dedup_groups(acoustid_index, hash_index)
+
+    if not groups:
+        _console.print("\n[bold green]dedup-library[/] — no duplicate groups found.\n")
+        log.info("dedup_library_no_groups", dest_root=str(dest_root))
+        cache.save()
+        return 0
+
+    log.info("dedup_library_groups_found", dest_root=str(dest_root), count=len(groups))
+
+    now = datetime.datetime.now(datetime.UTC)
+    deleted_count = 0
+
+    for group_members, evidence_method in groups:
+        # Medium-level aggregation: group members by release_id.
+        by_release: dict[str, list[Path]] = {}
+        for path, release_id in group_members:
+            by_release.setdefault(release_id, []).append(path)
+
+        release_ids = list(by_release)
+
+        if len(release_ids) < 2:  # noqa: PLR2004 — need at least 2 releases to dedup
+            # All files in the group belong to the same release — not a cross-release duplicate.
+            continue
+
+        # Build scatter-consequence note for the prompt.
+        scatter_note = _scatter_consequence_note(group_members, dest_root, current_lib)
+
+        # For medium-level aggregation: treat the first release as the "occupant" and the
+        # second as the "mover".  Each release contributes its first file as the representative
+        # for the group-resolution prompt.  The prompt surfaces the full group context.
+        occupant_release_id = release_ids[0]
+        mover_release_id = release_ids[1]
+        occupant_files = by_release[occupant_release_id]
+        mover_files = by_release[mover_release_id]
+
+        # Use the first file from each release as the representative for the prompt.
+        occupant_path = occupant_files[0]
+        mover_path = mover_files[0]
+
+        # Build a display note about the full group size (medium-level context).
+        total_files = len(group_members)
+        group_note = f"  Group: {total_files} file(s) total across {len(release_ids)} release(s)."
+        if scatter_note:
+            group_note = group_note + "\n" + scatter_note
+
+        if dry_run:
+            occ_rel = (
+                str(occupant_path.relative_to(dest_root)) if occupant_path.is_relative_to(dest_root) else str(occupant_path)
+            )
+            mov_rel = str(mover_path.relative_to(dest_root)) if mover_path.is_relative_to(dest_root) else str(mover_path)
+            _console.print(
+                f"\n[bold yellow]duplicate group[/] (evidence: {_markup_escape(evidence_method)}):\n"
+                f"  release A: [dim]{_markup_escape(occupant_release_id)}[/]"
+                f"  ({len(occupant_files)} file(s))\n"
+                f"  release B: [dim]{_markup_escape(mover_release_id)}[/]"
+                f"  ({len(mover_files)} file(s))\n"
+                f"  representative occupant: [dim]{_markup_escape(occ_rel)}[/]\n"
+                f"  representative mover:    [dim]{_markup_escape(mov_rel)}[/]\n"
+                f"  {_markup_escape(group_note)}\n"
+                f"  [dim](dry-run: no changes made)[/]"
+            )
+            log.info(
+                "dedup_library_dry_run_group",
+                evidence=evidence_method,
+                occupant_release=occupant_release_id,
+                mover_release=mover_release_id,
+                total_files=total_files,
+            )
+            continue
+
+        # --- Interactive: print group context then call resolve_duplicate_group ---
+        if scatter_note:
+            _console.print(f"\n[bold yellow]Scatter consequence warning:[/]\n{_markup_escape(scatter_note)}")
+
+        if total_files > 2:  # noqa: PLR2004 — 2 is the single-pair threshold
+            _console.print(
+                f"\n[dim]Medium-level group: {total_files} file(s) across {len(release_ids)} release(s).[/]"
+                f"\n[dim]Resolving representative pair; all files in the group will be treated consistently.[/]"
+            )
+
+        resolution = resolve_duplicate_group(
+            occupant_path,
+            occupant_release_id,
+            mover_path,
+            mover_release_id,
+            evidence_method,
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=now,
+            dry_run=False,
+        )
+
+        match resolution.choice:
+            case "abort":
+                log.info("dedup_library_aborted_by_operator", dest_root=str(dest_root))
+                cache.save()
+                return deleted_count
+            case "keep_both":
+                # Cross-reference written for the representative pair; no deletion.
+                log.info(
+                    "dedup_library_keep_both",
+                    occupant=str(occupant_path),
+                    mover=str(mover_path),
+                )
+            case "survivor_occupant":
+                # Occupant wins: mover (representative) deleted.  Delete all remaining mover files.
+                deleted_count += 1  # representative already deleted by resolve_duplicate_group
+                for extra_path in mover_files[1:]:
+                    if extra_path.exists():
+                        now_str = now.isoformat()
+                        _write_xref_and_journal(
+                            occupant_path,
+                            mover_release_id,
+                            journal=journal,
+                            journal_path=journal_path,
+                            now_str=now_str,
+                        )
+                        dedup_entry = TransactionEntry(
+                            timestamp=now_str,
+                            release_id=mover_release_id,
+                            source=str(extra_path),
+                            destination=str(occupant_path),
+                            action="deduplicated",
+                        )
+                        os.unlink(extra_path)
+                        append_journal_entry(journal_path, dedup_entry)
+                        journal.entries.append(dedup_entry)
+                        deleted_count += 1
+                        log.info(
+                            "deduplicated",
+                            deleted=str(extra_path),
+                            survivor=str(occupant_path),
+                            deleted_release_id=mover_release_id,
+                        )
+            case "survivor_mover":
+                # Mover wins: occupant (representative) deleted.  Delete all remaining occupant files.
+                deleted_count += 1  # representative already deleted by resolve_duplicate_group
+                for extra_path in occupant_files[1:]:
+                    if extra_path.exists():
+                        now_str = now.isoformat()
+                        _write_xref_and_journal(
+                            mover_path,
+                            occupant_release_id,
+                            journal=journal,
+                            journal_path=journal_path,
+                            now_str=now_str,
+                        )
+                        dedup_entry = TransactionEntry(
+                            timestamp=now_str,
+                            release_id=occupant_release_id,
+                            source=str(extra_path),
+                            destination=str(mover_path),
+                            action="deduplicated",
+                        )
+                        os.unlink(extra_path)
+                        append_journal_entry(journal_path, dedup_entry)
+                        journal.entries.append(dedup_entry)
+                        deleted_count += 1
+                        log.info(
+                            "deduplicated",
+                            deleted=str(extra_path),
+                            survivor=str(mover_path),
+                            deleted_release_id=occupant_release_id,
+                        )
+            case _:  # pragma: no cover
+                pass
+
+    _console.print(f"\n[bold green]dedup-library complete[/] — {deleted_count} file(s) deleted.\n")
+    log.info("dedup_library_complete", dest_root=str(dest_root), deleted=deleted_count)
+    cache.save()
+    return deleted_count

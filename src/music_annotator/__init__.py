@@ -134,6 +134,7 @@ from music_annotator._pipeline_io import (
 from music_annotator._pipeline_maint import (
     DuplicateResolution,
     compose_preflight_report,
+    dedup_library,
     enrich,
     reconstruct_cross_references,
     regroup,
@@ -210,6 +211,7 @@ __all__ = [
     "write_secondary_albumid_flac",
     "write_secondary_albumid_mp3",
     "DuplicateResolution",
+    "dedup_library",
     "reconstruct_cross_references",
     "resolve_duplicate_group",
     "find_source_files",

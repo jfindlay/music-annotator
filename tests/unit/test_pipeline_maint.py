@@ -49,6 +49,8 @@ from music_annotator._pipeline_maint import (
     _TAG_CACHE_FILENAME,
     DuplicateResolution,
     TagReadCache,
+    _build_dedup_census,
+    _build_dedup_groups,
     _census_journal_for_xrefs,
     _check_dest_root,
     _clamp_maint_dest,
@@ -60,10 +62,12 @@ from music_annotator._pipeline_maint import (
     _read_tags_cached,
     _reference_evidence,
     _resolve_current_lib,
+    _scatter_consequence_note,
     _tags_from_file_dict,
     _unify_classical_composer_groups,
     _write_xref_and_journal,
     compose_preflight_report,
+    dedup_library,
     reconstruct_cross_references,
     repatch_acoustid_tags,
     resolve_duplicate_group,
@@ -15331,3 +15335,1315 @@ class TestReconstructCrossReferences:
 
         # flac2 is an evidence-gap candidate.
         assert str(flac2) in gaps
+
+
+# ---------------------------------------------------------------------------
+# Library-wide dedup command (C-DEDUP general case)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDedupCensus:
+    """Unit tests for :func:`_build_dedup_census`.
+
+    KATs:
+    - Cache-driven: no audio opens on cache hits.
+    - Files lacking both ACOUSTID_ID and AUDIO_HASH are excluded.
+    - Files with ACOUSTID_ID appear in acoustid_index.
+    - Files with AUDIO_HASH appear in hash_index.
+    - Files with both appear in both indexes.
+    - Non-existent files are skipped.
+    - Unsupported extensions are skipped.
+    - Tag read errors are skipped.
+    """
+
+    @staticmethod
+    def _make_flac_with_tags(dest_root: Path, rel_path: str, tags: TrackTags) -> Path:
+        """Create a FLAC file with the given tags.
+
+        :param dest_root: Library root.
+        :param rel_path: Relative path within the library.
+        :param tags: Tags to embed.
+        :returns: Full absolute path.
+        """
+        full_path = dest_root / rel_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(full_path, tags)
+        return full_path
+
+    def test_cache_hit_avoids_audio_open(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Cache hit: no audio file open on cache hit (mock-enforced).
+
+        When the tag-read cache has a valid entry for a file, _build_dedup_census must not
+        open the audio file.  The mock verifies that _read_tags_flac is never called.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        path = dest_root / "A/track.flac"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_MINIMAL_FLAC)
+
+        # Pre-populate the cache with a tag dict that includes ACOUSTID_ID.
+        cache = TagReadCache(dest_root / _TAG_CACHE_FILENAME)
+        cache.put(path, {"ACOUSTID_ID": "acoustid-abc", "AUDIO_HASH": ""})
+
+        current_lib: dict[Path, str] = {path: "rel-a"}
+
+        # Patch _read_tags_flac to detect if it's called (it should NOT be on a cache hit).
+        read_mock = mocker.patch("music_annotator._pipeline_maint._read_tags_flac")
+
+        acoustid_index, hash_index = _build_dedup_census(current_lib, cache)
+
+        read_mock.assert_not_called()
+        assert "acoustid-abc" in acoustid_index
+        assert acoustid_index["acoustid-abc"] == [(path, "rel-a")]
+        assert hash_index == {}
+
+    def test_files_without_identity_tags_excluded(self, fs: FakeFilesystem) -> None:
+        """Files lacking both ACOUSTID_ID and AUDIO_HASH are excluded from both indexes.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Track", musicbrainz_albumid="rel-a")
+        path = self._make_flac_with_tags(dest_root, "A/track.flac", tags)
+
+        cache = TagReadCache(dest_root / _TAG_CACHE_FILENAME)
+        current_lib: dict[Path, str] = {path: "rel-a"}
+
+        acoustid_index, hash_index = _build_dedup_census(current_lib, cache)
+
+        assert acoustid_index == {}
+        assert hash_index == {}
+
+    def test_file_with_acoustid_only_in_acoustid_index(self, fs: FakeFilesystem) -> None:
+        """File with ACOUSTID_ID but no AUDIO_HASH appears only in acoustid_index.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Track", acoustid_id="acoustid-xyz", musicbrainz_albumid="rel-a")
+        path = self._make_flac_with_tags(dest_root, "A/track.flac", tags)
+
+        cache = TagReadCache(dest_root / _TAG_CACHE_FILENAME)
+        current_lib: dict[Path, str] = {path: "rel-a"}
+
+        acoustid_index, hash_index = _build_dedup_census(current_lib, cache)
+
+        assert "acoustid-xyz" in acoustid_index
+        assert hash_index == {}
+
+    def test_file_with_audio_hash_only_in_hash_index(self, fs: FakeFilesystem) -> None:
+        """File with AUDIO_HASH but no ACOUSTID_ID appears only in hash_index.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Track", audio_hash="hash-abc123", musicbrainz_albumid="rel-a")
+        path = self._make_flac_with_tags(dest_root, "A/track.flac", tags)
+
+        cache = TagReadCache(dest_root / _TAG_CACHE_FILENAME)
+        current_lib: dict[Path, str] = {path: "rel-a"}
+
+        acoustid_index, hash_index = _build_dedup_census(current_lib, cache)
+
+        assert acoustid_index == {}
+        assert "hash-abc123" in hash_index
+
+    def test_file_with_both_tags_in_both_indexes(self, fs: FakeFilesystem) -> None:
+        """File with both ACOUSTID_ID and AUDIO_HASH appears in both indexes.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Track", acoustid_id="acoustid-xyz", audio_hash="hash-abc123", musicbrainz_albumid="rel-a")
+        path = self._make_flac_with_tags(dest_root, "A/track.flac", tags)
+
+        cache = TagReadCache(dest_root / _TAG_CACHE_FILENAME)
+        current_lib: dict[Path, str] = {path: "rel-a"}
+
+        acoustid_index, hash_index = _build_dedup_census(current_lib, cache)
+
+        assert "acoustid-xyz" in acoustid_index
+        assert "hash-abc123" in hash_index
+
+    def test_nonexistent_file_skipped(self, fs: FakeFilesystem) -> None:
+        """Non-existent file is silently skipped.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        missing = dest_root / "A/missing.flac"
+        current_lib: dict[Path, str] = {missing: "rel-a"}
+        cache = TagReadCache(dest_root / _TAG_CACHE_FILENAME)
+
+        acoustid_index, hash_index = _build_dedup_census(current_lib, cache)
+
+        assert acoustid_index == {}
+        assert hash_index == {}
+
+    def test_unsupported_extension_skipped(self, fs: FakeFilesystem) -> None:
+        """File with unsupported extension (not .flac or .mp3) is skipped.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        ogg_path = dest_root / "A/track.ogg"
+        ogg_path.parent.mkdir(parents=True, exist_ok=True)
+        ogg_path.write_bytes(b"OggS")
+
+        current_lib: dict[Path, str] = {ogg_path: "rel-a"}
+        cache = TagReadCache(dest_root / _TAG_CACHE_FILENAME)
+
+        acoustid_index, hash_index = _build_dedup_census(current_lib, cache)
+
+        assert acoustid_index == {}
+        assert hash_index == {}
+
+    def test_tag_read_error_skipped(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Tag read failure is silently skipped (file not added to any index).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        path = dest_root / "A/track.flac"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(_MINIMAL_FLAC)
+
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=OSError("corrupt"))
+
+        current_lib: dict[Path, str] = {path: "rel-a"}
+        cache = TagReadCache(dest_root / _TAG_CACHE_FILENAME)
+
+        acoustid_index, hash_index = _build_dedup_census(current_lib, cache)
+
+        assert acoustid_index == {}
+        assert hash_index == {}
+
+    def test_mp3_file_indexed(self, fs: FakeFilesystem) -> None:
+        """MP3 file with ACOUSTID_ID is indexed correctly.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        mp3_path = dest_root / "A/track.mp3"
+        mp3_path.parent.mkdir(parents=True, exist_ok=True)
+        mp3_path.write_bytes(_MINIMAL_MP3)
+        apply_tags_mp3(mp3_path, TrackTags(title="Track", acoustid_id="acoustid-mp3"))
+
+        current_lib: dict[Path, str] = {mp3_path: "rel-a"}
+        cache = TagReadCache(dest_root / _TAG_CACHE_FILENAME)
+
+        acoustid_index, _hash_index = _build_dedup_census(current_lib, cache)
+
+        assert "acoustid-mp3" in acoustid_index
+
+
+class TestBuildDedupGroups:
+    """Unit tests for :func:`_build_dedup_groups`.
+
+    KATs:
+    - Hash clusters with ≥2 members form groups with evidence_method='audio_hash'.
+    - Hash-covered paths are excluded from AcoustID groups.
+    - AcoustID clusters with ≥2 uncovered members form groups with evidence_method='acoustid'.
+    - Single-member clusters produce no groups.
+    """
+
+    def test_hash_cluster_forms_group(self) -> None:
+        """Hash cluster with ≥2 members forms a group with evidence_method='audio_hash'.
+
+        :returns: None.
+        """
+        path_a = Path("/lib/A/track.flac")
+        path_b = Path("/lib/B/track.flac")
+        hash_index = {"hash-abc": [(path_a, "rel-a"), (path_b, "rel-b")]}
+        acoustid_index: dict[str, list[tuple[Path, str]]] = {}
+
+        groups = _build_dedup_groups(acoustid_index, hash_index)
+
+        assert len(groups) == 1
+        members, method = groups[0]
+        assert method == "audio_hash"
+        assert {p for p, _ in members} == {path_a, path_b}
+
+    def test_hash_covered_paths_excluded_from_acoustid_group(self) -> None:
+        """Paths already in a hash group are excluded from the AcoustID group.
+
+        When path_a and path_b share both AUDIO_HASH and ACOUSTID_ID, they form a hash group.
+        The AcoustID cluster for the same pair must not produce a second group.
+
+        :returns: None.
+        """
+        path_a = Path("/lib/A/track.flac")
+        path_b = Path("/lib/B/track.flac")
+        hash_index = {"hash-abc": [(path_a, "rel-a"), (path_b, "rel-b")]}
+        acoustid_index = {"acoustid-xyz": [(path_a, "rel-a"), (path_b, "rel-b")]}
+
+        groups = _build_dedup_groups(acoustid_index, hash_index)
+
+        # Only one group (the hash group); the AcoustID cluster is fully covered.
+        assert len(groups) == 1
+        assert groups[0][1] == "audio_hash"
+
+    def test_acoustid_cluster_forms_group_when_not_hash_covered(self) -> None:
+        """AcoustID cluster with ≥2 uncovered members forms a group with evidence_method='acoustid'.
+
+        :returns: None.
+        """
+        path_a = Path("/lib/A/track.flac")
+        path_b = Path("/lib/B/track.flac")
+        acoustid_index = {"acoustid-xyz": [(path_a, "rel-a"), (path_b, "rel-b")]}
+        hash_index: dict[str, list[tuple[Path, str]]] = {}
+
+        groups = _build_dedup_groups(acoustid_index, hash_index)
+
+        assert len(groups) == 1
+        members, method = groups[0]
+        assert method == "acoustid"
+        assert {p for p, _ in members} == {path_a, path_b}
+
+    def test_single_member_cluster_produces_no_group(self) -> None:
+        """Single-member clusters (hash or acoustid) produce no groups.
+
+        :returns: None.
+        """
+        path_a = Path("/lib/A/track.flac")
+        hash_index = {"hash-abc": [(path_a, "rel-a")]}
+        acoustid_index = {"acoustid-xyz": [(path_a, "rel-a")]}
+
+        groups = _build_dedup_groups(acoustid_index, hash_index)
+
+        assert groups == []
+
+    def test_partial_hash_coverage_leaves_acoustid_group(self) -> None:
+        """When only one of three AcoustID members is hash-covered, the other two form an AcoustID group.
+
+        :returns: None.
+        """
+        path_a = Path("/lib/A/track.flac")
+        path_b = Path("/lib/B/track.flac")
+        path_c = Path("/lib/C/track.flac")
+        # path_a and path_d share a hash (path_d is a fourth file not in the acoustid cluster).
+        path_d = Path("/lib/D/track.flac")
+        hash_index = {"hash-abc": [(path_a, "rel-a"), (path_d, "rel-d")]}
+        acoustid_index = {"acoustid-xyz": [(path_a, "rel-a"), (path_b, "rel-b"), (path_c, "rel-c")]}
+
+        groups = _build_dedup_groups(acoustid_index, hash_index)
+
+        # One hash group (path_a, path_d) and one acoustid group (path_b, path_c).
+        assert len(groups) == 2
+        methods = {g[1] for g in groups}
+        assert methods == {"audio_hash", "acoustid"}
+        # The acoustid group must not contain path_a (hash-covered).
+        acoustid_group = next(g for g in groups if g[1] == "acoustid")
+        acoustid_paths = {p for p, _ in acoustid_group[0]}
+        assert path_a not in acoustid_paths
+        assert path_b in acoustid_paths
+        assert path_c in acoustid_paths
+
+
+class TestScatterConsequenceNote:
+    """Unit tests for :func:`_scatter_consequence_note`.
+
+    KATs:
+    - No scatter when all files from a release in a directory are in the group.
+    - Scatter note generated when some files from a release's directory are not in the group.
+    - Empty string returned when no scatter consequence applies.
+    """
+
+    def test_no_scatter_when_all_release_files_in_group(self) -> None:
+        """No scatter note when all files from a release in a directory are in the group.
+
+        :returns: None.
+        """
+        dest_root = Path("/lib")
+        path_a = Path("/lib/A/track1.flac")
+        path_b = Path("/lib/B/track1.flac")
+        group_members = [(path_a, "rel-a"), (path_b, "rel-b")]
+        # current_lib has exactly the same files as the group.
+        current_lib: dict[Path, str] = {path_a: "rel-a", path_b: "rel-b"}
+
+        note = _scatter_consequence_note(group_members, dest_root, current_lib)
+
+        assert note == ""
+
+    def test_scatter_note_when_directory_partially_emptied(self) -> None:
+        """Scatter note generated when deleting group members would leave other tracks behind.
+
+        :returns: None.
+        """
+        dest_root = Path("/lib")
+        # Release rel-a has two tracks in /lib/A/; only track1 is in the group.
+        path_a1 = Path("/lib/A/track1.flac")
+        path_a2 = Path("/lib/A/track2.flac")  # not in group
+        path_b = Path("/lib/B/track1.flac")
+        group_members = [(path_a1, "rel-a"), (path_b, "rel-b")]
+        current_lib: dict[Path, str] = {path_a1: "rel-a", path_a2: "rel-a", path_b: "rel-b"}
+
+        note = _scatter_consequence_note(group_members, dest_root, current_lib)
+
+        assert note != ""
+        assert "rel-a" in note or "partially virtual" in note
+
+    def test_empty_release_id_skipped(self) -> None:
+        """Files with empty release_id are skipped in scatter analysis.
+
+        :returns: None.
+        """
+        dest_root = Path("/lib")
+        path_a = Path("/lib/A/track.flac")
+        group_members = [(path_a, "")]  # empty release_id
+        current_lib: dict[Path, str] = {path_a: ""}
+
+        note = _scatter_consequence_note(group_members, dest_root, current_lib)
+
+        assert note == ""
+
+
+class TestDedupLibrary:
+    """Tests for :func:`dedup_library` — the library-wide dedup command.
+
+    KATs:
+    - Cluster grouping (cache-driven, no audio opens on cache hits).
+    - Medium-level aggregation (whole-medium group → single prompt).
+    - All three resolution arms with C-DEDUP ordering:
+      (a) survivor_occupant: mover deleted, xref journalled before deletion.
+      (b) survivor_mover: occupant deleted, xref journalled before deletion.
+      (c) keep_both: cross-reference only, no deletion.
+    - Abort arm: run terminates, no further deletions.
+    - Scatter-consequence surfaced in prompt text (dry-run).
+    - Files without acoustid/hash never enter a group.
+    - Dry-run reports groups without prompting or deleting.
+    - No groups found: returns 0 without prompting.
+    - Multi-file medium: extra files deleted after representative resolution.
+    """
+
+    @staticmethod
+    def _make_flac(dest_root: Path, rel_path: str, tags: TrackTags) -> Path:
+        """Create a minimal FLAC file with the given tags.
+
+        :param dest_root: Library root.
+        :param rel_path: Relative path within the library.
+        :param tags: Tags to embed.
+        :returns: Full absolute path.
+        """
+        full_path = dest_root / rel_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(full_path, tags)
+        return full_path
+
+    @staticmethod
+    def _write_journal(dest_root: Path, entries: list[dict[str, str]]) -> Path:
+        """Write a JSONL journal and return the journal path.
+
+        :param dest_root: Library root.
+        :param entries: List of raw entry dicts.
+        :returns: Journal path.
+        """
+        journal_path = dest_root / "music_annotator_journal.json"
+        journal_path.write_text("".join(json.dumps(e) + "\n" for e in entries), encoding="utf-8")
+        return journal_path
+
+    def test_no_groups_returns_zero(self, fs: FakeFilesystem) -> None:
+        """dedup_library returns 0 when no duplicate groups are found.
+
+        Files without ACOUSTID_ID or AUDIO_HASH are out of scope.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Track", musicbrainz_albumid="rel-a")
+        path = self._make_flac(dest_root, "A/track.flac", tags)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        result = dedup_library(dest_root, journal_path)
+
+        assert result == 0
+
+    def test_files_without_identity_tags_excluded(self, fs: FakeFilesystem) -> None:
+        """Files lacking both ACOUSTID_ID and AUDIO_HASH never enter a group.
+
+        Even when two files share the same release, they are not grouped without identity evidence.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_a = TrackTags(title="Track A", musicbrainz_albumid="rel-a")
+        tags_b = TrackTags(title="Track B", musicbrainz_albumid="rel-b")
+        path_a = self._make_flac(dest_root, "A/track.flac", tags_a)
+        path_b = self._make_flac(dest_root, "B/track.flac", tags_b)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        result = dedup_library(dest_root, journal_path)
+
+        assert result == 0
+
+    def test_dry_run_reports_groups_without_prompting(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """dry_run=True reports duplicate groups without prompting or deleting.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_a = TrackTags(title="Track", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_b = TrackTags(title="Track", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+        path_a = self._make_flac(dest_root, "A/track.flac", tags_a)
+        path_b = self._make_flac(dest_root, "B/track.flac", tags_b)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        input_mock = mocker.patch("builtins.input")
+        result = dedup_library(dest_root, journal_path, dry_run=True)
+
+        # No prompt, no deletion.
+        input_mock.assert_not_called()
+        assert result == 0
+        assert path_a.exists()
+        assert path_b.exists()
+
+    def test_survivor_occupant_arm_deletes_mover(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """survivor_occupant arm: mover deleted, xref journalled before deletion (C-DEDUP ordering).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_a = TrackTags(title="Track", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_b = TrackTags(title="Track", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+        path_a = self._make_flac(dest_root, "A/track.flac", tags_a)
+        path_b = self._make_flac(dest_root, "B/track.flac", tags_b)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Choice "1" = survivor_occupant (occupant wins, mover deleted).
+        mocker.patch("builtins.input", return_value="1")
+        result = dedup_library(dest_root, journal_path)
+
+        assert result == 1
+        # One of the two files must be deleted.
+        survivors = [p for p in [path_a, path_b] if p.exists()]
+        deleted = [p for p in [path_a, path_b] if not p.exists()]
+        assert len(survivors) == 1
+        assert len(deleted) == 1
+
+        # C-DEDUP ordering: cross-referenced entry before deduplicated entry.
+        journal = read_journal(journal_path)
+        new_entries = [e for e in journal.entries if e.action in {"cross-referenced", "deduplicated"}]
+        assert len(new_entries) == 2
+        assert new_entries[0].action == "cross-referenced"
+        assert new_entries[1].action == "deduplicated"
+
+    def test_survivor_mover_arm_deletes_occupant(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """survivor_mover arm: occupant deleted, xref journalled before deletion (C-DEDUP ordering).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_a = TrackTags(title="Track", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_b = TrackTags(title="Track", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+        path_a = self._make_flac(dest_root, "A/track.flac", tags_a)
+        path_b = self._make_flac(dest_root, "B/track.flac", tags_b)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Choice "2" = survivor_mover (mover wins, occupant deleted).
+        mocker.patch("builtins.input", return_value="2")
+        result = dedup_library(dest_root, journal_path)
+
+        assert result == 1
+        survivors = [p for p in [path_a, path_b] if p.exists()]
+        deleted = [p for p in [path_a, path_b] if not p.exists()]
+        assert len(survivors) == 1
+        assert len(deleted) == 1
+
+        # C-DEDUP ordering: cross-referenced before deduplicated.
+        journal = read_journal(journal_path)
+        new_entries = [e for e in journal.entries if e.action in {"cross-referenced", "deduplicated"}]
+        assert len(new_entries) == 2
+        assert new_entries[0].action == "cross-referenced"
+        assert new_entries[1].action == "deduplicated"
+
+    def test_keep_both_arm_no_deletion(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """keep_both arm: cross-reference written, no deletion, both files survive.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_a = TrackTags(title="Track", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_b = TrackTags(title="Track", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+        path_a = self._make_flac(dest_root, "A/track.flac", tags_a)
+        path_b = self._make_flac(dest_root, "B/track.flac", tags_b)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Choice "b" = keep_both.
+        mocker.patch("builtins.input", return_value="b")
+        result = dedup_library(dest_root, journal_path)
+
+        assert result == 0
+        assert path_a.exists()
+        assert path_b.exists()
+
+        # cross-referenced entry written.
+        journal = read_journal(journal_path)
+        xref_entries = [e for e in journal.entries if e.action == "cross-referenced"]
+        assert len(xref_entries) == 1
+
+    def test_abort_arm_stops_run(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """abort arm: run terminates immediately, no deletions performed.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_a = TrackTags(title="Track", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_b = TrackTags(title="Track", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+        path_a = self._make_flac(dest_root, "A/track.flac", tags_a)
+        path_b = self._make_flac(dest_root, "B/track.flac", tags_b)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Choice "a" = abort.
+        mocker.patch("builtins.input", return_value="a")
+        result = dedup_library(dest_root, journal_path)
+
+        assert result == 0
+        assert path_a.exists()
+        assert path_b.exists()
+
+    def test_audio_hash_fast_path_groups_byte_identical_files(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """AUDIO_HASH equality groups byte-identical files with evidence_method='audio_hash'.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two files with the same AUDIO_HASH (byte-identical) but different releases.
+        tags_a = TrackTags(title="Track", audio_hash="hash-identical", musicbrainz_albumid="rel-a")
+        tags_b = TrackTags(title="Track", audio_hash="hash-identical", musicbrainz_albumid="rel-b")
+        path_a = self._make_flac(dest_root, "A/track.flac", tags_a)
+        path_b = self._make_flac(dest_root, "B/track.flac", tags_b)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Dry-run to verify grouping without deletion.
+        input_mock = mocker.patch("builtins.input")
+        result = dedup_library(dest_root, journal_path, dry_run=True)
+
+        input_mock.assert_not_called()
+        assert result == 0  # dry-run never deletes
+
+    def test_scatter_consequence_surfaced_in_dry_run(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Scatter consequence is surfaced in dry-run output when a directory would be partially emptied.
+
+        When deleting one release's files from a group would leave other tracks in the same
+        directory, the dry-run output must include a scatter-consequence warning.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Release rel-a has two tracks in /lib/A/; only track1 is in the duplicate group.
+        tags_a1 = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_a2 = TrackTags(title="Track 2", musicbrainz_albumid="rel-a")  # not in group
+        tags_b = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+        path_a1 = self._make_flac(dest_root, "A/track1.flac", tags_a1)
+        path_a2 = self._make_flac(dest_root, "A/track2.flac", tags_a2)
+        path_b = self._make_flac(dest_root, "B/track1.flac", tags_b)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a1.flac",
+                    "destination": str(path_a1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a2.flac",
+                    "destination": str(path_a2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Capture console output to verify scatter note is printed.
+        printed: list[str] = []
+        mocker.patch("music_annotator._pipeline_maint._console.print", side_effect=lambda *a, **kw: printed.append(str(a)))
+
+        result = dedup_library(dest_root, journal_path, dry_run=True)
+
+        assert result == 0
+        # The scatter consequence note must appear in the printed output.
+        all_output = " ".join(printed)
+        assert "partially virtual" in all_output or "track(s) behind" in all_output
+
+    def test_same_release_files_not_grouped(self, fs: FakeFilesystem) -> None:
+        """Files sharing the same ACOUSTID_ID but the same release are not grouped.
+
+        When all files in an AcoustID cluster belong to the same release, there is no
+        cross-release duplicate to resolve.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two tracks from the same release sharing the same ACOUSTID_ID (unusual but possible).
+        tags_a = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_b = TrackTags(title="Track 2", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        path_a = self._make_flac(dest_root, "A/track1.flac", tags_a)
+        path_b = self._make_flac(dest_root, "A/track2.flac", tags_b)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/b.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        result = dedup_library(dest_root, journal_path)
+
+        # No deletion: same release, not a cross-release duplicate.
+        assert result == 0
+        assert path_a.exists()
+        assert path_b.exists()
+
+    def test_medium_level_aggregation_multi_file_survivor_occupant(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Medium-level aggregation: extra mover files deleted when survivor_occupant chosen.
+
+        When a single AcoustID cluster contains multiple files from two releases (whole-medium
+        duplication), choosing survivor_occupant deletes all mover files (not just the
+        representative).  This exercises the ``extra_path`` loop in the survivor_occupant arm
+        and the ``total_files > 2`` medium-level group print.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Single AcoustID cluster with 4 files: 2 from rel-a (occupant), 2 from rel-b (mover).
+        # All four share the same ACOUSTID_ID so they form one group.
+        tags_a1 = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_a2 = TrackTags(title="Track 2", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_b1 = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+        tags_b2 = TrackTags(title="Track 2", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+
+        path_a1 = self._make_flac(dest_root, "A/track1.flac", tags_a1)
+        path_a2 = self._make_flac(dest_root, "A/track2.flac", tags_a2)
+        path_b1 = self._make_flac(dest_root, "B/track1.flac", tags_b1)
+        path_b2 = self._make_flac(dest_root, "B/track2.flac", tags_b2)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a1.flac",
+                    "destination": str(path_a1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a2.flac",
+                    "destination": str(path_a2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b1.flac",
+                    "destination": str(path_b1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:03+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b2.flac",
+                    "destination": str(path_b2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Choice "1" = survivor_occupant (occupant=rel-a wins, mover=rel-b deleted).
+        mocker.patch("builtins.input", return_value="1")
+        result = dedup_library(dest_root, journal_path)
+
+        # Both mover files (rel-b) should be deleted: representative + extra.
+        assert result == 2
+        assert not path_b1.exists()
+        assert not path_b2.exists()
+        # Occupant files (rel-a) must survive.
+        assert path_a1.exists()
+        assert path_a2.exists()
+
+    def test_medium_level_aggregation_multi_file_survivor_mover(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Medium-level aggregation: extra occupant files deleted when survivor_mover chosen.
+
+        When a single AcoustID cluster contains multiple files from two releases, choosing
+        survivor_mover deletes all occupant files (not just the representative).  This exercises
+        the ``extra_path`` loop in the survivor_mover arm.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Single AcoustID cluster with 4 files: 2 from rel-a (occupant), 2 from rel-b (mover).
+        tags_a1 = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_a2 = TrackTags(title="Track 2", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_b1 = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+        tags_b2 = TrackTags(title="Track 2", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+
+        path_a1 = self._make_flac(dest_root, "A/track1.flac", tags_a1)
+        path_a2 = self._make_flac(dest_root, "A/track2.flac", tags_a2)
+        path_b1 = self._make_flac(dest_root, "B/track1.flac", tags_b1)
+        path_b2 = self._make_flac(dest_root, "B/track2.flac", tags_b2)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a1.flac",
+                    "destination": str(path_a1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a2.flac",
+                    "destination": str(path_a2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b1.flac",
+                    "destination": str(path_b1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:03+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b2.flac",
+                    "destination": str(path_b2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Choice "2" = survivor_mover (mover=rel-b wins, occupant=rel-a deleted).
+        mocker.patch("builtins.input", return_value="2")
+        result = dedup_library(dest_root, journal_path)
+
+        # Both occupant files (rel-a) should be deleted: representative + extra.
+        assert result == 2
+        assert not path_a1.exists()
+        assert not path_a2.exists()
+        # Mover files (rel-b) must survive.
+        assert path_b1.exists()
+        assert path_b2.exists()
+
+    def test_scatter_consequence_printed_in_interactive_mode(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Scatter consequence warning is printed in interactive (non-dry-run) mode.
+
+        When a group has a scatter consequence (deleting files would partially empty a directory),
+        the warning is printed before the group-resolution prompt in interactive mode.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Release rel-a has two tracks in /lib/A/; only track1 is in the duplicate group.
+        tags_a1 = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_a2 = TrackTags(title="Track 2", musicbrainz_albumid="rel-a")  # not in group
+        tags_b = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+        path_a1 = self._make_flac(dest_root, "A/track1.flac", tags_a1)
+        path_a2 = self._make_flac(dest_root, "A/track2.flac", tags_a2)
+        path_b = self._make_flac(dest_root, "B/track1.flac", tags_b)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a1.flac",
+                    "destination": str(path_a1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a2.flac",
+                    "destination": str(path_a2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Capture console output to verify scatter note is printed in interactive mode.
+        printed: list[str] = []
+        mocker.patch(
+            "music_annotator._pipeline_maint._console.print",
+            side_effect=lambda *a, **kw: printed.append(str(a)),
+        )
+        # Choose "b" (keep_both) so we don't need to worry about deletion.
+        mocker.patch("builtins.input", return_value="b")
+
+        result = dedup_library(dest_root, journal_path)
+
+        assert result == 0
+        all_output = " ".join(printed)
+        # The scatter consequence warning must appear in interactive mode output.
+        assert (
+            "Scatter consequence warning" in all_output or "partially virtual" in all_output or "track(s) behind" in all_output
+        )
+
+    def test_extra_mover_file_deleted_between_census_and_loop_skipped(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Extra mover file deleted between census and the extra-file loop is silently skipped.
+
+        The ``if extra_path.exists()`` guard in the survivor_occupant arm handles the case
+        where an extra mover file existed during census but was deleted before the loop runs.
+        This exercises the ``False`` branch of that guard.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Single AcoustID cluster with 3 files: 1 from rel-a (occupant), 2 from rel-b (mover).
+        tags_a = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_b1 = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+        tags_b2 = TrackTags(title="Track 2", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+
+        path_a = self._make_flac(dest_root, "A/track1.flac", tags_a)
+        path_b1 = self._make_flac(dest_root, "B/track1.flac", tags_b1)
+        path_b2 = self._make_flac(dest_root, "B/track2.flac", tags_b2)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b1.flac",
+                    "destination": str(path_b1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b2.flac",
+                    "destination": str(path_b2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Simulate: path_b2 is deleted between census and the extra-file loop.
+        # We do this by deleting path_b2 after the census (via _build_dedup_census) but before
+        # the extra-file loop.  The simplest approach: delete path_b2 via a side_effect on
+        # resolve_duplicate_group (which runs before the extra-file loop).
+        real_resolve = resolve_duplicate_group
+
+        def _resolve_and_delete(*args: object, **kwargs: object) -> DuplicateResolution:
+            """Call real resolve_duplicate_group then delete path_b2 to simulate race condition.
+
+            :returns: The real DuplicateResolution result.
+            """
+            result_inner = real_resolve(*args, **kwargs)  # type: ignore[arg-type]
+            # Delete path_b2 after the representative (path_b1) is deleted by resolve.
+            if path_b2.exists():
+                path_b2.unlink()
+            return result_inner
+
+        mocker.patch("music_annotator._pipeline_maint.resolve_duplicate_group", side_effect=_resolve_and_delete)
+        mocker.patch("builtins.input", return_value="1")
+        result = dedup_library(dest_root, journal_path)
+
+        # path_b1 (representative) was deleted by resolve_duplicate_group.
+        # path_b2 was deleted by the side_effect (simulating race condition).
+        # The extra-file loop skips path_b2 because it no longer exists.
+        assert result == 1  # only the representative counted
+        assert not path_b1.exists()
+        assert path_a.exists()
+
+    def test_extra_occupant_file_deleted_between_census_and_loop_skipped(
+        self, fs: FakeFilesystem, mocker: MockerFixture
+    ) -> None:
+        """Extra occupant file deleted between census and the extra-file loop is silently skipped.
+
+        The ``if extra_path.exists()`` guard in the survivor_mover arm handles the case
+        where an extra occupant file existed during census but was deleted before the loop runs.
+        This exercises the ``False`` branch of that guard.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Single AcoustID cluster with 3 files: 2 from rel-a (occupant), 1 from rel-b (mover).
+        tags_a1 = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_a2 = TrackTags(title="Track 2", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-a")
+        tags_b = TrackTags(title="Track 1", acoustid_id="acoustid-shared", musicbrainz_albumid="rel-b")
+
+        path_a1 = self._make_flac(dest_root, "A/track1.flac", tags_a1)
+        path_a2 = self._make_flac(dest_root, "A/track2.flac", tags_a2)
+        path_b = self._make_flac(dest_root, "B/track1.flac", tags_b)
+
+        journal_path = self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a1.flac",
+                    "destination": str(path_a1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a2.flac",
+                    "destination": str(path_a2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:02+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b.flac",
+                    "destination": str(path_b),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Simulate: path_a2 is deleted between census and the extra-file loop.
+        real_resolve = resolve_duplicate_group
+
+        def _resolve_and_delete(*args: object, **kwargs: object) -> DuplicateResolution:
+            """Call real resolve_duplicate_group then delete path_a2 to simulate race condition.
+
+            :returns: The real DuplicateResolution result.
+            """
+            result_inner = real_resolve(*args, **kwargs)  # type: ignore[arg-type]
+            # Delete path_a2 after the representative (path_a1) is deleted by resolve.
+            if path_a2.exists():
+                path_a2.unlink()
+            return result_inner
+
+        mocker.patch("music_annotator._pipeline_maint.resolve_duplicate_group", side_effect=_resolve_and_delete)
+        mocker.patch("builtins.input", return_value="2")
+        result = dedup_library(dest_root, journal_path)
+
+        # path_a1 (representative) was deleted by resolve_duplicate_group.
+        # path_a2 was deleted by the side_effect (simulating race condition).
+        # The extra-file loop skips path_a2 because it no longer exists.
+        assert result == 1  # only the representative counted
+        assert not path_a1.exists()
+        assert path_b.exists()
+
+    def test_cli_dedup_library_dry_run(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """CLI 'dedup-library --dry-run' dispatches to dedup_library(dry_run=True).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Track", musicbrainz_albumid="rel-a")
+        path = self._make_flac(dest_root, "A/track.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        dedup_mock = mocker.patch("music_annotator.dedup_library", return_value=0)
+
+        sys.argv = ["music-annotator", "dedup-library", str(dest_root), "--dry-run"]
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        dedup_mock.assert_called_once()
+        call_kwargs = dedup_mock.call_args
+        assert call_kwargs.kwargs.get("dry_run") is True or (len(call_kwargs.args) > 2 and call_kwargs.args[2] is True)
+
+    def test_cli_dedup_library_no_dry_run(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """CLI 'dedup-library' (without --dry-run) dispatches to dedup_library(dry_run=False).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(title="Track", musicbrainz_albumid="rel-a")
+        path = self._make_flac(dest_root, "A/track.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        dedup_mock = mocker.patch("music_annotator.dedup_library", return_value=0)
+
+        sys.argv = ["music-annotator", "dedup-library", str(dest_root)]
+        try:
+            main()
+        except SystemExit:
+            pass
+
+        dedup_mock.assert_called_once()
+        call_kwargs = dedup_mock.call_args
+        assert call_kwargs.kwargs.get("dry_run") is False or (len(call_kwargs.args) > 2 and call_kwargs.args[2] is False)

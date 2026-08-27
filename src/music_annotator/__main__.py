@@ -1,6 +1,6 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes fifteen subcommands:
+Configures structlog for human-friendly console output and exposes sixteen subcommands:
 
 * ``apply``                    — copy and tag a directory of tracks for a known MusicBrainz release MBID.
 * ``search``                   — search MusicBrainz for a release matching a source directory, prompt for
@@ -21,8 +21,8 @@ Configures structlog for human-friendly console output and exposes fifteen subco
   YAML files (freedb_disc_N.yaml or music_annotator_provenance.yaml).  Idempotent.
 * ``rebuild``                  — walk the library, read tags and sidecars per file, and emit a new journal
   (dry-run by default; use ``--apply`` to replace the on-disk journal).
-* ``unify``                    — consolidate performer-split fragmented releases into their canonical top_dirs
-  (detects releases with ≥2 top_dirs sharing the same ``MUSICBRAINZ_ALBUMID`` tag).
+* ``unify``                    — consolidate performer-split and composer-split fragmented releases into their
+  canonical top_dirs (detects releases with ≥2 top_dirs sharing the same ``MUSICBRAINZ_ALBUMID`` tag).
 * ``repatch-acoustid``         — migrate the legacy ``CHROMAPRINT_FP`` fingerprint key to the Picard-aligned
   ``ACOUSTID_FINGERPRINT`` key, and (when ``--acoustid-key`` is supplied) re-source ``ACOUSTID_ID``
   from the fingerprint ``/v2/lookup`` endpoint.  Idempotent.
@@ -35,6 +35,11 @@ Configures structlog for human-friendly console output and exposes fifteen subco
 * ``reconstruct-xrefs``        — census the journal for destructive-choice shapes (SKIP and OVERWRITE
   collision policies) and write secondary release MBIDs as cross-reference tags on surviving files.
   Offline; supports ``--dry-run`` to preview findings without writing tags or journal entries.
+* ``dedup-library``            — offline census over the live library: group files by embedded
+  ``ACOUSTID_ID`` cluster (via the tag-read cache), with ``AUDIO_HASH`` equality as the byte-identity
+  fast path; files lacking both are out of scope.  Aggregate per-recording pairs up to medium-level
+  groups before prompting.  Each group runs the shared group-resolution flow (survivor / keep-both /
+  abort).  Supports ``--dry-run`` to report the full census without prompting or deleting.
 
 Usage::
 
@@ -100,6 +105,10 @@ Usage::
         [--journal-path PATH] [--json PATH]
 
     music-annotator reconstruct-xrefs \\
+        <dest_dir> \\
+        [--dry-run]
+
+    music-annotator dedup-library \\
         <dest_dir> \\
         [--dry-run]
 """
@@ -982,6 +991,52 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Report findings without writing tags, prompting, or appending journal entries.",
     )
 
+    # ------------------------------------------------------------------
+    # dedup-library subcommand
+    # ------------------------------------------------------------------
+    dedup_library_parser = subparsers.add_parser(
+        "dedup-library",
+        help="Offline census: group files by AcoustID cluster and resolve duplicates (C-DEDUP).",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Reads the live library via the tag-read cache (no audio file opens on cache hits),
+            groups files by embedded ACOUSTID_ID cluster with AUDIO_HASH equality as the
+            byte-identity fast path, and runs the shared group-resolution flow (survivor /
+            keep-both / abort) for each duplicate group.
+
+            Files lacking both ACOUSTID_ID and AUDIO_HASH are out of scope: identity evidence
+            is required before any deletion is permitted.
+
+            Medium-level aggregation: files are aggregated by release within each cluster before
+            prompting, reducing the number of prompts from N (one per track pair) to 1 (one per
+            medium pair).  The observed duplication shape is whole mediums.
+
+            Scatter consequence: when deleting one release's files would leave its directory
+            partially empty, the prompt surfaces this consequence explicitly.  The release
+            becomes partially virtual — represented only by secondary MBIDs on surviving files.
+
+            The group-resolution prompt is NOT suppressed by --yes (integrity prompts are not
+            bulk consent).  Use --dry-run to report the full census without prompting or deleting.
+
+            Offline: no MusicBrainz network calls are made.
+
+            Examples:
+              music-annotator dedup-library /tmp/music_library --dry-run
+              music-annotator dedup-library /tmp/music_library
+            """),
+    )
+    dedup_library_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    dedup_library_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report duplicate groups without prompting or deleting any files.",
+    )
+
     return parser
 
 
@@ -990,7 +1045,7 @@ def main() -> None:
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
     ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``, ``repatch-acoustid``,
-    ``repatch-catalogue-colon``, ``preflight``, ``reconstruct-xrefs``.
+    ``repatch-catalogue-colon``, ``preflight``, ``reconstruct-xrefs``, ``dedup-library``.
 
     The ``repath`` subcommand dispatches to :func:`~music_annotator.repath` with ``dry_run`` and
     ``yes`` forwarded from the parsed arguments.  The ``regroup`` subcommand dispatches to
@@ -1259,6 +1314,17 @@ def main() -> None:
                     dry_run=args.dry_run,
                 ),
                 "reconstruct_xrefs_error",
+                dest_root=str(args.dest_dir),
+            )
+
+        case "dedup-library":
+            _dispatch(
+                lambda: music_annotator.dedup_library(
+                    dest_root=args.dest_dir,
+                    journal_path=args.dest_dir / music_annotator.JOURNAL_FILENAME,
+                    dry_run=args.dry_run,
+                ),
+                "dedup_library_error",
                 dest_root=str(args.dest_dir),
             )
 
