@@ -1,248 +1,289 @@
-<!-- Rolling action frame.  The previous sub-track (preflight-evidence corrective fixes) closed 2026-08-25 with its
-     acceptance gate passed and the repair turn unblocked; its plan and ledger live in this file's git history.  This
-     sub-track was derived 2026-08-25 from the first live repair-turn repath run on hades, which surfaced the journal-store
-     O(N²) per-move cost, an in-place-rewrite corruption window, and an unhandled same-audio collision outcome that aborted
-     the run 12 minutes into its move phase.  Rewritten at the next boundary. -->
+<!-- Rolling action frame.  The previous sub-track (repair-turn hardening: journal store, collision completeness,
+     duplicate cross-referencing) closed 2026-08-27 with its S8 acceptance gate passed on hades; its plan and ledger
+     live in this file's git history (through commit 1b791ab).  This sub-track was derived 2026-08-27 from an operator
+     request to unify all idempotent library-maintenance passes behind a single `maintain` action, combined with a
+     design ruling that the maintenance passes be treated as a composition of morphisms whose confluence (ordering,
+     dry-run fidelity, idempotence across applications, absence of oscillating cycles) is analysed and contracted
+     before the umbrella is built.  Rewritten at the next boundary. -->
 
-# PLAN — repair-turn hardening: journal store, collision completeness, duplicate cross-referencing
+# PLAN — unified maintenance action: pass-composition confluence + `maintain` umbrella
 
 ## Why this sub-track exists
 
-The first live `repath` on hades (2026-08-25) ran 78 minutes and aborted mid-move-phase.  Root-caused defects and one
-capability gap, evidence in run logs and `~/Remote/hades/Music/Done/music_annotator_journal.json` (44 MB, 49k entries):
+Every recurring library-maintenance capability now exists as a standalone subcommand (`repath`, `regroup`, `unify`,
+`enrich`, `origin-time`, `reconstruct-xrefs`, `dedup-library`), plus two one-shot migration subcommands
+(`repatch-catalogue-colon`, `repatch-acoustid`) whose library-wide purpose was completed by the S8 hades run, plus a
+read-only `preflight` action that dry-runs six of the passes and emits a consolidated report.  The operator wants one
+action — `music-annotator maintain <dest>` — that runs the whole recurring maintenance set, with `--dry-run` standing
+in for (and superseding) `preflight`.
 
-- **Journal O(N²)** — `write_transaction_log` re-reads, re-validates (49k × `model_validate`), and fully rewrites the whole
-  array journal for **every single move** (~2.7 s/file, confirmed from log timestamps; called per-file from
-  `_execute_single_move`).  It also rewrites in place (truncate-then-write, no temp+rename), so a crash or full disk
-  mid-write destroys the entire journal.  The re-read defends nothing: there is no lock, so it provides zero concurrency
-  safety, and the tool is a single-process CLI.
-- **Collision-outcome incompleteness** — repath's plan handles only `match=False` (suffix; `_pipeline_maint.py:1183`).
-  `match=True` (same audio, different bytes — duplicate rips, e.g. the Greensleeves pair present in two Marriner/ASMF
-  releases) and `match=None` (inconclusive) fall through unhandled, reach execution, and die on C-NOCLOBBER — correctly
-  refusing the clobber, but discarding the remaining run.  Operator ruling: run-fatal stays (maximal integrity bias); the
-  obligation moves to the plan, which must never emit an unwinnable move.
-- **Duplicate releases are invisible in tags** — during ingest the operator destructively chose one release when whole
-  mediums were duplicated (SKIP/OVERWRITE collision policy).  Goal: reference *both* releases from tags — primary release
-  drives path + annotation; secondary releases are recorded as ID-only cross-references.  The journal holds complete
-  offline evidence for both destructive paths: SKIP wrote `action="skipped"` entries carrying the losing release_id;
-  OVERWRITE left both `tagged` entries at the same destination with different release_ids (chronological-last = primary).
-- **Re-run cost** — resume-for-correctness already works (per-move journal flush + `_resolve_current_lib` chain makes
-  re-runs idempotent), but every re-run pays ~an hour of tag re-reads over the full library before the first move.
-  Operator ruling: bring the tag-read cache into scope.
+The request is not a wiring job.  The passes are **morphisms on library state**, and composing them exposes four
+confluence properties that must be adjudicated before the umbrella can make honest guarantees:
+
+1. **Non-commutativity.** Order is load-bearing and already documented in-code
+   (`_pipeline_maint.py:1956`): tag-content rewrites must precede path-moves because the destination path is *computed
+   from* the tags.  The pass set has a required topological order; naive iteration corrupts.
+2. **Dry-run fidelity gap (the dangerous one).** `preflight` runs every pass against the *same* unmutated current
+   state (`compose_preflight_report`, `_pipeline_maint.py:3504-3509` — six independent `dry_run=True` calls, no state
+   threading).  A *live* run feeds pass `k+1` the output of pass `k`.  So for any pass downstream of a mutating pass,
+   the dry-run plan is computed against a state that will never exist at that pass's live execution.  The dry-run
+   report is truthful only for the first mutating pass and for genuinely independent passes.  A `--dry-run` that
+   claims to preview a live `maintain` run is lying unless it either threads a simulated state or explicitly declares
+   its guarantee and flags the cascade points.
+3. **Decision-divergence.** The two integrity passes (`reconstruct-xrefs`, `dedup-library`) fork the downstream graph
+   on operator choice (survivor / keep-both / abort).  Dry-run cannot know the branch taken.
+4. **Idempotence across applications + oscillation.** Per-pass single-application idempotence is documented, but
+   *composite* idempotence — `f(f(L)) == f(L)` — is not established and does not follow from per-pass idempotence once
+   the passes are ordered and state-threaded.  Two hazards: (a) a legitimate multi-application fixpoint (`enrich` adds
+   an acoustid this run → `dedup-library` can cluster it only on the *next* run), which is acceptable if declared and
+   reported; and (b) an **irreducible inter-pass oscillation** (A→B→A) that never converges — the silently
+   counterproductive case.  C-SEQ swap-cycle detection (`_pipeline_maint.py:974,981`) covers intra-pass swap cycles
+   only, not inter-pass oscillation.
+
+The operator ruling frames the goal precisely: look for covariances or intersections among the sub-actions that could
+lead to contradictory or counterproductive results — silently destructive or incorrect transforms, or irreducible
+action cycles across multiple `maintain` applications — and provide basic preparation for the edge cases where
+commutativity does not flow with optimal ease.
+
+## Design principle in play (durable vocabulary)
+
+**INSTR (instrument-the-editorial-decision).** A design principle of music-annotator: the tool instruments and
+automates human editorial decision points to optimise human efficiency, error-rate, and ergonomics.  An
+operator-driven maintenance pass is as legitimate a mode as matching a release to an MBID.  This is why `maintain` is
+deliberately **interactive** in its live mode — the C-XREF / C-DEDUP integrity prompts fire inline and are not
+suppressed by `--yes` (integrity prompts are not bulk consent), consistent with the passes' existing contracts.
 
 ## Cross-session contracts
 
-Frozen at derivation (operator rulings 2026-08-25):
+Frozen at derivation (operator rulings 2026-08-27).  The governing lens is **user ergonomics and archival fidelity,
+not a formal composition calculus** (operator ruling): the passes compose informally; `maintain` is judged by whether
+the operator's editorial time is well spent and no data is silently harmed, not by whether it reaches a provable
+fixpoint in one application.
 
-- **C-JRNL** — journal storage: append-only JSON Lines, one entry per line.  Per-entry durable flush (write + flush +
-  fsync) before the next move — C-PROV ordering and timing are unchanged.  Reads tolerate exactly one torn final line
-  (warn and ignore); any other malformation is corruption and a hard error, never a silent reset.  Full rewrites
-  (rebuild/compaction/migration) are atomic: temp file + `os.replace`.  A one-time migration converts the existing array
-  journal; the original `.json` is preserved as a read-only backup the tool never deletes.  Maintenance passes hold the
-  journal in memory for the run and never re-read it between moves.
-- **C-FATAL** — data-integrity errors are always run-fatal (reaffirms C-NOCLOBBER exactly as frozen; no per-file skip
-  flex).  Corollary obligation, **plan-time completeness**: every collision outcome (`True`/`False`/`None`) is resolved at
-  plan time — cross-reference + plan-drop, suffix, or operator prompt — so an execution-time C-NOCLOBBER refusal indicates
-  a defect in plan construction, not a data condition to tolerate.
-- **C-XREF** — cross-references are ID-only, append-only, and inert: secondary release references never drive path
-  computation, annotation content, or medium selection; the primary release (single-valued `MUSICBRAINZ_ALBUMID`) remains
-  the sole annotation source.  Cross-reference tag mutations require operator confirmation and pass through the full
-  C-PROV chain (tag write → verify → journal) with a dedicated journal action.  **Adjudicated (S3, 2026-08-26; EPIST-9):**
-  tag `MUSICBRAINZ_SECONDARY_ALBUMID` / TXXX `"MusicBrainz Secondary Album Id"`; payload release MBIDs only, `"; "`-joined
-  scalar (REND-17 separator; the read plumbing is `str→str` and native multi-value would be truncated by `v[0]` read-back),
-  append-only set-union; journal action `"cross-referenced"` with `release_id` = the *secondary* MBID being added;
-  `_resolve_current_lib` treats it as an in-place re-registration (like `"enriched"`); audit primary-id equality checks
-  exclude the action.
-- **C-DEDUP** — frozen at S3 (2026-08-26; EPIST-10, operator ruling): physical copies of the same audio may be deleted,
-  bounded by (1) `match=True` identity evidence — AcoustID cluster, byte identity a fortiori; `match=None` never deletes —
-  and (2) per-group operator confirmation with the operator choosing the survivor.  Ordering invariant: the survivor's
-  cross-reference write + verify + `"cross-referenced"` journal entry complete **before** any deletion executes (the
-  reference exists durably before the bytes disappear).  Deletions are journaled per file with action `"deduplicated"`
-  (source = deleted path, destination = surviving path, release_id = deleted copy's release MBID);
-  `_resolve_current_lib` gains a pop-the-source arm for it (neither a move nor an in-place update).  The group prompt
-  always offers keep-both (cross-reference only, non-fatal decline) and abort; prompts survive `--yes` (integrity
-  prompts are not bulk consent); `--dry-run` reports, never prompts, never deletes.  Identity tolerance covers
-  production-process variation (lead-in/out silence, minor post-mixdown gain).  This is a deliberate bounded exception
-  to the completionist posture — rationale recorded in EPIST-10.
+- **C-MAINTAIN** — the `maintain` action runs the recurring maintenance set (`enrich`, `origin-time`, `repath`,
+  `regroup`, `unify`, `reconstruct-xrefs`, `dedup-library`) as a single composition over one dest_root.  The journal
+  is read once at the top and threaded in memory through all passes (C-JRNL / the in-memory pattern from the prior
+  sub-track); no pass re-reads the journal.  Live mode is interactive: move-confirmation prompts (repath/regroup/
+  unify) are suppressible by `-y/--yes`; integrity prompts (reconstruct-xrefs, dedup-library) are **never** suppressed
+  by `--yes` (INSTR + C-XREF/C-DEDUP).  `--dry-run` renders every pass report-only — including the two integrity
+  passes, which degrade to census-only — and emits the consolidated report that supersedes `preflight`.
+- **C-CONFLUENCE** — the pass-composition contract, kept deliberately at the ergonomics/fidelity register (no
+  simulated-state theory).  Three plain rulings:
+  (a) **Pass order.**  Passes run in a fixed sequence: content-before-path (`enrich`, `origin-time` before the move
+      passes), then the move passes, then the integrity passes last (they delete/prompt and nothing downstream may
+      depend on their operator-divergent outcome).  The order exists for correctness (a moved path is computed from
+      tags, so tags must be corrected first); it is not claimed to be a unique or provably-optimal order.
+  (b) **Dry-run is a preview, not a rehearsal.**  `maintain --dry-run` runs each pass against the *current* library
+      state (the existing `preflight` behaviour — cheap, reuses existing machinery), so a pass downstream of a
+      mutating pass may plan differently in a live run.  This is **accepted and stated to the operator**, not
+      engineered away.  The report labels files that appear in more than one pass's plan (the existing cross-pass
+      overlap map) as the places where a live run may diverge from the preview.  Deliberately *not* built:
+      simulated-state threading that would make dry-run a faithful rehearsal — the token/LoC cost is not worth it when
+      the operator can simply re-run (operator ruling).
+  (c) **Convergence is "a run that changed nothing."**  `maintain` does not auto-loop and does not compute a formal
+      fixpoint.  Its final line states whether the run enacted changes; the operator re-runs `maintain` until a run
+      reports zero changes, which is the practical convergence signal.  Some legitimate cases need a second run (e.g.
+      `enrich` adds an acoustid this run, so `dedup-library` can cluster it only next run) — this is normal and the
+      operator is told, in plain language, that re-running is expected, not a defect.
+  No formal oscillation detector is built.  The one concrete oscillation risk — `repath`'s policy-canonical
+  disagreeing with `regroup`/`unify`'s consolidation-canonical on a file's home — is handled by the fixed pass order
+  and by the operator noticing a run that never reaches zero changes; if such a non-converging cycle is ever observed
+  in practice, it is a bug in a specific pass's canonical, fixed there, not a class of behaviour `maintain` polices
+  abstractly.
+- **C-RETIRE (this instance only)** — no general policy.  The two completed migration commands
+  (`repatch-catalogue-colon`, `repatch-acoustid`) are removed this sub-track; their journal action-verbs and every
+  reader that interprets them are retained forever (durable content in `docs/NOTES.md` § "Journal action-verbs are
+  append-only vocabulary").  **Forward stance (PERM, operator ruling 2026-08-27):** the project prefers *fewer or no*
+  temporary library refactors.  A newly-discovered maintenance need is first evaluated as a candidate for the
+  permanent action basis — a new durable action, or a refinement/extension of an existing one — and only falls back
+  to a throwaway singleton when it genuinely cannot be expressed as durable grammar.  The maturing maintenance grammar
+  is meant to *absorb* future needs, not spawn disposable passes.
+
+Inherited unchanged: C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, NORM-2-as-revised.
 
 ## Sessions
 
-Ordering rationale: S1/S2 close the operational emergency (the journal store) and are adjudication-free — they land
-first.  S3 is the interactive adjudication that gates all cross-reference work.  S4 restores a completable repath; S5
-reconstructs past destructive choices from journal evidence; S6 is conditional on S5's census finding evidence gaps.
-S7 is independent and can interleave.  S9 (added at S3: operator extended dedup to the general case) sweeps the whole
-library for same-audio duplicates that never collide, reusing S4's group-resolution flow.  Each build session is one
-conceptual unit, ~150–400 LOC, `tox -m analyze` green (100% branch coverage, mypy strict, pylint 10.00).
+Ordering rationale: S1 confirms the pass order and registers C-CONFLUENCE (already ruled at derivation — a short
+write-up, not an open adjudication).  S2 builds the umbrella against that order.  S3 folds the surviving `preflight`
+report logic into `maintain --dry-run` and deletes `preflight`.  S4 removes the two completed singletons (commands
+only; journal readers retained).  S5 is the operator acceptance gate on hades.  Each build session is one conceptual
+unit, `tox -m analyze` green (100% branch coverage, mypy strict, pylint 10.00).
 
-| ID | Type         | Deliverable (commit-title shape)                                                        | Deps   | Status |
-|----|--------------|------------------------------------------------------------------------------------------|--------|--------|
-| S1 | build        | JSONL journal store: O(1) durable appends, torn-tail recovery, atomic rewrite, migration (C-JRNL) | —      | todo   |
-| S2 | build        | Hold journal in memory across maintenance runs; retire per-move full rewrites (C-JRNL)     | S1     | todo   |
-| S3 | adjudication | STYLEGUIDE: cross-reference tag schema + repath collision interaction design (C-XREF)      | —      | todo   |
-| S4 | build        | Plan-time collision completeness in repath: cross-ref flow + inconclusive prompt (C-FATAL) | S2, S3 | todo   |
-| S5 | build        | Cross-reference reconstruction pass: journal census + confirmed secondary-ID tagging       | S3, S2 | todo   |
-| S6 | build        | (conditional) MB-backed cross-reference enrichment for evidence-gap cases                  | S5     | todo   |
-| S7 | build        | Tag-read cache for maintenance passes keyed on (path, size, mtime)                         | S2     | todo   |
-| S9 | build        | Library-wide dedup command: AcoustID-cluster census + survivor-choice deletion (C-DEDUP)   | S4     | todo   |
-| S8 | operator     | Resume the repair turn: full repath on hades end-to-end; acceptance gate                   | all    | todo   |
+| ID | Type   | Deliverable (commit-title shape)                                                                    | Deps       | Status |
+|----|--------|-----------------------------------------------------------------------------------------------------|------------|--------|
+| S1 | design | STYLEGUIDE: maintenance-pass order + dry-run-is-a-preview + convergence-is-a-quiet-run (C-CONFLUENCE) | —          | todo   |
+| S2 | build  | `maintain` umbrella action: single-composition run, in-memory journal threading, interactive live mode (C-MAINTAIN) | S1         | todo   |
+| S3 | build  | Fold preflight report into `maintain --dry-run`; remove `preflight` subcommand + compose_preflight_report | S2         | todo   |
+| S4 | build  | Retire completed singletons: remove repatch-catalogue-colon / repatch-acoustid commands; retain journal readers (C-RETIRE) | S2         | todo   |
+| S5 | operator | Acceptance gate: `maintain` and `maintain --dry-run` end-to-end on hades                            | S2,S3,S4   | todo   |
 
-### S1 — JSONL journal store (C-JRNL)
+### S1 — pass order + ergonomic contract (C-CONFLUENCE)
 
-Files: `src/music_annotator/_pipeline_io.py` (new append primitive; `read_journal` gains JSONL + torn-tail handling and
-the one-time array→JSONL migration; the full-rewrite path used by rebuild becomes atomic temp+`os.replace`), tests.
-KATs: append→read round-trip; torn final line tolerated exactly once and logged; non-tail malformation is a hard error;
-migration preserves entry order and count against a fixture array journal and leaves the `.json` backup untouched;
-rewrite is atomic (temp visible only post-replace).  JSONL is pyfakefs-compatible (pure-Python I/O) — no test-harness
-change needed.
+No code.  Short write-up registering C-CONFLUENCE (above) in `docs/STYLEGUIDE.md`.  The rulings are already made at
+derivation; S1 only confirms the pass order against the code and records the plain-language ergonomic contract.  It
+does **not** design simulated-state machinery, a formal convergence predicate, or an oscillation detector — those were
+ruled out (operator: ergonomics and archival fidelity over computational rigor).
 
-### S2 — in-memory journal threading
+1. **Confirm the pass order** against the actual passes: content-before-path (`enrich`, `origin-time` → move passes),
+   move passes (`reconstruct-xrefs` before `dedup-library` so survivors carry known secondaries and dedup does not
+   re-prompt; `repath`/`regroup`/`unify` mutual order confirmed against how each computes its canonical), integrity
+   passes last.  Record the order and the one-line reason per edge.
+2. **State the dry-run contract in plain language:** `maintain --dry-run` previews each pass against current state and
+   flags cross-pass-overlap files as "may change after earlier passes run"; it is a preview, not a rehearsal; re-run
+   `maintain` if a pass's real input shifts.  No shadow-state build.
+3. **State the convergence contract in plain language:** `maintain` reports whether it changed anything; a run that
+   changes nothing is "done"; some cases legitimately need a second run and the operator is told so.  No auto-loop, no
+   formal fixpoint.
 
-Files: `src/music_annotator/_pipeline_maint.py` (`_move_verify_journal` and callers accept/mutate an in-memory
-`TransactionLog` + append handle instead of re-reading per move), `src/music_annotator/_pipeline.py` (ingest call site),
-tests (fixture churn: journal fixtures move to JSONL).  KATs: a multi-move run performs zero journal re-reads (mock-
-enforced); per-move append lands before the next move begins (C-PROV ordering preserved); crash simulation between moves
-leaves a complete, readable journal.  Expected effect: per-move journal cost drops from ~2.7 s to ~1 ms; the move phase
-becomes hashing-bound.
+Output: C-CONFLUENCE registered.  S2's scope is fixed and small (option B; no simulated state).
 
-### S3 — cross-reference schema adjudication (adjudicated 2026-08-26)
+### S2 — `maintain` umbrella (C-MAINTAIN)
 
-All four agenda items ruled; vocabulary frozen into C-XREF/C-DEDUP above and registered as EPIST-9/EPIST-10 in the
-STYLEGUIDE.  Outcomes: (1) tag `MUSICBRAINZ_SECONDARY_ALBUMID`, release-MBID-only `"; "`-joined scalar; (2) journal
-actions `"cross-referenced"` (in-place, release_id = secondary MBID) and `"deduplicated"` (pop-source);
-(3) per-group prompts; `match=None` is suffix-or-abort only (no xref without identity evidence); prompts survive
-`--yes`; `--dry-run` reports only; (4) **deletion ruled in** (supersedes the mover-stays-put default and the
-flag-for-later option): survivor-choice per group under C-DEDUP, keep-both as the non-fatal decline arm.  The operator
-additionally extended dedup from collision-surfaced cases to the general library-wide case → S9 added.
+Files: `src/music_annotator/_pipeline_maint.py` (new `maintain(dest_root, *, dry_run, yes)` orchestrator + a uniform
+pass-adapter seam absorbing the non-uniform signatures — `repatch_acoustid_tags`'s journal-first positional and the
+varied return types `DryRunPlan | None`, `list[str]`, `int`, `None`; note the two repatch passes are gone by S4, so
+the surviving seam covers `enrich`/`origin-time`/`repath`/`regroup`/`unify`/`reconstruct-xrefs`/`dedup-library`),
+`src/music_annotator/__main__.py` (new `maintain` subcommand), `src/music_annotator/__init__.py` (export), tests.  The
+journal is read once and threaded in memory (prior sub-track's in-memory pattern); passes execute in the C-CONFLUENCE
+order.  A "changed anything?" flag is accumulated across passes for the final convergence line — a plain boolean/count,
+not a fixpoint computation.  KATs: composition runs all recurring passes in frozen order (mock-enforced call order);
+journal read exactly once (mock-enforced); `-y` suppresses move prompts but NOT integrity prompts (both asserted);
+`--dry-run` renders all passes report-only including the two integrity passes (no prompt, no mutation asserted); the
+final line reports "changed N" vs "no changes"; a no-change run over a settled fixture reports "no changes" (the
+practical convergence signal).  Not built: shadow-state dry-run, oscillation detector (KAT for the
+candidate cycle).
 
-### S4 — plan-time collision completeness (C-FATAL corollary)
+### S3 — fold preflight into `maintain --dry-run`; remove preflight
 
-Files: `src/music_annotator/_pipeline_maint.py` (repath collision resolution gains the `match=True` and `match=None`
-arms; regroup/unify audited for the same gap), `src/music_annotator/_tagger.py` (cross-reference tag write), tests.
+Files: `src/music_annotator/_pipeline_maint.py` (migrate the report-assembly worth keeping — cross-pass overlap map,
+journal-capacity projection, Reference/ evidence — into the `maintain` dry-run arm, now extended to the three passes
+preflight never covered; delete `compose_preflight_report` and its private helpers once nothing references them),
+`src/music_annotator/__main__.py` (delete the `preflight` subcommand + its `_run_preflight` closure),
+`src/music_annotator/__init__.py` (drop the export), `src/music_annotator/models.py` (retire `PreflightReport` /
+`PreflightPassSummary` / `PreflightOverlapEntry` if unused after migration, or rename to the maintain-report shape),
+tests (delete/port the preflight test module).  KATs: `maintain --dry-run` emits overlap map + journal capacity +
+reference evidence covering all recurring passes; the `--json PATH` serialisation preflight offered is preserved on
+`maintain --dry-run`; no dangling references to removed symbols (import-graph clean).
 
-The `match=True` arm is the **shared group-resolution flow** (S9 reuses it): per duplicate group, prompt with member
-files, releases, and evidence method (sha256 vs acoustid); operator chooses survivor / keep-both / abort.  Survivor
-choice determines the plan: survivor = occupant → mover deleted, move dropped; survivor = mover → occupant deleted
-first, then the move executes through the normal C-PROV chain into the vacated path.  Keep-both → survivor xref'd,
-move dropped, and later runs detect the existing secondary MBID and drop silently (idempotency, no re-prompt).
-C-DEDUP ordering throughout: xref write + verify + journal on the survivor before any deletion.
+### S4 — retire completed singletons (C-RETIRE)
 
-KATs: same-audio occupant → survivor-choice flow, all three arms (each deletion preceded by the survivor's
-`"cross-referenced"` entry; `"deduplicated"` entries carry deleted-path/surviving-path/deleted-release-id);
-keep-both re-run → silent drop, no prompt; inconclusive occupant → prompt suffix-or-abort, both arms; a plan that
-reaches `_move_verify_journal` contains no move whose destination is occupied by a non-vacated path (property test
-over generated plans); execution-time C-NOCLOBBER refusal still raises `RuntimeError` (unchanged, now bug-indicating);
-`_resolve_current_lib` handles both new actions (in-place re-registration; pop-source).
+Predicate confirmed empirically (operator 2026-08-27): both passes ran library-wide on hades, each twice, second run a
+no-op — composite fixpoint reached, purpose complete.
 
-### S5 — cross-reference reconstruction pass
+Files: `src/music_annotator/_pipeline_maint.py` (delete `repatch_catalogue_colon` and `repatch_acoustid_tags` pass
+functions + their private log helpers), `src/music_annotator/__main__.py` (delete both subcommands + docstring lines
+1065-1067), `src/music_annotator/__init__.py` (drop exports at lines 141-142, 223-224; and `is_catalogue_colon_corrupt`
+at 168/195 — see below), `src/music_annotator/models.py` (drop the `repatch_*` mentions in the DryRunPlan/pass-summary
+docstrings at 1888/1922/1944), tests (delete the corresponding test modules/cases).
 
-Files: `src/music_annotator/_pipeline_maint.py` (new maintenance command), `src/music_annotator/__main__.py`, tests.
-Census the journal for both destructive-choice shapes: (a) `skipped` entries joined to the surviving `tagged` entry at
-the same destination (SKIP policy); (b) multiple `tagged` entries at one destination with distinct release_ids
-(OVERWRITE policy, chronological-last = primary).  Present grouped findings; on operator confirmation, write secondary
-references per C-XREF and journal each mutation.  Offline; dry-run supported.  The census also reports evidence-gap
-candidates (duplicates suspected but not journal-provable) as input to the S6 conditional.
+**`_works.py` split — verified 2026-08-27:** `rederive_part_label` is the *forward* label rule used by ingest, not
+repair scaffolding — it **stays** (confirm the ingest reference holds before touching it).  `is_catalogue_colon_corrupt`
+is referenced only by the repair pass and by `rederive_part_label`'s neighbourhood — it goes with the command *if* the
+grep after deletion shows no other referent.
 
-### S6 — MB-backed enrichment (conditional)
+**Retention invariant (C-RETIRE) — residual journal-read surface.**  The journal is append-only history: every
+`"repatched"` / `"acoustid-repatched"` entry the two commands ever wrote stays in the journal forever, and multiple
+readers walk *every* entry.  Deleting the *writers* is safe only if all *readers* still interpret those verbs.  Three
+residual sites, all **preservation, no new logic**:
 
-Gated on S5's census reporting evidence gaps (duplicates resolved outside the pipeline, e.g. never-ingested second
-source dirs).  Per affected recording, `recording → releases` MB lookups under the standard `@_mb_retry` + `_mb_call`
-posture; propose cross-references for operator confirmation.  Skip this session entirely if the census shows no gaps.
+1. **Resolver arm** — `_resolve_current_lib` (`_pipeline_maint.py:540`): the members `"repatched"` /
+   `"acoustid-repatched"` in the in-place-update set MUST remain verbatim, with the docstring at `:514`.  These entries
+   are source==destination in-place updates; dropping them from the set would silently no-op today but removes the
+   documented intent and is a latent trap if the arm logic changes.
+2. **Audit/diff/rebuild readers** — `_audit.py` filters on action verbs via allow-lists (`{"tagged", "enriched"}` at
+   `:147/193/251/340`) and `action != "tagged"` skips (`:490/544`).  These already exclude the repatch verbs by
+   omission, so they need no change — but S4 must *confirm* none of them is a deny-by-default that would misclassify a
+   retired verb.  Verify, don't assume.
+3. **Model field** — `models.py:1832` `action: str` is a bare string, so historical entries deserialize regardless of
+   which verbs the current code emits.  **C-RETIRE trap:** if `action` is ever tightened to a `Literal[...]` union
+   (a plausible future hardening), the retired verbs `"repatched"` / `"acoustid-repatched"` (and every other
+   historical verb) MUST stay in the union or `model_validate` rejects the hades journal on read.  Record this on the
+   field docstring in S4 so the constraint travels with the code.
 
-### S7 — tag-read cache
+Only the two pass functions (the writers) are deleted; all three read sites stay.
 
-Files: `src/music_annotator/_pipeline_maint.py` (Pass 1 of repath and the preflight/audit walks consult a cache keyed on
-`(path, size_bytes, mtime_ns)`), cache persistence sidecar under dest_root, tests.  KATs: hit returns identical tags
-without opening the audio file (mock-enforced); any key component change invalidates; cache corruption or absence
-degrades to a full read (never an error); moves via `_move_verify_journal` re-key the entry.  Expected effect: re-run
-planning drops from ~an hour to minutes on an unchanged library.
+KATs: resolver still replays both retained action-verbs against a fixture journal containing them; `read_journal` +
+`_resolve_current_lib` + `audit` + `rebuild_journal` all round-trip a fixture journal that includes `"repatched"` and
+`"acoustid-repatched"` entries with no error and correct resolution; no source or test references the removed commands;
+`maintain` does not invoke the removed passes (they are complete, not folded in).
 
-### S9 — library-wide dedup command (C-DEDUP general case)
+### S5 — operator acceptance gate
 
-Files: `src/music_annotator/_pipeline_maint.py` (new maintenance command), `src/music_annotator/__main__.py`, tests.
-Offline census over the live library: group files by embedded `ACOUSTID_ID` cluster (via the tag-read cache), with
-`AUDIO_HASH` equality as the byte-identity fast path; files lacking both are out of scope (inconclusive — C-DEDUP
-never deletes without identity evidence).  Aggregate contiguous per-recording pairs up to medium-level groups before
-prompting (the observed duplication shape is whole mediums).  Each group runs the S4 group-resolution flow
-(survivor / keep-both / abort).  The prompt must surface the structural consequence when duplication scatters across
-releases: deleting a compilation's member guts the compilation's directory — the release becomes partially virtual,
-represented only by secondary MBIDs on files in other albums' directories.  Keep-both is always available; dry-run
-reports the full census without prompting.  KATs: cluster grouping (cache-driven, no audio opens on cache hits);
-medium-level aggregation; all three resolution arms with C-DEDUP ordering; scatter-consequence surfaced in prompt
-text; files without acoustid/hash never enter a group.
+Full `maintain` and `maintain --dry-run` on hades.  Acceptance criteria:
 
-### S8 — operator acceptance gate
+- `maintain --dry-run` emits the consolidated report (overlap map, journal capacity, reference evidence) across all
+  recurring passes; matches the shape the old `preflight` produced plus the three newly-covered passes.
+- `maintain` (live) runs the passes in C-CONFLUENCE order; move prompts honour `-y`; integrity prompts fire regardless.
+- The final line reports whether the run changed anything.  Re-running `maintain` until it reports "no changes" reaches
+  a settled library in a small number of runs; the operator experience is legible (a run that still changes things says
+  so, and re-running is understood as normal, not a defect).
+- `preflight`, `repatch-catalogue-colon`, `repatch-acoustid` subcommands are gone; `rebuild`/`audit` still read the
+  journal cleanly; the resolver still replays the two retained singleton action-verbs.
 
-Full `repath` on hades end-to-end.  Acceptance criteria:
-
-- Run completes without abort; zero execution-time C-NOCLOBBER refusals.
-- Move-phase throughput reflects the journal fix (per-move time hashing-bound, not journal-bound).
-- Same-audio collisions resolved per S3 rulings (survivor-choice deletion, keep-both, or abort — operator's call per
-  group); inconclusive collisions prompted, not fatal.
-- Journal is valid JSONL afterward; `.json` backup intact; rebuild/audit commands read it cleanly.
-- Reconstruction pass run once over the historical evidence; secondary references verified on known duplicated mediums
-  (the Greensleeves pair as the canonical KAT case).
-- Library-wide dedup run once; every surviving duplicate group is either operator-kept (cross-referenced) or collapsed
-  to one physical copy carrying its secondary MBIDs; deleted lineages intact in the journal.
-
-On acceptance: continue the repair turn per ROADMAP (leaf renumberings, year-label normalisations, consolidations), and
-rewrite this PLAN at the boundary.
+On acceptance: continue the repair turn / library-completion arc per ROADMAP, and rewrite this PLAN at the boundary.
 
 ## Notes for executors
 
 - **Register rule** (repo AGENTS.md): durable files state the property/invariant, never the plan coordinate.  Anneal
-  denylist for this sub-track: `\bS[1-9]\b` (session ids), `repair-turn hardening`, `sub-track`, `plan-run`,
-  `boundary rewrite`.  Contract names (C-JRNL, C-XREF, C-DEDUP, C-FATAL, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, C-CASE,
-  SEL-*, NORM-*, REND-*, EPIST-*) are legitimate durable vocabulary.
+  denylist for this sub-track: `\bS[1-5]\b` (session ids), `unified maintenance action`, `sub-track`, `plan-run`,
+  `boundary rewrite`, `umbrella action` (in durable prose; use "the `maintain` action").  Contract names (C-MAINTAIN,
+  C-CONFLUENCE, C-RETIRE, INSTR, PERM, C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, NORM-*,
+  REND-*, EPIST-*) are legitimate durable vocabulary.
 - Full gate before declaring any session done: `~/.local/bin/tox -m analyze` (100% branch coverage, mypy strict,
   pylint 10.00/10, ruff, pyupgrade).
 - Patch targets bind where the name is imported, not where it originates (repo testing convention).
-- The C-PROV/C-MOVE provenance chain is inviolable: no journal entry before SHA + `_verify_copy` pass.  C-JRNL changes
-  the storage of the journal, never the ordering of verification relative to the append.
-- The 2026-08-25 failed-run evidence: hades run logs (`repathed_moved`/`journal_written` timestamps, the C-NOCLOBBER
-  traceback) and the 44 MB array journal on the dev mount at `~/Remote/hades/Music/Done/` (hades paths:
-  `/home/findlay/Music/`).  The Greensleeves collision pair is the canonical same-audio-different-bytes fixture shape.
-- Test-fixture churn in S2 is expected and mechanical (array-journal fixtures → JSONL); do not let it balloon the
-  session — if it exceeds the commit window, split fixture migration into its own follow-up commit within the session.
+- C-PROV/C-MOVE provenance chain is inviolable: no journal entry before SHA + `_verify_copy` pass.  `maintain` changes
+  the *composition* of passes, never the intra-pass verification ordering.
+- The confluence evidence base: `compose_preflight_report`'s overlap map (`_pipeline_maint.py:3540-3554`) already
+  identifies cross-pass file intersections — the raw material for the S1 pass-order confirmation and the dry-run
+  overlap labels.  The dry-run-is-a-preview behaviour is exactly today's six-independent-dry-run-calls structure
+  (`compose_preflight_report`, `:3504-3509`) — reused, not replaced.
+- S3 deletion is a coverage cliff: migrate the report logic and its tests into `maintain --dry-run` in the *same*
+  commit as the deletion so coverage never dips and no report evidence is lost.
+- S4 deletion must NOT touch the journal replay arms.  The exact line is `_pipeline_maint.py:540` (the
+  `_resolve_current_lib` action set); `"repatched"` / `"acoustid-repatched"` stay as members.  Delete only the two
+  writer functions.  S4 predicate is operator-confirmed (both passes run twice on hades, second run a no-op).
 
 ## Progress ledger
 
-VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch coverage + mypy strict + pylint 10.00 + ruff +
-pyupgrade).  One green run satisfies tests, types, lint, format, and coverage.
+VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch coverage + mypy strict + pylint 10.00 + ruff
++ pyupgrade).  One green run satisfies tests, types, lint, format, and coverage.
 
-| ID | Title                                                                          | Status | Commit | Notes |
-|----|--------------------------------------------------------------------------------|--------|--------|-------|
-| S1 | JSONL journal store: appends, torn-tail recovery, atomic rewrite, migration     | done   | 60189da | C-JRNL append primitive + read_journal JSONL frozen |
-| S2 | In-memory journal threading; retire per-move full rewrites                      | done   | 235313d | in-memory threading pattern frozen for S4/S7 |
-| S3 | STYLEGUIDE: cross-reference tag schema + collision interaction design           | done   |        | EPIST-9/EPIST-10 registered; C-XREF adjudicated; C-DEDUP minted; deletion in scope; S9 added |
-| S4 | Plan-time collision completeness in repath                                      | done   | 496ba85 | scope grew at S3: shared group-resolution flow + deletion arm; extras: __init__.py, models.py (TrackTags.musicbrainz_secondary_albumid) |
-| S5 | Cross-reference reconstruction pass (journal census)                            | done   | 147cd40 | extra: __init__.py (export); evidence-gap reporting included |
-| S6 | (conditional) MB-backed cross-reference enrichment                              | cancelled |     | census found 59 journal-provable cross-references, zero evidence gaps; all files entered via music-annotator |
-| S7 | Tag-read cache for maintenance passes                                           | done   | 05319dc |       |
-| S9 | Library-wide dedup command (AcoustID-cluster census + survivor-choice deletion) | done   | 0eaca73 | extra: __init__.py (export); scatter-consequence warning included |
-| S8 | Resume repair turn on hades; acceptance gate                                    | done   |        | repath complete; dedup-library run; reconstruct-xrefs: 59 xrefs written; rebuild --dry-run: 43478 entries clean; .array-backup deleted |
+| ID | Title                                                                     | Status | Commit | Notes |
+|----|---------------------------------------------------------------------------|--------|--------|-------|
+| S1 | STYLEGUIDE: maintenance-pass order + dry-run/convergence ergonomics (C-CONFLUENCE) | todo   |        |       |
+| S2 | `maintain` umbrella action (C-MAINTAIN)                                   | todo   |        |       |
+| S3 | Fold preflight report into `maintain --dry-run`; remove preflight         | todo   |        |       |
+| S4 | Retire completed singletons; retain journal readers (C-RETIRE)            | todo   |        |       |
+| S5 | Acceptance gate on hades                                                  | todo   |        |       |
 
-Frozen contracts: C-JRNL, C-FATAL, C-XREF (frozen at derivation 2026-08-25; vocabulary adjudicated 2026-08-26),
-C-DEDUP (frozen 2026-08-26); C-NOCLOBBER, C-SEQ, C-GUARD, NORM-2-as-revised, SEL-23, REND-27 inherited unchanged from
-the previous sub-track.  S4 froze: group-resolution flow (resolve_duplicate_group), write_secondary_albumid_flac/mp3,
-_resolve_current_lib "cross-referenced"/"deduplicated" arms, TrackTags.musicbrainz_secondary_albumid field.
+Frozen contracts: C-MAINTAIN, C-CONFLUENCE, C-RETIRE (frozen at derivation 2026-08-27; C-CONFLUENCE registered — not
+adjudicated — at S1); INSTR and PERM (design principles, durable).  C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER,
+C-SEQ, C-PROV, C-MOVE, NORM-2-as-revised inherited unchanged from the prior sub-track.
 
 ## Action-frame digest
 
 (append non-trivial discoveries, contract flexes, and notable texture here as sessions run)
 
-- Derivation (2026-08-25): operator ruled run-fatal integrity posture over per-file skip (C-FATAL); chose cross-reference
-  tagging over suffix/dedup for same-audio collisions; journal census confirmed both destructive-choice shapes are fully
-  reconstructible offline (SKIP → `skipped` entries with loser release_id; OVERWRITE → dual `tagged` entries per
-  destination).  SQLite/LMDB/CBOR evaluated and rejected for the journal: SQLite loses pyfakefs compatibility and
-  greppability for query capability this workload doesn't need; JSONL + in-memory copy achieves O(1) appends with
-  stdlib-only, test-compatible mechanics.
-- S3 adjudication (2026-08-26): all four agenda items ruled (EPIST-9/EPIST-10; C-XREF vocabulary; C-DEDUP).  Two posture
-  shifts beyond the agenda: **deletion ruled in** — the derivation's "deletion is out" default was operator-overturned
-  as a bounded completionist exception (rationale preserved verbatim-in-spirit in EPIST-10: secondary MBIDs suffice;
-  "completion is practically forbidden by nature"); and **dedup generalised** from collision-surfaced cases to a
-  library-wide census command (S9).  Substrate finding that shaped the tag encoding: FLAC Vorbis comments are natively
-  multi-valued and mutagen always yields lists, but the entire read path flattens to `v[0]`
-  (`_read_tags_flac`, MP3 `frame.text[0]`) — a native multi-value write would be silently truncated by `_verify_copy`
-  round-trip, so the `"; "`-joined scalar is a safety ruling, not merely convenience.  Checked before minting: neither
-  CE (in-repo census) nor Picard carries a multi-release idiom; nearest shape is Picard's `musicbrainz_originalalbumid`
-  (different semantics); release-group id does not cover cross-RG duplication.
+- Derivation (2026-08-27): operator surfaced, then deliberately bounded, the pass-composition question.  The passes
+  *do* compose non-trivially (order matters; a dry-run can mispredict a live run; some sequences need a second run),
+  but the operator ruled the governing lens is **user ergonomics and archival fidelity, not a formal state/composition
+  calculus** — a `maintain` that is imperfect but cost the project ~nothing extra beats a provably-confluent one that
+  cost 10M tokens and 15k LoC, even if the operator must run it a few times or think between `--dry-run` and live.
+  Rulings: (1) `maintain` is deliberately interactive (INSTR — the tool instruments editorial decisions; an
+  operator-run maintenance pass is as legitimate as MBID matching); all recurring passes, including the two integrity
+  passes, are unified, accepting that the integrity passes' idempotence kernel is predicated on operator discretion.
+  (2) **Dry-run is a preview, not a rehearsal** — reuse today's per-pass-against-current-state behaviour
+  (`compose_preflight_report`), label cross-pass-overlap files as "may change," and do NOT build simulated-state
+  threading.  (3) **Convergence is a quiet run** — `maintain` reports "changed N" vs "no changes"; the operator
+  re-runs to settle; no auto-loop, no formal fixpoint, no oscillation detector.  (4) `preflight` folds into
+  `maintain --dry-run` and is removed.  (5) The two completed migration singletons are removed (commands only; journal
+  readers retained — the durable content is captured in NOTES § "Journal action-verbs are append-only vocabulary").
+  (6) **No general C-RETIRE policy — PERM instead:** the project prefers fewer/no temporary refactors; future
+  maintenance needs are evaluated first as candidates for the permanent action basis (new durable action, or refine an
+  existing one), the maintenance grammar absorbing needs rather than spawning disposable passes.
+- S4 predicate confirmed (2026-08-27): operator ran `repatch-catalogue-colon` and `repatch-acoustid` library-wide on
+  hades, each twice, second run a no-op → both at fixpoint, safe to remove.  Removal is clean: the only durable
+  retention is `_resolve_current_lib`'s replay of the `"repatched"` / `"acoustid-repatched"` action-verbs
+  (`_pipeline_maint.py:540`) — the reader stays, the writers go.  `rederive_part_label` stays (forward ingest rule);
+  `is_catalogue_colon_corrupt` goes with the command.

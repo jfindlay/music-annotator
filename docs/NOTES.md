@@ -265,6 +265,59 @@ yielding zero candidates) whenever `dest_root` does not match the journal's embe
 a maintenance command against a non-canonical mount is a **silent no-op hazard**, not a library
 defect: pass the host-matching `dest_root`.
 
+## Journal action-verbs are append-only vocabulary: retiring a command must never retire its verb
+
+The corollary to "the journal is a regenerable cache" (above): the cache is *regenerable*, but the
+on-disk journal that exists **is** an append-only historical record, and every entry it holds must
+stay interpretable for the life of the library.  This splits an action's lifetime into two clocks
+that tick independently:
+
+- **A command has a finite purpose.**  A singleton / migration command (e.g. `repatch-catalogue-colon`,
+  `repatch-acoustid`) is *done* once its transform has been applied library-wide and a second run is
+  a no-op — the composite fixpoint.  At that point the command is dead weight and should be removed
+  (the removal-plan principle for singleton actions).
+- **The action-verb it wrote is frozen forever.**  Every `"repatched"` / `"acoustid-repatched"`
+  entry the command ever appended is permanently in the journal.  Removing the command removes only
+  the *writer*; every *reader* that walks the journal must still interpret those verbs.
+
+The rule, therefore: **delete the writer, keep every reader, and never shrink the action
+vocabulary.**  Concretely, three residual read sites must survive a command's removal (verified
+2026-08-27 for the two repatch commands):
+
+1. **The lineage resolver** (`_resolve_current_lib`) — must keep the retired verbs in whichever arm
+   interprets them (the repatch verbs are source==destination in-place updates).  Dropping them may
+   no-op harmlessly *today* but discards documented intent and is a latent trap under later edits.
+2. **The audit/diff/rebuild readers** — these currently filter by *allow-list* (`{"tagged",
+   "enriched"}`) and `action != "tagged"` skips, so retired content-only verbs are excluded by
+   omission and need no change.  The obligation is to *verify* no reader is deny-by-default, not to
+   add arms.
+3. **The model field** — `TransactionEntry.action` is a bare `str`, which is *why* historical
+   entries deserialize regardless of which verbs current code emits.  **The trap:** if `action` is
+   ever tightened to a `Literal[...]` union (a plausible hardening), every historical verb — retired
+   or not — MUST remain in the union, or `model_validate` rejects the real journal on read.  The
+   string-typed field is load-bearing backward compatibility, not laxity.
+
+This is the durable content behind the C-RETIRE contract: **command lifetime ≠ action-verb
+lifetime.**  Any future singleton's removal plan inherits it unchanged.
+
+### Prefer the permanent action basis over disposable passes (PERM)
+
+The append-only-verb rule above is what makes retiring a singleton *safe*; PERM is the stance that
+makes retiring one *rare*.  The forward preference (operator ruling 2026-08-27) is **fewer or no
+temporary library refactors.**  When a new maintenance need is discovered, the triage order is:
+
+1. Can an **existing durable action** absorb it (a refinement or a new option/dimension)?
+2. If not, is it a **new dimension worth making permanent** — a durable addition to the maintenance
+   action basis, designed to recur?
+3. Only if neither holds — the need is genuinely one-shot and cannot be expressed as durable grammar
+   — is a throwaway singleton justified, and it ships already carrying its removal plan.
+
+The maintenance grammar is meant to *mature into* a basis that absorbs future needs, not to
+accumulate disposable migrations.  Every singleton is a small admission that the grammar did not yet
+cover a case; the healthy direction is for that to happen less over time, not more.  The two repatch
+commands retired in the `maintain` sub-track are the last expected instances of the disposable
+shape, not a template for more.
+
 ## Cross-medium work-group aggregation (the multimedium substrate)
 
 `run()` processes one medium's *copy* at a time, but aggregates *path/tag* metadata across **all**
