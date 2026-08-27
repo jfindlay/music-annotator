@@ -833,6 +833,90 @@ verbatim credit is `_cea_MB_artists` → `CEA_MB_ARTISTS`, already correctly rea
 `ARTIST`.  The assembled composite stays under `CEA_RECORDING_ARTIST`; no rename, no new verbatim
 tag.  Resolved at the S2 juncture (C-RA-GRAMMAR, 2026-07-31).
 
+## Library maintenance: pass composition (C-CONFLUENCE)
+
+The `maintain` action runs the recurring maintenance passes as a single composition over one library
+root.  Three properties govern how the passes compose: their required order, the guarantee a dry-run
+preview carries, and the convergence signal a settled library produces.  These are ergonomic and
+archival-fidelity contracts, not a formal composition calculus.
+
+### Pass order
+
+Passes execute in a fixed sequence.  The order is required for correctness; it is not claimed to be
+unique or provably optimal.
+
+**Content passes first: `enrich`, then `origin-time`.**  Both passes write content — tags and
+sidecars respectively — that downstream passes read.  `enrich` backfills fingerprint fields
+(`ACOUSTID_ID`, `AUDIO_HASH`) into library files; `dedup_library` clusters by `ACOUSTID_ID`, so
+fingerprints must be present before the integrity passes run.  `origin-time` writes origin
+provenance into work-directory sidecars keyed on the work top directory; if files move first, the
+sidecar paths shift and the write targets change.  Content before path is the invariant: a
+destination path is computed from embedded tags, so tags must be correct before any path move
+executes.
+
+**Move passes next: `repath`, then `regroup`, then `unify`.**  All three compute each file's
+canonical destination from its embedded tags alone (no network calls), using `build_dest_path`.
+The mutual order within the move passes follows from how each defines "canonical":
+
+- `repath` applies the current path policy to every library file.  It runs first because it
+  establishes the policy-canonical location for each file; subsequent move passes inherit that
+  baseline.
+- `regroup` consolidates confirmed split-release files — tracks of one release scattered across
+  more than one work directory.  It runs after `repath` so that the files it consolidates are
+  already at their policy-canonical paths; consolidating before repathing could move files to a
+  location that `repath` would immediately move again.
+- `unify` consolidates performer-split and composer-split fragmented releases — tracks of one
+  release spread across more than one top directory due to per-track performer or composer
+  variation.  It runs after `regroup` so that release-level fragmentation is resolved before
+  performer-level unification; a release that is both split-release and performer-fragmented
+  should first be gathered into one work directory, then unified into one top directory.
+
+**Integrity passes last: `reconstruct-xrefs`, then `dedup-library`.**  Both passes make
+operator-confirmed, destructive or semi-destructive choices (writing secondary MBIDs; deleting
+duplicate files).  Nothing downstream may depend on their operator-divergent outcome, so they run
+after all content and move passes are complete.  Within the integrity passes, `reconstruct-xrefs`
+runs before `dedup-library`: it writes secondary release MBIDs onto surviving files, so that when
+`dedup-library` subsequently identifies duplicate groups, the survivors already carry their known
+secondary MBIDs and the dedup prompt does not re-surface cross-references that have already been
+recorded.
+
+### Dry-run is a preview, not a rehearsal
+
+`maintain --dry-run` runs each pass against the *current* library state — the same per-pass
+dry-run behaviour that each pass offers individually.  It does not thread simulated state from one
+pass to the next.  This means: for any pass that runs downstream of a mutating pass, the dry-run
+plan is computed against a state that will not exist at that pass's live execution.  The preview is
+truthful for the first mutating pass and for passes whose inputs are genuinely independent of
+earlier passes; it may diverge from the live run for passes whose inputs would have been changed by
+an earlier pass.
+
+The report labels files that appear in more than one pass's plan as "may change after earlier
+passes run" — these are the cross-pass overlap points where the preview is least faithful.  The
+operator should treat the dry-run output as a directional preview, not a binding rehearsal.  If a
+pass's real input shifts (because an earlier pass moved or enriched files), re-running `maintain`
+after the live run will produce an accurate picture of what remains.
+
+No simulated-state threading is built.  The cost of threading a faithful shadow state through all
+passes is not worth it when the operator can simply re-run; the preview is honest about its limits.
+
+### Convergence is a quiet run
+
+`maintain` does not auto-loop and does not compute a formal fixpoint.  Its final output states
+whether the run enacted any changes.  A run that changes nothing is the practical convergence
+signal: the library is settled with respect to the current pass set and policy.
+
+Some legitimate cases require more than one run to settle.  For example: `enrich` may add an
+`ACOUSTID_ID` to a file on one run; `dedup-library` can cluster that file with its duplicates only
+on the *next* run, because the fingerprint was not present when the first run's dedup census
+executed.  This is normal behaviour, not a defect.  When a run still changes things, the operator
+is told so and re-running is the expected response.
+
+No oscillation detector is built.  The one concrete oscillation risk — `repath`'s policy-canonical
+disagreeing with `regroup`'s or `unify`'s consolidation-canonical on a file's home — is handled by
+the fixed pass order and by the operator noticing a run that never reaches zero changes.  If such a
+non-converging cycle is ever observed in practice, it is a bug in a specific pass's canonical
+computation, fixed there, not a class of behaviour `maintain` polices abstractly.
+
 ## Continuing styleguide development
 
 - **the adjudication loop** (perpetual steady state): new cases append to the STYLEGUIDE register as
