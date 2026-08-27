@@ -1,5 +1,5 @@
 """Unit tests for _pipeline_maint functions: repath, regroup, unify, enrich,
-_move_verify_journal, _resolve_current_lib, repatch_acoustid_tags, and related helpers.
+_move_verify_journal, _resolve_current_lib, and related helpers.
 
 Migrated from test_main.py (TestRepath, TestRegroup, TestEnrich, TestUnify, etc.)
 and test_pipeline.py (TestMoveVerifyJournal, TestResolveCurrentLib, TestRepathConfirmation).
@@ -20,7 +20,7 @@ from pathlib import Path
 import pytest
 from mutagen._util import MutagenError
 from mutagen.flac import FLAC as MutagenFLAC
-from mutagen.id3 import ID3, TXXX  # type: ignore[attr-defined]
+from mutagen.id3 import ID3
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
@@ -56,7 +56,6 @@ from music_annotator._pipeline_maint import (
     _check_dest_root,
     _clamp_maint_dest,
     _execute_single_move,
-    _has_legacy_acoustid_key,
     _hydrate_performer_lists,
     _journal_capacity,
     _move_verify_journal,
@@ -64,13 +63,11 @@ from music_annotator._pipeline_maint import (
     _reference_evidence,
     _resolve_current_lib,
     _scatter_consequence_note,
-    _tags_from_file_dict,
     _unify_classical_composer_groups,
     _write_xref_and_journal,
     dedup_library,
     maintain,
     reconstruct_cross_references,
-    repatch_acoustid_tags,
     resolve_duplicate_group,
 )
 from music_annotator._tagger import write_secondary_albumid_flac, write_secondary_albumid_mp3
@@ -8009,1581 +8006,20 @@ class TestRegroupWorkGroupModalDepth:
 
 
 # ---------------------------------------------------------------------------
-# Haydn Hoboken catalogue-colon repatch pass
-# ---------------------------------------------------------------------------
-
-
-def _make_haydn_corrupt_tags() -> TrackTags:
-    """Build a TrackTags fixture with a corrupt Haydn Hoboken CWP_PART_1 label.
-
-    Simulates a file tagged before the ``": "`` forward fix (NORM-9 / STYLEGUIDE 4.x): the old
-    bare-``":"`` split truncated ``"String Quartet in E major, Op. 20 No. 4, Hob. III:31"`` to
-    ``"31"`` when deriving ``CWP_PART_1``.  The ``CWP_GROUPHEADING`` is correspondingly corrupt.
-
-    The hierarchy has 3 levels (``CWP_PART_LEVELS = "2"``):
-    - Level 0 (leaf): ``CWP_WORK_0`` = ``"I. Allegro moderato"``
-    - Level 1 (child): ``CWP_WORK_1`` = ``"String Quartet in E major, Op. 20 No. 4, Hob. III:31"``
-    - Level 2 (top):   ``CWP_WORK_2`` = ``"String Quartets, Op. 20"``
-
-    :returns: A :class:`TrackTags` instance with corrupt ``CWP_PART_1`` and ``CWP_GROUPHEADING``.
-    """
-    tags = TrackTags(
-        cwp_work_top="String Quartets, Op. 20",
-        cwp_groupheading="String Quartets, Op. 20 :: 31 :: I. Allegro moderato",
-        cwp_part="I. Allegro moderato",
-        cwp_part_levels="2",
-        cwp_work_part_levels="2",
-        cwp_movt_num="1",
-        movementtotal="4",
-        title="I. Allegro moderato",
-        artist="Angeles Quartet",
-        cwp_composer_lastnames="Haydn",
-        recording_date="1980",
-    )
-    if tags.model_extra is not None:
-        tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
-        tags.model_extra["cwp_part_0"] = "I. Allegro moderato"
-        tags.model_extra["cwp_work_1"] = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
-        tags.model_extra["cwp_part_1"] = "31"
-        tags.model_extra["cwp_work_2"] = "String Quartets, Op. 20"
-        tags.model_extra["cwp_part_2"] = ""
-    return tags
-
-
-def _make_haydn_correct_tags() -> TrackTags:
-    """Build a TrackTags fixture with correct Haydn Hoboken CWP_PART_1 label.
-
-    Simulates a file tagged after the ``": "`` forward fix (NORM-9 / STYLEGUIDE 4.x): the
-    ``CWP_PART_1`` label is the full quartet title, not the bare catalogue fragment.
-
-    :returns: A :class:`TrackTags` instance with correct ``CWP_PART_1`` and ``CWP_GROUPHEADING``.
-    """
-    corrected_part1 = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
-    tags = TrackTags(
-        cwp_work_top="String Quartets, Op. 20",
-        cwp_groupheading=(
-            "String Quartets, Op. 20 :: String Quartet in E major, Op. 20 No. 4, Hob. III:31 :: I. Allegro moderato"
-        ),
-        cwp_part="I. Allegro moderato",
-        cwp_part_levels="2",
-        cwp_work_part_levels="2",
-        cwp_movt_num="1",
-        movementtotal="4",
-        title="I. Allegro moderato",
-        artist="Angeles Quartet",
-        cwp_composer_lastnames="Haydn",
-        recording_date="1980",
-    )
-    if tags.model_extra is not None:
-        tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
-        tags.model_extra["cwp_part_0"] = "I. Allegro moderato"
-        tags.model_extra["cwp_work_1"] = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
-        tags.model_extra["cwp_part_1"] = corrected_part1
-        tags.model_extra["cwp_work_2"] = "String Quartets, Op. 20"
-        tags.model_extra["cwp_part_2"] = ""
-    return tags
-
-
-class TestRepatchCatalogueColon:
-    """Tests for :func:`music_annotator.repatch_catalogue_colon`.
-
-    Exercises the full re-tag → ``_verify_copy`` → journal provenance chain without mocking
-    ``apply_tags_flac``, ``_verify_copy``, or ``_read_tags_flac`` (real round-trip, only the
-    filesystem is fake via pyfakefs).
-
-    KATs:
-    (a) Corrupt Haydn fixture → corrected after pass.
-    (b) ``build_dest_path`` renders correct path after repatch.
-    (c) ``dry_run=True`` writes nothing.
-    (d) Second run is a no-op (idempotency).
-    (e) File with no corruption is untouched.
-    """
-
-    _CORRUPT_REL = "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]/01 - 31/01 - I. Allegro moderato.flac"
-
-    def test_repatch_corrects_corrupt_haydn_flac(self, fs: FakeFilesystem) -> None:
-        """(a) Corrupt Haydn fixture → CWP_PART_1 and CWP_GROUPHEADING corrected after pass.
-
-        A FLAC file with ``CWP_PART_1 = "31"`` (the bare catalogue fragment produced by the
-        pre-fix bare-``":"`` split) is corrected by ``repatch_catalogue_colon``.  After the pass:
-        - ``CWP_PART_1`` reads back as the full quartet title.
-        - ``CWP_GROUPHEADING`` reads back as the correctly assembled heading.
-        - A ``"repatched"`` journal entry is appended.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = _make_haydn_corrupt_tags()
-        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        audio = MutagenFLAC(str(path))
-        part1_vals = audio.get("cwp_part_1") or []
-        gh_vals = audio.get("cwp_groupheading") or []
-
-        assert part1_vals and part1_vals[0] == "String Quartet in E major, Op. 20 No. 4, Hob. III:31", (
-            f"CWP_PART_1 should be corrected, got {part1_vals}"
-        )
-        assert gh_vals and "String Quartet in E major, Op. 20 No. 4, Hob. III:31" in gh_vals[0], (
-            f"CWP_GROUPHEADING should contain corrected part label, got {gh_vals}"
-        )
-        assert gh_vals[0].startswith("String Quartets, Op. 20 :: "), (
-            f"CWP_GROUPHEADING should start with top work, got {gh_vals[0]}"
-        )
-
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched = [e for e in journal.entries if e.action == "repatched"]
-        assert len(repatched) == 1
-        assert repatched[0].source == str(path)
-        assert repatched[0].destination == str(path)
-        assert repatched[0].release_id == "haydn-rel-1"
-
-    def test_repatch_build_dest_path_correct_after_repatch(self, fs: FakeFilesystem) -> None:
-        """(b) build_dest_path renders correct path after repatch (path fix follows tag fix).
-
-        After ``repatch_catalogue_colon`` corrects ``CWP_PART_1``, calling ``build_dest_path``
-        on the corrected tags renders ``NN - <full label>`` (not ``NN - 31``).
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = _make_haydn_corrupt_tags()
-        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        # Read back the corrected tags and verify build_dest_path renders the full label.
-        file_dict = _read_tags_flac(path)
-        corrected_tags = _tags_from_file_dict(file_dict)
-
-        dest_path = build_dest_path(dest_root, MBRelease(), MBTrack(), corrected_tags, global_track_idx=1)
-        path_str = str(dest_path)
-
-        # The intermediate directory must contain the full quartet title, not the bare "31" fragment.
-        assert "31" not in dest_path.parent.name or "Hob" in dest_path.parent.name, (
-            f"Intermediate dir should not be bare '31': {dest_path.parent.name}"
-        )
-        assert "String Quartet in E major" in path_str, (
-            f"build_dest_path should render full quartet title after repatch, got {path_str}"
-        )
-
-    def test_repatch_dry_run_writes_nothing(self, fs: FakeFilesystem) -> None:
-        """(c) dry_run=True logs planned repatches but writes no tags and no journal entry.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = _make_haydn_corrupt_tags()
-        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root, dry_run=True)
-
-        # Tags must be unchanged (still corrupt)
-        audio = MutagenFLAC(str(path))
-        part1_vals = audio.get("cwp_part_1") or []
-        assert part1_vals and part1_vals[0] == "31", f"dry_run must not write tags, got {part1_vals}"
-
-        # No journal entry appended
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched = [e for e in journal.entries if e.action == "repatched"]
-        assert len(repatched) == 0, f"dry_run must not append journal entries, got {repatched}"
-
-    def test_repatch_idempotent_second_run_is_noop(self, fs: FakeFilesystem) -> None:
-        """(d) Second run on a corrected library is a no-op (idempotency).
-
-        Run 1: corrupt fixture → corrected, one ``"repatched"`` journal entry appended.
-        Run 2: already-correct file → no writes, no new journal entry.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = _make_haydn_corrupt_tags()
-        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        # Run 1: corrects the corrupt file
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        journal1 = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched1 = [e for e in journal1.entries if e.action == "repatched"]
-        assert len(repatched1) == 1, "Run 1 must append exactly one repatched entry"
-
-        # Run 2: file is already correct — must be a no-op
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        journal2 = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched2 = [e for e in journal2.entries if e.action == "repatched"]
-        assert len(repatched2) == 1, "Run 2 must not append a new repatched entry (idempotency)"
-
-    def test_repatch_correct_file_is_untouched(self, fs: FakeFilesystem) -> None:
-        """(e) File with correct tags is untouched (no write, no journal entry).
-
-        A file whose ``CWP_PART_1`` already equals the recomputed label is not rewritten.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = _make_haydn_correct_tags()
-        correct_rel = (
-            "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]"
-            "/01 - String Quartet in E major, Op. 20 No. 4, Hob. III:31/01 - I. Allegro moderato.flac"
-        )
-        path = _make_library_flac(dest_root, correct_rel, tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        # No journal entry appended
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched = [e for e in journal.entries if e.action == "repatched"]
-        assert len(repatched) == 0, f"Correct file must not be repatched, got {repatched}"
-
-        # Tags unchanged
-        audio = MutagenFLAC(str(path))
-        part1_vals = audio.get("cwp_part_1") or []
-        assert part1_vals and part1_vals[0] == "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
-
-    def test_repatch_cannot_recompute_level_left_untouched(self, fs: FakeFilesystem) -> None:
-        """cannot-recompute branch: a level with empty CWP_WORK_{i} is left untouched.
-
-        When ``CWP_WORK_{i}`` is empty (the ``rederive_part_label`` CANNOT_RECOMPUTE branch),
-        the stored ``CWP_PART_{i}`` is not rewritten even if it looks corrupt.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        # Build a file where CWP_WORK_1 is absent but CWP_PART_1 looks like a bare fragment.
-        # rederive_part_label("", ...) returns CANNOT_RECOMPUTE → no rewrite.
-        tags = TrackTags(
-            cwp_work_top="String Quartets, Op. 20",
-            cwp_groupheading="String Quartets, Op. 20 :: 31 :: I. Allegro moderato",
-            cwp_part="I. Allegro moderato",
-            cwp_part_levels="2",
-            cwp_work_part_levels="2",
-            cwp_movt_num="1",
-            movementtotal="4",
-            title="I. Allegro moderato",
-            artist="Angeles Quartet",
-            cwp_composer_lastnames="Haydn",
-            recording_date="1980",
-        )
-        if tags.model_extra is not None:
-            tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
-            tags.model_extra["cwp_part_0"] = "I. Allegro moderato"
-            # CWP_WORK_1 intentionally absent (empty string → not written to file)
-            tags.model_extra["cwp_part_1"] = "31"
-            # CWP_WORK_2 also absent
-
-        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        # No journal entry: the CANNOT_RECOMPUTE branch leaves the file untouched.
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched = [e for e in journal.entries if e.action == "repatched"]
-        assert len(repatched) == 0, f"CANNOT_RECOMPUTE level must not be repatched, got {repatched}"
-
-    def test_repatch_empty_journal_is_noop(self, fs: FakeFilesystem) -> None:
-        """repatch_catalogue_colon() is a no-op when the journal has no entries.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-        _write_library_journal(dest_root, [])
-
-        # Should not raise; nothing to process.
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-    def test_repatch_mutagen_error_on_write_raises(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """repatch_catalogue_colon() raises RuntimeError when apply_tags_flac raises MutagenError.
-
-        :param mocker: pytest-mock fixture.
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = _make_haydn_corrupt_tags()
-        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        mocker.patch("music_annotator._pipeline_maint.apply_tags_flac", side_effect=MutagenError("write failed"))
-
-        with pytest.raises(RuntimeError, match="repatch_catalogue_colon tag write failure"):
-            music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-    def test_repatch_tag_read_error_skips_file(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """Tag read error is logged and the file is skipped (no crash, no journal entry).
-
-        :param mocker: pytest-mock fixture.
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = _make_haydn_corrupt_tags()
-        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=OSError("read failed"))
-
-        # Should not raise; the file is skipped.
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched = [e for e in journal.entries if e.action == "repatched"]
-        assert len(repatched) == 0, f"Tag read error must not produce a journal entry, got {repatched}"
-
-    def test_repatch_mp3_corrupt_via_mock(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """MP3 write branch: mock _read_tags_mp3 to return corrupt tags → write branch covered.
-
-        The dynamic CWP_WORK_* / CWP_PART_* tags are not stored in MP3 files by apply_tags_mp3
-        (they are not in _MP3_TXXX_MAP).  This test mocks _read_tags_mp3 to return a corrupt tag
-        dict so that the .mp3 write branch in repatch_catalogue_colon is exercised.
-
-        :param mocker: pytest-mock fixture.
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        # Create a minimal MP3 file (tags don't matter — we mock the read).
-        mp3_rel = "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]/01 - 31/01 - I. Allegro moderato.mp3"
-        path = dest_root / mp3_rel
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(_MINIMAL_MP3)
-        apply_tags_mp3(path, TrackTags(title="I. Allegro moderato"))
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": "/src/01.mp3",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        # Mock _read_tags_mp3 to return a corrupt tag dict with CWP_WORK_1 / CWP_PART_1.
-        corrupt_dict = {
-            "TITLE": "I. Allegro moderato",
-            "CWP_WORK_TOP": "String Quartets, Op. 20",
-            "CWP_GROUPHEADING": "String Quartets, Op. 20 :: 31 :: I. Allegro moderato",
-            "CWP_PART_LEVELS": "2",
-            "CWP_WORK_0": "I. Allegro moderato",
-            "CWP_PART_0": "I. Allegro moderato",
-            "CWP_WORK_1": "String Quartet in E major, Op. 20 No. 4, Hob. III:31",
-            "CWP_PART_1": "31",
-            "CWP_WORK_2": "String Quartets, Op. 20",
-        }
-        mocker.patch("music_annotator._pipeline_maint._read_tags_mp3", return_value=corrupt_dict)
-
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched = [e for e in journal.entries if e.action == "repatched"]
-        assert len(repatched) == 1, f"Mocked corrupt MP3 must be repatched, got {repatched}"
-
-    def test_repatch_groupheading_empty_when_no_work_top_or_parts(self, fs: FakeFilesystem) -> None:
-        """Groupheading rebuild: empty work_top + empty bottom_part → new_groupheading is empty.
-
-        Covers the False branches of ``if bottom_part:`` and ``if new_groupheading:`` in the
-        groupheading rebuild.  A corrupt file with no ``CWP_WORK_TOP`` and no ``CWP_PART_0``
-        still gets its ``CWP_PART_1`` corrected; ``CWP_GROUPHEADING`` is left unchanged (empty
-        new_groupheading → no update).
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        # Minimal corrupt fixture: CWP_WORK_TOP absent, CWP_PART_0 absent, CWP_PART_LEVELS=1.
-        # The corrupt CWP_PART_1 = "104" is derived from "Symphony No. 5, Hob. I:104".
-        tags = TrackTags(
-            cwp_part_levels="1",
-            cwp_work_part_levels="1",
-            cwp_movt_num="1",
-            title="I. Allegro",
-            artist="Karajan",
-            cwp_composer_lastnames="Haydn",
-            recording_date="1963",
-        )
-        if tags.model_extra is not None:
-            tags.model_extra["cwp_work_1"] = "Symphony No. 5, Hob. I:104"
-            tags.model_extra["cwp_part_1"] = "104"
-            # CWP_WORK_TOP absent (empty → not written); CWP_PART_0 absent
-
-        path = _make_library_flac(dest_root, "Classical/Haydn - Karajan/01 - 104/01 - I. Allegro.flac", tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-2",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        # CWP_PART_1 must be corrected even though groupheading is empty.
-        audio = MutagenFLAC(str(path))
-        part1_vals = audio.get("cwp_part_1") or []
-        assert part1_vals and part1_vals[0] == "Symphony No. 5, Hob. I:104", (
-            f"CWP_PART_1 should be corrected to full title, got {part1_vals}"
-        )
-
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched = [e for e in journal.entries if e.action == "repatched"]
-        assert len(repatched) == 1, f"Corrupt file must be repatched, got {repatched}"
-
-    def test_repatch_groupheading_inter_part_empty_skipped(self, fs: FakeFilesystem) -> None:
-        """Groupheading rebuild: empty intermediate part is skipped (False branch of ``if inter_part:``).
-
-        A 4-level hierarchy where level 2 has no work title (absent from the file) produces an
-        empty ``inter_part`` at ``j=2`` in the groupheading rebuild loop.  The empty part is
-        skipped (not appended to ``gh_parts``).
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        # 4-level hierarchy: CWP_PART_LEVELS=3, n_levels=4.
-        # Level 1 is corrupt; level 2 work title is absent (scanning loop breaks at i=2).
-        # Groupheading rebuild: j=2 → inter_part="" (absent) → skipped; j=1 → corrected label.
-        tags = TrackTags(
-            cwp_work_top="Haydn Complete Works",
-            cwp_groupheading="Haydn Complete Works :: 31 :: I. Allegro moderato",
-            cwp_part="I. Allegro moderato",
-            cwp_part_levels="3",
-            cwp_work_part_levels="3",
-            cwp_movt_num="1",
-            movementtotal="4",
-            title="I. Allegro moderato",
-            artist="Angeles Quartet",
-            cwp_composer_lastnames="Haydn",
-            recording_date="1980",
-        )
-        if tags.model_extra is not None:
-            tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
-            tags.model_extra["cwp_part_0"] = "I. Allegro moderato"
-            tags.model_extra["cwp_work_1"] = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
-            tags.model_extra["cwp_part_1"] = "31"
-            # CWP_WORK_2 intentionally absent (empty → not written) → scanning loop breaks at i=2
-            # CWP_WORK_3 = "Haydn Complete Works" (= CWP_WORK_TOP)
-            tags.model_extra["cwp_work_3"] = "Haydn Complete Works"
-
-        path = _make_library_flac(
-            dest_root,
-            "Classical/Haydn - Angeles Quartet/Haydn Complete Works [rec 1980]/01 - 31/01 - I. Allegro moderato.flac",
-            tags,
-        )
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-3",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        audio = MutagenFLAC(str(path))
-        part1_vals = audio.get("cwp_part_1") or []
-        assert part1_vals and part1_vals[0] == "String Quartet in E major, Op. 20 No. 4, Hob. III:31", (
-            f"CWP_PART_1 should be corrected, got {part1_vals}"
-        )
-
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched = [e for e in journal.entries if e.action == "repatched"]
-        assert len(repatched) == 1, f"Corrupt file must be repatched, got {repatched}"
-
-    def test_repatch_case_str_noop_arm_covered(self, fs: FakeFilesystem) -> None:
-        """match/case ``case str():`` arm: correct label at an intermediate level is left untouched.
-
-        A file with a correct ``CWP_PART_1`` (recomputes to itself) exercises the ``case str():``
-        no-op arm of the per-level scan loop.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        # File with correct CWP_PART_1 — the loop hits case str(): (no-op) at i=1.
-        tags = _make_haydn_correct_tags()
-        correct_rel = (
-            "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]"
-            "/01 - String Quartet in E major, Op. 20 No. 4, Hob. III:31/01 - I. Allegro moderato.flac"
-        )
-        path = _make_library_flac(dest_root, correct_rel, tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        # No repatched entry: correct label → no-op.
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched = [e for e in journal.entries if e.action == "repatched"]
-        assert len(repatched) == 0, f"Correct label must not be repatched, got {repatched}"
-
-    def test_repatch_repatched_lineage_entry_resolves_correctly(self, fs: FakeFilesystem) -> None:
-        """_resolve_current_lib handles "repatched" in-place entries correctly.
-
-        A file that was "tagged" then "repatched" (in-place, same path) is still resolved
-        correctly by _resolve_current_lib so that a second repatch_catalogue_colon run can
-        find it.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = _make_haydn_correct_tags()
-        correct_rel = (
-            "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]"
-            "/01 - String Quartet in E major, Op. 20 No. 4, Hob. III:31/01 - I. Allegro moderato.flac"
-        )
-        path = _make_library_flac(dest_root, correct_rel, tags)
-
-        # Journal has a "tagged" entry followed by a "repatched" entry (in-place).
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                },
-                {
-                    "timestamp": "2024-01-01T00:01:00+00:00",
-                    "release_id": "haydn-rel-1",
-                    "source": str(path),
-                    "destination": str(path),
-                    "action": "repatched",
-                },
-            ],
-        )
-
-        # File is already correct — second run must be a no-op.
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        new_repatched = [e for e in journal.entries if e.action == "repatched" and e.timestamp != "2024-01-01T00:01:00+00:00"]
-        assert len(new_repatched) == 0, f"Already-correct file must not gain a new repatched entry, got {new_repatched}"
-
-
-# ---------------------------------------------------------------------------
-# No-regression parity pin: detect + repatch behaviour on the Haydn Hoboken fixture
-# ---------------------------------------------------------------------------
-
-
-class TestRepatchCatalogueColonParity:
-    """No-regression parity pin for the catalogue-colon detect + repatch behaviour.
-
-    Asserts that the detect predicate fires on the representative Haydn Hoboken fixture and
-    that ``repatch_catalogue_colon`` corrects both ``CWP_PART_1`` and ``CWP_GROUPHEADING``.
-    This is a behavioural pin — it must remain green as long as the detect predicate and the
-    repatch pass are in service, confirming the two components agree on what is corrupt and
-    what the corrected value should be.
-    """
-
-    _CORRUPT_REL = "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]/01 - 31/01 - I. Allegro moderato.flac"
-
-    def test_parity_haydn_hoboken_detect_and_repatch(self, fs: FakeFilesystem) -> None:
-        """Parity pin: corrupt Haydn Hoboken fixture is detected and corrected end-to-end.
-
-        Creates a FLAC file with the Haydn Hoboken corrupt tags (``CWP_PART_1 = "31"`` from
-        the pre-fix bare-``":"`` split on ``"String Quartet in E major, Op. 20 No. 4, Hob. III:31"``),
-        runs ``repatch_catalogue_colon``, and asserts:
-
-        (a) ``CWP_PART_1`` reads back as the full quartet title (not the bare fragment ``"31"``).
-        (b) ``CWP_GROUPHEADING`` contains the corrected part label.
-
-        This pin confirms the detect predicate and the repatch pass remain in agreement on the
-        representative catalogue-colon corruption case.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = _make_haydn_corrupt_tags()
-        path = _make_library_flac(dest_root, self._CORRUPT_REL, tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-parity-rel",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        music_annotator.repatch_catalogue_colon(dest_root=dest_root)
-
-        audio = MutagenFLAC(str(path))
-        part1_vals = audio.get("cwp_part_1") or []
-        gh_vals = audio.get("cwp_groupheading") or []
-
-        # (a) CWP_PART_1 must be the full quartet title, not the bare catalogue fragment.
-        assert part1_vals and part1_vals[0] == "String Quartet in E major, Op. 20 No. 4, Hob. III:31", (
-            f"CWP_PART_1 should be corrected to full title, got {part1_vals}"
-        )
-
-        # (b) CWP_GROUPHEADING must contain the corrected part label.
-        assert gh_vals and "String Quartet in E major, Op. 20 No. 4, Hob. III:31" in gh_vals[0], (
-            f"CWP_GROUPHEADING should contain corrected part label, got {gh_vals}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Helpers for TestRepatchAcoustidTags
-# ---------------------------------------------------------------------------
-
-
-def _write_legacy_flac_fingerprint(path: Path, fingerprint: str) -> None:
-    """Write the legacy ``CHROMAPRINT_FP`` Vorbis Comment key to a FLAC file.
-
-    Used in tests to simulate a pre-migration FLAC file that carries the legacy key.
-    Appends the key to the existing Vorbis Comments without clearing other tags.
-
-    :param path: Path to the FLAC file to modify.
-    :param fingerprint: The Chromaprint fingerprint string to embed.
-    """
-    audio = MutagenFLAC(str(path))
-    audio["chromaprint_fp"] = [fingerprint]
-    audio.save()
-
-
-def _write_legacy_mp3_fingerprint(path: Path, fingerprint: str) -> None:
-    """Write the legacy TXXX ``"Chromaprint Fingerprint"`` frame to an MP3 file.
-
-    Used in tests to simulate a pre-migration MP3 file that carries the legacy key.
-    Adds the TXXX frame to the existing ID3 tags without clearing other frames.
-
-    :param path: Path to the MP3 file to modify.
-    :param fingerprint: The Chromaprint fingerprint string to embed.
-    """
-    id3 = ID3(str(path))  # type: ignore[no-untyped-call]
-    id3.add(TXXX(encoding=3, desc="Chromaprint Fingerprint", text=fingerprint))  # type: ignore[no-untyped-call]
-    id3.save(str(path))
-
-
-class TestRepatchAcoustidTags:
-    """Tests for :func:`music_annotator.repatch_acoustid_tags`.
-
-    Exercises the full re-tag → ``_verify_copy`` → journal provenance chain without mocking
-    ``apply_tags_flac``, ``apply_tags_mp3``, or ``_verify_copy`` (real round-trip, only the
-    filesystem is fake via pyfakefs).
-
-    KATs:
-    (a) FLAC with legacy ``CHROMAPRINT_FP`` + stale ``ACOUSTID_ID`` → migrated to
-        ``ACOUSTID_FINGERPRINT``, legacy key gone, ``ACOUSTID_ID`` re-sourced when api_key given.
-    (b) MP3 with legacy ``CHROMAPRINT_FP`` → same migration.
-    (c) ``dry_run=True`` writes nothing and returns empty list.
-    (d) Second run on an already-migrated file is a no-op (idempotency).
-    (e) Already-migrated file (has ``ACOUSTID_FINGERPRINT``, no ``CHROMAPRINT_FP``) is untouched.
-    (f) No api_key: migrates the key only, leaves ``ACOUSTID_ID`` unchanged.
-    (g) ``_verify_copy`` failure: no journal entry appended (provenance chain).
-    """
-
-    _FLAC_REL = "Classical/Beethoven - Karajan/Symphony No. 5 [rec 2020]/01 - Allegro.flac"
-    _MP3_REL = "Classical/Beethoven - Karajan/Symphony No. 5 [rec 2020]/01 - Allegro.mp3"
-    _FINGERPRINT = "AQADtNSibcmS5EiS"
-    _ACOUSTID_UUID = "test-acoustid-uuid-1234"
-
-    @staticmethod
-    def _make_base_tags() -> TrackTags:
-        """Build a minimal :class:`TrackTags` for use in repatch_acoustid_tags tests.
-
-        :returns: A :class:`TrackTags` instance with title and artist set.
-        """
-        return TrackTags(title="Allegro con brio", artist="Karajan", acoustid_id="stale-list-by-mbid-value")
-
-    def test_flac_legacy_key_migrated_with_api_key(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """(a) FLAC with legacy CHROMAPRINT_FP is migrated; ACOUSTID_ID re-sourced when api_key given.
-
-        After the pass:
-        - ``ACOUSTID_FINGERPRINT`` reads back with the fingerprint value.
-        - The legacy ``CHROMAPRINT_FP`` key is absent.
-        - ``ACOUSTID_ID`` is updated to the cluster UUID from the mocked ``/v2/lookup``.
-        - A journal entry with ``action="acoustid-repatched"`` is appended.
-
-        :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = self._make_base_tags()
-        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
-        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-1",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        mocker.patch(
-            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
-            return_value=(self._FINGERPRINT, self._ACOUSTID_UUID),
-        )
-        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=300_000)
-
-        result = music_annotator.repatch_acoustid_tags(
-            journal=journal_path,
-            dest_root=dest_root,
-            acoustid_key="test-key",
-        )
-
-        # Fingerprint migrated to new key
-        audio = MutagenFLAC(str(path))
-        new_fp = audio.get("acoustid_fingerprint") or []
-        legacy_fp = audio.get("chromaprint_fp") or []
-        assert new_fp and new_fp[0] == self._FINGERPRINT, f"ACOUSTID_FINGERPRINT should be set, got {new_fp}"
-        assert not legacy_fp, f"CHROMAPRINT_FP should be absent after migration, got {legacy_fp}"
-
-        # ACOUSTID_ID re-sourced
-        acoustid_id_vals = audio.get("acoustid_id") or []
-        assert acoustid_id_vals and acoustid_id_vals[0] == self._ACOUSTID_UUID, (
-            f"ACOUSTID_ID should be re-sourced, got {acoustid_id_vals}"
-        )
-
-        # Journal entry appended
-        journal = read_journal(journal_path)
-        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
-        assert len(repatched) == 1
-        assert repatched[0].source == str(path)
-        assert repatched[0].destination == str(path)
-        assert repatched[0].release_id == "rel-1"
-        assert repatched[0].acoustid_fingerprint == self._FINGERPRINT
-        assert repatched[0].acoustid_id == self._ACOUSTID_UUID
-
-        # Return value matches appended entries (non-dry-run returns list[TransactionEntry])
-        assert isinstance(result, list)
-        assert len(result) == 1
-        assert result[0].action == "acoustid-repatched"
-
-    def test_mp3_legacy_key_migrated(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """(b) MP3 with legacy TXXX "Chromaprint Fingerprint" is migrated to ACOUSTID_FINGERPRINT.
-
-        After the pass:
-        - The TXXX ``"Acoustid Fingerprint"`` frame carries the fingerprint value.
-        - The legacy TXXX ``"Chromaprint Fingerprint"`` frame is absent.
-        - A journal entry with ``action="acoustid-repatched"`` is appended.
-
-        :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = self._make_base_tags()
-        path = _make_library_mp3(dest_root, self._MP3_REL, tags)
-        _write_legacy_mp3_fingerprint(path, self._FINGERPRINT)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-mp3",
-                    "source": "/src/01.mp3",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        mocker.patch(
-            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
-            return_value=(self._FINGERPRINT, self._ACOUSTID_UUID),
-        )
-        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=300_000)
-
-        result = music_annotator.repatch_acoustid_tags(
-            journal=journal_path,
-            dest_root=dest_root,
-            acoustid_key="test-key",
-        )
-
-        # Fingerprint migrated to new TXXX frame
-        id3 = ID3(str(path))  # type: ignore[no-untyped-call]
-        all_txxx = id3.getall("TXXX")  # type: ignore[no-untyped-call]
-        new_fp_frames = [f for f in all_txxx if f.desc == "Acoustid Fingerprint"]
-        legacy_fp_frames = [f for f in all_txxx if f.desc == "Chromaprint Fingerprint"]
-        assert new_fp_frames and str(new_fp_frames[0].text[0]) == self._FINGERPRINT, (
-            f"Acoustid Fingerprint TXXX should be set, got {new_fp_frames}"
-        )
-        assert not legacy_fp_frames, f"Chromaprint Fingerprint TXXX should be absent, got {legacy_fp_frames}"
-
-        # Journal entry appended
-        journal = read_journal(journal_path)
-        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
-        assert len(repatched) == 1
-        assert repatched[0].release_id == "rel-mp3"
-
-        assert isinstance(result, list)
-        assert len(result) == 1
-
-    def test_dry_run_writes_nothing_returns_empty(self, fs: FakeFilesystem) -> None:
-        """(c) dry_run=True logs planned migrations but writes no tags and returns an empty DryRunPlan.
-
-        An empty DryRunPlan (count=0, entries=[]) is structurally distinct from None (not-run):
-        the pass ran and found one file to migrate, but dry_run=True means no writes occurred.
-        Wait — this fixture has one file with the legacy key, so the plan is non-empty.
-        The "empty plan" witness is covered by test_dry_run_empty_plan_no_legacy_files.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = self._make_base_tags()
-        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
-        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-dry",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        result = music_annotator.repatch_acoustid_tags(
-            journal=journal_path,
-            dest_root=dest_root,
-            dry_run=True,
-        )
-
-        # Tags must be unchanged (legacy key still present)
-        audio = MutagenFLAC(str(path))
-        legacy_fp = audio.get("chromaprint_fp") or []
-        new_fp = audio.get("acoustid_fingerprint") or []
-        assert legacy_fp, "dry_run must not remove legacy key"
-        assert not new_fp, "dry_run must not write new key"
-
-        # No journal entry appended
-        journal = read_journal(journal_path)
-        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
-        assert len(repatched) == 0, f"dry_run must not append journal entries, got {repatched}"
-
-        # Return value is a DryRunPlan with one entry (the file that would be migrated)
-        assert isinstance(result, DryRunPlan), f"dry_run must return DryRunPlan, got {type(result)}"
-        assert result.count == 1, f"expected count=1 (one file to migrate), got {result.count}"
-        assert len(result.entries) == 1
-        assert result.entries[0].current_path == str(path)
-        assert "ACOUSTID_FINGERPRINT" in result.entries[0].tag_delta
-
-    def test_idempotent_second_run_is_noop(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """(d) Second run on an already-migrated file is a no-op (idempotency).
-
-        Run 1: legacy key present → migrated, one ``"acoustid-repatched"`` journal entry.
-        Run 2: legacy key absent (already migrated) → no writes, no new journal entry.
-
-        :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = self._make_base_tags()
-        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
-        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-idem",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        mocker.patch(
-            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
-            return_value=(self._FINGERPRINT, self._ACOUSTID_UUID),
-        )
-        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=300_000)
-
-        # Run 1: migrates the legacy key
-        result1 = music_annotator.repatch_acoustid_tags(
-            journal=journal_path,
-            dest_root=dest_root,
-            acoustid_key="test-key",
-        )
-        assert isinstance(result1, list)
-        assert len(result1) == 1
-
-        journal1 = read_journal(journal_path)
-        repatched1 = [e for e in journal1.entries if e.action == "acoustid-repatched"]
-        assert len(repatched1) == 1, "Run 1 must append exactly one acoustid-repatched entry"
-
-        # Run 2: file is already migrated — must be a no-op
-        result2 = music_annotator.repatch_acoustid_tags(
-            journal=journal_path,
-            dest_root=dest_root,
-            acoustid_key="test-key",
-        )
-        assert isinstance(result2, list)
-        assert result2 == []
-
-        journal2 = read_journal(journal_path)
-        repatched2 = [e for e in journal2.entries if e.action == "acoustid-repatched"]
-        assert len(repatched2) == 1, "Run 2 must not append a new entry (idempotency)"
-
-    def test_already_migrated_file_is_untouched(self, fs: FakeFilesystem) -> None:
-        """(e) A file already carrying ACOUSTID_FINGERPRINT and no CHROMAPRINT_FP is untouched.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        # Create a file with the new key already set (no legacy key)
-        tags = TrackTags(title="Allegro", artist="Karajan", acoustid_fingerprint=self._FINGERPRINT)
-        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-already",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        result = music_annotator.repatch_acoustid_tags(
-            journal=journal_path,
-            dest_root=dest_root,
-        )
-
-        # No journal entry appended
-        journal = read_journal(journal_path)
-        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
-        assert len(repatched) == 0, f"Already-migrated file must not produce a journal entry, got {repatched}"
-        assert result == []
-
-    def test_no_api_key_migrates_key_only(self, fs: FakeFilesystem) -> None:
-        """(f) Without an api_key, the fingerprint key is migrated but ACOUSTID_ID is unchanged.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        original_acoustid_id = "original-acoustid-id"
-        tags = TrackTags(title="Allegro", artist="Karajan", acoustid_id=original_acoustid_id)
-        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
-        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-nokey",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        result = music_annotator.repatch_acoustid_tags(
-            journal=journal_path,
-            dest_root=dest_root,
-            acoustid_key="",  # no api key
-        )
-
-        # Fingerprint migrated
-        audio = MutagenFLAC(str(path))
-        new_fp = audio.get("acoustid_fingerprint") or []
-        legacy_fp = audio.get("chromaprint_fp") or []
-        assert new_fp and new_fp[0] == self._FINGERPRINT, f"ACOUSTID_FINGERPRINT should be set, got {new_fp}"
-        assert not legacy_fp, f"CHROMAPRINT_FP should be absent, got {legacy_fp}"
-
-        # ACOUSTID_ID unchanged (no lookup performed)
-        acoustid_id_vals = audio.get("acoustid_id") or []
-        assert acoustid_id_vals and acoustid_id_vals[0] == original_acoustid_id, (
-            f"ACOUSTID_ID should be unchanged without api_key, got {acoustid_id_vals}"
-        )
-
-        # Journal entry appended (migration happened)
-        journal = read_journal(journal_path)
-        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
-        assert len(repatched) == 1
-        assert isinstance(result, list)
-        assert len(result) == 1
-
-    def test_verify_copy_failure_no_journal_entry(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """(g) _verify_copy failure: RuntimeError propagates and no journal entry is appended.
-
-        The provenance-chain invariant (C-PROV) requires that the journal entry is written
-        only after _verify_copy confirms the write succeeded.  When _verify_copy raises
-        RuntimeError, the entry must not be appended.
-
-        :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = self._make_base_tags()
-        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
-        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-verify-fail",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        mocker.patch(
-            "music_annotator._pipeline_maint._verify_copy",
-            side_effect=RuntimeError("verify_copy simulated failure"),
-        )
-
-        with pytest.raises(RuntimeError, match="verify_copy simulated failure"):
-            music_annotator.repatch_acoustid_tags(
-                journal=journal_path,
-                dest_root=dest_root,
-            )
-
-        # No journal entry must have been appended (provenance chain)
-        journal = read_journal(journal_path)
-        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
-        assert len(repatched) == 0, f"No journal entry must be written when _verify_copy fails, got {repatched}"
-
-    def test_empty_journal_returns_empty(self, fs: FakeFilesystem) -> None:
-        """repatch_acoustid_tags() returns empty list when the journal has no entries.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(dest_root, [])
-
-        result = music_annotator.repatch_acoustid_tags(
-            journal=journal_path,
-            dest_root=dest_root,
-        )
-        assert result == []
-
-    def test_acoustid_lookup_failure_leaves_acoustid_id_unchanged(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """When the AcoustID /v2/lookup call fails, ACOUSTID_ID is left unchanged and migration proceeds.
-
-        A transient AcoustID outage must not abort the migration or prevent the journal entry.
-
-        :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        original_acoustid_id = "original-id"
-        tags = TrackTags(title="Allegro", artist="Karajan", acoustid_id=original_acoustid_id)
-        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
-        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-lookup-fail",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        mocker.patch(
-            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
-            side_effect=RuntimeError("AcoustID lookup failed"),
-        )
-        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=300_000)
-
-        result = music_annotator.repatch_acoustid_tags(
-            journal=journal_path,
-            dest_root=dest_root,
-            acoustid_key="test-key",
-        )
-
-        # Migration still happened (fingerprint key migrated)
-        audio = MutagenFLAC(str(path))
-        new_fp = audio.get("acoustid_fingerprint") or []
-        assert new_fp and new_fp[0] == self._FINGERPRINT
-
-        # ACOUSTID_ID left unchanged (lookup failed)
-        acoustid_id_vals = audio.get("acoustid_id") or []
-        assert acoustid_id_vals and acoustid_id_vals[0] == original_acoustid_id, (
-            f"ACOUSTID_ID should be unchanged when lookup fails, got {acoustid_id_vals}"
-        )
-
-        # Journal entry still appended (migration succeeded despite lookup failure)
-        journal = read_journal(journal_path)
-        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
-        assert len(repatched) == 1
-        assert isinstance(result, list)
-        assert len(result) == 1
-
-    def test_acoustid_repatched_action_in_resolve_current_lib(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """acoustid-repatched journal entries are handled by _resolve_current_lib (in-place update).
-
-        After a repatch, a second repatch run must correctly resolve the file path via the
-        journal lineage (the acoustid-repatched entry re-registers the path in-place).
-
-        :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = self._make_base_tags()
-        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
-        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-resolve",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                },
-            ],
-        )
-
-        mocker.patch(
-            "music_annotator._pipeline_maint._fetch_acoustid_lookup_raw",
-            return_value=(self._FINGERPRINT, self._ACOUSTID_UUID),
-        )
-        mocker.patch("music_annotator._pipeline_maint._read_duration_ms", return_value=300_000)
-
-        # Run 1: migrates
-        music_annotator.repatch_acoustid_tags(
-            journal=journal_path,
-            dest_root=dest_root,
-            acoustid_key="test-key",
-        )
-
-        # Verify the journal now has an acoustid-repatched entry
-        journal = read_journal(journal_path)
-        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
-        assert len(repatched) == 1
-
-        # _resolve_current_lib must handle the acoustid-repatched entry correctly
-        current_lib = _resolve_current_lib(journal)
-        assert path in current_lib, f"Path {path} should be in current_lib after acoustid-repatched entry"
-
-    def test_has_legacy_acoustid_key_flac(self, fs: FakeFilesystem) -> None:
-        """_has_legacy_acoustid_key returns True for FLAC with CHROMAPRINT_FP, False without.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = TrackTags(title="Test", artist="Test")
-        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
-
-        # No legacy key yet
-        assert not _has_legacy_acoustid_key(path)
-
-        # Add legacy key
-        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
-        assert _has_legacy_acoustid_key(path)
-
-    def test_has_legacy_acoustid_key_mp3(self, fs: FakeFilesystem) -> None:
-        """_has_legacy_acoustid_key returns True for MP3 with Chromaprint Fingerprint TXXX, False without.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = TrackTags(title="Test", artist="Test")
-        path = _make_library_mp3(dest_root, self._MP3_REL, tags)
-
-        # No legacy key yet
-        assert not _has_legacy_acoustid_key(path)
-
-        # Add legacy key
-        _write_legacy_mp3_fingerprint(path, self._FINGERPRINT)
-        assert _has_legacy_acoustid_key(path)
-
-    def test_repatch_acoustid_cli_subcommand(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """repatch-acoustid CLI subcommand dispatches to repatch_acoustid_tags correctly.
-
-        :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(dest_root, [])
-
-        mock_repatch = mocker.patch("music_annotator.repatch_acoustid_tags", return_value=[])
-
-        sys.argv = ["music-annotator", "repatch-acoustid", str(dest_root), "--acoustid-key", "MY_KEY"]
-        main()
-
-        mock_repatch.assert_called_once_with(
-            journal=journal_path,
-            dest_root=dest_root,
-            acoustid_key="MY_KEY",
-            dry_run=False,
-        )
-
-    def test_repatch_acoustid_cli_dry_run(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """repatch-acoustid CLI subcommand passes dry_run=True when --dry-run is given.
-
-        :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(dest_root, [])
-
-        mock_repatch = mocker.patch("music_annotator.repatch_acoustid_tags", return_value=[])
-
-        sys.argv = ["music-annotator", "repatch-acoustid", str(dest_root), "--dry-run"]
-        main()
-
-        mock_repatch.assert_called_once_with(
-            journal=journal_path,
-            dest_root=dest_root,
-            acoustid_key="",
-            dry_run=True,
-        )
-
-    def test_tag_read_failure_logs_and_skips(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """Tag read failure is logged and the file is skipped (no journal entry, no crash).
-
-        :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = self._make_base_tags()
-        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
-        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-read-fail",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        mocker.patch(
-            "music_annotator._pipeline_maint._read_tags_flac",
-            side_effect=MutagenError("simulated read failure"),
-        )
-
-        result = music_annotator.repatch_acoustid_tags(
-            journal=journal_path,
-            dest_root=dest_root,
-        )
-
-        # No journal entry appended (file was skipped)
-        journal = read_journal(journal_path)
-        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
-        assert len(repatched) == 0
-        assert result == []
-
-    def test_apply_tags_failure_raises_runtime_error(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """MutagenError from apply_tags_flac is re-raised as RuntimeError.
-
-        :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = self._make_base_tags()
-        path = _make_library_flac(dest_root, self._FLAC_REL, tags)
-        _write_legacy_flac_fingerprint(path, self._FINGERPRINT)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-apply-fail",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        mocker.patch(
-            "music_annotator._pipeline_maint.apply_tags_flac",
-            side_effect=MutagenError("simulated write failure"),
-        )
-
-        with pytest.raises(RuntimeError, match="repatch_acoustid_tags write failure"):
-            music_annotator.repatch_acoustid_tags(
-                journal=journal_path,
-                dest_root=dest_root,
-            )
-
-        # No journal entry appended (write failed before _verify_copy)
-        journal = read_journal(journal_path)
-        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
-        assert len(repatched) == 0
-
-    def test_has_legacy_acoustid_key_read_error_returns_false(self, fs: FakeFilesystem) -> None:
-        """_has_legacy_acoustid_key returns False when mutagen raises an exception (e.g. corrupt file).
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        # Write a corrupt FLAC file (not valid FLAC bytes) — mutagen will raise on open
-        path = dest_root / "corrupt.flac"
-        path.write_bytes(b"not a valid flac file")
-
-        result = _has_legacy_acoustid_key(path)
-        assert result is False
-
-    def test_has_legacy_acoustid_key_unsupported_extension_returns_false(self, fs: FakeFilesystem) -> None:
-        """_has_legacy_acoustid_key returns False for unsupported file extensions.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        path = dest_root / "track.ogg"
-        path.write_bytes(b"OggS")
-
-        result = _has_legacy_acoustid_key(path)
-        assert result is False
-
-
-# ---------------------------------------------------------------------------
 # AcoustID tag parity pin — integrative behavioural witness
 # ---------------------------------------------------------------------------
 
 
 class TestAcoustidTagParityPin:
-    """Integrative behavioural parity pins for the AcoustID forward-write and repatch paths.
+    """Integrative behavioural parity pin for the AcoustID forward-write path.
 
-    These tests assert the observable on-disk tag state produced by the two AcoustID tag
-    migration mechanisms:
+    Asserts the observable on-disk tag state produced by :func:`apply_tags_flac` when
+    ``acoustid_fingerprint`` is set: the Picard-aligned ``ACOUSTID_FINGERPRINT`` Vorbis Comment
+    key is written and no legacy ``CHROMAPRINT_FP`` key is present.
 
-    1. **Forward-write parity pin**: a FLAC written by :func:`apply_tags_flac` with
-       ``acoustid_fingerprint`` set reads back the Picard-aligned ``ACOUSTID_FINGERPRINT``
-       Vorbis Comment key and carries no legacy ``CHROMAPRINT_FP`` key.
-
-    2. **Repatch parity pin**: a FLAC carrying the legacy ``CHROMAPRINT_FP`` key, after
-       :func:`~music_annotator._pipeline_maint.repatch_acoustid_tags` runs, reads back
-       ``ACOUSTID_FINGERPRINT`` and carries no legacy ``CHROMAPRINT_FP`` key.
-
-    These are integrative behavioural pins, not unit tests of individual functions.  They
-    verify the end-to-end property that the forward-write and offline repatch paths both
-    produce Picard-aligned on-disk tag state.
+    This is an integrative behavioural pin, not a unit test of an individual function.  It
+    verifies the end-to-end property that the forward-write path produces Picard-aligned
+    on-disk tag state.
     """
 
     def test_forward_write_parity_pin_flac(self, fs: FakeFilesystem) -> None:
@@ -9621,67 +8057,6 @@ class TestAcoustidTagParityPin:
         # (b) Legacy key must be absent.
         legacy_vals = audio.get("chromaprint_fp") or audio.get("CHROMAPRINT_FP") or []
         assert not legacy_vals, f"Legacy CHROMAPRINT_FP key must be absent after forward-write; found {legacy_vals!r}"
-
-    def test_repatch_parity_pin_flac(self, fs: FakeFilesystem) -> None:
-        """Repatch parity pin: repatch_acoustid_tags migrates CHROMAPRINT_FP to ACOUSTID_FINGERPRINT.
-
-        Constructs a FLAC carrying the legacy ``CHROMAPRINT_FP`` Vorbis Comment key (written
-        directly via mutagen to simulate a pre-migration library file), runs
-        :func:`~music_annotator._pipeline_maint.repatch_acoustid_tags`, then reads the on-disk
-        Vorbis Comment block directly via mutagen and asserts:
-
-        (a) ``acoustid_fingerprint`` (the Picard-aligned key) is present with the migrated value.
-        (b) ``chromaprint_fp`` (the legacy key) is absent.
-
-        This pins the repatch path: the offline migration pass correctly retires the legacy key
-        and writes the Picard-aligned key, leaving no trace of the legacy key on disk.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        # Create a FLAC with the legacy CHROMAPRINT_FP key written directly via mutagen,
-        # simulating a pre-migration library file (before the repatch pass runs).
-        path = dest_root / "track.flac"
-        path.write_bytes(_MINIMAL_FLAC)
-
-        # Write a minimal set of tags via apply_tags_flac first (so the file is valid).
-        base_tags = TrackTags(title="Test Track", acoustid_id="test-uuid")
-        apply_tags_flac(path, base_tags)
-
-        # Inject the legacy CHROMAPRINT_FP key directly, bypassing the tagger.
-        audio = MutagenFLAC(str(path))
-        audio["chromaprint_fp"] = ["AQADtMmybckm_legacy"]
-        audio.save()
-
-        # Verify the legacy key is present before the repatch (test precondition).
-        audio_before = MutagenFLAC(str(path))
-        assert audio_before.get("chromaprint_fp"), "Test precondition: legacy key must be present before repatch"
-
-        # Write a journal entry so repatch_acoustid_tags can resolve the file.
-        journal_path = dest_root / "music_annotator_journal.json"
-        journal_path.write_text(
-            '[{"timestamp": "2024-01-01T00:00:00+00:00", "release_id": "r1", '
-            '"source": "/src/01.flac", "destination": "' + str(path) + '", "action": "tagged"}]',
-            encoding="utf-8",
-        )
-
-        # Run the repatch pass (no acoustid_key → key migration only, no re-resolve).
-        repatch_acoustid_tags(journal=journal_path, dest_root=dest_root, acoustid_key="", dry_run=False)
-
-        # Read back via mutagen directly to verify on-disk state.
-        audio_after = MutagenFLAC(str(path))
-
-        # (a) Picard-aligned key must be present with the migrated value.
-        fp_vals = audio_after.get("acoustid_fingerprint") or []
-        assert fp_vals and fp_vals[0] == "AQADtMmybckm_legacy", (
-            f"Expected acoustid_fingerprint='AQADtMmybckm_legacy' after repatch, got {fp_vals!r}"
-        )
-
-        # (b) Legacy key must be absent.
-        legacy_vals = audio_after.get("chromaprint_fp") or audio_after.get("CHROMAPRINT_FP") or []
-        assert not legacy_vals, f"Legacy CHROMAPRINT_FP key must be absent after repatch; found {legacy_vals!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -10147,193 +8522,6 @@ class TestDryRunPlanReturn:
         assert result.entries == []
 
     # ---------------------------------------------------------------------------
-    # (a) + (b): plan-return witness + no-write witness — repatch_catalogue_colon
-    # ---------------------------------------------------------------------------
-
-    def test_repatch_catalogue_colon_dry_run_returns_plan_with_entries(self, fs: FakeFilesystem) -> None:
-        """(a)+(b) repatch_catalogue_colon(dry_run=True) returns a DryRunPlan; writes nothing.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = _make_haydn_corrupt_tags()
-        path = _make_library_flac(
-            dest_root,
-            "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]/01 - 31/01 - I. Allegro moderato.flac",
-            tags,
-        )
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-kat",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        result = music_annotator.repatch_catalogue_colon(dest_root=dest_root, dry_run=True)
-
-        # (a) Returns a DryRunPlan with the planned tag writes
-        assert isinstance(result, DryRunPlan), f"expected DryRunPlan, got {type(result)}"
-        assert result.pass_name == "repatch_catalogue_colon"
-        assert result.count == 1
-        assert len(result.entries) == 1
-        entry = result.entries[0]
-        assert entry.current_path == str(path)
-        assert entry.planned_path == ""  # tag-content pass: in-place write
-        assert "CWP_PART_1" in entry.tag_delta
-        assert "CWP_GROUPHEADING" in entry.tag_delta
-
-        # (b) No writes: tags unchanged, no journal entry
-        audio = MutagenFLAC(str(path))
-        part1_vals = audio.get("cwp_part_1") or []
-        assert part1_vals and part1_vals[0] == "31", "dry_run must not write tags"
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        repatched = [e for e in journal.entries if e.action == "repatched"]
-        assert len(repatched) == 0, "dry_run must not append journal entries"
-
-    # ---------------------------------------------------------------------------
-    # (c): empty-plan witness — repatch_catalogue_colon
-    # ---------------------------------------------------------------------------
-
-    def test_repatch_catalogue_colon_dry_run_empty_plan_when_already_correct(self, fs: FakeFilesystem) -> None:
-        """(c) repatch_catalogue_colon(dry_run=True) returns DryRunPlan(count=0) when all correct.
-
-        When every file already has correct CWP_PART labels, the plan is empty.
-        An empty DryRunPlan is structurally distinct from None (not-run).
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = _make_haydn_correct_tags()
-        path = _make_library_flac(
-            dest_root,
-            "Classical/Haydn - Angeles Quartet/String Quartets, Op. 20 [rec 1980]/01 - Hob/01 - I. Allegro moderato.flac",
-            tags,
-        )
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-correct",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        result = music_annotator.repatch_catalogue_colon(dest_root=dest_root, dry_run=True)
-
-        # Empty plan — not None
-        assert isinstance(result, DryRunPlan), f"expected DryRunPlan(count=0), got {type(result)}"
-        assert result.count == 0
-        assert result.entries == []
-
-    # ---------------------------------------------------------------------------
-    # (a) + (b): plan-return witness + no-write witness — repatch_acoustid_tags
-    # ---------------------------------------------------------------------------
-
-    def test_repatch_acoustid_tags_dry_run_returns_plan_with_entries(self, fs: FakeFilesystem) -> None:
-        """(a)+(b) repatch_acoustid_tags(dry_run=True) returns a DryRunPlan; writes nothing.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = TrackTags(title="Allegro", artist="Karajan", acoustid_id="stale-id")
-        path = _make_library_flac(dest_root, "Classical/Beethoven - Karajan/Symphony No. 5/01 - Allegro.flac", tags)
-        _write_legacy_flac_fingerprint(path, "AQADtNSibcmS5EiS_kat")
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-acoustid-kat",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        result = music_annotator.repatch_acoustid_tags(journal=journal_path, dest_root=dest_root, dry_run=True)
-
-        # (a) Returns a DryRunPlan with the planned tag writes
-        assert isinstance(result, DryRunPlan), f"expected DryRunPlan, got {type(result)}"
-        assert result.pass_name == "repatch_acoustid_tags"
-        assert result.count == 1
-        assert len(result.entries) == 1
-        entry = result.entries[0]
-        assert entry.current_path == str(path)
-        assert entry.planned_path == ""  # tag-content pass: in-place write
-        assert "ACOUSTID_FINGERPRINT" in entry.tag_delta
-
-        # (b) No writes: legacy key still present, no journal entry
-        audio = MutagenFLAC(str(path))
-        legacy_fp = audio.get("chromaprint_fp") or []
-        new_fp = audio.get("acoustid_fingerprint") or []
-        assert legacy_fp, "dry_run must not remove legacy key"
-        assert not new_fp, "dry_run must not write new key"
-        journal = read_journal(journal_path)
-        repatched = [e for e in journal.entries if e.action == "acoustid-repatched"]
-        assert len(repatched) == 0, "dry_run must not append journal entries"
-
-    # ---------------------------------------------------------------------------
-    # (c): empty-plan witness — repatch_acoustid_tags
-    # ---------------------------------------------------------------------------
-
-    def test_repatch_acoustid_tags_dry_run_empty_plan_no_legacy_files(self, fs: FakeFilesystem) -> None:
-        """(c) repatch_acoustid_tags(dry_run=True) returns DryRunPlan(count=0) when no legacy files.
-
-        When no files carry the legacy CHROMAPRINT_FP key, the plan is empty.
-        An empty DryRunPlan is structurally distinct from None (not-run).
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        # File already has the new ACOUSTID_FINGERPRINT key (no legacy key)
-        tags = TrackTags(title="Allegro", artist="Karajan", acoustid_fingerprint="AQADtNSibcmS5EiS")
-        path = _make_library_flac(dest_root, "Classical/Beethoven - Karajan/Symphony No. 5/01 - Allegro.flac", tags)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-acoustid-noop",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        result = music_annotator.repatch_acoustid_tags(journal=journal_path, dest_root=dest_root, dry_run=True)
-
-        # Empty plan — not None
-        assert isinstance(result, DryRunPlan), f"expected DryRunPlan(count=0), got {type(result)}"
-        assert result.count == 0
-        assert result.entries == []
-
-    # ---------------------------------------------------------------------------
     # (d): shape-uniformity witness — move pass and tag-content pass both return DryRunPlan
     # ---------------------------------------------------------------------------
 
@@ -10659,180 +8847,6 @@ class TestDryRunPlanReturn:
         assert result.count == 0
         assert result.entries == []
 
-    def test_repatch_catalogue_colon_dry_run_empty_plan_no_existing_files(self, fs: FakeFilesystem) -> None:
-        """repatch_catalogue_colon(dry_run=True) returns DryRunPlan(count=0) when no files exist.
-
-        Exercises the early-return path when the journal is empty (no existing files on disk).
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-        _write_library_journal(dest_root, [])
-
-        result = music_annotator.repatch_catalogue_colon(dest_root=dest_root, dry_run=True)
-
-        assert isinstance(result, DryRunPlan)
-        assert result.count == 0
-        assert result.entries == []
-
-    def test_repatch_catalogue_colon_dry_run_empty_groupheading(self, fs: FakeFilesystem) -> None:
-        """repatch_catalogue_colon(dry_run=True) handles corrupt file with empty new_groupheading.
-
-        When a corrupt CWP_PART label is corrected but the rebuilt CWP_GROUPHEADING is empty
-        (because CWP_WORK_TOP is absent and CWP_PART_0 is absent), the tag_delta omits
-        CWP_GROUPHEADING.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        # Build a corrupt file where CWP_WORK_TOP is empty and CWP_PART_0 is empty,
-        # so new_groupheading will be empty.
-        # CWP_PART_1 = "31" (corrupt), CWP_WORK_1 = "Hob. III:31" (triggers correction),
-        # CWP_WORK_TOP = "" (empty), CWP_PART_0 = "" (empty) → new_groupheading = ""
-        tags = TrackTags(
-            cwp_work_top="",
-            cwp_groupheading="31",
-            cwp_part="",
-            cwp_part_levels="1",
-            cwp_work_part_levels="1",
-            cwp_movt_num="1",
-            movementtotal="4",
-            title="I. Allegro moderato",
-            artist="Angeles Quartet",
-            cwp_composer_lastnames="Haydn",
-            recording_date="1980",
-        )
-        if tags.model_extra is not None:
-            tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
-            tags.model_extra["cwp_part_0"] = ""
-            tags.model_extra["cwp_work_1"] = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
-            tags.model_extra["cwp_part_1"] = "31"
-            tags.model_extra["cwp_work_2"] = ""
-            tags.model_extra["cwp_part_2"] = ""
-
-        path = _make_library_flac(dest_root, "Classical/Haydn/01 - I. Allegro moderato.flac", tags)
-
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "haydn-rel-nogh",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        result = music_annotator.repatch_catalogue_colon(dest_root=dest_root, dry_run=True)
-
-        assert isinstance(result, DryRunPlan)
-        assert result.count == 1
-        assert "CWP_PART_1" in result.entries[0].tag_delta
-        # CWP_GROUPHEADING must NOT be in tag_delta when new_groupheading is empty
-        assert "CWP_GROUPHEADING" not in result.entries[0].tag_delta
-
-    def test_repatch_acoustid_tags_dry_run_empty_plan_no_existing_files(self, fs: FakeFilesystem) -> None:
-        """repatch_acoustid_tags(dry_run=True) returns DryRunPlan(count=0) when no files exist.
-
-        Exercises the early-return path when the journal is empty (no existing files on disk).
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(dest_root, [])
-
-        result = music_annotator.repatch_acoustid_tags(journal=journal_path, dest_root=dest_root, dry_run=True)
-
-        assert isinstance(result, DryRunPlan)
-        assert result.count == 0
-        assert result.entries == []
-
-    def test_repatch_acoustid_tags_dry_run_empty_fingerprint(self, fs: FakeFilesystem) -> None:
-        """repatch_acoustid_tags(dry_run=True) handles legacy key with empty fingerprint value.
-
-        When the legacy CHROMAPRINT_FP key is present but its value is empty, the tag_delta
-        omits ACOUSTID_FINGERPRINT (no value to migrate).
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = TrackTags(title="Allegro", artist="Karajan")
-        path = _make_library_flac(dest_root, "Classical/Beethoven/01 - Allegro.flac", tags)
-
-        # Write legacy key with empty value
-        audio = MutagenFLAC(str(path))
-        audio["chromaprint_fp"] = [""]
-        audio.save()
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-empty-fp",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        result = music_annotator.repatch_acoustid_tags(journal=journal_path, dest_root=dest_root, dry_run=True)
-
-        assert isinstance(result, DryRunPlan)
-        assert result.count == 1
-        # Empty fingerprint → ACOUSTID_FINGERPRINT not in tag_delta
-        assert "ACOUSTID_FINGERPRINT" not in result.entries[0].tag_delta
-
-    def test_repatch_acoustid_tags_dry_run_with_acoustid_key(self, fs: FakeFilesystem) -> None:
-        """repatch_acoustid_tags(dry_run=True) includes ACOUSTID_ID in tag_delta when key is set.
-
-        When acoustid_key is set and fingerprint is non-empty, the tag_delta includes
-        ACOUSTID_ID with a placeholder value indicating re-resolution would occur.
-
-        :param fs: pyfakefs fixture.
-        """
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        tags = TrackTags(title="Allegro", artist="Karajan")
-        path = _make_library_flac(dest_root, "Classical/Beethoven/01 - Allegro.flac", tags)
-        _write_legacy_flac_fingerprint(path, "AQADtNSibcmS5EiS_key")
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-with-key",
-                    "source": "/src/01.flac",
-                    "destination": str(path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        result = music_annotator.repatch_acoustid_tags(
-            journal=journal_path, dest_root=dest_root, acoustid_key="test-api-key", dry_run=True
-        )
-
-        assert isinstance(result, DryRunPlan)
-        assert result.count == 1
-        entry = result.entries[0]
-        assert "ACOUSTID_FINGERPRINT" in entry.tag_delta
-        assert "ACOUSTID_ID" in entry.tag_delta
-
 
 class TestMaintainDryRunReport:
     """KAT witnesses for ``maintain --dry-run`` consolidated report and its helpers.
@@ -10857,7 +8871,6 @@ class TestMaintainDryRunReport:
 
         The embedded CWP_WORK_1 contains a Hoboken catalogue number with a colon, and
         CWP_PART_1 carries the bare fragment produced by the old bare-colon split.
-        :func:`repatch_catalogue_colon` will flag this file for repatching.
 
         :returns: A :class:`TrackTags` instance with catalogue-colon corruption.
         """
@@ -10905,7 +8918,7 @@ class TestMaintainDryRunReport:
 
         Constructs a library with:
         - One file at a legacy path (repath candidate).
-        - One file with catalogue-colon corruption (repatch_catalogue_colon candidate).
+        - One additional file at a stable path (enrich candidate).
         Calls maintain(dry_run=True) and captures the report via _build_maintain_report mock.
         Asserts that the repath pass summary reports count >= 1 and the other passes report
         count == 0 for regroup and unify.
@@ -10923,7 +8936,7 @@ class TestMaintainDryRunReport:
         repath_tags = self._make_repath_tags()
         repath_path = _make_library_flac(dest_root, "Beethoven - Karajan/OldSym [rec 2020]/01 - Allegro.flac", repath_tags)
 
-        # File 2: catalogue-colon repatch candidate.
+        # File 2: a second file at a stable path (enrich candidate, missing audio_hash).
         cat_tags = self._make_catalogue_colon_tags()
         cat_path = _make_library_flac(dest_root, "Haydn - Amadeus/Quartet [rec 2021]/01 - Allegro.flac", cat_tags)
 
@@ -11490,26 +9503,25 @@ class TestMaintainDryRunParity:
     """No-regression parity pin for ``maintain --dry-run`` composition behaviour.
 
     Exercises the full maintain(dry_run=True) path over a representative fixture that
-    contains at least one candidate for each of repath and repatch_catalogue_colon, including
-    a file that qualifies for both (triggering the overlap map).  This test is the behavioural
-    pin: it must pass even after future changes to the composition logic.
+    contains candidates for repath and enrich, including a file that qualifies for both
+    (triggering the overlap map).  This test is the behavioural pin: it must pass even after
+    future changes to the composition logic.
 
     The fixture is deliberately minimal — three files, a known journal, no Reference/ directory
     — so every assertion is exact rather than a lower bound.  The fixture exercises:
 
-    - The repath-only path (one file at a legacy path, no catalogue-colon corruption).
-    - The repatch_catalogue_colon-only path (one file at a correct path, with corruption).
-    - The overlap path (one file at a legacy path AND with corruption).
+    - The repath-only path (one file at a legacy path, clean tags).
+    - The enrich-only path (one file at a correct path, missing audio_hash).
+    - The overlap path (one file at a legacy path AND missing audio_hash).
     - Journal capacity: current_entry_count equals the number of pre-existing journal entries;
       projected_delta_entries equals the sum of planned changes across all passes.
     """
 
     @staticmethod
     def _make_repath_only_tags() -> TrackTags:
-        """Build tags for a repath-only candidate: correct tags, no catalogue-colon corruption.
+        """Build tags for a repath-only candidate: correct tags, placed at a legacy path.
 
-        The file will be placed at a legacy path so repath plans to move it, but
-        repatch_catalogue_colon finds nothing to fix.
+        The file will be placed at a legacy path so repath plans to move it.
 
         :returns: A :class:`TrackTags` instance with clean CWP tags.
         """
@@ -11525,18 +9537,17 @@ class TestMaintainDryRunParity:
         )
 
     @staticmethod
-    def _make_repatch_only_tags() -> TrackTags:
-        """Build tags for a repatch_catalogue_colon candidate: corrupt CWP_PART_1 tag.
+    def _make_enrich_only_tags() -> TrackTags:
+        """Build tags for an enrich-only candidate: missing audio_hash, placed at a correct path.
 
-        The file carries catalogue-colon corruption so repatch_catalogue_colon plans to rewrite
-        the corrupt CWP_PART_1 tag.  The file may also be a repath candidate depending on where
-        it is placed; assertions use >= so this does not affect correctness.
+        The file will be placed at a canonical path so repath finds nothing to move, but
+        enrich plans to backfill the missing audio_hash.
 
-        :returns: A :class:`TrackTags` instance with catalogue-colon corruption.
+        :returns: A :class:`TrackTags` instance with clean CWP tags and no audio_hash.
         """
-        tags = TrackTags(
+        return TrackTags(
             cwp_composer_lastnames="Haydn",
-            cwp_work_top="String Quartet in G major, Op. 76 No. 1, Hob. III:75",
+            cwp_work_top="String Quartet in G major, Op. 76 No. 1",
             recording_date="2018",
             cwp_movt_num="1",
             movementtotal="1",
@@ -11544,26 +9555,19 @@ class TestMaintainDryRunParity:
             title="Allegro con spirito",
             artist="Kodaly Quartet",
         )
-        if tags.model_extra is not None:
-            tags.model_extra["cwp_work_0"] = "Allegro con spirito"
-            tags.model_extra["cwp_part_0"] = ""
-            tags.model_extra["cwp_work_1"] = "String Quartet in G major, Op. 76 No. 1, Hob. III:75"
-            tags.model_extra["cwp_part_1"] = "75"
-            tags.model_extra["cwp_work_2"] = ""
-        return tags
 
     @staticmethod
     def _make_overlap_tags() -> TrackTags:
-        """Build tags for a file that qualifies for both repath and repatch_catalogue_colon.
+        """Build tags for a file that qualifies for both repath and enrich.
 
-        The file will be placed at a legacy path (repath candidate) and carries catalogue-colon
-        corruption (repatch_catalogue_colon candidate), triggering the cross-pass overlap map.
+        The file will be placed at a legacy path (repath candidate) and is missing audio_hash
+        (enrich candidate), triggering the cross-pass overlap map.
 
-        :returns: A :class:`TrackTags` instance with both a legacy path and catalogue-colon corruption.
+        :returns: A :class:`TrackTags` instance with a legacy path and missing audio_hash.
         """
-        tags = TrackTags(
+        return TrackTags(
             cwp_composer_lastnames="Haydn",
-            cwp_work_top="String Quartet in E major, Op. 20 No. 4, Hob. III:31",
+            cwp_work_top="String Quartet in E major, Op. 20 No. 4",
             recording_date="2021",
             cwp_movt_num="1",
             movementtotal="1",
@@ -11571,29 +9575,22 @@ class TestMaintainDryRunParity:
             title="I. Allegro moderato",
             artist="Amadeus Quartet",
         )
-        if tags.model_extra is not None:
-            tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
-            tags.model_extra["cwp_part_0"] = ""
-            tags.model_extra["cwp_work_1"] = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
-            tags.model_extra["cwp_part_1"] = "31"
-            tags.model_extra["cwp_work_2"] = ""
-        return tags
 
     def test_parity_pin_full_maintain_dry_run_path(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
         """Parity pin: maintain(dry_run=True) composition behaviour over a representative fixture.
 
         Constructs a three-file library:
-        - File A: repath candidate (legacy path, clean tags).
-        - File B: repatch_catalogue_colon candidate (corrupt CWP_PART_1; may also be a repath candidate).
-        - File C: both repath and repatch_catalogue_colon candidate (legacy path + corrupt CWP_PART_1).
+        - File A: repath candidate (legacy path, clean tags, missing audio_hash).
+        - File B: enrich candidate (canonical path, missing audio_hash).
+        - File C: both repath and enrich candidate (legacy path + missing audio_hash).
 
         Asserts all four parity properties:
         (1) scan_ran=True — the root was mounted and non-empty.
         (2) Per-pass counts: repath count >= 2 (files A and C); regroup, unify count == 0.
-        (3) Overlap map: file C appears in the overlaps list with both "repath" and
-            "repatch_catalogue_colon" named; repath and repatch_catalogue_colon overlap_count >= 1.
+        (3) Overlap map: files A and C appear in the overlaps list with both "enrich" and
+            "repath" named; repath overlap_count >= 1.
         (4) journal_capacity: current_entry_count == 3 (three pre-existing journal entries);
-            projected_delta_entries >= 4 (at least 2 repath + 2 repatch_catalogue_colon planned).
+            projected_delta_entries >= 2 (at least 2 repath moves planned).
 
         ``_run_fpcalc`` is mocked because fpcalc is not available in the test environment.
 
@@ -11604,7 +9601,7 @@ class TestMaintainDryRunParity:
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        # --- File A: repath-only candidate ---
+        # --- File A: repath + enrich candidate ---
         repath_only_tags = self._make_repath_only_tags()
         # Place at a legacy path (old work name) so repath plans to move it.
         file_a = _make_library_flac(
@@ -11613,21 +9610,18 @@ class TestMaintainDryRunParity:
             repath_only_tags,
         )
 
-        # --- File B: repatch_catalogue_colon candidate ---
-        repatch_only_tags = self._make_repatch_only_tags()
-        # Place at any stable path — repath may or may not plan to move it, but the
-        # repatch_catalogue_colon pass will plan to rewrite its corrupt CWP_PART_1 tag.
-        # Assertions use >= so file B being a repath candidate too does not break them.
+        # --- File B: enrich-only candidate ---
+        enrich_only_tags = self._make_enrich_only_tags()
+        # Place at a canonical path so repath finds nothing to move.
         file_b = _make_library_flac(
             dest_root,
-            "Haydn - Kodaly/Quartet Op76 [rec 2018]/01 - Allegro con spirito.flac",
-            repatch_only_tags,
+            "Classical/Haydn - Kodaly Quartet/String Quartet in G major, Op. 76 No. 1 [rec 2018]/01 - Allegro con spirito.flac",
+            enrich_only_tags,
         )
 
-        # --- File C: overlap candidate (both repath and repatch_catalogue_colon) ---
+        # --- File C: overlap candidate (both repath and enrich) ---
         overlap_tags = self._make_overlap_tags()
-        # Place at a legacy path so repath plans to move it; tags also have catalogue-colon
-        # corruption so repatch_catalogue_colon plans to rewrite it.
+        # Place at a legacy path so repath plans to move it; also missing audio_hash so enrich plans it.
         file_c = _make_library_flac(
             dest_root,
             "Haydn - Amadeus/OldQuartet [rec 2021]/01 - Allegro.flac",
@@ -11683,7 +9677,7 @@ class TestMaintainDryRunParity:
         # --- Parity property (2): per-pass counts ---
         by_pass = {s.pass_name: s for s in report.pass_summaries}
 
-        # repath must plan to move file A (legacy path) and file C (legacy path + corruption).
+        # repath must plan to move file A (legacy path) and file C (legacy path).
         assert by_pass["repath"].count >= 2, f"repath count must be >= 2 (files A and C); got {by_pass['repath'].count}"
         # No fragmented releases in this fixture.
         assert by_pass["regroup"].count == 0, f"regroup must be 0; got {by_pass['regroup'].count}"
@@ -11691,11 +9685,10 @@ class TestMaintainDryRunParity:
 
         # --- Parity property (3): overlap map populated ---
         # The maintain composition covers enrich, origin-time, repath, regroup, unify,
-        # reconstruct-xrefs, and dedup-library.  repatch_catalogue_colon is NOT in the
-        # maintain composition.  Files that need both enrich (audio_hash backfill) and repath
-        # (path correction) appear in the overlap map with passes ["enrich", "repath"].
-        # All three files in this fixture lack audio_hash and are at legacy paths, so all
-        # three appear in the overlap map.
+        # reconstruct-xrefs, and dedup-library.  Files that need both enrich (audio_hash
+        # backfill) and repath (path correction) appear in the overlap map with passes
+        # ["enrich", "repath"].  Files A and C in this fixture are at legacy paths and
+        # lack audio_hash, so they appear in the overlap map.
         assert len(report.overlaps) >= 1, f"at least one overlap expected; got {report.overlaps}"
         # Every overlap entry must include both "enrich" and "repath".
         for overlap_entry in report.overlaps:
@@ -11715,10 +9708,10 @@ class TestMaintainDryRunParity:
             f"current_entry_count must be 3 (three pre-existing entries); got {cap.current_entry_count}"
         )
         assert cap.current_size_bytes > 0, "current_size_bytes must be nonzero (journal file exists)"
-        # At least 3 planned changes: 3 repath (files A, B, and C at legacy paths).
+        # At least 2 planned changes: 2 repath (files A and C at legacy paths).
         # enrich also plans changes (audio_hash backfill for all three files).
-        assert cap.projected_delta_entries >= 3, (
-            f"projected_delta_entries must be >= 3 (at least 3 repath moves); got {cap.projected_delta_entries}"
+        assert cap.projected_delta_entries >= 2, (
+            f"projected_delta_entries must be >= 2 (at least 2 repath moves); got {cap.projected_delta_entries}"
         )
 
 
@@ -12514,6 +10507,143 @@ class TestWriteSecondaryAlbumId:
             if frame.desc == "MusicBrainz Secondary Album Id":
                 found = str(frame.text[0])
         assert found == "mbid-a; mbid-b"
+
+
+class TestResolveCurrentLibRetiredVerbs:
+    """KATs for :func:`_resolve_current_lib` with the retired action verbs ``"repatched"`` and
+    ``"acoustid-repatched"`` (C-RETIRE).
+
+    The two commands that wrote these verbs (``repatch-catalogue-colon`` and ``repatch-acoustid``)
+    have been removed, but the journal is append-only: historical entries with these verbs must
+    still deserialise correctly and be resolved correctly by the lineage walk.  These tests verify
+    that the resolver's in-place-update arm handles both verbs, and that a journal containing them
+    round-trips through ``read_journal`` and ``rebuild_journal`` without error.
+    """
+
+    def test_repatched_entry_re_registers_path_in_place(self) -> None:
+        """'repatched' entry re-registers the path in-place (source == destination).
+
+        A file that was 'tagged' then 'repatched' (in-place, same path) is still resolved
+        to the same path with the same release_id.  The 'repatched' entry must not pop the
+        path from the map or change the release_id.
+        """
+        journal = TransactionLog(
+            entries=[
+                TransactionEntry(
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    release_id="rel-1",
+                    source="/src/01.flac",
+                    destination="/lib/A/01.flac",
+                    action="tagged",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-01T00:01:00+00:00",
+                    release_id="rel-1",
+                    source="/lib/A/01.flac",
+                    destination="/lib/A/01.flac",
+                    action="repatched",
+                ),
+            ]
+        )
+        result = _resolve_current_lib(journal)
+        assert Path("/lib/A/01.flac") in result
+        assert result[Path("/lib/A/01.flac")] == "rel-1"
+
+    def test_acoustid_repatched_entry_re_registers_path_in_place(self) -> None:
+        """'acoustid-repatched' entry re-registers the path in-place (source == destination).
+
+        A file that was 'tagged' then 'acoustid-repatched' (in-place, same path) is still
+        resolved to the same path with the same release_id.  The 'acoustid-repatched' entry
+        must not pop the path from the map or change the release_id.
+        """
+        journal = TransactionLog(
+            entries=[
+                TransactionEntry(
+                    timestamp="2024-01-01T00:00:00+00:00",
+                    release_id="rel-2",
+                    source="/src/02.flac",
+                    destination="/lib/B/02.flac",
+                    action="tagged",
+                ),
+                TransactionEntry(
+                    timestamp="2024-01-01T00:01:00+00:00",
+                    release_id="rel-2",
+                    source="/lib/B/02.flac",
+                    destination="/lib/B/02.flac",
+                    action="acoustid-repatched",
+                    acoustid_fingerprint="AQADtMmybckm",
+                    acoustid_id="uuid-1234",
+                ),
+            ]
+        )
+        result = _resolve_current_lib(journal)
+        assert Path("/lib/B/02.flac") in result
+        assert result[Path("/lib/B/02.flac")] == "rel-2"
+
+    def test_retired_verbs_round_trip_through_read_journal(self, fs: FakeFilesystem) -> None:
+        """A journal containing 'repatched' and 'acoustid-repatched' entries deserialises correctly.
+
+        Writes a JSONL journal with both retired verbs and reads it back via :func:`read_journal`.
+        Asserts that both entries are present with the correct action verbs and that
+        :func:`_resolve_current_lib` resolves the paths correctly.  This is the C-RETIRE
+        round-trip KAT: the journal is append-only, so historical entries must always deserialise.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        journal_path = dest_root / JOURNAL_FILENAME
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/A/a.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/A/a.flac",
+                    "destination": "/lib/A/a.flac",
+                    "action": "repatched",
+                },
+                {
+                    "timestamp": "2024-01-01T00:02:00+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/b.flac",
+                    "destination": "/lib/B/b.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:03:00+00:00",
+                    "release_id": "rel-b",
+                    "source": "/lib/B/b.flac",
+                    "destination": "/lib/B/b.flac",
+                    "action": "acoustid-repatched",
+                    "acoustid_fingerprint": "AQADtMmybckm",
+                    "acoustid_id": "uuid-5678",
+                },
+            ],
+        )
+
+        journal = read_journal(journal_path)
+
+        # All four entries must deserialise correctly.
+        assert len(journal.entries) == 4
+        actions = [e.action for e in journal.entries]
+        assert "repatched" in actions
+        assert "acoustid-repatched" in actions
+
+        # _resolve_current_lib must handle both retired verbs correctly.
+        current_lib = _resolve_current_lib(journal)
+        assert Path("/lib/A/a.flac") in current_lib
+        assert current_lib[Path("/lib/A/a.flac")] == "rel-a"
+        assert Path("/lib/B/b.flac") in current_lib
+        assert current_lib[Path("/lib/B/b.flac")] == "rel-b"
 
 
 class TestResolveCurrentLibNewActions:

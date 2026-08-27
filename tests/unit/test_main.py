@@ -637,40 +637,6 @@ class TestBuildParser:
         assert exc.value.code == 2
 
     # ------------------------------------------------------------------
-    # repatch-catalogue-colon parser tests
-    # ------------------------------------------------------------------
-
-    _REPATCH_CAT_COLON_BASE = ["repatch-catalogue-colon", "/dest"]
-
-    def test_repatch_catalogue_colon_parses_dest_dir(self) -> None:
-        """repatch-catalogue-colon accepts dest_dir as a positional argument."""
-        parser = _build_parser()
-        ns = parser.parse_args(self._REPATCH_CAT_COLON_BASE)
-        assert ns.subcommand == "repatch-catalogue-colon"
-        assert ns.dest_dir == Path("/dest")
-        assert not ns.dry_run
-
-    def test_repatch_catalogue_colon_dry_run_flag(self) -> None:
-        """repatch-catalogue-colon --dry-run sets dry_run=True."""
-        parser = _build_parser()
-        ns = parser.parse_args([*self._REPATCH_CAT_COLON_BASE, "--dry-run"])
-        assert ns.dry_run
-
-    def test_repatch_catalogue_colon_requires_dest_dir(self) -> None:
-        """repatch-catalogue-colon exits with code 2 when dest_dir positional is missing."""
-        parser = _build_parser()
-        with pytest.raises(SystemExit) as exc:
-            parser.parse_args(["repatch-catalogue-colon"])
-        assert exc.value.code == 2
-
-    def test_repatch_catalogue_colon_appears_in_help(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """repatch-catalogue-colon appears in the top-level --help output."""
-        parser = _build_parser()
-        with pytest.raises(SystemExit):
-            parser.parse_args(["--help"])
-        assert "repatch-catalogue-colon" in capsys.readouterr().out
-
-    # ------------------------------------------------------------------
     # maintain parser --json tests
     # ------------------------------------------------------------------
 
@@ -1537,70 +1503,6 @@ class TestMain:
         self._patch_common(mocker)
         mocker.patch("music_annotator.rebuild_journal", side_effect=KeyboardInterrupt)
         mocker.patch.object(sys, "argv", new=self._REBUILD_ARGV)
-        with pytest.raises(SystemExit) as exc:
-            main()
-        assert exc.value.code == 1
-
-    # ------------------------------------------------------------------
-    # repatch-catalogue-colon dispatch tests
-    # ------------------------------------------------------------------
-
-    _REPATCH_CAT_COLON_ARGV = ["music-annotator", "repatch-catalogue-colon", "/d"]
-
-    # pylint: disable-next=unused-argument
-    def test_repatch_catalogue_colon_dispatches(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """main() repatch-catalogue-colon calls repatch_catalogue_colon with dest_root and dry_run=False.
-
-        :param mocker: pytest-mock fixture.
-        :param fs: pyfakefs fixture.
-        """
-        self._patch_common(mocker)
-        mock_repatch = mocker.patch("music_annotator.repatch_catalogue_colon")
-        mocker.patch.object(sys, "argv", new=self._REPATCH_CAT_COLON_ARGV)
-        main()
-        mock_repatch.assert_called_once_with(dest_root=Path("/d"), dry_run=False)
-
-    # pylint: disable-next=unused-argument
-    def test_repatch_catalogue_colon_dry_run_passed_through(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """main() repatch-catalogue-colon --dry-run passes dry_run=True; no file mutation occurs.
-
-        Verifies the dry-run branch: the mock is called with dry_run=True, and because the mock
-        returns None (no writes), no journal entries or tag writes occur.
-
-        :param mocker: pytest-mock fixture.
-        :param fs: pyfakefs fixture.
-        """
-        self._patch_common(mocker)
-        mock_repatch = mocker.patch("music_annotator.repatch_catalogue_colon", return_value=None)
-        mocker.patch.object(sys, "argv", new=[*self._REPATCH_CAT_COLON_ARGV, "--dry-run"])
-        main()
-        _, kwargs = mock_repatch.call_args
-        assert kwargs["dry_run"] is True
-
-    # pylint: disable-next=unused-argument
-    def test_repatch_catalogue_colon_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """main() repatch-catalogue-colon exits with code 1 when repatch_catalogue_colon raises.
-
-        :param mocker: pytest-mock fixture.
-        :param fs: pyfakefs fixture.
-        """
-        self._patch_common(mocker)
-        mocker.patch("music_annotator.repatch_catalogue_colon", side_effect=RuntimeError("boom"))
-        mocker.patch.object(sys, "argv", new=self._REPATCH_CAT_COLON_ARGV)
-        with pytest.raises(SystemExit) as exc:
-            main()
-        assert exc.value.code == 1
-
-    # pylint: disable-next=unused-argument
-    def test_repatch_catalogue_colon_exits_1_on_keyboard_interrupt(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """main() repatch-catalogue-colon exits with code 1 on KeyboardInterrupt.
-
-        :param mocker: pytest-mock fixture.
-        :param fs: pyfakefs fixture.
-        """
-        self._patch_common(mocker)
-        mocker.patch("music_annotator.repatch_catalogue_colon", side_effect=KeyboardInterrupt)
-        mocker.patch.object(sys, "argv", new=self._REPATCH_CAT_COLON_ARGV)
         with pytest.raises(SystemExit) as exc:
             main()
         assert exc.value.code == 1

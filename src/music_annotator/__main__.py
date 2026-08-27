@@ -1,6 +1,6 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes sixteen subcommands:
+Configures structlog for human-friendly console output and exposes fourteen subcommands:
 
 * ``apply``                    — copy and tag a directory of tracks for a known MusicBrainz release MBID.
 * ``search``                   — search MusicBrainz for a release matching a source directory, prompt for
@@ -23,12 +23,6 @@ Configures structlog for human-friendly console output and exposes sixteen subco
   (dry-run by default; use ``--apply`` to replace the on-disk journal).
 * ``unify``                    — consolidate performer-split and composer-split fragmented releases into their
   canonical top_dirs (detects releases with ≥2 top_dirs sharing the same ``MUSICBRAINZ_ALBUMID`` tag).
-* ``repatch-acoustid``         — migrate the legacy ``CHROMAPRINT_FP`` fingerprint key to the Picard-aligned
-  ``ACOUSTID_FINGERPRINT`` key, and (when ``--acoustid-key`` is supplied) re-source ``ACOUSTID_ID``
-  from the fingerprint ``/v2/lookup`` endpoint.  Idempotent.
-* ``repatch-catalogue-colon``  — rewrite ``CWP_PART_*`` / ``CWP_GROUPHEADING`` tags corrupted by the
-  pre-fix bare-``":"`` split (catalogue-colon labels such as Hoboken ``"Hob. III:31"``).  Idempotent.
-  Supports ``--dry-run`` to preview planned repatches without writing any tags or journal entries.
 * ``reconstruct-xrefs``        — census the journal for destructive-choice shapes (SKIP and OVERWRITE
   collision policies) and write secondary release MBIDs as cross-reference tags on surviving files.
   Offline; supports ``--dry-run`` to preview findings without writing tags or journal entries.
@@ -94,14 +88,6 @@ Usage::
         <dest_dir> \\
         [--user-agent-app "AppName/Version"] [--user-agent-email contact@example.com] \\
         [--dry-run] [-y/--yes]
-
-    music-annotator repatch-acoustid \\
-        <dest_dir> \\
-        [--acoustid-key KEY] [--dry-run]
-
-    music-annotator repatch-catalogue-colon \\
-        <dest_dir> \\
-        [--dry-run]
 
     music-annotator reconstruct-xrefs \\
         <dest_dir> \\
@@ -310,8 +296,6 @@ def _build_parser() -> argparse.ArgumentParser:
     dry-run (no write); pass ``--apply`` to replace the on-disk journal.
     ``unify`` scans the library for releases fragmented across ≥2 top_dirs (by ``MUSICBRAINZ_ALBUMID`` tag),
     computes the canonical top_dir for each, and moves the fragments.  Supports ``--dry-run`` and ``-y``/``--yes``.
-    ``repatch-acoustid`` migrates the legacy ``CHROMAPRINT_FP`` fingerprint key to the Picard-aligned
-    ``ACOUSTID_FINGERPRINT`` key; accepts ``--acoustid-key`` and ``--dry-run``.
     ``maintain`` runs all recurring maintenance passes as a single composition; accepts ``--dry-run``,
     ``-y``/``--yes``, and ``--json PATH``.  Move-confirmation prompts are suppressible by ``--yes``;
     integrity prompts are not.  When ``--dry-run`` is supplied, a consolidated report is emitted
@@ -809,80 +793,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # ------------------------------------------------------------------
-    # repatch-acoustid subcommand
-    # ------------------------------------------------------------------
-    repatch_acoustid_parser = subparsers.add_parser(
-        "repatch-acoustid",
-        help="Migrate the legacy CHROMAPRINT_FP fingerprint key to the Picard-aligned ACOUSTID_FINGERPRINT key.",
-        formatter_class=_Formatter,
-        epilog=textwrap.dedent("""\
-            Scans the library at <dest_dir> for files still carrying the legacy CHROMAPRINT_FP
-            Vorbis Comment key (FLAC) or TXXX "Chromaprint Fingerprint" frame (MP3), migrates
-            the fingerprint value to the Picard-aligned ACOUSTID_FINGERPRINT key, and removes
-            the legacy key.
-
-            When --acoustid-key is supplied and a fingerprint is present, re-sources ACOUSTID_ID
-            from the fingerprint /v2/lookup endpoint (the same path 'enrich --re-resolve' uses).
-            Without --acoustid-key, ACOUSTID_ID is left unchanged.
-
-            Idempotent: a second run on a fully-migrated library is a no-op.
-            Use --dry-run first to preview all planned migrations.
-
-            Examples:
-              music-annotator repatch-acoustid /tmp/music_library --dry-run
-              music-annotator repatch-acoustid /tmp/music_library
-              music-annotator repatch-acoustid /tmp/music_library --acoustid-key MY_KEY
-            """),
-    )
-    repatch_acoustid_parser.add_argument(
-        "dest_dir",
-        metavar="dest_dir",
-        type=_resolve_path,
-        help="Root of the annotated music library (contains music_annotator_journal.json).",
-    )
-    repatch_acoustid_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Log planned migrations without writing any tags or journal entries.",
-    )
-    _add_acoustid_arg(repatch_acoustid_parser)
-
-    # ------------------------------------------------------------------
-    # repatch-catalogue-colon subcommand
-    # ------------------------------------------------------------------
-    repatch_cat_colon_parser = subparsers.add_parser(
-        "repatch-catalogue-colon",
-        help="Rewrite CWP_PART_* / CWP_GROUPHEADING tags corrupted by the pre-fix bare-':' split.",
-        formatter_class=_Formatter,
-        epilog=textwrap.dedent("""\
-            Scans the library at <dest_dir> for CWP_PART_{i} values produced by the retired
-            bare-':' fallback in strip_common_prefix — a colon inside a catalogue number (e.g.
-            Hoboken "Hob. III:31") caused the old split to truncate the label to a bare fragment
-            ("31").  The forward fix keys on ": " (colon-followed-by-space) so new ingests are
-            correct; this pass re-derives the corrected label offline from the CWP_WORK_{i} /
-            CWP_WORK_{i+1} pair already embedded in the file — no MusicBrainz network call needed.
-
-            Idempotent: a second run on a library where all labels are already correct is a no-op.
-            Use --dry-run first to preview all planned repatches.
-
-            Examples:
-              music-annotator repatch-catalogue-colon /tmp/music_library --dry-run
-              music-annotator repatch-catalogue-colon /tmp/music_library
-            """),
-    )
-    repatch_cat_colon_parser.add_argument(
-        "dest_dir",
-        metavar="dest_dir",
-        type=_resolve_path,
-        help="Root of the annotated music library (contains music_annotator_journal.json).",
-    )
-    repatch_cat_colon_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Log planned repatches without writing any tags or journal entries.",
-    )
-
-    # ------------------------------------------------------------------
     # reconstruct-xrefs subcommand
     # ------------------------------------------------------------------
     reconstruct_xrefs_parser = subparsers.add_parser(
@@ -1056,8 +966,8 @@ def main() -> None:
     """Parse CLI arguments, configure logging, and dispatch to subcommands.
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
-    ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``, ``repatch-acoustid``,
-    ``repatch-catalogue-colon``, ``reconstruct-xrefs``, ``dedup-library``, ``maintain``.
+    ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``, ``reconstruct-xrefs``,
+    ``dedup-library``, ``maintain``.
 
     The ``repath`` subcommand dispatches to :func:`~music_annotator.repath` with ``dry_run`` and
     ``yes`` forwarded from the parsed arguments.  The ``regroup`` subcommand dispatches to
@@ -1073,11 +983,7 @@ def main() -> None:
     compatibility), then dispatches to :func:`~music_annotator.unify`.  The unify pass is
     genuinely offline — it reads embedded tags alone and does not call
     :func:`~music_annotator._mb_api.fetch_artist_aliases` (NORM-2 as revised; alias hydration
-    has been removed from the maintenance path).  The ``repatch-acoustid`` subcommand dispatches
-    to :func:`~music_annotator.repatch_acoustid_tags` with ``acoustid_key`` and ``dry_run``
-    forwarded.  The ``repatch-catalogue-colon`` subcommand dispatches to
-    :func:`~music_annotator.repatch_catalogue_colon` with ``dry_run`` forwarded.  The
-    ``reconstruct-xrefs`` subcommand dispatches to
+    has been removed from the maintenance path).  The ``reconstruct-xrefs`` subcommand dispatches to
     :func:`~music_annotator.reconstruct_cross_references` with ``dry_run`` forwarded; the
     operator confirmation prompt is never suppressed by ``--yes`` (integrity prompts are not
     bulk consent).  The ``maintain`` subcommand dispatches to :func:`~music_annotator.maintain`
@@ -1234,28 +1140,6 @@ def main() -> None:
                 music_annotator.unify(dest_root=args.dest_dir, yes=args.yes, dry_run=args.dry_run)
 
             _dispatch(_run_unify, "unify_error", dest_root=str(args.dest_dir))
-
-        case "repatch-acoustid":
-            _dispatch(
-                lambda: music_annotator.repatch_acoustid_tags(
-                    journal=args.dest_dir / music_annotator.JOURNAL_FILENAME,
-                    dest_root=args.dest_dir,
-                    acoustid_key=args.acoustid_key,
-                    dry_run=args.dry_run,
-                ),
-                "repatch_acoustid_error",
-                dest_root=str(args.dest_dir),
-            )
-
-        case "repatch-catalogue-colon":
-            _dispatch(
-                lambda: music_annotator.repatch_catalogue_colon(
-                    dest_root=args.dest_dir,
-                    dry_run=args.dry_run,
-                ),
-                "repatch_catalogue_colon_error",
-                dest_root=str(args.dest_dir),
-            )
 
         case "reconstruct-xrefs":
             _dispatch(

@@ -1828,8 +1828,19 @@ class TransactionEntry(BaseModel):
     release_id: str
     source: str
     destination: str
-    # "tagged" | "skipped" | "dry_run" | "downloaded" | "sidecar" | "repathed" | "regrouped" | "enriched" | "unified"
     action: str
+    """Journal action verb.  Current emitted verbs: ``"tagged"``, ``"skipped"``, ``"dry_run"``,
+    ``"downloaded"``, ``"sidecar"``, ``"repathed"``, ``"regrouped"``, ``"enriched"``, ``"unified"``,
+    ``"cross-referenced"``, ``"deduplicated"``.
+
+    **C-RETIRE trap:** the retired verbs ``"repatched"`` and ``"acoustid-repatched"`` appear in
+    historical journal entries written by the now-removed ``repatch-catalogue-colon`` and
+    ``repatch-acoustid`` commands.  This field is a bare ``str`` so historical entries deserialise
+    correctly regardless of which verbs the current code emits.  If ``action`` is ever tightened to
+    a ``Literal[...]`` union, the retired verbs ``"repatched"`` and ``"acoustid-repatched"`` (and
+    every other historical verb) **must** stay in the union or ``model_validate`` will reject real
+    journal files on read (C-JRNL: journal is append-only; historical entries are permanent).
+    """
     # --- archival identity (extensible: 4th dim slots in here) ---
     audio_hash: str = ""  # algorithm-tagged decoded-audio hash; format "<algo>:<hexdigest>"
     acoustid_fingerprint: str = ""
@@ -1885,7 +1896,7 @@ class DryRunEntry(BaseModel):
 
     - **Move passes** (``repath``, ``regroup``, ``unify``): ``planned_path`` is non-empty;
       ``tag_delta`` is ``{}``.
-    - **Tag-content passes** (``enrich``, ``repatch_catalogue_colon``, ``repatch_acoustid_tags``):
+    - **Tag-content passes** (``enrich``):
       ``planned_path`` is ``""`` (in-place write); ``tag_delta`` is non-empty.
 
     All fields default to empty/zero so an entry can be constructed incrementally.
@@ -1919,7 +1930,7 @@ class DryRunPlan(BaseModel):
     """
 
     pass_name: str = ""
-    """The pass identity (e.g. ``"repath"``, ``"enrich"``, ``"repatch_acoustid_tags"``)."""
+    """The pass identity (e.g. ``"repath"``, ``"enrich"``)."""
 
     entries: list[DryRunEntry] = Field(default_factory=list)
     """Per-file change-set entries; one per file the pass would act on."""
