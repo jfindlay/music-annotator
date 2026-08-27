@@ -219,7 +219,7 @@ pyupgrade).  One green run satisfies tests, types, lint, format, and coverage.
 | S6 | (conditional) MB-backed cross-reference enrichment                              | cancelled |     | census found 59 journal-provable cross-references, zero evidence gaps; all files entered via music-annotator |
 | S7 | Tag-read cache for maintenance passes                                           | done   | 05319dc |       |
 | S9 | Library-wide dedup command (AcoustID-cluster census + survivor-choice deletion) | done   | 0eaca73 | extra: __init__.py (export); scatter-consequence warning included |
-| S8 | Resume repair turn on hades; acceptance gate                                    | todo   |        |       |
+| S8 | Resume repair turn on hades; acceptance gate                                    | done   |        | repath complete; dedup-library run; reconstruct-xrefs: 59 xrefs written; rebuild --dry-run: 43478 entries clean; .array-backup deleted |
 
 Frozen contracts: C-JRNL, C-FATAL, C-XREF (frozen at derivation 2026-08-25; vocabulary adjudicated 2026-08-26),
 C-DEDUP (frozen 2026-08-26); C-NOCLOBBER, C-SEQ, C-GUARD, NORM-2-as-revised, SEL-23, REND-27 inherited unchanged from
