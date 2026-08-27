@@ -216,7 +216,7 @@ pyupgrade).  One green run satisfies tests, types, lint, format, and coverage.
 | S3 | STYLEGUIDE: cross-reference tag schema + collision interaction design           | done   |        | EPIST-9/EPIST-10 registered; C-XREF adjudicated; C-DEDUP minted; deletion in scope; S9 added |
 | S4 | Plan-time collision completeness in repath                                      | done   | 496ba85 | scope grew at S3: shared group-resolution flow + deletion arm; extras: __init__.py, models.py (TrackTags.musicbrainz_secondary_albumid) |
 | S5 | Cross-reference reconstruction pass (journal census)                            | done   | 147cd40 | extra: __init__.py (export); evidence-gap reporting included |
-| S6 | (conditional) MB-backed cross-reference enrichment                              | todo   |        |       |
+| S6 | (conditional) MB-backed cross-reference enrichment                              | cancelled |     | census found 59 journal-provable cross-references, zero evidence gaps; all files entered via music-annotator |
 | S7 | Tag-read cache for maintenance passes                                           | done   | 05319dc |       |
 | S9 | Library-wide dedup command (AcoustID-cluster census + survivor-choice deletion) | done   | 0eaca73 | extra: __init__.py (export); scatter-consequence warning included |
 | S8 | Resume repair turn on hades; acceptance gate                                    | todo   |        |       |
