@@ -207,6 +207,36 @@ KATs: resolver still replays both retained action-verbs against a fixture journa
 `"acoustid-repatched"` entries with no error and correct resolution; no source or test references the removed commands;
 `maintain` does not invoke the removed passes (they are complete, not folded in).
 
+### S6 — patch hades journal: backfill cross-referenced entries for evidence-gap files
+
+Operator task + in-session script.  During the S5 acceptance run, `maintain --dry-run` reported
+~29 evidence-gap candidates — files carrying a `MUSICBRAINZ_SECONDARY_ALBUMID` tag with no
+corresponding `"cross-referenced"` journal entry.  Root cause: a bug in `_census_journal_for_xrefs`
+(`_pipeline_maint.py`) where the gap-candidate predicate did not exclude destinations that already
+had a `"cross-referenced"` entry, so files written by a prior `reconstruct-xrefs` run were
+re-reported as gaps on subsequent runs.  The bug is fixed (commit `9916fee`); the fix will suppress
+false positives going forward.  However, the hades journal genuinely lacks the `"cross-referenced"`
+entries for the files that were written by the earlier `reconstruct-xrefs` run (run completed a few
+hours before the bug was identified), so the fix alone does not silence the report for those files
+on the current journal — the entries need to be backfilled.
+
+Procedure:
+
+1. Remount hades FS read-write locally.
+2. For each evidence-gap file, read its `MUSICBRAINZ_SECONDARY_ALBUMID` tag to get the secondary
+   MBID(s).
+3. Append one `"cross-referenced"` JSONL entry per file per secondary MBID to the journal, using
+   the current timestamp and `source == destination` (the in-place-update shape).  Entries are
+   simulated but accurate: the tag write did happen, the journal entry is the missing provenance
+   record.
+4. Verify: re-run `music-annotator maintain --dry-run <dest>` and confirm the evidence-gap section
+   is empty (or contains only genuinely unresolved cases).
+
+The journal is append-only (C-JRNL); appending correct entries is safe and does not alter any
+existing record.  No source code changes are needed beyond the already-committed bug fix.
+
+Files affected: hades journal only (`music_annotator_journal.jsonl`).  No repo files change.
+
 ### S5 — operator acceptance gate
 
 Full `maintain` and `maintain --dry-run` on hades.  Acceptance criteria:
@@ -255,7 +285,8 @@ VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch covera
 | S2 | `maintain` umbrella action (C-MAINTAIN)                                   | done   | 98797eb | extra: _pipeline_io.py (journal threading seam for enrich_origin_time) |
 | S3 | Fold preflight report into `maintain --dry-run`; remove preflight         | done   | ad63cd0 | Preflight* models renamed to Maintain*; test_main.py updated (preflight tests removed) |
 | S4 | Retire completed singletons; retain journal readers (C-RETIRE)            | done   | 5a19d68 | extras: _works.py (is_catalogue_colon_corrupt), test_annotator.py, test_main.py; C-RETIRE trap warning added to action: str docstring |
-| S5 | Acceptance gate on hades                                                  | todo   |        |       |
+| S5 | Acceptance gate on hades                                                  | done   |        | regroup moves confirmed (not collisions); maintain live run accepted; bug fix committed (9916fee) |
+| S6 | Patch hades journal: backfill cross-referenced entries for evidence-gap files | todo   |        | depends on S5 |
 
 Frozen contracts: C-MAINTAIN, C-CONFLUENCE, C-RETIRE (frozen at derivation 2026-08-27; C-CONFLUENCE registered — not
 adjudicated — at S1); INSTR and PERM (design principles, durable).  C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER,
@@ -287,3 +318,9 @@ C-SEQ, C-PROV, C-MOVE, NORM-2-as-revised inherited unchanged from the prior sub-
   retention is `_resolve_current_lib`'s replay of the `"repatched"` / `"acoustid-repatched"` action-verbs
   (`_pipeline_maint.py:540`) — the reader stays, the writers go.  `rederive_part_label` stays (forward ingest rule);
   `is_catalogue_colon_corrupt` goes with the command.
+- S5 acceptance + bug discovery (2026-08-27): gate accepted.  During the live run, `maintain --dry-run` surfaced ~29
+  evidence-gap candidates — files with a `MUSICBRAINZ_SECONDARY_ALBUMID` tag but no `"cross-referenced"` journal
+  entry.  Root cause: `_census_journal_for_xrefs` gap-candidate predicate was missing the `xref_by_dest` exclusion,
+  so files written by a prior `reconstruct-xrefs` run were re-reported as gaps on subsequent runs.  Bug fixed
+  (commit `9916fee`); hades journal needs backfill of the missing entries (S6).  No contract flex — C-XREF and
+  C-JRNL are unchanged; this was a reporting bug, not a data-integrity issue.
