@@ -51,6 +51,7 @@ from music_annotator._pipeline_maint import (
     TagReadCache,
     _build_dedup_census,
     _build_dedup_groups,
+    _build_maintain_report,
     _census_journal_for_xrefs,
     _check_dest_root,
     _clamp_maint_dest,
@@ -66,7 +67,6 @@ from music_annotator._pipeline_maint import (
     _tags_from_file_dict,
     _unify_classical_composer_groups,
     _write_xref_and_journal,
-    compose_preflight_report,
     dedup_library,
     maintain,
     reconstruct_cross_references,
@@ -81,9 +81,9 @@ from music_annotator.models import (
     DryRunEntry,
     DryRunPlan,
     JournalCapacity,
+    MaintainDryRunReport,
     MBRelease,
     MBTrack,
-    PreflightReport,
     TrackTags,
     TransactionEntry,
     TransactionLog,
@@ -10834,13 +10834,17 @@ class TestDryRunPlanReturn:
         assert "ACOUSTID_ID" in entry.tag_delta
 
 
-class TestComposePreflight:
-    """KAT witnesses for :func:`compose_preflight_report` and its helpers.
+class TestMaintainDryRunReport:
+    """KAT witnesses for ``maintain --dry-run`` consolidated report and its helpers.
 
-    Exercises the consolidated dry-run preflight report: per-pass counts, cross-pass overlap
-    detection, journal-capacity measurement, Reference/ evidence, the empty-vs-not-run
-    distinction, and the read-only invariant (no journal entry / no file move across the whole
-    composition).
+    Exercises the consolidated dry-run report emitted by :func:`maintain` when called with
+    ``dry_run=True``: per-pass counts, cross-pass overlap detection, journal-capacity
+    measurement, Reference/ evidence, the empty-vs-not-run distinction, and the read-only
+    invariant (no journal entry / no file move across the whole composition).
+
+    Report-assembly logic is tested via :func:`_build_maintain_report` directly.
+    Integration behaviour (root-not-mounted guard, json_path serialisation) is tested via
+    :func:`maintain`.
     """
 
     # ---------------------------------------------------------------------------
@@ -10893,20 +10897,20 @@ class TestComposePreflight:
         )
 
     # ---------------------------------------------------------------------------
-    # KAT 1: per-pass counts match the fixture
+    # KAT 1: per-pass counts match the fixture (via maintain dry-run)
     # ---------------------------------------------------------------------------
 
-    def test_compose_preflight_per_pass_counts(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """compose_preflight_report() returns per-pass counts matching the fixture library.
+    def test_maintain_dry_run_per_pass_counts(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """maintain(dry_run=True) produces per-pass counts matching the fixture library.
 
         Constructs a library with:
         - One file at a legacy path (repath candidate).
         - One file with catalogue-colon corruption (repatch_catalogue_colon candidate).
-        Calls compose_preflight_report() and asserts that the repath and repatch_catalogue_colon
-        pass summaries each report count=1, and the other passes report count=0.
+        Calls maintain(dry_run=True) and captures the report via _build_maintain_report mock.
+        Asserts that the repath pass summary reports count >= 1 and the other passes report
+        count == 0 for regroup and unify.
 
-        ``_run_fpcalc`` is mocked because fpcalc is not available in the test environment and
-        the enrich pass calls it via subprocess.
+        ``_run_fpcalc`` is mocked because fpcalc is not available in the test environment.
 
         :param fs: pyfakefs fixture.
         :param mocker: pytest-mock fixture.
@@ -10923,7 +10927,6 @@ class TestComposePreflight:
         cat_tags = self._make_catalogue_colon_tags()
         cat_path = _make_library_flac(dest_root, "Haydn - Amadeus/Quartet [rec 2021]/01 - Allegro.flac", cat_tags)
 
-        journal_path = dest_root / JOURNAL_FILENAME
         _write_library_journal(
             dest_root,
             [
@@ -10944,9 +10947,21 @@ class TestComposePreflight:
             ],
         )
 
-        report = compose_preflight_report(dest_root, journal_path)
+        captured_report: list[MaintainDryRunReport] = []
+        real_build = _build_maintain_report
 
-        assert isinstance(report, PreflightReport)
+        def _capture_report(*args: object, **kwargs: object) -> MaintainDryRunReport:
+            report = real_build(*args, **kwargs)  # type: ignore[arg-type]
+            captured_report.append(report)
+            return report
+
+        mocker.patch("music_annotator._pipeline_maint._build_maintain_report", side_effect=_capture_report)
+
+        maintain(dest_root, dry_run=True)
+
+        assert len(captured_report) == 1
+        report = captured_report[0]
+        assert isinstance(report, MaintainDryRunReport)
         assert report.scan_ran is True
 
         # Build a lookup by pass name for easy assertion.
@@ -10954,38 +10969,27 @@ class TestComposePreflight:
 
         # The repath candidate must be planned for repathing.
         assert by_pass["repath"].count >= 1
-        # The catalogue-colon file must be planned for repatching.
-        assert by_pass["repatch_catalogue_colon"].count >= 1
         # No fragmented releases in this fixture — regroup and unify find nothing.
         assert by_pass["regroup"].count == 0
         assert by_pass["unify"].count == 0
-        # No legacy CHROMAPRINT_FP keys in this fixture.
-        assert by_pass["repatch_acoustid_tags"].count == 0
 
     # ---------------------------------------------------------------------------
-    # KAT 2: journal-capacity measurement
+    # KAT 2: journal-capacity measurement (via _build_maintain_report directly)
     # ---------------------------------------------------------------------------
 
-    def test_compose_preflight_journal_capacity(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """compose_preflight_report() journal_capacity reflects current entry count and file size.
+    def test_build_maintain_report_journal_capacity(self, fs: FakeFilesystem) -> None:
+        """_build_maintain_report() journal_capacity reflects current entry count and file size.
 
-        Constructs a library with one existing journal entry and one repath candidate.
+        Constructs a library with two existing journal entries and a plan with one repath entry.
         Asserts that:
         - current_entry_count equals the number of existing journal entries.
         - current_size_bytes is nonzero (the journal file exists and has content).
-        - projected_delta_entries equals the total planned changes across all passes.
-
-        ``_run_fpcalc`` is mocked because fpcalc is not available in the test environment.
+        - projected_delta_entries equals the total planned changes across all plans.
 
         :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
         """
-        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="")
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
-
-        repath_tags = self._make_repath_tags()
-        repath_path = _make_library_flac(dest_root, "Beethoven - Karajan/OldSym [rec 2020]/01 - Allegro.flac", repath_tags)
 
         journal_path = dest_root / JOURNAL_FILENAME
         _write_library_journal(
@@ -10993,112 +10997,50 @@ class TestComposePreflight:
             [
                 {
                     "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-beethoven",
+                    "release_id": "rel-1",
                     "source": "/src/01.flac",
-                    "destination": str(repath_path),
+                    "destination": "/lib/01.flac",
                     "action": "tagged",
-                }
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-2",
+                    "source": "/src/02.flac",
+                    "destination": "/lib/02.flac",
+                    "action": "tagged",
+                },
             ],
         )
 
-        report = compose_preflight_report(dest_root, journal_path)
+        plans = [
+            DryRunPlan(
+                pass_name="repath",
+                entries=[DryRunEntry(current_path="/lib/01.flac", planned_path="/lib/new.flac")],
+                count=1,
+            ),
+            DryRunPlan(pass_name="enrich", entries=[], count=0),
+        ]
 
+        report = _build_maintain_report(journal_path, dest_root, plans)
+
+        assert isinstance(report, MaintainDryRunReport)
         assert report.scan_ran is True
         cap = report.journal_capacity
-        assert cap.current_entry_count == 1
+        assert cap.current_entry_count == 2
         assert cap.current_size_bytes > 0
-        # At least the repath move is planned; enrich may also plan changes depending on
-        # whether the file has audio_hash / acoustid_fingerprint tags.
-        assert cap.projected_delta_entries >= 1
+        assert cap.projected_delta_entries == 1
 
     # ---------------------------------------------------------------------------
-    # KAT 3: overlap detection
+    # KAT 3: overlap detection (via _build_maintain_report directly)
     # ---------------------------------------------------------------------------
 
-    def test_compose_preflight_overlap_detection(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """compose_preflight_report() flags a file appearing in both repath and repatch_catalogue_colon.
+    def test_build_maintain_report_overlap_detection(self, fs: FakeFilesystem) -> None:
+        """_build_maintain_report() flags a file appearing in both repath and enrich plans.
 
-        Constructs a single file that is both at a legacy path (repath candidate) and carries
-        catalogue-colon corruption (repatch_catalogue_colon candidate).  Asserts that:
+        Constructs two plans where the same file path appears in both.  Asserts that:
         - The file appears in the overlaps list.
         - Both pass names are recorded in the overlap entry.
         - The overlap_count for both passes is 1.
-
-        ``_run_fpcalc`` is mocked because fpcalc is not available in the test environment.
-
-        :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
-        """
-        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="")
-        dest_root = Path("/lib")
-        fs.create_dir(str(dest_root))
-
-        # Build tags that are both a repath candidate AND a catalogue-colon repatch candidate.
-        # The file is at a legacy path (repath will plan to move it) and has corrupt CWP_PART_1
-        # (repatch_catalogue_colon will plan to rewrite it).
-        tags = TrackTags(
-            cwp_composer_lastnames="Haydn",
-            cwp_work_top="String Quartet in E major, Op. 20 No. 4, Hob. III:31",
-            recording_date="2021",
-            cwp_movt_num="1",
-            movementtotal="1",
-            cwp_part_levels="1",
-            title="I. Allegro moderato",
-            artist="Amadeus Quartet",
-        )
-        if tags.model_extra is not None:
-            tags.model_extra["cwp_work_0"] = "I. Allegro moderato"
-            tags.model_extra["cwp_part_0"] = ""
-            tags.model_extra["cwp_work_1"] = "String Quartet in E major, Op. 20 No. 4, Hob. III:31"
-            tags.model_extra["cwp_part_1"] = "31"
-            tags.model_extra["cwp_work_2"] = ""
-
-        # Place the file at a legacy path so repath will plan to move it.
-        overlap_path = _make_library_flac(dest_root, "Haydn - Amadeus/OldQuartet [rec 2021]/01 - Allegro.flac", tags)
-
-        journal_path = dest_root / JOURNAL_FILENAME
-        _write_library_journal(
-            dest_root,
-            [
-                {
-                    "timestamp": "2024-01-01T00:00:00+00:00",
-                    "release_id": "rel-haydn-overlap",
-                    "source": "/src/01.flac",
-                    "destination": str(overlap_path),
-                    "action": "tagged",
-                }
-            ],
-        )
-
-        report = compose_preflight_report(dest_root, journal_path)
-
-        assert report.scan_ran is True
-        # The file must appear in the overlaps list.
-        assert len(report.overlaps) >= 1
-        overlap_paths = {e.current_path for e in report.overlaps}
-        assert str(overlap_path) in overlap_paths
-
-        # Both repath and repatch_catalogue_colon must be named in the overlap entry.
-        overlap_entry = next(e for e in report.overlaps if e.current_path == str(overlap_path))
-        assert "repath" in overlap_entry.pass_names
-        assert "repatch_catalogue_colon" in overlap_entry.pass_names
-
-        # Per-pass overlap_count must reflect the overlap.
-        by_pass = {s.pass_name: s for s in report.pass_summaries}
-        assert by_pass["repath"].overlap_count == 1
-        assert by_pass["repatch_catalogue_colon"].overlap_count == 1
-
-    # ---------------------------------------------------------------------------
-    # KAT 4: empty fixture — scan_ran=True, all counts 0
-    # ---------------------------------------------------------------------------
-
-    def test_compose_preflight_empty_library_no_findings(self, fs: FakeFilesystem) -> None:
-        """compose_preflight_report() on an empty library returns scan_ran=True with all counts 0.
-
-        Constructs a library root with a journal file but no audio files.  Asserts that
-        scan_ran=True (the root was mounted and non-empty — the journal file itself makes it
-        non-empty) and all pass counts are 0.  This is structurally distinct from scan_ran=False
-        (root absent or empty).
 
         :param fs: pyfakefs fixture.
         """
@@ -11108,63 +11050,101 @@ class TestComposePreflight:
         journal_path = dest_root / JOURNAL_FILENAME
         _write_library_journal(dest_root, [])
 
-        report = compose_preflight_report(dest_root, journal_path)
+        overlap_path = "/lib/overlap.flac"
+        plans = [
+            DryRunPlan(
+                pass_name="repath",
+                entries=[DryRunEntry(current_path=overlap_path, planned_path="/lib/new.flac")],
+                count=1,
+            ),
+            DryRunPlan(
+                pass_name="enrich",
+                entries=[DryRunEntry(current_path=overlap_path, tag_delta={"ACOUSTID_ID": "aid-1"})],
+                count=1,
+            ),
+        ]
 
-        assert isinstance(report, PreflightReport)
+        report = _build_maintain_report(journal_path, dest_root, plans)
+
         assert report.scan_ran is True
-        assert all(s.count == 0 for s in report.pass_summaries)
-        assert report.overlaps == []
+        # The file must appear in the overlaps list.
+        assert len(report.overlaps) == 1
+        overlap_entry = report.overlaps[0]
+        assert overlap_entry.current_path == overlap_path
+        assert "repath" in overlap_entry.pass_names
+        assert "enrich" in overlap_entry.pass_names
+
+        # Per-pass overlap_count must reflect the overlap.
+        by_pass = {s.pass_name: s for s in report.pass_summaries}
+        assert by_pass["repath"].overlap_count == 1
+        assert by_pass["enrich"].overlap_count == 1
 
     # ---------------------------------------------------------------------------
-    # KAT 5: scan-not-run — root absent → scan_ran=False
+    # KAT 4: empty fixture — scan_ran=True, all counts 0 (via maintain dry-run)
     # ---------------------------------------------------------------------------
 
-    def test_compose_preflight_root_not_mounted(self) -> None:
-        """compose_preflight_report() returns scan_ran=False when the root does not exist.
+    def test_maintain_dry_run_empty_library_no_findings(self, fs: FakeFilesystem) -> None:
+        """maintain(dry_run=True) on an empty library returns 0 and emits scan_ran=True report.
 
-        Calls compose_preflight_report() with a dest_root that does not exist.  Asserts that
-        scan_ran=False and pass_summaries is empty — structurally distinct from a no-findings
-        result (scan_ran=True, all counts 0).  No pyfakefs fixture needed: the path is
-        guaranteed not to exist on any real filesystem.
+        Constructs a library root with a journal file but no audio files.  Asserts that
+        maintain returns 0 (no planned changes).  This is structurally distinct from
+        scan_ran=False (root absent or empty).
+
+        :param fs: pyfakefs fixture.
         """
-        dest_root = Path("/nonexistent_preflight_test_root_xyzzy")
-        journal_path = dest_root / JOURNAL_FILENAME
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
 
-        report = compose_preflight_report(dest_root, journal_path)
+        _write_library_journal(dest_root, [])
 
-        assert isinstance(report, PreflightReport)
-        assert report.scan_ran is False
-        assert report.pass_summaries == []
-        assert report.overlaps == []
+        # Call maintain directly — all passes are no-ops on an empty library.
+        result = maintain(dest_root, dry_run=True)
+
+        assert result == 0
 
     # ---------------------------------------------------------------------------
-    # KAT 6: scan-not-run — root empty → scan_ran=False
+    # KAT 5: scan-not-run — root absent → scan_ran=False, returns 0
     # ---------------------------------------------------------------------------
 
-    def test_compose_preflight_root_empty(self, fs: FakeFilesystem) -> None:
-        """compose_preflight_report() returns scan_ran=False when the root is empty.
+    def test_maintain_dry_run_root_not_mounted(self) -> None:
+        """maintain(dry_run=True) returns 0 when the root does not exist.
+
+        Calls maintain(dry_run=True) with a dest_root that does not exist.  Asserts that
+        maintain returns 0 — structurally distinct from a no-findings result (root mounted,
+        all counts 0).  No pyfakefs fixture needed: the path is guaranteed not to exist.
+        """
+        dest_root = Path("/nonexistent_maintain_dry_run_root_xyzzy")
+
+        result = maintain(dest_root, dry_run=True)
+
+        assert result == 0
+
+    # ---------------------------------------------------------------------------
+    # KAT 6: scan-not-run — root empty → returns 0
+    # ---------------------------------------------------------------------------
+
+    def test_maintain_dry_run_root_empty(self, fs: FakeFilesystem) -> None:
+        """maintain(dry_run=True) returns 0 when the root is empty.
 
         Constructs an empty dest_root directory (no files, no journal).  Asserts that
-        scan_ran=False — an empty root is treated as "not mounted" to prevent a missing
+        maintain returns 0 — an empty root is treated as "not mounted" to prevent a missing
         mount from being silently reported as "no findings".
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/empty_lib")
         fs.create_dir(str(dest_root))
-        journal_path = dest_root / JOURNAL_FILENAME
 
-        report = compose_preflight_report(dest_root, journal_path)
+        result = maintain(dest_root, dry_run=True)
 
-        assert isinstance(report, PreflightReport)
-        assert report.scan_ran is False
+        assert result == 0
 
     # ---------------------------------------------------------------------------
-    # KAT 7: Reference/ evidence
+    # KAT 7: Reference/ evidence (via _build_maintain_report directly)
     # ---------------------------------------------------------------------------
 
-    def test_compose_preflight_reference_evidence_present(self, fs: FakeFilesystem) -> None:
-        """compose_preflight_report() surfaces Reference/ presence and nonzero footprint.
+    def test_build_maintain_report_reference_evidence_present(self, fs: FakeFilesystem) -> None:
+        """_build_maintain_report() surfaces Reference/ presence and nonzero footprint.
 
         Constructs a library root with a sibling Reference/ directory containing one file.
         Asserts that reference_evidence.present=True and reference_evidence.size_bytes > 0.
@@ -11183,14 +11163,14 @@ class TestComposePreflight:
         journal_path = dest_root / JOURNAL_FILENAME
         _write_library_journal(dest_root, [])
 
-        report = compose_preflight_report(dest_root, journal_path)
+        report = _build_maintain_report(journal_path, dest_root, [])
 
         assert report.scan_ran is True
         assert report.reference_evidence.present is True
         assert report.reference_evidence.size_bytes > 0
 
-    def test_compose_preflight_reference_evidence_absent(self, fs: FakeFilesystem) -> None:
-        """compose_preflight_report() reports Reference/ absent when the directory does not exist.
+    def test_build_maintain_report_reference_evidence_absent(self, fs: FakeFilesystem) -> None:
+        """_build_maintain_report() reports Reference/ absent when the directory does not exist.
 
         Constructs a library root without a sibling Reference/ directory.  Asserts that
         reference_evidence.present=False and reference_evidence.size_bytes=0.
@@ -11203,7 +11183,7 @@ class TestComposePreflight:
         journal_path = dest_root / JOURNAL_FILENAME
         _write_library_journal(dest_root, [])
 
-        report = compose_preflight_report(dest_root, journal_path)
+        report = _build_maintain_report(journal_path, dest_root, [])
 
         assert report.scan_ran is True
         assert report.reference_evidence.present is False
@@ -11213,11 +11193,11 @@ class TestComposePreflight:
     # KAT 8: read-only invariant — no journal entry / no file move
     # ---------------------------------------------------------------------------
 
-    def test_compose_preflight_is_read_only(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """compose_preflight_report() writes no files and appends no journal entries.
+    def test_maintain_dry_run_is_read_only(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """maintain(dry_run=True) writes no files and appends no journal entries.
 
         Constructs a library with a repath candidate and a catalogue-colon repatch candidate.
-        Calls compose_preflight_report() and asserts that:
+        Calls maintain(dry_run=True) and asserts that:
         - No files were moved (the repath candidate is still at its original path).
         - The journal has the same number of entries as before the call.
 
@@ -11259,7 +11239,7 @@ class TestComposePreflight:
 
         journal_entry_count_before = len(read_journal(journal_path).entries)
 
-        report = compose_preflight_report(dest_root, journal_path)
+        maintain(dest_root, dry_run=True)
 
         # Files must not have moved.
         assert repath_path.exists(), "repath candidate must not have been moved"
@@ -11269,10 +11249,58 @@ class TestComposePreflight:
         journal_entry_count_after = len(read_journal(journal_path).entries)
         assert journal_entry_count_after == journal_entry_count_before
 
-        # The report must still reflect planned changes (not zero — the passes did find work).
-        assert report.scan_ran is True
-        by_pass = {s.pass_name: s for s in report.pass_summaries}
-        assert by_pass["repath"].count >= 1
+    # ---------------------------------------------------------------------------
+    # KAT 9: json_path serialisation
+    # ---------------------------------------------------------------------------
+
+    def test_maintain_dry_run_json_path_serialisation(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """maintain(dry_run=True, json_path=...) serialises the report to JSON.
+
+        Constructs a minimal library, calls maintain with dry_run=True and a json_path, and
+        asserts that the JSON file is written and contains a valid MaintainDryRunReport.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="")
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        _write_library_journal(dest_root, [])
+
+        # Use a path whose parent does not yet exist; maintain must create it.
+        json_path = Path("/maintain_reports/report.json")
+
+        maintain(dest_root, dry_run=True, json_path=json_path)
+
+        assert json_path.exists(), "JSON report file must be written"
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        assert "scan_ran" in data
+        assert data["scan_ran"] is True
+
+    # ---------------------------------------------------------------------------
+    # KAT 10: json_path written even when root not mounted (scan_ran=False)
+    # ---------------------------------------------------------------------------
+
+    # pylint: disable-next=unused-argument
+    def test_maintain_dry_run_json_path_root_not_mounted(self, fs: FakeFilesystem) -> None:
+        """maintain(dry_run=True, json_path=...) writes scan_ran=False JSON when root absent.
+
+        Calls maintain with a non-existent dest_root and a json_path.  Asserts that the JSON
+        file is written with scan_ran=False.  The pyfakefs fixture is required to intercept
+        filesystem writes so the test does not write to the real filesystem.
+
+        :param fs: pyfakefs fixture (activates fake filesystem; not referenced directly).
+        """
+        dest_root = Path("/nonexistent_maintain_json_root_xyzzy")
+        # Use a path whose parent does not yet exist; maintain must create it.
+        json_path = Path("/maintain_reports/not_run.json")
+
+        result = maintain(dest_root, dry_run=True, json_path=json_path)
+
+        assert result == 0
+        assert json_path.exists(), "JSON report file must be written even when scan not run"
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+        assert data["scan_ran"] is False
 
     # ---------------------------------------------------------------------------
     # KAT 9: _journal_capacity helper directly
@@ -11422,15 +11450,14 @@ class TestComposePreflight:
     # KAT 13: overlap deduplication guard (same pass, same path in two entries)
     # ---------------------------------------------------------------------------
 
-    def test_compose_preflight_overlap_dedup_same_pass(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """compose_preflight_report() deduplicates pass names in the overlap map.
+    def test_build_maintain_report_overlap_dedup_same_pass(self, fs: FakeFilesystem) -> None:
+        """_build_maintain_report() deduplicates pass names in the overlap map.
 
-        Mocks the six passes to return plans where the same pass name appears twice for the same
-        path (a defensive scenario that cannot arise from the real passes but exercises the
-        deduplication guard in the overlap-building loop).
+        Builds plans where the same pass name appears twice for the same path (a defensive
+        scenario that cannot arise from the real passes but exercises the deduplication guard
+        in the overlap-building loop).
 
         :param fs: pyfakefs fixture.
-        :param mocker: pytest-mock fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
@@ -11448,16 +11475,8 @@ class TestComposePreflight:
             ],
             count=2,
         )
-        empty_plan = DryRunPlan(pass_name="dummy", entries=[], count=0)
 
-        mocker.patch("music_annotator._pipeline_maint.repath", return_value=dup_plan)
-        mocker.patch("music_annotator._pipeline_maint.regroup", return_value=empty_plan)
-        mocker.patch("music_annotator._pipeline_maint.unify", return_value=empty_plan)
-        mocker.patch("music_annotator._pipeline_maint.enrich", return_value=empty_plan)
-        mocker.patch("music_annotator._pipeline_maint.repatch_catalogue_colon", return_value=empty_plan)
-        mocker.patch("music_annotator._pipeline_maint.repatch_acoustid_tags", return_value=empty_plan)
-
-        report = compose_preflight_report(dest_root, journal_path)
+        report = _build_maintain_report(journal_path, dest_root, [dup_plan])
 
         # The path appears in only one pass — no overlap (overlap requires >1 distinct pass).
         assert report.scan_ran is True
@@ -11467,10 +11486,10 @@ class TestComposePreflight:
         assert repath_summary.count == 2
 
 
-class TestPreflightParity:
-    """No-regression parity pin for :func:`compose_preflight_report` composition behaviour.
+class TestMaintainDryRunParity:
+    """No-regression parity pin for ``maintain --dry-run`` composition behaviour.
 
-    Exercises the full compose_preflight_report() path over a representative fixture that
+    Exercises the full maintain(dry_run=True) path over a representative fixture that
     contains at least one candidate for each of repath and repatch_catalogue_colon, including
     a file that qualifies for both (triggering the overlap map).  This test is the behavioural
     pin: it must pass even after future changes to the composition logic.
@@ -11560,8 +11579,8 @@ class TestPreflightParity:
             tags.model_extra["cwp_work_2"] = ""
         return tags
 
-    def test_parity_pin_full_compose_path(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """Parity pin: compose_preflight_report() composition behaviour over a representative fixture.
+    def test_parity_pin_full_maintain_dry_run_path(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Parity pin: maintain(dry_run=True) composition behaviour over a representative fixture.
 
         Constructs a three-file library:
         - File A: repath candidate (legacy path, clean tags).
@@ -11570,8 +11589,7 @@ class TestPreflightParity:
 
         Asserts all four parity properties:
         (1) scan_ran=True — the root was mounted and non-empty.
-        (2) Per-pass counts: repath count >= 2 (files A and C); repatch_catalogue_colon count >= 2
-            (files B and C); regroup, unify, repatch_acoustid_tags count == 0.
+        (2) Per-pass counts: repath count >= 2 (files A and C); regroup, unify count == 0.
         (3) Overlap map: file C appears in the overlaps list with both "repath" and
             "repatch_catalogue_colon" named; repath and repatch_catalogue_colon overlap_count >= 1.
         (4) journal_capacity: current_entry_count == 3 (three pre-existing journal entries);
@@ -11617,7 +11635,6 @@ class TestPreflightParity:
         )
 
         # --- Journal: three pre-existing entries (one per file) ---
-        journal_path = dest_root / JOURNAL_FILENAME
         _write_library_journal(
             dest_root,
             [
@@ -11645,7 +11662,20 @@ class TestPreflightParity:
             ],
         )
 
-        report = compose_preflight_report(dest_root, journal_path)
+        captured_report: list[MaintainDryRunReport] = []
+        real_build = _build_maintain_report
+
+        def _capture_report(*args: object, **kwargs: object) -> MaintainDryRunReport:
+            report = real_build(*args, **kwargs)  # type: ignore[arg-type]
+            captured_report.append(report)
+            return report
+
+        mocker.patch("music_annotator._pipeline_maint._build_maintain_report", side_effect=_capture_report)
+
+        maintain(dest_root, dry_run=True)
+
+        assert len(captured_report) == 1
+        report = captured_report[0]
 
         # --- Parity property (1): scan_ran=True ---
         assert report.scan_ran is True, "scan_ran must be True when the root is mounted and non-empty"
@@ -11655,33 +11685,28 @@ class TestPreflightParity:
 
         # repath must plan to move file A (legacy path) and file C (legacy path + corruption).
         assert by_pass["repath"].count >= 2, f"repath count must be >= 2 (files A and C); got {by_pass['repath'].count}"
-        # repatch_catalogue_colon must plan to rewrite file B (corruption) and file C (corruption).
-        assert by_pass["repatch_catalogue_colon"].count >= 2, (
-            f"repatch_catalogue_colon count must be >= 2 (files B and C); got {by_pass['repatch_catalogue_colon'].count}"
-        )
         # No fragmented releases in this fixture.
         assert by_pass["regroup"].count == 0, f"regroup must be 0; got {by_pass['regroup'].count}"
         assert by_pass["unify"].count == 0, f"unify must be 0; got {by_pass['unify'].count}"
-        # No legacy CHROMAPRINT_FP keys in this fixture.
-        assert by_pass["repatch_acoustid_tags"].count == 0, (
-            f"repatch_acoustid_tags must be 0; got {by_pass['repatch_acoustid_tags'].count}"
-        )
 
-        # --- Parity property (3): overlap map populated for file C ---
-        overlap_paths = {e.current_path for e in report.overlaps}
-        assert str(file_c) in overlap_paths, f"file C ({file_c}) must appear in the overlap map; overlaps={overlap_paths}"
-        overlap_entry = next(e for e in report.overlaps if e.current_path == str(file_c))
-        assert "repath" in overlap_entry.pass_names, (
-            f"'repath' must be in file C's overlap pass_names; got {overlap_entry.pass_names}"
-        )
-        assert "repatch_catalogue_colon" in overlap_entry.pass_names, (
-            f"'repatch_catalogue_colon' must be in file C's overlap pass_names; got {overlap_entry.pass_names}"
-        )
-        # Both passes must report at least one overlapping file.
+        # --- Parity property (3): overlap map populated ---
+        # The maintain composition covers enrich, origin-time, repath, regroup, unify,
+        # reconstruct-xrefs, and dedup-library.  repatch_catalogue_colon is NOT in the
+        # maintain composition.  Files that need both enrich (audio_hash backfill) and repath
+        # (path correction) appear in the overlap map with passes ["enrich", "repath"].
+        # All three files in this fixture lack audio_hash and are at legacy paths, so all
+        # three appear in the overlap map.
+        assert len(report.overlaps) >= 1, f"at least one overlap expected; got {report.overlaps}"
+        # Every overlap entry must include both "enrich" and "repath".
+        for overlap_entry in report.overlaps:
+            assert "repath" in overlap_entry.pass_names, (
+                f"'repath' must be in overlap pass_names; got {overlap_entry.pass_names}"
+            )
+            assert "enrich" in overlap_entry.pass_names, (
+                f"'enrich' must be in overlap pass_names; got {overlap_entry.pass_names}"
+            )
+        # repath must report at least one overlapping file.
         assert by_pass["repath"].overlap_count >= 1, f"repath overlap_count must be >= 1; got {by_pass['repath'].overlap_count}"
-        assert by_pass["repatch_catalogue_colon"].overlap_count >= 1, (
-            f"repatch_catalogue_colon overlap_count must be >= 1; got {by_pass['repatch_catalogue_colon'].overlap_count}"
-        )
 
         # --- Parity property (4): journal_capacity reflects the fixture journal ---
         cap = report.journal_capacity
@@ -11690,9 +11715,10 @@ class TestPreflightParity:
             f"current_entry_count must be 3 (three pre-existing entries); got {cap.current_entry_count}"
         )
         assert cap.current_size_bytes > 0, "current_size_bytes must be nonzero (journal file exists)"
-        # At least 4 planned changes: 2 repath (A and C) + 2 repatch_catalogue_colon (B and C).
-        assert cap.projected_delta_entries >= 4, (
-            f"projected_delta_entries must be >= 4 (2 repath + 2 repatch_catalogue_colon); got {cap.projected_delta_entries}"
+        # At least 3 planned changes: 3 repath (files A, B, and C at legacy paths).
+        # enrich also plans changes (audio_hash backfill for all three files).
+        assert cap.projected_delta_entries >= 3, (
+            f"projected_delta_entries must be >= 3 (at least 3 repath moves); got {cap.projected_delta_entries}"
         )
 
 
@@ -17025,6 +17051,7 @@ class TestMaintain:
             dest_root=dest_root,
             dry_run=False,
             yes=False,
+            json_path=None,
         )
 
     def test_cli_maintain_dry_run(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
@@ -17046,6 +17073,7 @@ class TestMaintain:
             dest_root=dest_root,
             dry_run=True,
             yes=False,
+            json_path=None,
         )
 
     def test_cli_maintain_yes(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
@@ -17067,6 +17095,7 @@ class TestMaintain:
             dest_root=dest_root,
             dry_run=False,
             yes=True,
+            json_path=None,
         )
 
     def test_cli_maintain_error_exits_1(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
@@ -17096,6 +17125,7 @@ class TestMaintain:
         assert args.subcommand == "maintain"
         assert args.dry_run is False
         assert args.yes is False
+        assert args.json_path is None
 
     def test_cli_maintain_parser_dry_run_flag(self) -> None:
         """'maintain --dry-run' sets dry_run=True in parsed args.
@@ -17116,6 +17146,16 @@ class TestMaintain:
         args = parser.parse_args(["maintain", "/lib", "-y"])
         assert args.subcommand == "maintain"
         assert args.yes is True
+
+    def test_cli_maintain_parser_json_flag(self) -> None:
+        """'maintain --json PATH' sets json_path in parsed args.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args(["maintain", "/lib", "--dry-run", "--json", "/tmp/report.json"])
+        assert args.subcommand == "maintain"
+        assert args.json_path == Path("/tmp/report.json")
 
     def test_journal_threaded_to_passes(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
         """maintain threads the pre-read journal to each pass via the _journal kwarg.

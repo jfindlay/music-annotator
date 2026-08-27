@@ -1928,8 +1928,8 @@ class DryRunPlan(BaseModel):
     """Stored summary count; must equal ``len(entries)`` at construction."""
 
 
-class PreflightPassSummary(BaseModel):
-    """Per-pass summary from a consolidated dry-run preflight report.
+class MaintainPassSummary(BaseModel):
+    """Per-pass summary from a consolidated ``maintain --dry-run`` report.
 
     Records how many files a single maintenance pass would act on, and how many of those files
     also appear in at least one other pass's plan (the cross-pass overlap count).  An overlap
@@ -1941,7 +1941,7 @@ class PreflightPassSummary(BaseModel):
     """
 
     pass_name: str = ""
-    """The pass identity (e.g. ``"repath"``, ``"enrich"``, ``"repatch_acoustid_tags"``)."""
+    """The pass identity (e.g. ``"repath"``, ``"enrich"``, ``"reconstruct_cross_references"``)."""
 
     count: int = 0
     """Number of files the pass would act on (equals the corresponding :class:`DryRunPlan` ``count``)."""
@@ -1950,13 +1950,15 @@ class PreflightPassSummary(BaseModel):
     """Number of files in this pass's plan that also appear in at least one other pass's plan."""
 
 
-class PreflightOverlapEntry(BaseModel):
+class MaintainOverlapEntry(BaseModel):
     """A file that appears in more than one maintenance pass's dry-run plan.
 
     When a file is planned for changes by multiple passes, the ordering of those passes is
     load-bearing: tag-content rewrites must precede path rewrites so the corrected tags drive
     the new destination path.  Surfacing these overlaps as explicit evidence lets the operator
-    verify the ordering before any destructive run.
+    verify the ordering before any destructive run.  Files flagged here may plan differently in
+    a live run if an earlier pass mutates their state first (C-CONFLUENCE: dry-run is a preview,
+    not a rehearsal).
 
     Important attributes: ``current_path``, ``pass_names``.
     """
@@ -1969,7 +1971,7 @@ class PreflightOverlapEntry(BaseModel):
 
 
 class JournalCapacity(BaseModel):
-    """Journal capacity snapshot for a preflight report.
+    """Journal capacity snapshot for a ``maintain --dry-run`` report.
 
     Captures the current journal state and projects how much it would grow if all planned
     maintenance passes were executed.  Each planned file action (move or tag-content write)
@@ -2005,8 +2007,8 @@ class ReferenceEvidence(BaseModel):
     """Total disk footprint of the ``Reference/`` directory in bytes (0 when not present)."""
 
 
-class PreflightReport(BaseModel):
-    """Consolidated dry-run preflight report across all maintenance passes.
+class MaintainDryRunReport(BaseModel):
+    """Consolidated dry-run report from ``maintain --dry-run`` across all recurring maintenance passes.
 
     Assembles the output of running every maintenance pass with ``dry_run=True`` into a single
     structured report.  The report is the read-only evidence surface for a human decision about
@@ -2017,14 +2019,19 @@ class PreflightReport(BaseModel):
     ``True`` means the scan ran and the pass summaries reflect the actual library state (all
     counts may be zero, which is a genuine "no findings" result).
 
+    Each pass plans against the current (unmutated) library state, so a pass downstream of a
+    mutating pass may plan differently in a live run.  Files appearing in more than one pass's
+    plan are flagged in ``overlaps`` as the places where a live run may diverge from this preview
+    (C-CONFLUENCE: dry-run is a preview, not a rehearsal).
+
     Important attributes: ``pass_summaries``, ``overlaps``, ``journal_capacity``,
     ``reference_evidence``, ``scan_ran``.
     """
 
-    pass_summaries: list[PreflightPassSummary] = Field(default_factory=list)
-    """Per-pass summaries, one entry per maintenance pass, in the order the passes were run."""
+    pass_summaries: list[MaintainPassSummary] = Field(default_factory=list)
+    """Per-pass summaries, one entry per maintenance pass, in the C-CONFLUENCE order."""
 
-    overlaps: list[PreflightOverlapEntry] = Field(default_factory=list)
+    overlaps: list[MaintainOverlapEntry] = Field(default_factory=list)
     """Files appearing in more than one pass's plan; empty when no cross-pass overlap exists."""
 
     journal_capacity: JournalCapacity = Field(default_factory=JournalCapacity)

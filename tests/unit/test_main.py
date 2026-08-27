@@ -671,70 +671,31 @@ class TestBuildParser:
         assert "repatch-catalogue-colon" in capsys.readouterr().out
 
     # ------------------------------------------------------------------
-    # preflight parser tests
+    # maintain parser --json tests
     # ------------------------------------------------------------------
 
-    _PREFLIGHT_BASE = ["preflight", "/dest"]
+    _MAINTAIN_BASE = ["maintain", "/dest"]
 
-    def test_preflight_parses_dest_dir(self) -> None:
-        """preflight accepts dest_dir as a positional argument."""
+    def test_maintain_json_flag(self) -> None:
+        """maintain --json sets json_path to the given path."""
         parser = _build_parser()
-        ns = parser.parse_args(self._PREFLIGHT_BASE)
-        assert ns.subcommand == "preflight"
-        assert ns.dest_dir == Path("/dest")
-        assert ns.journal_path is None
-        assert ns.json_path is None
-
-    def test_preflight_journal_path_flag(self) -> None:
-        """preflight --journal-path sets journal_path to the given path."""
-        parser = _build_parser()
-        ns = parser.parse_args([*self._PREFLIGHT_BASE, "--journal-path", "/custom/journal.json"])
-        assert ns.journal_path == Path("/custom/journal.json")
-
-    def test_preflight_json_flag(self) -> None:
-        """preflight --json sets json_path to the given path."""
-        parser = _build_parser()
-        ns = parser.parse_args([*self._PREFLIGHT_BASE, "--json", "/tmp/report.json"])
+        ns = parser.parse_args([*self._MAINTAIN_BASE, "--dry-run", "--json", "/tmp/report.json"])
         assert ns.json_path == Path("/tmp/report.json")
 
-    def test_preflight_requires_dest_dir(self) -> None:
-        """preflight exits with code 2 when dest_dir positional is missing."""
+    def test_maintain_json_flag_default_none(self) -> None:
+        """maintain json_path defaults to None when --json is not supplied."""
         parser = _build_parser()
-        with pytest.raises(SystemExit) as exc:
-            parser.parse_args(["preflight"])
-        assert exc.value.code == 2
+        ns = parser.parse_args(self._MAINTAIN_BASE)
+        assert ns.json_path is None
 
-    def test_preflight_appears_in_help(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """preflight appears in the top-level --help output."""
+    def test_maintain_not_in_help_as_preflight(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """preflight subcommand is no longer registered; maintain is the dry-run entry point."""
         parser = _build_parser()
         with pytest.raises(SystemExit):
             parser.parse_args(["--help"])
-        assert "preflight" in capsys.readouterr().out
-
-    def test_preflight_user_agent_app_default(self) -> None:
-        """preflight user_agent_app defaults to the package version string."""
-        parser = _build_parser()
-        ns = parser.parse_args(self._PREFLIGHT_BASE)
-        assert ns.user_agent_app == _DEFAULT_USER_AGENT_APP
-        assert _VERSION in ns.user_agent_app
-
-    def test_preflight_user_agent_app_custom(self) -> None:
-        """preflight --user-agent-app overrides the default."""
-        parser = _build_parser()
-        ns = parser.parse_args([*self._PREFLIGHT_BASE, "--user-agent-app", "MyApp/2.0"])
-        assert ns.user_agent_app == "MyApp/2.0"
-
-    def test_preflight_user_agent_email_default_empty(self) -> None:
-        """preflight user_agent_email defaults to empty string when not supplied."""
-        parser = _build_parser()
-        ns = parser.parse_args(self._PREFLIGHT_BASE)
-        assert ns.user_agent_email == ""
-
-    def test_preflight_user_agent_email_stored(self) -> None:
-        """preflight --user-agent-email is stored on the namespace."""
-        parser = _build_parser()
-        ns = parser.parse_args([*self._PREFLIGHT_BASE, "--user-agent-email", "me@example.com"])
-        assert ns.user_agent_email == "me@example.com"
+        out = capsys.readouterr().out
+        assert "preflight" not in out
+        assert "maintain" in out
 
     # ------------------------------------------------------------------
     # unify parser user-agent tests (KAT a)
@@ -1645,220 +1606,49 @@ class TestMain:
         assert exc.value.code == 1
 
     # ------------------------------------------------------------------
-    # preflight dispatch tests
+    # maintain --json dispatch tests
     # ------------------------------------------------------------------
 
-    _PREFLIGHT_ARGV = ["music-annotator", "preflight", "/d"]
-
-    def test_preflight_dispatches_to_compose_preflight_report(
-        self, mocker: MockerFixture, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """main() preflight calls compose_preflight_report and prints the report.
-
-        Verifies that the preflight subcommand dispatches to compose_preflight_report with the
-        correct dest_root and journal_path, and that the report output is printed to stdout.
-        Exercises the no-overlaps branch (report.overlaps is empty).
-
-        :param mocker: pytest-mock fixture.
-        :param capsys: pytest stdout/stderr capture fixture.
-        """
-        from music_annotator.models import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
-            JournalCapacity,
-            PreflightPassSummary,
-            PreflightReport,
-            ReferenceEvidence,
-        )
-
-        self._patch_common(mocker)
-        mocker.patch("music_annotator.init_mb")
-        report = PreflightReport(
-            scan_ran=True,
-            pass_summaries=[PreflightPassSummary(pass_name="repath", count=2, overlap_count=0)],
-            journal_capacity=JournalCapacity(current_entry_count=10, current_size_bytes=500, projected_delta_entries=2),
-            reference_evidence=ReferenceEvidence(present=False, size_bytes=0),
-        )
-        mock_preflight = mocker.patch("music_annotator.compose_preflight_report", return_value=report)
-        mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
-        main()
-
-        mock_preflight.assert_called_once_with(
-            dest_root=Path("/d"),
-            journal_path=Path("/d") / music_annotator.JOURNAL_FILENAME,
-        )
-        out = capsys.readouterr().out
-        assert "repath" in out
-        assert "2" in out
-        assert "Cross-pass overlaps: none" in out
-
-    def test_preflight_report_with_overlaps(self, mocker: MockerFixture, capsys: pytest.CaptureFixture[str]) -> None:
-        """main() preflight prints cross-pass overlap details when overlaps are present.
-
-        Exercises the report.overlaps branch: when a file appears in more than one pass's plan,
-        the CLI prints the file path and the names of the passes that include it.
-
-        :param mocker: pytest-mock fixture.
-        :param capsys: pytest stdout/stderr capture fixture.
-        """
-        from music_annotator.models import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
-            JournalCapacity,
-            PreflightOverlapEntry,
-            PreflightPassSummary,
-            PreflightReport,
-            ReferenceEvidence,
-        )
-
-        self._patch_common(mocker)
-        mocker.patch("music_annotator.init_mb")
-        report = PreflightReport(
-            scan_ran=True,
-            pass_summaries=[
-                PreflightPassSummary(pass_name="repath", count=1, overlap_count=1),
-                PreflightPassSummary(pass_name="repatch_catalogue_colon", count=1, overlap_count=1),
-            ],
-            overlaps=[
-                PreflightOverlapEntry(
-                    current_path="/lib/track.flac",
-                    pass_names=["repath", "repatch_catalogue_colon"],
-                )
-            ],
-            journal_capacity=JournalCapacity(current_entry_count=5, current_size_bytes=200, projected_delta_entries=2),
-            reference_evidence=ReferenceEvidence(present=True, size_bytes=1024),
-        )
-        mocker.patch("music_annotator.compose_preflight_report", return_value=report)
-        mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
-        main()
-
-        out = capsys.readouterr().out
-        assert "/lib/track.flac" in out
-        assert "repath" in out
-        assert "repatch_catalogue_colon" in out
-        # Reference/ present branch
-        assert "present" in out
-
-    def test_preflight_scan_not_run_prints_message(self, mocker: MockerFixture, capsys: pytest.CaptureFixture[str]) -> None:
-        """main() preflight prints a 'scan not run' message when scan_ran=False.
-
-        When the library root is not mounted or is empty, compose_preflight_report returns a
-        report with scan_ran=False.  The CLI must print a clear message and exit cleanly (no
-        exception, no exit code 1).
-
-        :param mocker: pytest-mock fixture.
-        :param capsys: pytest stdout/stderr capture fixture.
-        """
-        from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
-
-        self._patch_common(mocker)
-        mocker.patch("music_annotator.init_mb")
-        mocker.patch("music_annotator.compose_preflight_report", return_value=PreflightReport(scan_ran=False))
-        mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
-        main()
-        out = capsys.readouterr().out
-        assert "scan not run" in out
-
-    def test_preflight_custom_journal_path(self, mocker: MockerFixture) -> None:
-        """main() preflight --journal-path passes the custom path to compose_preflight_report.
-
-        :param mocker: pytest-mock fixture.
-        """
-        from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
-
-        self._patch_common(mocker)
-        mocker.patch("music_annotator.init_mb")
-        mock_preflight = mocker.patch("music_annotator.compose_preflight_report", return_value=PreflightReport(scan_ran=False))
-        mocker.patch.object(sys, "argv", new=[*self._PREFLIGHT_ARGV, "--journal-path", "/custom/journal.json"])
-        main()
-        # The custom journal path is passed through to compose_preflight_report.
-        mock_preflight.assert_called_once_with(
-            dest_root=Path("/d"),
-            journal_path=Path("/custom/journal.json"),
-        )
+    _MAINTAIN_DISPATCH_ARGV = ["music-annotator", "maintain", "/d"]
 
     # pylint: disable-next=unused-argument
-    def test_preflight_json_output(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """main() preflight --json writes the report to the given path as JSON.
+    def test_maintain_json_path_forwarded_to_maintain(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() maintain --json forwards json_path to music_annotator.maintain.
+
+        Verifies that the --json flag is parsed and forwarded as json_path to maintain().
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
         """
-        from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
-
         self._patch_common(mocker)
-        mocker.patch("music_annotator.init_mb")
-        report = PreflightReport(scan_ran=True)
-        mocker.patch("music_annotator.compose_preflight_report", return_value=report)
+        mock_fn = mocker.patch("music_annotator.maintain", return_value=0)
         json_path = Path("/tmp/report.json")
-        mocker.patch.object(sys, "argv", new=[*self._PREFLIGHT_ARGV, "--json", str(json_path)])
+        mocker.patch.object(sys, "argv", new=[*self._MAINTAIN_DISPATCH_ARGV, "--dry-run", "--json", str(json_path)])
         main()
-        assert json_path.exists()
-        data = json.loads(json_path.read_text(encoding="utf-8"))
-        assert data["scan_ran"] is True
+        mock_fn.assert_called_once_with(
+            dest_root=Path("/d"),
+            dry_run=True,
+            yes=False,
+            json_path=json_path,
+        )
 
     # pylint: disable-next=unused-argument
-    def test_preflight_exits_1_on_exception(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """main() preflight exits with code 1 when compose_preflight_report raises.
+    def test_maintain_json_path_none_when_not_supplied(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """main() maintain without --json passes json_path=None to maintain().
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
         """
         self._patch_common(mocker)
-        mocker.patch("music_annotator.init_mb")
-        mocker.patch("music_annotator.compose_preflight_report", side_effect=RuntimeError("boom"))
-        mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
-        with pytest.raises(SystemExit) as exc:
-            main()
-        assert exc.value.code == 1
-
-    def test_preflight_init_mb_called_with_user_agent(self, mocker: MockerFixture) -> None:
-        """main() preflight calls init_mb with the assembled user-agent string before compose_preflight_report.
-
-        The MusicBrainz user-agent must be initialised before any MB API calls (ingest still
-        needs it).  Verifies that init_mb is called with the combined app+email string before
-        compose_preflight_report is invoked.
-
-        :param mocker: pytest-mock fixture.
-        """
-        from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
-
-        self._patch_common(mocker)
-        mock_init_mb = mocker.patch("music_annotator.init_mb")
-        mocker.patch("music_annotator.compose_preflight_report", return_value=PreflightReport(scan_ran=False))
-        mocker.patch.object(
-            sys,
-            "argv",
-            new=[
-                "music-annotator",
-                "preflight",
-                "/d",
-                "--user-agent-app",
-                "MyApp/2.0",
-                "--user-agent-email",
-                "me@example.com",
-            ],
+        mock_fn = mocker.patch("music_annotator.maintain", return_value=0)
+        mocker.patch.object(sys, "argv", new=self._MAINTAIN_DISPATCH_ARGV)
+        main()
+        mock_fn.assert_called_once_with(
+            dest_root=Path("/d"),
+            dry_run=False,
+            yes=False,
+            json_path=None,
         )
-        main()
-        mock_init_mb.assert_called_once_with("MyApp/2.0 me@example.com")
-
-    def test_preflight_init_mb_called_with_default_user_agent(self, mocker: MockerFixture) -> None:
-        """main() preflight calls init_mb with the default user-agent when no args are supplied.
-
-        When --user-agent-email is omitted (defaults to ""), the assembled string is stripped so
-        init_mb receives just the app token without a trailing space.
-
-        :param mocker: pytest-mock fixture.
-        """
-        from music_annotator.models import PreflightReport  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
-
-        self._patch_common(mocker)
-        mock_init_mb = mocker.patch("music_annotator.init_mb")
-        mocker.patch("music_annotator.compose_preflight_report", return_value=PreflightReport(scan_ran=False))
-        mocker.patch.object(sys, "argv", new=self._PREFLIGHT_ARGV)
-        main()
-        # With no --user-agent-email, the assembled string is just the app token (stripped).
-        call_args = mock_init_mb.call_args
-        assert call_args is not None
-        user_agent_arg = call_args.args[0]
-        assert _DEFAULT_USER_AGENT_APP in user_agent_arg
-        assert not user_agent_arg.endswith(" ")  # trailing space stripped
 
     # ------------------------------------------------------------------
     # unify dispatch tests (KAT b and c)

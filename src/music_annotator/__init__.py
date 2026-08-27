@@ -133,7 +133,6 @@ from music_annotator._pipeline_io import (
 )
 from music_annotator._pipeline_maint import (
     DuplicateResolution,
-    compose_preflight_report,
     dedup_library,
     enrich,
     maintain,
@@ -219,7 +218,6 @@ __all__ = [
     "find_source_files",
     "CollisionPolicy",
     "SelectionMethod",
-    "compose_preflight_report",
     "enrich",
     "regroup",
     "repatch_acoustid_tags",

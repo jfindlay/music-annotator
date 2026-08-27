@@ -1,6 +1,6 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes seventeen subcommands:
+Configures structlog for human-friendly console output and exposes sixteen subcommands:
 
 * ``apply``                    — copy and tag a directory of tracks for a known MusicBrainz release MBID.
 * ``search``                   — search MusicBrainz for a release matching a source directory, prompt for
@@ -29,9 +29,6 @@ Configures structlog for human-friendly console output and exposes seventeen sub
 * ``repatch-catalogue-colon``  — rewrite ``CWP_PART_*`` / ``CWP_GROUPHEADING`` tags corrupted by the
   pre-fix bare-``":"`` split (catalogue-colon labels such as Hoboken ``"Hob. III:31"``).  Idempotent.
   Supports ``--dry-run`` to preview planned repatches without writing any tags or journal entries.
-* ``preflight``                — run all maintenance passes with ``dry_run=True`` over ``dest_dir`` and
-  emit a consolidated report of planned changes, cross-pass overlaps, journal capacity, and
-  ``Reference/`` snapshot evidence.  Supports ``--json PATH`` to serialise the report to JSON.
 * ``reconstruct-xrefs``        — census the journal for destructive-choice shapes (SKIP and OVERWRITE
   collision policies) and write secondary release MBIDs as cross-reference tags on surviving files.
   Offline; supports ``--dry-run`` to preview findings without writing tags or journal entries.
@@ -44,7 +41,9 @@ Configures structlog for human-friendly console output and exposes seventeen sub
   ``repath``, ``regroup``, ``unify``, ``reconstruct-xrefs``, ``dedup-library``) as a single
   composition over ``dest_dir``.  The journal is read once and threaded through all passes.
   Move-confirmation prompts are suppressible by ``-y``/``--yes``; integrity prompts are never
-  suppressed.  Supports ``--dry-run`` to preview all passes without mutations.
+  suppressed.  Supports ``--dry-run`` to preview all passes without mutations and emit a
+  consolidated report (overlap map, journal capacity, Reference/ evidence).  Supports
+  ``--json PATH`` to serialise the dry-run report to JSON.
 
 Usage::
 
@@ -104,11 +103,6 @@ Usage::
         <dest_dir> \\
         [--dry-run]
 
-    music-annotator preflight \\
-        <dest_dir> \\
-        [--user-agent-app "AppName/Version"] [--user-agent-email contact@example.com] \\
-        [--journal-path PATH] [--json PATH]
-
     music-annotator reconstruct-xrefs \\
         <dest_dir> \\
         [--dry-run]
@@ -119,7 +113,7 @@ Usage::
 
     music-annotator maintain \\
         <dest_dir> \\
-        [--dry-run] [-y/--yes]
+        [--dry-run] [-y/--yes] [--json PATH]
 """
 
 from __future__ import annotations
@@ -318,8 +312,10 @@ def _build_parser() -> argparse.ArgumentParser:
     computes the canonical top_dir for each, and moves the fragments.  Supports ``--dry-run`` and ``-y``/``--yes``.
     ``repatch-acoustid`` migrates the legacy ``CHROMAPRINT_FP`` fingerprint key to the Picard-aligned
     ``ACOUSTID_FINGERPRINT`` key; accepts ``--acoustid-key`` and ``--dry-run``.
-    ``maintain`` runs all recurring maintenance passes as a single composition; accepts ``--dry-run`` and
-    ``-y``/``--yes``.  Move-confirmation prompts are suppressible by ``--yes``; integrity prompts are not.
+    ``maintain`` runs all recurring maintenance passes as a single composition; accepts ``--dry-run``,
+    ``-y``/``--yes``, and ``--json PATH``.  Move-confirmation prompts are suppressible by ``--yes``;
+    integrity prompts are not.  When ``--dry-run`` is supplied, a consolidated report is emitted
+    covering all seven passes; ``--json PATH`` serialises the report to JSON.
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -887,71 +883,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # ------------------------------------------------------------------
-    # preflight subcommand
-    # ------------------------------------------------------------------
-    preflight_parser = subparsers.add_parser(
-        "preflight",
-        help="Run all maintenance passes with dry_run=True and emit a consolidated preflight report.",
-        formatter_class=_Formatter,
-        epilog=textwrap.dedent("""\
-            Runs each of the six maintenance passes (repath, regroup, unify, enrich,
-            repatch-catalogue-colon, repatch-acoustid) with dry_run=True over <dest_dir> and
-            assembles a consolidated report containing:
-
-              - Per-pass planned-change counts and cross-pass overlap counts.
-              - Cross-pass overlap map: files appearing in more than one pass's plan.
-              - Journal capacity: current entry count, on-disk size, and projected growth.
-              - Reference/ evidence: presence and footprint of the Reference/ snapshot directory.
-
-            When <dest_dir> is not mounted or is empty, prints a "scan not run" message and
-            exits cleanly.  This is structurally distinct from a scan that ran and found nothing.
-
-            Non-mutating: no files are moved, no tags are written, no journal entries are appended.
-
-            Examples:
-              music-annotator preflight /tmp/music_library
-              music-annotator preflight /tmp/music_library --json /tmp/preflight.json
-            """),
-    )
-    preflight_parser.add_argument(
-        "dest_dir",
-        metavar="dest_dir",
-        type=_resolve_path,
-        help="Root of the annotated music library (contains music_annotator_journal.json).",
-    )
-    preflight_parser.add_argument(
-        "--user-agent-app",
-        default=_DEFAULT_USER_AGENT_APP,
-        metavar="STRING",
-        help='MusicBrainz user-agent app token in the form "AppName/Version" (default: %(default)s).',
-    )
-    preflight_parser.add_argument(
-        "--user-agent-email",
-        default="",
-        metavar="EMAIL",
-        help=(
-            "Contact e-mail address included in the MusicBrainz user-agent string.  "
-            "Accepted for forward compatibility; all maintenance passes are genuinely offline "
-            "and do not require the user-agent for correct operation."
-        ),
-    )
-    preflight_parser.add_argument(
-        "--journal-path",
-        metavar="PATH",
-        type=_resolve_path,
-        default=None,
-        help=("Path to the journal file.  Defaults to <dest_dir>/music_annotator_journal.json when not supplied."),
-    )
-    preflight_parser.add_argument(
-        "--json",
-        metavar="PATH",
-        type=_resolve_path,
-        default=None,
-        dest="json_path",
-        help="Serialise the preflight report to JSON at the given path.",
-    )
-
-    # ------------------------------------------------------------------
     # reconstruct-xrefs subcommand
     # ------------------------------------------------------------------
     reconstruct_xrefs_parser = subparsers.add_parser(
@@ -1106,6 +1037,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "Has no effect on integrity prompts (reconstruct-xrefs, dedup-library)."
         ),
     )
+    maintain_parser.add_argument(
+        "--json",
+        metavar="PATH",
+        type=_resolve_path,
+        default=None,
+        dest="json_path",
+        help=(
+            "Serialise the consolidated dry-run report to JSON at the given path.  "
+            "Only effective when --dry-run is also supplied."
+        ),
+    )
 
     return parser
 
@@ -1115,8 +1057,7 @@ def main() -> None:
 
     Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
     ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``, ``repatch-acoustid``,
-    ``repatch-catalogue-colon``, ``preflight``, ``reconstruct-xrefs``, ``dedup-library``,
-    ``maintain``.
+    ``repatch-catalogue-colon``, ``reconstruct-xrefs``, ``dedup-library``, ``maintain``.
 
     The ``repath`` subcommand dispatches to :func:`~music_annotator.repath` with ``dry_run`` and
     ``yes`` forwarded from the parsed arguments.  The ``regroup`` subcommand dispatches to
@@ -1127,7 +1068,7 @@ def main() -> None:
     :func:`~music_annotator.diff_journal`.  The ``origin-time`` subcommand dispatches to
     :func:`~music_annotator.enrich_origin_time` with ``dry_run`` forwarded.  The ``rebuild``
     subcommand dispatches to :func:`~music_annotator.rebuild_journal` with ``dry_run=True``
-    (default) or ``dry_run=False`` when ``--apply`` is passed.      The ``unify`` subcommand
+    (default) or ``dry_run=False`` when ``--apply`` is passed.  The ``unify`` subcommand
     calls :func:`~music_annotator.init_mb` when a user-agent email was supplied (for forward
     compatibility), then dispatches to :func:`~music_annotator.unify`.  The unify pass is
     genuinely offline — it reads embedded tags alone and does not call
@@ -1136,16 +1077,14 @@ def main() -> None:
     to :func:`~music_annotator.repatch_acoustid_tags` with ``acoustid_key`` and ``dry_run``
     forwarded.  The ``repatch-catalogue-colon`` subcommand dispatches to
     :func:`~music_annotator.repatch_catalogue_colon` with ``dry_run`` forwarded.  The
-    ``preflight`` subcommand calls :func:`~music_annotator.init_mb` when a user-agent email was
-    supplied (for forward compatibility), then dispatches to
-    :func:`~music_annotator.compose_preflight_report` and prints the consolidated report; when
-    ``scan_ran`` is ``False`` (root not mounted or empty), prints a clear "scan not run" message
-    and exits cleanly.  The ``reconstruct-xrefs`` subcommand dispatches to
+    ``reconstruct-xrefs`` subcommand dispatches to
     :func:`~music_annotator.reconstruct_cross_references` with ``dry_run`` forwarded; the
     operator confirmation prompt is never suppressed by ``--yes`` (integrity prompts are not
     bulk consent).  The ``maintain`` subcommand dispatches to :func:`~music_annotator.maintain`
-    with ``dry_run`` and ``yes`` forwarded; move-confirmation prompts are suppressible by
-    ``--yes`` but integrity prompts are never suppressed.
+    with ``dry_run``, ``yes``, and ``json_path`` forwarded; move-confirmation prompts are
+    suppressible by ``--yes`` but integrity prompts are never suppressed.  When ``--dry-run``
+    is supplied, a consolidated report is emitted covering all seven passes; ``--json PATH``
+    serialises the report to JSON.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating.  All subcommands except ``prune`` use :func:`_dispatch` to convert any unhandled exception or keyboard
@@ -1318,67 +1257,6 @@ def main() -> None:
                 dest_root=str(args.dest_dir),
             )
 
-        case "preflight":
-            _preflight_journal_path = (
-                args.journal_path if args.journal_path is not None else args.dest_dir / music_annotator.JOURNAL_FILENAME
-            )
-            _preflight_json_path = args.json_path
-
-            def _run_preflight() -> None:
-                """Run compose_preflight_report and emit the consolidated report.
-
-                Initialises the MusicBrainz user-agent via :func:`~music_annotator.init_mb`
-                when a user-agent email was supplied (for forward compatibility), then calls
-                :func:`~music_annotator.compose_preflight_report`.  All maintenance passes
-                are genuinely offline — they read embedded tags alone and do not require the
-                user-agent for correct operation (NORM-2 as revised).
-
-                Calls :func:`~music_annotator.compose_preflight_report` with the resolved
-                ``dest_root`` and ``journal_path``, prints a human-readable summary, and
-                optionally serialises the report to JSON when ``--json`` was supplied.
-                When ``scan_ran`` is ``False`` (root not mounted or empty), prints a clear
-                "scan not run" message and returns without printing pass summaries.
-                """
-                music_annotator.init_mb(f"{args.user_agent_app} {args.user_agent_email}".strip())
-                report = music_annotator.compose_preflight_report(
-                    dest_root=args.dest_dir,
-                    journal_path=_preflight_journal_path,
-                )
-                if not report.scan_ran:
-                    print(
-                        f"preflight: scan not run — '{args.dest_dir}' is not mounted or is empty.\n"
-                        "Mount the library root and re-run to obtain preflight evidence."
-                    )
-                else:
-                    print(f"\nPreflight report for: {args.dest_dir}\n")
-                    print("Pass summaries:")
-                    for summary in report.pass_summaries:
-                        overlap_note = f"  ({summary.overlap_count} overlap)" if summary.overlap_count else ""
-                        print(f"  {summary.pass_name:<30} {summary.count:>5} planned{overlap_note}")
-                    total = sum(s.count for s in report.pass_summaries)
-                    print(f"\n  {'TOTAL':<30} {total:>5} planned")
-                    if report.overlaps:
-                        print(f"\nCross-pass overlaps ({len(report.overlaps)} file(s) in >1 pass):")
-                        for overlap in report.overlaps:
-                            print(f"  {overlap.current_path}")
-                            print(f"    passes: {', '.join(overlap.pass_names)}")
-                    else:
-                        print("\nCross-pass overlaps: none")
-                    cap = report.journal_capacity
-                    print("\nJournal capacity:")
-                    print(f"  Current entries : {cap.current_entry_count}")
-                    print(f"  Current size    : {cap.current_size_bytes} bytes")
-                    print(f"  Projected delta : +{cap.projected_delta_entries} entries")
-                    ref = report.reference_evidence
-                    ref_status = f"present ({ref.size_bytes} bytes)" if ref.present else "absent"
-                    print(f"\nReference/ snapshot: {ref_status}")
-                if _preflight_json_path is not None:
-                    _preflight_json_path.parent.mkdir(parents=True, exist_ok=True)
-                    _preflight_json_path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
-                    print(f"\nReport written to: {_preflight_json_path}")
-
-            _dispatch(_run_preflight, "preflight_error", dest_root=str(args.dest_dir))
-
         case "reconstruct-xrefs":
             _dispatch(
                 lambda: music_annotator.reconstruct_cross_references(
@@ -1407,6 +1285,7 @@ def main() -> None:
                     dest_root=args.dest_dir,
                     dry_run=args.dry_run,
                     yes=args.yes,
+                    json_path=args.json_path,
                 ),
                 "maintain_error",
                 dest_root=str(args.dest_dir),
