@@ -12518,6 +12518,37 @@ class TestCensusJournalForXrefs:
         assert "/lib/Work/01.flac" not in groups
         assert "/lib/Work/01.flac" not in gaps
 
+    def test_existing_cross_referenced_entry_excludes_from_gap(self) -> None:
+        """A destination with a prior 'cross-referenced' journal entry is not an evidence gap.
+
+        When a file has one unique 'tagged' entry and an existing 'cross-referenced' entry, the
+        secondary MBID is already journal-provable (written by a prior reconstruct-xrefs run).
+        The destination must not appear in evidence_gap_dests.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/lib/Work/01.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "cross-referenced",
+                },
+            ]
+        )
+        groups, gaps = _census_journal_for_xrefs(journal)
+        # Already journalled as cross-referenced → not actionable (secondary already recorded).
+        assert "/lib/Work/01.flac" not in groups
+        # Already journal-provable → not an evidence gap.
+        assert "/lib/Work/01.flac" not in gaps
+
 
 # ---------------------------------------------------------------------------
 # reconstruct_cross_references

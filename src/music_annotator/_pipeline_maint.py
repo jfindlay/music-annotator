@@ -3144,14 +3144,17 @@ def _census_journal_for_xrefs(
         if secondary_mbids:
             groups[dest] = (primary_mbid, secondary_mbids)
 
-    # Evidence-gap candidates: destinations with exactly one unique tagged release_id and no
-    # skipped entries — the journal alone cannot prove a secondary MBID, but the file may carry
-    # one (written outside the journal).  Reported for operator review; the caller reads the
-    # live file to check for an existing MUSICBRAINZ_SECONDARY_ALBUMID tag.
+    # Evidence-gap candidates: destinations with exactly one unique tagged release_id, no
+    # skipped entries, and no existing "cross-referenced" journal entry — the journal alone
+    # cannot prove a secondary MBID, but the file may carry one (written outside the journal).
+    # Destinations that already have a "cross-referenced" journal entry are journal-provable and
+    # are excluded: the secondary MBID was written by a prior reconstruct-xrefs run and is
+    # correctly recorded.  Reported for operator review; the caller reads the live file to check
+    # for an existing MUSICBRAINZ_SECONDARY_ALBUMID tag.
     evidence_gap_dests: list[str] = []
     for dest, tagged_ids in tagged_by_dest.items():
         seen_ids: set[str] = {rid for rid in tagged_ids if rid}
-        if len(seen_ids) == 1 and dest not in skipped_by_dest and dest not in groups:
+        if len(seen_ids) == 1 and dest not in skipped_by_dest and dest not in groups and dest not in xref_by_dest:
             evidence_gap_dests.append(dest)
 
     return groups, evidence_gap_dests
