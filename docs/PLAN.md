@@ -251,7 +251,7 @@ VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch covera
 
 | ID | Title                                                                     | Status | Commit | Notes |
 |----|---------------------------------------------------------------------------|--------|--------|-------|
-| S1 | STYLEGUIDE: maintenance-pass order + dry-run/convergence ergonomics (C-CONFLUENCE) | todo   |        |       |
+| S1 | STYLEGUIDE: maintenance-pass order + dry-run/convergence ergonomics (C-CONFLUENCE) | done   | 9e030e7 | C-CONFLUENCE registered in STYLEGUIDE.md; pass order confirmed against code |
 | S2 | `maintain` umbrella action (C-MAINTAIN)                                   | todo   |        |       |
 | S3 | Fold preflight report into `maintain --dry-run`; remove preflight         | todo   |        |       |
 | S4 | Retire completed singletons; retain journal readers (C-RETIRE)            | todo   |        |       |
