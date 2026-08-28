@@ -1414,8 +1414,8 @@ def _read_albumid_tag(path: Path) -> str:
                 log.warning("albumid_tag_unsupported_format", path=str(path), suffix=ext)
                 return ""
         return file_dict.get("MUSICBRAINZ_ALBUMID", "")
-    except Exception:  # noqa: BLE001 — best-effort read; any failure means unconfirmed/stale
-        log.warning("albumid_tag_read_error", path=str(path))
+    except Exception as exc:  # noqa: BLE001 — best-effort read; any failure means unconfirmed/stale
+        log.warning("albumid_tag_read_error", path=str(path), exc_type=type(exc).__name__, exc_msg=str(exc))
         return ""
 
 

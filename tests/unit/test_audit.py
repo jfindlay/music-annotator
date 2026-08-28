@@ -1467,7 +1467,10 @@ class TestReadAlbumidTag:
 
     # pylint: disable-next=unused-argument
     def test_read_error_returns_empty(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
-        """_read_albumid_tag returns "" and logs a warning when the tag read raises.
+        """_read_albumid_tag returns "" and logs a warning with exc_type/exc_msg when the tag read raises.
+
+        The warning event includes the exception class name and message so the failure mode is
+        visible in structured logs without requiring a traceback.
 
         :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
@@ -1479,8 +1482,13 @@ class TestReadAlbumidTag:
         result = _read_albumid_tag(path)
 
         assert result == ""
-        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        warning_calls = mock_log.warning.call_args_list
+        warning_events = [c.args[0] for c in warning_calls]
         assert "albumid_tag_read_error" in warning_events
+        # The warning must carry the exception class name and message so the failure mode is visible.
+        error_call = next(c for c in warning_calls if c.args[0] == "albumid_tag_read_error")
+        assert error_call.kwargs.get("exc_type") == "OSError"
+        assert error_call.kwargs.get("exc_msg") == "corrupt"
 
     def test_mp3_with_albumid_tag_returns_id(self, fs: FakeFilesystem) -> None:
         """_read_albumid_tag returns the embedded MUSICBRAINZ_ALBUMID for a tagged MP3.
