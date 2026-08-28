@@ -218,7 +218,7 @@ ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and cove
 | S4 | Composite-idempotence KATs + inverse-move tripwire (C-IDEM)                    | done   | af119d7 | New test_idempotence.py; tripwire warns (does not block); all KATs pass. |
 | S5 | Evidence-gap predicate fix (current-path resolution + census de-dup)           | done   | 51406e8 | _resolve_move_chain helper added; all 3 KATs pass. |
 | S6 | dedup prompt re-prompt + name_too_long noise fix                               | done   | 22371df | Re-prompt loop added; EOF treated as abort; clamp warning suppressed on no-op. |
-| S7 | albumid_tag_read_error diagnosis + exception detail in event                   | todo   |        |       |
+| S7 | albumid_tag_read_error diagnosis + exception detail in event                   | done   | fec53bd | exc_type + exc_msg added to warning event; KAT passes. Operator samples hades at S8. |
 | S8 | Acceptance gate on hades: converge to "no changes" by run 2                    | todo   |        |       |
 
 Frozen contracts: C-CANON, C-NC-TOP, C-IDEM (frozen at derivation 2026-08-28, operator rulings).  C-MAINTAIN,
