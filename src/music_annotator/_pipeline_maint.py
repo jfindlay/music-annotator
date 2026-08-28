@@ -2131,9 +2131,44 @@ def regroup(  # pylint: disable=too-many-return-statements
             _regroup_work_groups[_twid] = []
         _regroup_work_groups[_twid].append(_ri)
 
+    # Extend the modal depth computation to include all library files that share the same
+    # CWP_WORKID_TOP as the confirmed-release tracks, even if those files belong to other
+    # releases.  Without this, regroup computes modal depth over only the confirmed-release
+    # subset, which may differ from repath's computation (which scans the full library).
+    # The disagreement causes a same-run ping-pong: repath moves a track into its work-subdir
+    # (full-library modal depth), then regroup moves it back (subset modal depth).
+    # Files outside confirmed_release_ids are read for depth context only — they are never moved.
+    _regroup_work_ids_in_scope: frozenset[str] = frozenset(
+        _rt.cwp_workid_top for _, _rt, _, _, _ in _regroup_file_data if _rt.cwp_workid_top
+    )
+    # Map from cwp_workid_top → extra part_levels from non-confirmed library files.
+    _regroup_extra_part_levels: dict[str, list[int]] = {}
+    _regroup_confirmed_paths: frozenset[Path] = frozenset(p for p, _, _, _, _ in _regroup_file_data)
+    for _ctx_path, _ctx_rid in full_lib.items():
+        if _ctx_rid in confirmed_release_ids:
+            continue  # already in _regroup_file_data
+        if _ctx_path in _regroup_confirmed_paths:
+            continue  # pragma: no cover — defensive: a non-confirmed path cannot be in confirmed set
+        if not _ctx_path.exists():
+            continue
+        _ctx_ext = _ctx_path.suffix.lower()
+        if _ctx_ext not in {".flac", ".mp3"}:  # pragma: no cover — full_lib only contains tagged audio files
+            continue
+        try:
+            _ctx_file_dict = _read_tags_cached(_ctx_path, _ctx_ext, cache)
+        except Exception:  # noqa: BLE001 — tag read failure: skip for depth context  # pragma: no cover
+            continue
+        _ctx_twid = _ctx_file_dict.get("CWP_WORKID_TOP", "")
+        if _ctx_twid not in _regroup_work_ids_in_scope:
+            continue
+        _regroup_extra_part_levels.setdefault(_ctx_twid, []).append(int(_ctx_file_dict.get("CWP_PART_LEVELS") or "0"))
+
     _regroup_modal_by_idx: dict[int, int | None] = {}
     for _twid, _group_idxs in _regroup_work_groups.items():
         _part_levels = [int(_regroup_file_data[_i][1].cwp_part_levels or "0") for _i in _group_idxs]
+        # Include part_levels from non-confirmed library files sharing the same top-work MBID
+        # so the modal depth ceiling matches repath's full-library computation.
+        _part_levels.extend(_regroup_extra_part_levels.get(_twid, []))
         _modal = work_group_modal_depth(_part_levels)
         # When modal is 0 (all-orphan group), pass None so build_dest_path uses own depth
         # unchanged — equivalent outcome, avoids a redundant min(0, 0) clamp.
@@ -2542,9 +2577,36 @@ def unify(  # pylint: disable=too-many-return-statements
             _hydrate_performer_lists(_tags, _file_dict)
         sel23_ensemble_patch([_tags for _, _tags, _ in group_tags])
 
-        for file_path, tags, file_dict in group_tags:
+        # --- Work-group modal depth per CWP_WORKID_TOP group (C-CANON / C-W3b-INT) ---
+        # Compute once per top-work group within this release, then pass to build_dest_path
+        # so unify's depth render agrees with repath's and regroup's.  Without this, unify
+        # omits the group_modal_depth argument and produces a depth render that disagrees
+        # with the other passes, causing depth-insertion churn every run.
+        _unify_work_groups: dict[str, list[int]] = {}
+        for _ui, (_, _ut, _) in enumerate(group_tags):
+            _twid = _ut.cwp_workid_top
+            _unify_work_groups.setdefault(_twid, []).append(_ui)
+
+        _unify_modal_by_idx: dict[int, int | None] = {}
+        for _twid, _group_idxs in _unify_work_groups.items():
+            _part_levels = [int(group_tags[_i][1].cwp_part_levels or "0") for _i in _group_idxs]
+            _modal = work_group_modal_depth(_part_levels)
+            # When modal is 0 (all-orphan group), pass None so build_dest_path uses own depth
+            # unchanged — equivalent outcome, avoids a redundant min(0, 0) clamp.
+            _modal_or_none: int | None = _modal if _modal > 0 else None
+            for _i in _group_idxs:
+                _unify_modal_by_idx[_i] = _modal_or_none
+
+        for _ui, (file_path, tags, file_dict) in enumerate(group_tags):
             ext = file_path.suffix.lower()
-            new_dest_base = build_dest_path(dest_root, stub_release, stub_track, tags, global_track_idx=0)
+            new_dest_base = build_dest_path(
+                dest_root,
+                stub_release,
+                stub_track,
+                tags,
+                global_track_idx=0,
+                group_modal_depth=_unify_modal_by_idx.get(_ui),
+            )
             new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext))
 
             if new_dest == file_path:

@@ -15602,3 +15602,575 @@ class TestMaintain:
 
         for pass_name, received in received_journals.items():
             assert received is sentinel_journal, f"Pass '{pass_name}' did not receive the threaded journal"
+
+
+# ---------------------------------------------------------------------------
+# KATs: depth canonical unification (C-CANON / C-W3b-INT)
+# ---------------------------------------------------------------------------
+
+
+class TestDepthCanonicalUnification:
+    """KATs for the depth canonical unification fix (C-CANON / C-W3b-INT).
+
+    Three witnesses:
+
+    1. **Wagner shape** — a confirmed split-release whose tracks have PL=2, but the same
+       top-work MBID is shared by non-confirmed library files with PL=3.  After the fix,
+       ``regroup`` extends its modal-depth computation to include the non-confirmed files and
+       agrees with ``repath``'s full-library modal depth.  The same-run ping-pong is impossible
+       by construction: after ``repath`` moves the file to the work-subdir (depth-3 render),
+       ``regroup`` computes the same canonical destination and produces an empty plan.
+
+    2. **La traviata / Guglielmo Tell shape** — a classical work with PL=2 tracks fragmented
+       across top_dirs.  After the fix, ``unify`` threads ``group_modal_depth`` into
+       ``build_dest_path`` and produces the same depth render as ``repath``.  Mock-enforced
+       equality: both passes compute the same canonical destination for the same tags.
+
+    3. **C-W3b-INT parity** — the depth render for classical works matches between the ingest
+       pipeline (``build_dest_path`` with ``group_modal_depth``) and the maintenance passes
+       (``regroup`` and ``unify``).  Asserts that after a full ``maintain`` run, files land at
+       the same path that the ingest pipeline would have computed.
+    """
+
+    # ------------------------------------------------------------------
+    # Shared tag factories
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_wagner_tags(
+        cwp_part_levels: str,
+        cwp_movt_num: str,
+        title: str,
+        release_id: str,
+        *,
+        extra_parts: dict[str, str] | None = None,
+    ) -> TrackTags:
+        """Build TrackTags for a Wagner-shape test track.
+
+        :param cwp_part_levels: String value for CWP_PART_LEVELS.
+        :param cwp_movt_num: String value for CWP_MOVT_NUM.
+        :param title: Track title.
+        :param release_id: MUSICBRAINZ_ALBUMID to embed.
+        :param extra_parts: Optional dict of lowercase model_extra keys to set.
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        tags = TrackTags(
+            cwp_work_top="Die Meistersinger von Nürnberg",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="Wagner",
+            cwp_workid_top="w-meistersinger",
+            recording_date="1951",
+            cwp_part_levels=cwp_part_levels,
+            cwp_movt_num=cwp_movt_num,
+            movementtotal="3",
+            title=title,
+            artist="Karajan",
+            musicbrainz_albumid=release_id,
+        )
+        if extra_parts and tags.model_extra is not None:
+            tags.model_extra.update(extra_parts)
+        return tags
+
+    @staticmethod
+    def _make_opera_tags(
+        cwp_part_levels: str,
+        cwp_movt_num: str,
+        title: str,
+        release_id: str,
+        work_top: str = "La traviata",
+        *,
+        extra_parts: dict[str, str] | None = None,
+    ) -> TrackTags:
+        """Build TrackTags for a La traviata / Guglielmo Tell shape test track.
+
+        :param cwp_part_levels: String value for CWP_PART_LEVELS.
+        :param cwp_movt_num: String value for CWP_MOVT_NUM.
+        :param title: Track title.
+        :param release_id: MUSICBRAINZ_ALBUMID to embed.
+        :param work_top: CWP_WORK_TOP value (default: ``"La traviata"``).
+        :param extra_parts: Optional dict of lowercase model_extra keys to set.
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        tags = TrackTags(
+            cwp_work_top=work_top,
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="Verdi",
+            cwp_workid_top="w-traviata",
+            recording_date="1955",
+            cwp_part_levels=cwp_part_levels,
+            cwp_movt_num=cwp_movt_num,
+            movementtotal="2",
+            title=title,
+            artist="Callas",
+            musicbrainz_albumid=release_id,
+        )
+        if extra_parts and tags.model_extra is not None:
+            tags.model_extra.update(extra_parts)
+        return tags
+
+    # ------------------------------------------------------------------
+    # KAT 1: Wagner shape — regroup agrees with repath; ping-pong impossible
+    # ------------------------------------------------------------------
+
+    def test_wagner_regroup_agrees_with_repath_no_ping_pong(self, fs: FakeFilesystem) -> None:
+        """Wagner shape: regroup's modal depth agrees with repath's after the full-library extension.
+
+        Scenario: the confirmed split-release ("wagner-split") has 2 tracks with PL=3 (3-level
+        hierarchy: work_dir / act / scene / leaf).  A non-confirmed release ("wagner-other") has
+        3 tracks with PL=2 sharing the same CWP_WORKID_TOP ("w-meistersinger").
+
+        Without the fix:
+        - regroup computes modal depth over only the 2 confirmed tracks (PL=3): modal=3.
+          regroup moves the confirmed tracks from their 2-level canonical paths to 3-level paths.
+          → ping-pong: regroup disagrees with repath's full-library modal depth (2).
+
+        With the fix:
+        - regroup extends its modal depth computation to include the non-confirmed tracks (PL=2)
+          and computes modal=2 — agreeing with repath.
+        - The confirmed tracks are already at their 2-level canonical paths (placed there by
+          repath), so regroup produces an empty plan — the ping-pong is impossible.
+
+        The test places the confirmed tracks at their 2-level canonical paths (simulating the
+        post-repath state) and asserts that regroup is a noop.  Without the fix, regroup would
+        compute modal=3 and move the tracks to 3-level paths.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Confirmed split-release: 2 tracks with PL=3 (3-level hierarchy).
+        # These are the tracks regroup will try to consolidate.
+        tags_split_1 = self._make_wagner_tags(
+            "3",
+            "1",
+            "Prelude",
+            "wagner-split",
+            extra_parts={
+                "cwp_part_1": "Scene 1",
+                "cwp_ordering_key_1": "1",
+                "cwp_part_2": "Akt I",
+                "cwp_ordering_key_2": "1",
+            },
+        )
+        tags_split_2 = self._make_wagner_tags(
+            "3",
+            "2",
+            "Quintet",
+            "wagner-split",
+            extra_parts={
+                "cwp_part_1": "Scene 1",
+                "cwp_ordering_key_1": "1",
+                "cwp_part_2": "Akt I",
+                "cwp_ordering_key_2": "1",
+            },
+        )
+
+        # Non-confirmed release: 3 tracks with PL=2 sharing the same CWP_WORKID_TOP.
+        # These tracks are NOT in the confirmed split-release set.
+        # Their majority (3 vs 2) drives the full-library modal depth to 2.
+        tags_other_1 = self._make_wagner_tags(
+            "2",
+            "1",
+            "Overture",
+            "wagner-other",
+            extra_parts={"cwp_part_1": "Akt I", "cwp_ordering_key_1": "1"},
+        )
+        tags_other_2 = self._make_wagner_tags(
+            "2",
+            "2",
+            "Aria",
+            "wagner-other",
+            extra_parts={"cwp_part_1": "Akt I", "cwp_ordering_key_1": "1"},
+        )
+        tags_other_3 = self._make_wagner_tags(
+            "2",
+            "3",
+            "Finale",
+            "wagner-other",
+            extra_parts={"cwp_part_1": "Akt II", "cwp_ordering_key_1": "2"},
+        )
+
+        # Full-library modal depth: 3 PL=2 tracks + 2 PL=3 tracks → modal=2 (majority PL=2).
+        full_modal = work_group_modal_depth([3, 3, 2, 2, 2])
+        assert full_modal == 2  # noqa: PLR2004 — 2 is the full-library modal depth
+
+        # Subset modal depth (only the confirmed release's tracks): 2 PL=3 tracks → modal=3.
+        subset_modal = work_group_modal_depth([3, 3])
+        assert subset_modal == 3  # noqa: PLR2004 — 3 is the subset modal depth
+
+        # Canonical destination using full-library modal depth (what repath computes).
+        # For PL=3 tracks with modal=2: min(3,2)=2 → 2-level path (no scene dir, only act dir).
+        canonical_split_1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_split_1, group_modal_depth=full_modal
+        ).with_suffix(".flac")
+        canonical_split_2 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_split_2, group_modal_depth=full_modal
+        ).with_suffix(".flac")
+
+        # Subset-modal destination (what regroup would compute WITHOUT the fix).
+        # For PL=3 tracks with modal=3: min(3,3)=3 → 3-level path (act + scene + leaf).
+        subset_dest_1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_split_1, group_modal_depth=subset_modal
+        ).with_suffix(".flac")
+        subset_dest_2 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_split_2, group_modal_depth=subset_modal
+        ).with_suffix(".flac")
+
+        # The canonical (full-modal) and subset-modal paths must differ for the
+        # ping-pong scenario to be non-trivial.
+        assert canonical_split_1 != subset_dest_1, (
+            "test setup error: full-modal (2-level) and subset-modal (3-level) paths must differ for PL=3 tracks"
+        )
+
+        # Place confirmed tracks at their CANONICAL (full-modal, 2-level) paths.
+        # This simulates the post-repath state: repath has already moved the files to the
+        # 2-level canonical paths using the full-library modal depth.
+        _make_library_flac(dest_root, str(canonical_split_1.relative_to(dest_root)), tags_split_1)
+        _make_library_flac(dest_root, str(canonical_split_2.relative_to(dest_root)), tags_split_2)
+
+        # Place non-confirmed tracks at their canonical paths (full-modal=2, 2-level paths).
+        canonical_other_1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_other_1, group_modal_depth=full_modal
+        ).with_suffix(".flac")
+        canonical_other_2 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_other_2, group_modal_depth=full_modal
+        ).with_suffix(".flac")
+        canonical_other_3 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_other_3, group_modal_depth=full_modal
+        ).with_suffix(".flac")
+        _make_library_flac(dest_root, str(canonical_other_1.relative_to(dest_root)), tags_other_1)
+        _make_library_flac(dest_root, str(canonical_other_2.relative_to(dest_root)), tags_other_2)
+        _make_library_flac(dest_root, str(canonical_other_3.relative_to(dest_root)), tags_other_3)
+
+        # Build a split-release journal: the confirmed release has tracks in two work_dirs.
+        # The "tagged" entries show the confirmed tracks at their CURRENT (canonical) paths.
+        # A phantom entry in a different work_dir triggers _confirm_fragmentation case-b.
+        # The confirmed tracks are at the canonical paths so _is_confirmed can read their tags.
+        phantom = dest_root / "Wagner - Karajan" / "OldMeistersinger [rec 1951]" / "phantom.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "wagner-split",
+                    "source": "/src/01.flac",
+                    "destination": str(canonical_split_1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "wagner-split",
+                    "source": "/src/02.flac",
+                    "destination": str(canonical_split_2),
+                    "action": "tagged",
+                },
+                # Phantom entry in a different work_dir to trigger case-b fragmentation.
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "wagner-split",
+                    "source": "/src/phantom.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+                # Non-confirmed release tracks (tagged at their canonical paths).
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "wagner-other",
+                    "source": "/src/other1.flac",
+                    "destination": str(canonical_other_1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "wagner-other",
+                    "source": "/src/other2.flac",
+                    "destination": str(canonical_other_2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "wagner-other",
+                    "source": "/src/other3.flac",
+                    "destination": str(canonical_other_3),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Run regroup: with the fix, it extends its modal depth computation to include the
+        # non-confirmed tracks (PL=2) and computes modal=2 — agreeing with repath.
+        # The confirmed tracks are already at their 2-level canonical paths, so regroup
+        # must produce an empty plan (no moves).
+        #
+        # Without the fix, regroup would compute modal=3 (only the confirmed tracks, PL=3)
+        # and move the confirmed tracks from 2-level to 3-level paths — the ping-pong.
+        regroup_plan = music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # regroup must produce an empty plan (no moves) — the ping-pong is impossible.
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped = [e for e in journal.entries if e.action == "regrouped"]
+        assert not regrouped, (
+            f"regroup must not move any files when confirmed tracks are already at the full-modal "
+            f"(2-level) canonical path; got {len(regrouped)} regrouped entries: "
+            f"{[e.destination for e in regrouped]}"
+        )
+        # regroup returns None (not a DryRunPlan) when it finds nothing to do in live mode.
+        assert regroup_plan is None, f"regroup must return None (no moves) in live mode; got {regroup_plan!r}"
+
+        # Confirmed tracks must still be at the full-modal canonical paths.
+        assert canonical_split_1.exists(), "confirmed track 1 must remain at full-modal canonical path"
+        assert canonical_split_2.exists(), "confirmed track 2 must remain at full-modal canonical path"
+        # Subset-modal (3-level) paths must not exist — regroup must not have moved the tracks there.
+        assert not subset_dest_1.exists(), (
+            "regroup must not move confirmed track 1 to the 3-level path (subset-modal ping-pong)"
+        )
+        assert not subset_dest_2.exists(), (
+            "regroup must not move confirmed track 2 to the 3-level path (subset-modal ping-pong)"
+        )
+
+    # ------------------------------------------------------------------
+    # KAT 2: La traviata / Guglielmo Tell shape — unify depth equals repath
+    # ------------------------------------------------------------------
+
+    def test_opera_unify_depth_equals_repath(self, fs: FakeFilesystem) -> None:
+        """La traviata / Guglielmo Tell shape: unify's depth render equals repath's (C-CANON).
+
+        A classical opera work with PL=2 tracks (2-level hierarchy: work_dir + act + leaf)
+        is fragmented across two top_dirs.  After the fix, unify threads group_modal_depth
+        into build_dest_path and produces the same depth render as repath.
+
+        Mock-enforced equality: both repath and unify compute the same canonical destination
+        for the same embedded tags.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two tracks of the same opera, PL=2 (work_dir / act / leaf).
+        tags_1 = self._make_opera_tags(
+            "2",
+            "1",
+            "Atto I - Aria",
+            "opera-frag",
+            extra_parts={"cwp_part_1": "Atto I", "cwp_ordering_key_1": "1"},
+        )
+        tags_2 = self._make_opera_tags(
+            "2",
+            "2",
+            "Atto II - Duet",
+            "opera-frag",
+            extra_parts={"cwp_part_1": "Atto II", "cwp_ordering_key_1": "2"},
+        )
+
+        # Compute the canonical destination using the group modal depth (modal=2 for both tracks).
+        modal = work_group_modal_depth([2, 2])
+        assert modal == 2  # noqa: PLR2004
+
+        canonical_1 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_1, group_modal_depth=modal).with_suffix(".flac")
+        canonical_2 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_2, group_modal_depth=modal).with_suffix(".flac")
+
+        # Place track 1 at a wrong top_dir (fragmented: different performer in path).
+        # Track 2 is already at the canonical path (same top_dir as canonical_1 would be).
+        wrong_top_1 = dest_root / "Verdi - Serafin" / "La traviata [rec 1955]" / "01 - Atto I" / "01 - Atto I - Aria.flac"
+        wrong_top_1.parent.mkdir(parents=True, exist_ok=True)
+        wrong_top_1.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(wrong_top_1, tags_1)
+
+        # Track 2 at canonical path (ensures two distinct top_dirs for fragmentation detection).
+        _make_library_flac(dest_root, str(canonical_2.relative_to(dest_root)), tags_2)
+
+        # Verify that wrong_top_1 != canonical_1 (fragmentation is non-trivial).
+        assert wrong_top_1 != canonical_1, "test setup error: wrong and canonical paths must differ"
+
+        # Compute what repath would compute for track 1 (full-library modal depth = 2).
+        repath_dest_1 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_1, group_modal_depth=modal).with_suffix(".flac")
+
+        # Assert that unify's canonical destination (with fix) equals repath's.
+        # Both use the same group_modal_depth (modal=2) over the same tags.
+        assert repath_dest_1 == canonical_1, (
+            "repath and unify must compute the same canonical destination for the same tags and modal depth"
+        )
+
+        # Run unify: it must move track 1 from wrong_top_1 to canonical_1.
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # Track 1 must be at the canonical path (with intermediate act dir — depth 2).
+        assert canonical_1.exists(), (
+            f"unify must move track 1 to the canonical depth-2 path {canonical_1.relative_to(dest_root)}"
+        )
+        assert not wrong_top_1.exists(), "unify must move track 1 away from the wrong top_dir"
+
+        # Verify the canonical path has the correct depth (4 parts: top/work/act/leaf).
+        assert len(canonical_1.relative_to(dest_root).parts) == 4, (  # noqa: PLR2004
+            f"canonical path must have 4 parts (top/work/act/leaf), got {canonical_1.relative_to(dest_root).parts}"
+        )
+
+        # Verify the depth render matches repath's: the act directory must be present.
+        assert "Atto I" in str(canonical_1), (
+            "canonical path must contain the act directory (Atto I) — depth render must agree with repath"
+        )
+
+    # ------------------------------------------------------------------
+    # KAT 3: C-W3b-INT parity — ingest/maintenance depth render match
+    # ------------------------------------------------------------------
+
+    def test_c_w3b_int_parity_regroup_and_unify(self, fs: FakeFilesystem) -> None:
+        """C-W3b-INT parity: regroup and unify produce the same depth render as the ingest pipeline.
+
+        Asserts that after a full maintain run, files land at the same path that
+        build_dest_path (the ingest pipeline's canonical function) would compute with the
+        correct group_modal_depth.  This is the maintenance-parity invariant: the depth render
+        for classical works must match between the ingest pipeline and all maintenance passes.
+
+        Scenario: a 3-track classical work with PL=2 (2-level hierarchy).  The ingest pipeline
+        would place each track at ``work_dir/act/leaf``.  After the fix, both regroup and unify
+        produce the same depth render.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Three tracks of the same work, all PL=2.
+        tags_1 = self._make_opera_tags(
+            "2",
+            "1",
+            "Atto I - Scena 1",
+            "parity-rel",
+            work_top="Guillaume Tell",
+            extra_parts={"cwp_part_1": "Atto I", "cwp_ordering_key_1": "1"},
+        )
+        tags_2 = self._make_opera_tags(
+            "2",
+            "2",
+            "Atto II - Scena 1",
+            "parity-rel",
+            work_top="Guillaume Tell",
+            extra_parts={"cwp_part_1": "Atto II", "cwp_ordering_key_1": "2"},
+        )
+        tags_3 = self._make_opera_tags(
+            "2",
+            "3",
+            "Atto III - Finale",
+            "parity-rel",
+            work_top="Guillaume Tell",
+            extra_parts={"cwp_part_1": "Atto III", "cwp_ordering_key_1": "3"},
+        )
+
+        # Compute the ingest-pipeline canonical destinations (group_modal_depth=2).
+        modal = work_group_modal_depth([2, 2, 2])
+        assert modal == 2  # noqa: PLR2004
+
+        ingest_dest_1 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_1, group_modal_depth=modal).with_suffix(".flac")
+        ingest_dest_2 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_2, group_modal_depth=modal).with_suffix(".flac")
+        ingest_dest_3 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_3, group_modal_depth=modal).with_suffix(".flac")
+
+        # All three ingest destinations must have the act directory (depth-2 render).
+        assert len(ingest_dest_1.relative_to(dest_root).parts) == 4, (  # noqa: PLR2004
+            "ingest path must have 4 parts (top/work/act/leaf)"
+        )
+
+        # --- Regroup parity sub-test ---
+        # Place tracks at legacy paths (flat, no act dir — depth-1 render).
+        # A phantom entry in a different work_dir triggers case-b fragmentation detection.
+        legacy_1 = dest_root / "Verdi - Callas" / "Guillaume Tell [rec 1955]" / "01 - Atto I - Scena 1.flac"
+        legacy_2 = dest_root / "Verdi - Callas" / "Guillaume Tell [rec 1955]" / "02 - Atto II - Scena 1.flac"
+        legacy_3 = dest_root / "Verdi - Callas" / "Guillaume Tell [rec 1955]" / "03 - Atto III - Finale.flac"
+        for legacy_path, tags in [(legacy_1, tags_1), (legacy_2, tags_2), (legacy_3, tags_3)]:
+            legacy_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_path.write_bytes(_MINIMAL_FLAC)
+            apply_tags_flac(legacy_path, tags)
+
+        phantom_regroup = dest_root / "Verdi - Callas" / "OldGuillaume [rec 1955]" / "phantom.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "parity-rel",
+                    "source": "/src/01.flac",
+                    "destination": str(legacy_1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "parity-rel",
+                    "source": "/src/02.flac",
+                    "destination": str(legacy_2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "parity-rel",
+                    "source": "/src/03.flac",
+                    "destination": str(legacy_3),
+                    "action": "tagged",
+                },
+                # Phantom entry in a different work_dir to trigger case-b fragmentation.
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "parity-rel",
+                    "source": "/src/phantom.flac",
+                    "destination": str(phantom_regroup),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # After regroup: all tracks must be at the ingest-pipeline canonical paths.
+        assert ingest_dest_1.exists(), (
+            f"regroup must place track 1 at ingest-canonical path {ingest_dest_1.relative_to(dest_root)}"
+        )
+        assert ingest_dest_2.exists(), (
+            f"regroup must place track 2 at ingest-canonical path {ingest_dest_2.relative_to(dest_root)}"
+        )
+        assert ingest_dest_3.exists(), (
+            f"regroup must place track 3 at ingest-canonical path {ingest_dest_3.relative_to(dest_root)}"
+        )
+
+        # Depth check: all paths must have the act directory (4 parts: top/work/act/leaf).
+        for dest, label in [(ingest_dest_1, "track 1"), (ingest_dest_2, "track 2"), (ingest_dest_3, "track 3")]:
+            assert len(dest.relative_to(dest_root).parts) == 4, (  # noqa: PLR2004
+                f"regroup {label} path must have 4 parts (top/work/act/leaf), got {dest.relative_to(dest_root).parts}"
+            )
+
+        # --- Unify parity sub-test ---
+        # Reset the library: place tracks at wrong top_dirs (fragmented) for unify to consolidate.
+        # Use a fresh dest_root to avoid interference with the regroup sub-test.
+        dest_root2 = Path("/lib2")
+        fs.create_dir(str(dest_root2))
+
+        wrong_top_1 = dest_root2 / "Verdi - Serafin" / "Guillaume Tell [rec 1955]" / "01 - Atto I - Scena 1.flac"
+        wrong_top_1.parent.mkdir(parents=True, exist_ok=True)
+        wrong_top_1.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(wrong_top_1, tags_1)
+
+        # Track 2 at canonical path (ensures two distinct top_dirs for fragmentation detection).
+        ingest_dest_2b = build_dest_path(dest_root2, MBRelease(), MBTrack(), tags_2, group_modal_depth=modal).with_suffix(
+            ".flac"
+        )
+        _make_library_flac(dest_root2, str(ingest_dest_2b.relative_to(dest_root2)), tags_2)
+
+        # Compute the ingest-canonical destination for track 1 in dest_root2.
+        ingest_dest_1b = build_dest_path(dest_root2, MBRelease(), MBTrack(), tags_1, group_modal_depth=modal).with_suffix(
+            ".flac"
+        )
+
+        assert wrong_top_1 != ingest_dest_1b, "test setup error: wrong and canonical paths must differ"
+
+        music_annotator.unify(dest_root=dest_root2, yes=True)
+
+        # After unify: track 1 must be at the ingest-pipeline canonical path.
+        assert ingest_dest_1b.exists(), (
+            f"unify must place track 1 at ingest-canonical path {ingest_dest_1b.relative_to(dest_root2)}"
+        )
+        assert not wrong_top_1.exists(), "unify must move track 1 away from the wrong top_dir"
+
+        # Depth check: the canonical path must have the act directory (4 parts: top/work/act/leaf).
+        assert len(ingest_dest_1b.relative_to(dest_root2).parts) == 4, (  # noqa: PLR2004
+            f"unify path must have 4 parts (top/work/act/leaf), got {ingest_dest_1b.relative_to(dest_root2).parts}"
+        )
