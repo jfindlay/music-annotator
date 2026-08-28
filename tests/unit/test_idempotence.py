@@ -19,6 +19,27 @@ Covers every observed cycle shape that was fixed by the canonical unification wo
 4. **Inverse-move tripwire** — a deliberately-divergent stub canonical triggers the
    ``inverse_move_detected`` warning before executing the plan.  The tripwire warns; it does not
    block (C-CONFLUENCE ergonomics register: no formal oscillation calculus).
+
+5. **Completer chain shape (K.626 / Mozart; Süßmayr)** — a classical release whose movements carry
+   two distinct embedded composer chains (``Mozart`` and ``Mozart; Süßmayr``).  The old pass-local
+   in-memory chain patch unified all movements under the fullest chain, causing ``repath`` and
+   ``unify`` to disagree on the destination.  After the patch is deleted, each movement renders its
+   raw embedded chain; the two chains produce two distinct top dirs (the accepted fixpoint).  The
+   second ``maintain`` run must report "no changes" and append zero journal entries.
+
+6. **Empty-composer non-classical flip** — a jazz release whose tracks carry ``MUSICBRAINZ_WORKID``
+   and empty composer tags.  The old chain patch applied to these tracks via the ``musicbrainz_workid``
+   fallback, flipping their top dir from ALBUMARTIST-led to composer-led (a C-NC-TOP violation).
+   After the patch is deleted, the top dir stays ALBUMARTIST-led.  The second ``maintain`` run must
+   report "no changes" and append zero journal entries.
+
+7. **Depth-membership shape** — a library fixture with two recordings of the same top work with
+   different ``cwp_part_levels`` distributions, one of them a fragmented release.  The old ``unify``
+   computed modal depth over the fragmented release's files only (release-local membership), while
+   ``repath`` computed over the full library (library-wide membership).  The same statistic over
+   different denominators produced a stable orbit.  After the fix, all passes use the library-wide
+   modal depth map (C-GROUPSCOPE).  The second ``maintain`` run must report "no changes" and append
+   zero journal entries.
 """
 
 # pylint: disable=duplicate-code  # test setup patterns are intentionally similar across test modules
@@ -802,3 +823,463 @@ class TestInverseMoveTripwire:
         )
         assert warning_events[0]["current_pass"] in {"repath", "regroup", "unify"}
         assert warning_events[0]["prior_pass"] == "unified"
+
+
+# ---------------------------------------------------------------------------
+# KAT 5: Completer chain shape (C-IDEM, C-CANON)
+# ---------------------------------------------------------------------------
+
+
+class TestCompleterChainIdempotence:
+    """KAT: completer-chain shape consolidation is idempotent (C-IDEM, C-CANON).
+
+    Covers the K.626 / Mozart; Süßmayr cycle shape: a classical release whose movements carry
+    two distinct embedded composer chains (``Mozart`` and ``Mozart; Süßmayr``).  The old
+    pass-local in-memory chain patch unified all movements under the fullest chain, causing
+    ``repath`` and ``unify`` to disagree on the destination (a stable orbit).
+
+    After the patch is deleted, each movement renders its raw embedded chain.  The two chains
+    produce two distinct top dirs (the accepted fixpoint — not a regression).  The second
+    ``maintain`` run must report "no changes" and append zero journal entries.
+
+    Also covers the empty-composer non-classical flip: a jazz release whose tracks carry
+    ``MUSICBRAINZ_WORKID`` and empty composer tags.  The old chain patch applied to these tracks
+    via the ``musicbrainz_workid`` fallback, flipping their top dir from ALBUMARTIST-led to
+    composer-led (a C-NC-TOP violation).  After the patch is deleted, the top dir stays
+    ALBUMARTIST-led.  The second ``maintain`` run must report "no changes" and append zero
+    journal entries.
+    """
+
+    @staticmethod
+    def _make_requiem_tags(composer: str, movt_num: str, title: str) -> TrackTags:
+        """Build TrackTags for a K.626 Requiem movement with the given embedded composer chain.
+
+        :param composer: Embedded ``CWP_COMPOSER_LASTNAMES`` value (e.g. ``"Mozart"`` or
+            ``"Mozart; Süßmayr"``).
+        :param movt_num: Track number string.
+        :param title: Track title.
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        return TrackTags(
+            cwp_composer_lastnames=composer,
+            cea_composer_lastnames=composer,
+            cwp_workid_top="work-k626-idem",
+            cwp_work_top="Requiem K. 626",
+            cwp_worktype_genres_top="Classical",
+            cwp_movt_num=movt_num,
+            movementtotal="2",
+            cwp_part_levels="1",
+            title=title,
+            artist="Karajan",
+            recording_date="1962",
+            musicbrainz_albumid="completer-idem-rel-1",
+        )
+
+    @staticmethod
+    def _make_jazz_tags(title: str, movt_num: str) -> TrackTags:
+        """Build TrackTags for a jazz track with ``MUSICBRAINZ_WORKID`` and empty composer tags.
+
+        :param title: Track title.
+        :param movt_num: Track number string.
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        return TrackTags(
+            cwp_work_top="",
+            cwp_worktype_genres_top="Jazz",
+            musicbrainz_workid="work-jazz-idem-1",
+            cwp_composer_lastnames="",
+            cea_composer_lastnames="",
+            albumartist="Benny Goodman",
+            album="Sing, Sing, Sing",
+            releasetype="Album",
+            cwp_movt_num=movt_num,
+            movementtotal="2",
+            cwp_part_levels="0",
+            title=title,
+            artist="Benny Goodman",
+            recording_date="1937",
+            musicbrainz_albumid="jazz-idem-rel-1",
+        )
+
+    def test_completer_chain_second_run_no_changes(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Completer chain shape: second maintain run reports no changes after raw-chain consolidation.
+
+        Movement 1 (``Mozart``) and movement 2 (``Mozart; Süßmayr``) start at the wrong location:
+        both are placed under the ``Mozart`` top dir, simulating the pre-fix state where the old
+        chain patch unified all movements under the fullest chain.  The first ``maintain`` run moves
+        movement 2 to its raw-embedded-chain canonical path (``Mozart; Süßmayr`` top dir).  The
+        second run must report "no changes" and append zero journal entries.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        _mock_content_passes(mocker)
+        _mock_integrity_passes(mocker)
+
+        tags_mvt1 = self._make_requiem_tags("Mozart", "1", "Introitus")
+        tags_mvt2 = self._make_requiem_tags("Mozart; Süßmayr", "2", "Kyrie")
+
+        # Compute the canonical (raw-embedded-chain) destinations.
+        canonical_mvt1 = _canonical_path(dest_root, tags_mvt1)
+        canonical_mvt2 = _canonical_path(dest_root, tags_mvt2)
+
+        # The two chains must render distinct top dirs (the accepted fixpoint).
+        top_dir_mvt1 = canonical_mvt1.relative_to(dest_root).parts[0]
+        top_dir_mvt2 = canonical_mvt2.relative_to(dest_root).parts[0]
+        assert top_dir_mvt1 != top_dir_mvt2, "test setup: the two embedded chains must render distinct top dirs"
+        assert "Mozart" in top_dir_mvt1
+        assert "Süßmayr" in top_dir_mvt2
+
+        # Place movement 1 at its canonical path (already correct).
+        _make_flac(dest_root, str(canonical_mvt1.relative_to(dest_root)), tags_mvt1)
+
+        # Place movement 2 at the wrong path — under the Mozart top dir (simulating the pre-fix
+        # state where the chain patch unified all movements under the fullest chain, then repath
+        # moved the Süßmayr movement to the Mozart top dir).
+        wrong_mvt2 = dest_root / top_dir_mvt1 / canonical_mvt2.parent.name / canonical_mvt2.name
+        wrong_mvt2.parent.mkdir(parents=True, exist_ok=True)
+        wrong_mvt2.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(wrong_mvt2, tags_mvt2)
+
+        assert wrong_mvt2 != canonical_mvt2, "test setup: wrong and canonical paths must differ"
+
+        # Journal: both movements tagged at their initial (wrong) locations.
+        _write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "completer-idem-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(canonical_mvt1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "completer-idem-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(wrong_mvt2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # --- Run 1: maintain moves movement 2 to its raw-chain canonical path ---
+        changed_1 = maintain(dest_root, yes=True)
+
+        assert canonical_mvt1.exists(), "run 1: movement 1 must remain at its canonical path"
+        assert canonical_mvt2.exists(), (
+            f"run 1: movement 2 must be at its raw-chain canonical path {canonical_mvt2.relative_to(dest_root)}"
+        )
+        assert not wrong_mvt2.exists(), "run 1: movement 2 must be moved away from the wrong top dir"
+        assert changed_1 > 0, "run 1 must report changes (raw-chain consolidation move)"
+
+        # --- Run 2: maintain must be a no-op ---
+        journal_before_run2 = (dest_root / "music_annotator_journal.json").read_text(encoding="utf-8")
+        changed_2 = maintain(dest_root, yes=True)
+
+        assert changed_2 == 0, f"run 2 must report no changes; got changed={changed_2}"
+        journal_after_run2 = (dest_root / "music_annotator_journal.json").read_text(encoding="utf-8")
+        assert journal_after_run2 == journal_before_run2, "run 2 must append zero journal entries"
+
+    def test_empty_composer_nonclassical_flip_second_run_no_changes(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Empty-composer non-classical flip: second maintain run reports no changes.
+
+        A jazz release with ``MUSICBRAINZ_WORKID`` and empty composer tags starts at a
+        composer-led path (simulating the pre-fix state where the old chain patch applied to
+        empty-composer files via the ``musicbrainz_workid`` fallback, flipping their top dir
+        from ALBUMARTIST-led to composer-led — a C-NC-TOP violation).  The first ``maintain``
+        run moves the tracks to the ALBUMARTIST-led canonical path.  The second run must report
+        "no changes" and append zero journal entries.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        _mock_content_passes(mocker)
+        _mock_integrity_passes(mocker)
+
+        tags_trk1 = self._make_jazz_tags("Sing, Sing, Sing (Part 1)", "1")
+        tags_trk2 = self._make_jazz_tags("Sing, Sing, Sing (Part 2)", "2")
+
+        # Compute the canonical (ALBUMARTIST-led) destinations.
+        canonical_trk1 = _canonical_path(dest_root, tags_trk1)
+        canonical_trk2 = _canonical_path(dest_root, tags_trk2)
+
+        # Verify the canonical paths are ALBUMARTIST-led.
+        top_dir = canonical_trk1.relative_to(dest_root).parts[0]
+        assert top_dir.startswith("Benny Goodman"), (
+            f"test setup: canonical path must be ALBUMARTIST-led; got top dir {top_dir!r}"
+        )
+
+        # Place tracks at a composer-led wrong path — simulating the pre-fix state where the
+        # old chain patch applied to empty-composer files via the musicbrainz_workid fallback
+        # and flipped the top dir from ALBUMARTIST-led to composer-led.
+        wrong_top = dest_root / "Waller; Kander - Goodman" / "Sing, Sing, Sing [rec 1937]"
+        wrong_trk1 = wrong_top / "01 - Sing, Sing, Sing (Part 1).flac"
+        wrong_trk2 = wrong_top / "02 - Sing, Sing, Sing (Part 2).flac"
+        wrong_top.mkdir(parents=True, exist_ok=True)
+        wrong_trk1.write_bytes(_MINIMAL_FLAC)
+        wrong_trk2.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(wrong_trk1, tags_trk1)
+        apply_tags_flac(wrong_trk2, tags_trk2)
+
+        assert wrong_trk1 != canonical_trk1, "test setup: wrong and canonical paths must differ"
+        assert wrong_trk2 != canonical_trk2, "test setup: wrong and canonical paths must differ"
+
+        # Journal: both tracks tagged at the wrong (composer-led) paths.
+        _write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "jazz-idem-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(wrong_trk1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "jazz-idem-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(wrong_trk2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # --- Run 1: maintain moves tracks to ALBUMARTIST-led canonical paths ---
+        changed_1 = maintain(dest_root, yes=True)
+
+        assert canonical_trk1.exists(), (
+            f"run 1: track 1 must be at ALBUMARTIST-led canonical path {canonical_trk1.relative_to(dest_root)}"
+        )
+        assert canonical_trk2.exists(), (
+            f"run 1: track 2 must be at ALBUMARTIST-led canonical path {canonical_trk2.relative_to(dest_root)}"
+        )
+        assert not wrong_trk1.exists(), "run 1: track 1 must be moved away from the composer-led wrong path"
+        assert not wrong_trk2.exists(), "run 1: track 2 must be moved away from the composer-led wrong path"
+        assert changed_1 > 0, "run 1 must report changes (ALBUMARTIST-led consolidation moves)"
+
+        # --- Run 2: maintain must be a no-op ---
+        journal_before_run2 = (dest_root / "music_annotator_journal.json").read_text(encoding="utf-8")
+        changed_2 = maintain(dest_root, yes=True)
+
+        assert changed_2 == 0, f"run 2 must report no changes; got changed={changed_2}"
+        journal_after_run2 = (dest_root / "music_annotator_journal.json").read_text(encoding="utf-8")
+        assert journal_after_run2 == journal_before_run2, "run 2 must append zero journal entries"
+
+
+# ---------------------------------------------------------------------------
+# KAT 6: Depth-membership shape (C-IDEM, C-GROUPSCOPE)
+# ---------------------------------------------------------------------------
+
+
+class TestDepthMembershipIdempotence:
+    """KAT: depth-membership shape consolidation is idempotent (C-IDEM, C-GROUPSCOPE).
+
+    Covers the Saint-Saëns op. 78 / La traviata / Guglielmo Tell / Walküre depth-membership
+    cycle shape: a library fixture with two recordings of the same top work with different
+    ``cwp_part_levels`` distributions, one of them a fragmented release.
+
+    The old ``unify`` computed modal depth over the fragmented release's files only
+    (release-local membership), while ``repath`` computed over the full library (library-wide
+    membership).  The same statistic over different denominators produced a stable orbit: repath
+    collapsed a work subdir, unify re-inserted it, every run.
+
+    After the fix, all passes use the library-wide modal depth map (C-GROUPSCOPE).  The second
+    ``maintain`` run must report "no changes" and append zero journal entries.
+    """
+
+    @staticmethod
+    def _make_opera_tags(
+        cwp_part_levels: str,
+        cwp_movt_num: str,
+        title: str,
+        release_id: str,
+        part_1: str,
+        ordering_key_1: str,
+    ) -> TrackTags:
+        """Build TrackTags for a classical opera track.
+
+        :param cwp_part_levels: String value for CWP_PART_LEVELS.
+        :param cwp_movt_num: String value for CWP_MOVT_NUM.
+        :param title: Track title.
+        :param release_id: MUSICBRAINZ_ALBUMID to embed.
+        :param part_1: CWP_PART_1 value (act name).
+        :param ordering_key_1: CWP_ORDERING_KEY_1 value.
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        tags = TrackTags(
+            cwp_work_top="La traviata",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="Verdi",
+            cwp_workid_top="w-traviata-idem",
+            recording_date="1955",
+            cwp_part_levels=cwp_part_levels,
+            cwp_movt_num=cwp_movt_num,
+            movementtotal="3",
+            title=title,
+            artist="Callas",
+            musicbrainz_albumid=release_id,
+        )
+        if tags.model_extra is not None:
+            tags.model_extra["cwp_part_1"] = part_1
+            tags.model_extra["cwp_ordering_key_1"] = ordering_key_1
+        return tags
+
+    def test_depth_membership_second_run_no_changes(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Depth-membership shape: second maintain run reports no changes after depth consolidation.
+
+        Library fixture:
+        - Release A (fragmented, PL=3): two tracks spread across two top_dirs.
+        - Release B (non-fragmented, PL=2): three tracks at canonical paths.
+
+        Both releases share the same ``CWP_WORKID_TOP``.  The library-wide modal depth is 2
+        (three PL=2 tracks vs two PL=3 tracks).  Release A's tracks start at the release-local
+        depth-3 paths (simulating the pre-fix state where ``unify`` computed release-local modal
+        depth = 3 and moved them there).  The first ``maintain`` run moves release A's tracks to
+        the library-wide depth-2 canonical paths.  The second run must report "no changes" and
+        append zero journal entries.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        _mock_content_passes(mocker)
+        _mock_integrity_passes(mocker)
+
+        # Release A (fragmented): 2 tracks with PL=3.
+        tags_a1 = self._make_opera_tags("3", "1", "Atto I - Scena 1", "traviata-idem-frag", "Atto I", "1")
+        tags_a2 = self._make_opera_tags("3", "2", "Atto II - Scena 1", "traviata-idem-frag", "Atto II", "2")
+
+        # Release B (non-fragmented): 3 tracks with PL=2 sharing the same CWP_WORKID_TOP.
+        # Their majority (3 vs 2) drives the full-library modal depth to 2.
+        tags_b1 = self._make_opera_tags("2", "1", "Atto I - Aria", "traviata-idem-other", "Atto I", "1")
+        tags_b2 = self._make_opera_tags("2", "2", "Atto II - Duet", "traviata-idem-other", "Atto II", "2")
+        tags_b3 = self._make_opera_tags("2", "3", "Atto III - Finale", "traviata-idem-other", "Atto III", "3")
+
+        # Verify the membership-divergence shape:
+        # - Release-local modal (only release A's PL=3 tracks): modal=3.
+        # - Library-wide modal (all 5 tracks: PL=3, PL=3, PL=2, PL=2, PL=2): modal=2.
+        release_local_modal = work_group_modal_depth([3, 3])
+        assert release_local_modal == 3  # noqa: PLR2004 — 3 is the release-local modal depth
+
+        lib_wide_modal = work_group_modal_depth([3, 3, 2, 2, 2])
+        assert lib_wide_modal == 2  # noqa: PLR2004 — 2 is the library-wide modal depth
+
+        # Canonical destinations using library-wide modal depth (what maintain now computes).
+        canonical_a1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_a1, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+        canonical_a2 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_a2, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+
+        # Release-local destinations (what unify would compute WITHOUT the shared map — depth-3).
+        release_local_a1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_a1, group_modal_depth=release_local_modal
+        ).with_suffix(".flac")
+        release_local_a2 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_a2, group_modal_depth=release_local_modal
+        ).with_suffix(".flac")
+
+        # The library-wide and release-local destinations must differ (non-trivial test).
+        assert canonical_a1 != release_local_a1, (
+            "test setup: library-wide and release-local destinations must differ for PL=3 tracks"
+        )
+
+        # Place release A track 1 at a wrong top_dir (fragmented: different performer in path).
+        # This simulates the pre-fix state where unify moved it to the release-local depth-3 path
+        # under a different top_dir (fragmentation detected because tracks are in different top_dirs).
+        wrong_top_a1 = dest_root / "Verdi - Serafin" / "La traviata [rec 1955]" / "01 - Atto I - Scena 1.flac"
+        wrong_top_a1.parent.mkdir(parents=True, exist_ok=True)
+        wrong_top_a1.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(wrong_top_a1, tags_a1)
+
+        # Place release A track 2 at the release-local depth-3 canonical path.
+        # This ensures two distinct top_dirs for fragmentation detection in unify.
+        _make_flac(dest_root, str(release_local_a2.relative_to(dest_root)), tags_a2)
+
+        # Place release B tracks at their library-wide canonical paths.
+        canonical_b1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_b1, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+        canonical_b2 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_b2, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+        canonical_b3 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_b3, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+        _make_flac(dest_root, str(canonical_b1.relative_to(dest_root)), tags_b1)
+        _make_flac(dest_root, str(canonical_b2.relative_to(dest_root)), tags_b2)
+        _make_flac(dest_root, str(canonical_b3.relative_to(dest_root)), tags_b3)
+
+        # Journal: all tracks at their initial locations.
+        _write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "traviata-idem-frag",
+                    "source": "/src/a1.flac",
+                    "destination": str(wrong_top_a1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "traviata-idem-frag",
+                    "source": "/src/a2.flac",
+                    "destination": str(release_local_a2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "traviata-idem-other",
+                    "source": "/src/b1.flac",
+                    "destination": str(canonical_b1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "traviata-idem-other",
+                    "source": "/src/b2.flac",
+                    "destination": str(canonical_b2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "traviata-idem-other",
+                    "source": "/src/b3.flac",
+                    "destination": str(canonical_b3),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # --- Run 1: maintain moves release A tracks to library-wide depth-2 canonical paths ---
+        changed_1 = maintain(dest_root, yes=True)
+
+        assert canonical_a1.exists(), (
+            f"run 1: track A1 must be at library-wide canonical path {canonical_a1.relative_to(dest_root)}"
+        )
+        assert canonical_a2.exists(), (
+            f"run 1: track A2 must be at library-wide canonical path {canonical_a2.relative_to(dest_root)}"
+        )
+        assert not wrong_top_a1.exists(), "run 1: track A1 must be moved away from the wrong top_dir"
+        assert changed_1 > 0, "run 1 must report changes (depth-membership consolidation moves)"
+
+        # --- Run 2: maintain must be a no-op ---
+        journal_before_run2 = (dest_root / "music_annotator_journal.json").read_text(encoding="utf-8")
+        changed_2 = maintain(dest_root, yes=True)
+
+        assert changed_2 == 0, f"run 2 must report no changes; got changed={changed_2}"
+        journal_after_run2 = (dest_root / "music_annotator_journal.json").read_text(encoding="utf-8")
+        assert journal_after_run2 == journal_before_run2, "run 2 must append zero journal entries"
