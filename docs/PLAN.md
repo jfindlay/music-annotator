@@ -1,246 +1,172 @@
-<!-- Rolling action frame.  The previous sub-track (unified maintenance action: pass-composition confluence + the
-     `maintain` action) closed 2026-08-27 with its acceptance gate passed on hades; its plan and ledger live in this
-     file's git history (through the commit that landed this rewrite).  Its S6 (hades journal backfill for
-     evidence-gap files) is SUPERSEDED, not carried forward: the gap-report predicate itself is defective (see S4
-     below) and must be fixed before any backfill is scoped.  This sub-track was derived 2026-08-28 from the operator's
-     analysis request over two sequential live `maintain` runs (runs 3 and 4 on hades, `maintain.{a,b}.out`), which
-     proved the composition is in a stable non-converging orbit.  Rewritten at the next boundary. -->
+<!-- Rolling action frame.  The previous sub-track (maintain convergence repair: single-source canonical + gap-report
+     and dedup fixes) closed 2026-08-28 with all sessions done; its plan and ledger live in this file's git history
+     (through the commit that landed this rewrite).  Its S8 acceptance ("maintain converges to no changes by run 2")
+     is REOPENED, not carried forward as passed: two post-acceptance live runs on hades (`maintain.{d,e}.out`,
+     2026-08-28 15:20/15:24) are byte-identical modulo timestamps and each reports **changed=246** — a residual
+     stable orbit of 123 repath moves exactly inverted by 123 unify moves, with the C-IDEM tripwire firing
+     `inverse_move_detected` ×246/run precisely as designed.  This sub-track was derived 2026-08-28 from the
+     operator's analysis request over those runs.  Rewritten at the next boundary. -->
 
-# PLAN — maintain convergence repair: single-source canonical + gap-report and dedup fixes
+# PLAN — maintain convergence repair, second round: delete the last in-memory render patch
 
 ## Why this sub-track exists
 
-Runs 3 and 4 of `maintain` on hades each reported **changed 388 file(s)**, and the 388 journal-entry changes are
-**byte-identical between the runs** (repath 194 + regroup 10 + unify 184 = 388; every old→new move pair recurs
-exactly).  The composition never converges: each run, `repath`/`regroup` undo what `unify` did the previous run, then
-`unify` redoes it.  C-CONFLUENCE anticipated this class and deliberately deferred it ("if such a non-converging cycle
-is ever observed in practice, it is a bug in a specific pass's canonical, fixed there") — it has now been observed, in
-three cycle classes, plus four non-cycle problems:
+The prior sub-track's repair deleted the non-classical composer manufacture and threaded modal depth — and the two
+spots it deliberately spared are exactly where the residual oscillation lives.  Evidence (`maintain.{d,e}.out`,
+hades): each run `repath` moves 123 files and `unify` moves the **same 123 files back** (the unify plan is the exact
+inverse of the repath plan, 123/123, verified by normalized-log diff); the two runs' outputs are byte-identical
+modulo timestamps, so the library is in a stable orbit with `changed=246` forever.  Two divergence classes:
 
-1. **repath ↔ unify top-dir oscillation (~184 files, 97 releases — dominant).**  `unify`'s composer-split
-   pre-processing patches `cea_composer_lastnames` **in memory only** (`_pipeline_maint.py:2589-2602`;
-   `last_name(ALBUMARTISTSORT)` or `"Various"`), flipping `_top_dir_component` (`_tags.py:251-313`) from its
-   ALBUMARTIST fallback to the `"<composer> - <performers>"` shape (`Kidz Bop` → `Kidz Bop - Kidz Bop`,
-   `Benny Goodman` → `Goodman - Benny Goodman` / `Goodman - [no artist]`, `Mormon Tabernacle Choir` →
-   `Tabernacle Choir at Temple Square - …`).  The patch is never written to disk, so `repath` (embedded tags as-is)
-   computes the ALBUMARTIST shape and moves everything back next run.  Worse, the manufactured shape is
-   **self-defeating**: the performers component varies per track, so `unify` scatters consolidated releases
-   (`Various Artists/The Jazz Collection` → 16 top dirs; one MJ release across three `Jackson - …` dirs) —
-   the de-fragmentation pass is the fragmenter.
-2. **repath ↔ regroup depth ping-pong, same run (2 Wagner Meistersinger files, 4 moves/run).**  `repath` moves the
-   track into its work-subdir (`…/04 - Akt III/…`, modal-depth render); `regroup` moves it straight back the same run.
-3. **Depth-insertion churn (small population).**  `unify` omits the `group_modal_depth` argument `repath` passes
-   (`_pipeline_maint.py:2639` vs `:1746`), so its depth renders (`La traviata …/01 - Atto I/…`) disagree with
-   repath/regroup's and recur every run.  regroup's Saint-Saëns movement-subdir moves (8 files) likewise repeat.
-4. **dedup-library is dead under piped consent.**  8 duplicate groups found every run, 0 resolved: the integrity
-   prompt accepts `1/2/b/a`; piped `y` hits `case _` → aborts the whole pass (`_pipeline_maint.py:870-880`).
-5. **reconstruct-xrefs evidence-gap false positives (~29 lines/run, with intra-list duplicates).**  The gap predicate
-   keys its exclusion on the **original tagged destination**, but `"cross-referenced"` entries written after a file
-   moved are keyed on the **current path** — those files fail the exclusion forever.  The prior sub-track's backfill
-   plan would NOT have silenced them.
-6. **`albumid_tag_read_error` × 1167/run.**  ~10% of the library fails the `MUSICBRAINZ_ALBUMID` read inside
-   fragmentation detection (`_pipeline_io.py:1418`, blanket `except`) and is silently excluded from unify/regroup/
-   dedup scope.  Legacy-shaped paths (pre-annotator dir names, empty album components, truncated `…op.flac` leaves).
-   Cause undiagnosed — the blanket except hides the exception class.
-7. **Chronic no-op noise.**  `name_too_long` ×24/run re-warns on already-clamped names that produce no move;
-   `enrich_acoustid_inconclusive` ×93/run is a stable unresolvable-without-key population (informational).
+1. **Classical composer-chain patch (112 of 123 moves — dominant).**  `_unify_classical_composer_groups`
+   (`_pipeline_maint.py:2455`, called only from `unify` at `:2659`) patches `cea_composer_lastnames` **and**
+   `cwp_composer_lastnames` **in memory only** before `build_dest_path`, propagating the fullest ("; "-richest)
+   chain across each work group.  `repath` renders the raw embedded per-file chains.  The patch is never written to
+   disk, so the two passes disagree forever: repath moves `Mozart; Süßmayr - …` files to `Mozart - …` (37 moves,
+   the K.626 completer shape), unify moves them back.  This is a direct violation of frozen C-CANON ("no pass may
+   apply a pass-local in-memory tag patch that alters the rendered path") that survived the prior deletion because
+   the survey classified it as genuine classical handling rather than manufacture.  Two aggravating defects,
+   confirmed in code:
+   - **The claimed scope gate does not exist.**  The call-site comment (`:2656-2658`) asserts a classical gate
+     "enforced inside" the function; the body has none — it groups by `cwp_workid_top or musicbrainz_workid` and
+     skips only empty IDs.  Jazz and musical releases with MB work IDs are chain-patched (Goodman
+     `Waller; Kander` → `Goodman; Sampson; Kander`; the MJ-musical moves), and patching chains onto files whose
+     embedded composer tags are **empty** flips their top dir from ALBUMARTIST-led to composer-led — a C-NC-TOP
+     violation through the back door (`Michael Jackson/…` → `Bahler - The Andraé Crouch Choir/…`).
+   - **The chooser clobbers real scholarship.**  All concertos of the 16 Konzerte release share one top-work MBID,
+     so fullest-chain/first-appearance rewrites `Vivaldi; Bach` → `Bach; Marcello` (18 moves) — flattening
+     genuinely different arrangement sources.  Persisting this to tags would bake fake data into the library.
+2. **Modal-depth group-membership asymmetry (~11 moves).**  `repath` (and `regroup`, per the prior repair) compute
+   `group_modal_depth` over **library-wide** `cwp_workid_top` groups (`:1784-1799`); `unify` computes it over
+   **the fragmented release's files only** (`:2684-2689`).  Same durable inputs, different denominators → repath
+   collapses a work subdir, unify re-inserts it, every run (the Saint-Saëns op. 78 / La traviata / Guglielmo Tell /
+   Walküre Akt-subdir moves — same-composer pairs differing only at the work-subdir level).
 
-Root cause of classes 1–3 is one property violation: **the canonical destination is not single-sourced** — passes
-derive "where does this file live" from different effective inputs (in-memory patches vs disk tags; with vs without
-modal depth).  Per-pass idempotence composes into oscillation exactly at the files where the inputs diverge.
+Root cause is the same single property the prior sub-track named: the canonical destination is still not
+single-sourced.  A group-scope canonicalization is shared only when **both the function and the group membership**
+are identical across passes — computing the same statistic over different denominators diverges exactly like an
+in-memory patch.
+
+**Operator ruling (2026-08-28, this derivation):** delete the composer-chain patch outright (over persist-to-tags
+and over symmetrizing the patch into other passes).  After deletion, genuinely divergent embedded chains render
+distinct top dirs (K.626 movements split across `Mozart - …` and `Mozart; Süßmayr - …`) — this is accepted as the
+truthful render of current tags.  Chain repair, if wanted, belongs to **re-annotation** (which writes real
+per-track MB data through the full verify chain), never to maintenance-time render patching.  Tracked in BACKLOG,
+out of scope here.
 
 ## Cross-session contracts
 
-Frozen at derivation (operator rulings 2026-08-28):
+Inherited frozen, now enforced in full: **C-CANON** (this sub-track deletes the last surviving pass-local in-memory
+render patch and extends "threaded identically into every pass" to the modal-depth **membership**, not just the
+argument), **C-NC-TOP** (the discriminator becomes per-file-durable again once chain patching is gone), **C-IDEM**
+(tripwire stays warn-only; the composite harness gains the two observed residual shapes).
 
-- **C-CANON** — every move pass (`repath`, `regroup`, `unify`) derives a file's destination from the *same* canonical
-  function over the *same* durable inputs: embedded tags as read from disk, plus the shared work-group modal-depth
-  computation, threaded identically into every pass.  No pass may apply a pass-local in-memory tag patch that alters
-  the rendered path.  A pass needing different render inputs is a destructive-HALT signal that the canonical is
-  mis-specified, not a licence to patch.
-- **C-NC-TOP** — non-classical releases take the **ALBUMARTIST-led** top dir (operator ruling, Option A): the
-  `"<composer> - <performers>"` shape requires a real, scholarship-stable composer from embedded tags; manufacturing a
-  composer from `ALBUMARTISTSORT` (unify's W2b patch) is deleted, and `"Various"` is never a composer.  `unify`
-  consolidates fragmented non-classical releases to the same ALBUMARTIST-led shape `build_dest_path` produces for
-  every other pass.  The discriminator (classical vs non-classical) must be computable per file from durable tags
-  (the work-type predicate that already backs `IS_CLASSICAL`), never from a per-run in-memory majority.  Consistent
-  with C-UNIVERSAL and the epistemic criterion (NOTES): no fake scholarship enters library topology.
-- **C-IDEM** — composite idempotence is test-enforced: a KAT fixture library covering every observed cycle shape
-  (composer-manufacture top dirs, Various scattering, work-subdir depth disagreement) runs `maintain` twice; the
-  second run MUST report "no changes".  Additionally `maintain` carries a runtime **inverse-move tripwire**: a pass
-  planning a move whose (old, new) inverts a journal-recorded move from this run or a prior run logs a loud warning
-  naming both passes — converting any future canonical divergence from silent churn into a visible signal.  The
-  tripwire warns; it does not block (C-CONFLUENCE's ergonomics register stands — no formal oscillation calculus).
+New this sub-track:
 
-Inherited unchanged: C-MAINTAIN, C-CONFLUENCE (this sub-track implements its "fix the specific canonical" rider),
-C-RETIRE (readers stay), INSTR, PERM, C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE,
-NORM-2-as-revised, C-W3b-INT.
+- **C-GROUPSCOPE** — any group-scope statistic that feeds `build_dest_path` (work-group modal depth, release-scope
+  ensemble expansion) must be computed by one shared helper over one pass-invariant membership definition
+  (library-wide scan, keyed identically), and threaded into every pass.  A pass computing the same statistic over a
+  pass-local membership is the same contract violation as an in-memory tag patch.
+
+Inherited unchanged: C-MAINTAIN, C-CONFLUENCE, C-RETIRE, INSTR, PERM, C-JRNL, C-FATAL, C-XREF, C-DEDUP,
+C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, NORM-2-as-revised, C-W3b-INT.
 
 ## Sessions
 
-Ordering rationale: S1 is the substrate/design session — it registers C-CANON/C-NC-TOP in the styleguide, confirms
-complete inverse-pairing attribution of all 388 moves, and surveys the exact code sites, fixing S2/S3 scope.  S2 and
-S3 land the canonical fix in two commit-shaped units (top-dir axis, then depth axis) — split because each is a clean
-conceptual unit with its own KATs and the cost-of-wrong is high (library-wide move policy).  S4 adds the tripwire +
-composite-idempotence harness (test-enforced C-IDEM) once both axes agree.  S5/S6/S7 are mutually independent repairs
-(gap predicate, dedup input handling, read-error diagnosis).  S8 is the operator acceptance gate: with the canonical
-unified, the first live run performs the one-time un-scatter and the second run must report "no changes".
+Ordering rationale: S1 and S2 are the two canonical-divergence deletions, split because each is a clean conceptual
+unit with its own KATs and the cost-of-wrong is library-wide move policy (small commits, dense green gates).  They
+touch the same region of `_pipeline_maint.py`, so they run serially (S1 first — it deletes code S2 would otherwise
+have to reason around).  S3 extends the composite-idempotence harness with exactly the two shapes the existing
+harness demonstrably missed — it must follow both fixes because the harness asserts the composed fixpoint.  S4 is
+the reopened operator acceptance gate.
 
-| ID | Type     | Deliverable (commit-title shape)                                                                     | Deps        | Status |
-|----|----------|------------------------------------------------------------------------------------------------------|-------------|--------|
-| S1 | design   | STYLEGUIDE: single-source canonical + ALBUMARTIST-led non-classical top dir (C-CANON, C-NC-TOP); move-pair attribution + code-site survey | —           | todo   |
-| S2 | build    | Unify top-dir canonical: delete W2b composer manufacture; non-classical → ALBUMARTIST-led in all passes (C-NC-TOP) | S1          | todo   |
-| S3 | build    | Unify depth canonical: thread group_modal_depth into regroup/unify; align regroup's depth target (C-CANON) | S1          | todo   |
-| S4 | build    | Composite-idempotence KAT harness + inverse-move tripwire in maintain (C-IDEM)                        | S2,S3       | todo   |
-| S5 | build    | Fix reconstruct-xrefs evidence-gap predicate: resolve tagged-dest to current path; de-dup census      | S1          | todo   |
-| S6 | build    | dedup-library prompt: re-prompt on invalid input, abort only on 'a'; name_too_long warns only on change | —           | todo   |
-| S7 | build    | Diagnose albumid_tag_read_error: log exception class, sample the 1167-file cluster, route repair      | —           | todo   |
-| S9 | build    | Fix xref-census move-chain resolution: chronological O(N) resolver, cycle-proof; delete _resolve_move_chain | S5          | todo   |
-| S8 | operator | Acceptance gate on hades: maintain converges to "no changes" by run 2; dedup groups adjudicated; gap report clean or genuinely-unresolved only | S2–S7,S9    | todo   |
+| ID | Type     | Deliverable (commit-title shape)                                                                      | Deps  | Status |
+|----|----------|-------------------------------------------------------------------------------------------------------|-------|--------|
+| S1 | build    | Delete unify's classical composer-chain render patch; render raw embedded chains (C-CANON)            | —     | todo   |
+| S2 | build    | Shared library-wide modal-depth computation threaded into all passes (C-CANON, C-GROUPSCOPE)          | S1    | todo   |
+| S3 | build    | Composite-idempotence KATs: chain-patch and depth-membership cycle shapes (C-IDEM)                    | S1,S2 | todo   |
+| S4 | operator | Reopened acceptance gate on hades: one-time un-scatter, then "no changes" by run 2                    | S1–S3 | todo   |
 
-### S1 — canonical contract + attribution survey (design; no code)
+### S1 — delete the composer-chain render patch (C-CANON)
 
-1. **Register C-CANON and C-NC-TOP** in `docs/STYLEGUIDE.md` (plain-language: one canonical function, same inputs,
-   every pass; non-classical top dir is ALBUMARTIST-led; no manufactured composers; `Various` is not a composer).
-2. **Confirm complete inverse pairing**: from `maintain.{a,b}.out` (hades, `~/Music/` on the operator workstation
-   mount), pair every run-3 move with its inverse and attribute each of the 388 to cycle class 1, 2, or 3.  Any move
-   not explained by the three classes is a discovery — append to the digest and adjudicate before S2 freezes scope.
-3. **Code-site survey** for S2/S3: the W2b block (`_is_composer_split_release`, `_canonical_composer_component`, the
-   patch loop), `_top_dir_component`'s fallback chain, the per-pass `build_dest_path` call sites and their
-   `group_modal_depth` arguments, regroup's depth target, and the work-type predicate to be used as the
-   classical/non-classical discriminator.  Record exact spans in this PLAN's digest for the build sessions.
+Files: `src/music_annotator/_pipeline_maint.py` (delete `_unify_classical_composer_groups` and its call site with
+the stale scope-gate comment block; delete the module-docstring index entry), tests (delete/rewrite tests that
+assert the patched render; add KATs below).  KATs:
 
-### S2 — top-dir canonical unification (C-NC-TOP)
+1. **Completer shape** — fragmented fixture where movements of one work carry `Mozart` and `Mozart; Süßmayr`
+   embedded chains: `unify` and `repath` compute **identical** destinations from raw tags (mock-enforced equality);
+   after consolidation the library holds still (the two chains render two top dirs, and that is the asserted
+   fixpoint — not a regression).
+2. **Mixed-arrangement shape** — a release whose sub-works carry genuinely different chains (`Vivaldi; Bach` vs
+   `Bach; Marcello`) sharing one top-work MBID: no pass ever rewrites either chain's render.
+3. **Work-ID'd non-classical shape** — a jazz release whose tracks carry `musicbrainz_workid` and empty composer
+   tags: top dir stays ALBUMARTIST-led through repath and unify (the back-door C-NC-TOP flip is impossible once
+   the patch is gone).
 
-Files: `src/music_annotator/_pipeline_maint.py` (delete/restrict W2b: `unify` consolidates non-classical releases to
-the ALBUMARTIST-led shape; keep genuine classical composer-split handling only where real composer tags exist),
-`src/music_annotator/_tags.py` (only if the discriminator needs a seam in `_top_dir_component`; the ALBUMARTIST
-fallback itself already renders the ruled shape), tests.  KATs: Kidz-Bop shape (single artist), Goodman shape
-(per-track composer variation on a non-classical release, including `[no artist]` tracks), Various-Artists
-compilation (must consolidate to ONE top dir, never scatter per-track), Tabernacle long-name shape; for each, `unify`
-and `repath` must compute the identical destination (mock-enforced equality), and a fragmented fixture must
-consolidate then hold still.  Not built: tag writes (no composer is persisted — C-NC-TOP forbids the fake), ownership
-guards (rejected Option C).
+Not built: any replacement chain-unification logic (the operator ruling routes chain repair to re-annotation);
+tripwire changes.
 
-### S3 — depth canonical unification (C-CANON)
+### S2 — shared modal-depth computation (C-CANON, C-GROUPSCOPE)
 
-Files: `src/music_annotator/_pipeline_maint.py` (thread `work_group_modal_depth` into `regroup`'s and `unify`'s
-`build_dest_path` calls exactly as `repath` computes it; align regroup's consolidation target so it no longer
-flattens a work-subdir repath just created), tests.  KATs: the Wagner shape (single track whose work-subdir render
-depends on modal depth — repath and regroup must agree, same-run ping-pong impossible by construction); the La
-traviata / Guglielmo Tell shape (unify's depth render equals repath's); ingest/maintenance parity re-asserted
-(C-W3b-INT KAT extended to regroup/unify).
+Files: `src/music_annotator/_pipeline_maint.py` (extract the library-wide `cwp_workid_top` → modal-depth
+computation that `repath` performs into one shared helper; `maintain` computes the map once over the full library
+scan and threads it into `repath`, `regroup`, and `unify`; standalone per-pass invocations compute it themselves
+via the same helper — one function, one membership definition), tests.  KATs:
 
-### S4 — composite-idempotence harness + tripwire (C-IDEM)
+1. **Membership-divergence shape** — library fixture holding two recordings of the same top work with different
+   `cwp_part_levels` distributions, one of them a fragmented release: `unify`'s depth render equals `repath`'s
+   (mock-enforced equality); previously unify's release-local modal computed a different depth.
+2. **Same-run inverse-free** — repath then unify over the fixture produces zero `inverse_move_detected` events.
+3. Ingest/maintenance parity re-asserted (C-W3b-INT KAT extended to the shared helper).
 
-Files: `tests/` (fixture library covering every S2/S3 cycle shape; run `maintain` twice via the public API with all
-boundaries mocked/pyfakefs; second run asserts "no changes" and zero journal delta), `src/music_annotator/
-_pipeline_maint.py` (inverse-move tripwire: before executing a pass's plan, warn per move whose (old, new) inverts a
-journal entry; include both pass names in the event).  KATs: settled fixture → second run reports no changes; a
-deliberately-divergent stub canonical triggers the tripwire warning (and nothing blocks).
+### S3 — composite-idempotence harness extension (C-IDEM)
 
-### S5 — evidence-gap predicate fix
+Files: `tests/` (extend the existing twice-run fixture library with both residual cycle shapes: the completer
+chain shape including the empty-composer non-classical flip, and the depth-membership shape; second `maintain` run
+asserts "no changes" and zero journal delta).  The prior harness passed while both shapes churned live — the
+fixture set must now include the pathology documented in this sub-track's own derivation evidence (same durable
+lesson as the resolver-cycle miss recorded in the prior ledger).
 
-Files: `src/music_annotator/_pipeline_maint.py` (`_census_journal_for_xrefs`: resolve each tagged destination through
-the move chain (`"repathed"`/`"regrouped"`/`"unified"`) to its current path before the `xref_by_dest` exclusion — or
-equivalently key both sides on resolved-current paths; de-duplicate the candidate list), tests.  KATs: fixture
-journal with tagged-at-A → moved A→B → cross-referenced-at-B is NOT reported; genuinely-gapped file IS reported
-exactly once; the duplicate-listing shape (two tagged entries resolving to one current file) reports once.
-After this lands, the prior sub-track's backfill question is re-scoped from live evidence in S8 — backfill only what
-the *fixed* predicate still reports, if anything.
+### S4 — reopened operator acceptance gate (hades)
 
-### S6 — dedup prompt handling + warning noise
+- Run 1: expect the one-time un-scatter — repath moves the ~123 files to their raw-embedded-chain and
+  shared-modal-depth homes; unify performs **no reversal**; tripwire silent.
+- Run 2: MUST report **"no changes"**.  This is the composite-fixpoint acceptance criterion, reopened from the
+  prior sub-track.
+- Watch item: any residual moves in run 2 are a discovery — attribute before touching code.  Candidate residual
+  class flagged at derivation: ~1167 files fail the albumid read inside fragmentation detection and are invisible
+  to unify's release-scope SEL-23/modal groupings while visible to repath's library-wide ones; no such churn is
+  present in the current evidence (all 123 moves attributed), but the asymmetric visibility survives until the
+  read-error cluster is routed (prior sub-track's diagnosis session landed exception detail in the event; sampling
+  remains operator work here).
 
-Files: `src/music_annotator/_pipeline_maint.py` (`resolve_duplicate_group` input loop: unrecognized input re-prompts
-with the valid-choice reminder; only `a` aborts the pass — preserves INSTR/C-DEDUP: integrity consent stays
-interactive and is still never satisfied by `--yes` or piped `y`; `_clamp_maint_dest`: emit `name_too_long` only when
-the clamped destination differs from the file's current path), tests.  KATs: invalid input then `b` cross-references
-without deletion; `a` aborts; piped-`y` stream no longer silently kills the pass (it re-prompts until EOF → treated
-as abort with a clear message); clamp warning suppressed on no-op.
-
-### S7 — albumid read-error diagnosis
-
-Files: `src/music_annotator/_pipeline_io.py` (`_read_albumid_tag`: include the exception class/message in the warning
-event so the failure mode is visible), tests.  Then an operator-paced diagnostic on hades: sample the 1167-path
-cluster (paths recorded in `maintain.{a,b}.out`), classify (unreadable FLAC vs wrong container vs reader bug vs
-legacy never-ingested files), and **route at the boundary** — repair rides a follow-on shard, not this one.  These
-files are currently invisible to unify/regroup/dedup; until routed, treat any integrity conclusion about them as
-unsupported.
-
-### S9 — xref-census move-chain resolution regression (cycle hang + quadratic loop)
-
-**Why (discovered at the S8 attempt, 2026-08-28):** the first live acceptance run on hades hung indefinitely (one
-core pegged, flat RSS, no output) immediately after `unify_complete`.  py-spy confirmed the spin:
-`_resolve_move_chain` (`_pipeline_maint.py:3154`) ← `_census_journal_for_xrefs:3271` ←
-`reconstruct_cross_references:3332` ← `maintain:4117`.  Root cause: the evidence-gap resolver builds its move chain
-**ahistorically** (`move_chain[entry.source] = entry.destination` over all history, `:3217-3218`) and follows it with
-a guardless `while` (`:3153-3156`).  The hades journal **provably contains inverse move pairs** — the sub-track's own
-derivation evidence (388 byte-identical moves across runs 3/4) guarantees an `A→B` and `B→A` entry for every
-oscillating file — so the flattened map contains 2-cycles and the loop never terminates.  The inverse-move tripwire
-is warn-only by contract (C-IDEM), so inverse pairs in the journal are a legitimate, permanent condition that any
-history-walking reader MUST tolerate.
-
-Files: `src/music_annotator/_pipeline_maint.py`, tests.
-
-1. **One shared chronological resolver.**  Add a helper (shape: `_resolve_tagged_to_current(journal) ->
-   dict[str, str]`, tagged-dest → current path) that walks entries **in chronological order** — same principle as
-   `_resolve_current_lib` — maintaining an inverse index (current path → tagged dests currently there) so each move
-   entry updates its affected keys in O(1) amortized: O(N) total, cycle-proof by construction (a later inverse move
-   just moves the pointer back; no fixpoint-follow ever happens).
-2. **Replace both call sites.**  (a) `_census_journal_for_xrefs`'s evidence-gap exclusion (`:3265-3276`) — drop
-   `move_chain` and `_resolve_move_chain` entirely; (b) `reconstruct_cross_references`'s path resolution
-   (`:3342-3355`), which is chronological/cycle-safe already but O(tagged × moves) with a full dict copy per move
-   entry (`list(_current_by_tagged.items())` at `:3350`) — replace with the shared helper.
-3. **Delete `_resolve_move_chain`** (sole production caller is `:3271`; update the test import at
-   `test_pipeline_maint.py:65` and the usage at `:13071`).
-
-KATs: (a) **cycle fixture** — journal with tagged-at-A, moved A→B, moved B→A (the recorded-oscillation shape from
-the derivation evidence): census terminates and resolves the file to A; (b) inverse pair plus onward move
-(A→B, B→A, A→C) resolves to C; (c) existing S5 KATs (moved-then-xref'd exclusion, single-report de-dup) still pass
-through the new resolver; (d) a soft O(N) sanity guard — resolver over a synthetic ~10k-entry journal with many
-moves completes without timeout (no formal perf assertion; the KAT exists to catch reintroduced quadratic walks).
-
-Not built: cycle *repair* (journal entries are historical facts; inverse pairs are legitimate under warn-only
-C-IDEM), tripwire behavior changes, any journal mutation.
-
-### S8 — operator acceptance gate (hades)
-
-Interactive live runs (integrity prompts must be answered by the operator — `yes y` cannot consent and now cannot
-abort silently):
-
-- Run 1: expect the one-time un-scatter (repath returns the ~184 files to ALBUMARTIST-led homes; no unify reversal);
-  adjudicate the 8 dedup groups at the prompt; tripwire silent.
-- Run 2: MUST report **"no changes"**.  This is the composite-fixpoint acceptance criterion.
-- Evidence-gap report after S5: empty or genuinely-unresolved only; backfill scoped from what remains (if anything).
-- `albumid_tag_read_error` events now carry exception detail; capture a sample for the S7 routing decision.
-
-On acceptance: rewrite this PLAN at the boundary; the ROADMAP repair-turn item continues (preflight re-run → R5 drain
-→ J3 → R6d per ROADMAP).
+On acceptance: rewrite this PLAN at the boundary.
 
 ## Notes for executors
 
-- **Register rule** (repo AGENTS.md): durable files state the property/invariant, never the plan coordinate.  Anneal
-  denylist for this sub-track: `\bS[1-8]\b` (session ids), `sub-track`, `plan-run`, `boundary rewrite`, `Option A`,
-  `cycle class`, `run 3`/`run 4` (in durable prose; state the invariant — "all passes derive destinations from the
-  same canonical inputs" — instead).  Contract names (C-CANON, C-NC-TOP, C-IDEM, C-MAINTAIN, C-CONFLUENCE, INSTR,
-  PERM, C-JRNL, C-XREF, C-DEDUP, C-PROV, C-MOVE, C-W3b-INT, NORM-*, REND-*, EPIST-*) are legitimate durable
-  vocabulary.
+- **Register rule** (repo AGENTS.md): durable files state the property/invariant, never the plan coordinate.
+  Anneal denylist for this sub-track: `\bS[1-4]\b` (session ids), `sub-track`, `plan-run`, `boundary rewrite`,
+  `cycle class`, `\bW2[bc]\b` (work-item ids from the prior sub-track; the deleted function's docstring carries
+  one — it goes with the deletion; no new durable prose may use them), `run [de]\b`, `maintain\.[de]\.out` (in
+  durable prose; state the invariant — "all passes derive destinations from the same canonical inputs over the
+  same group membership" — instead).  Contract names (C-CANON, C-NC-TOP, C-IDEM, C-GROUPSCOPE, C-MAINTAIN,
+  C-CONFLUENCE, INSTR, PERM, C-JRNL, C-XREF, C-DEDUP, C-PROV, C-MOVE, C-W3b-INT, NORM-*, REND-*, EPIST-*) are
+  legitimate durable vocabulary.
 - Full gate before declaring any session done: `~/.local/bin/tox -m analyze` (100% branch coverage, mypy strict,
   pylint 10.00/10, ruff, pyupgrade).
 - Patch targets bind where the name is imported, not where it originates (repo testing convention).
 - **C-PROV/C-MOVE are untouched**: this sub-track changes which destination is computed, never the intra-pass
   move/verify/journal ordering.  No journal entry before SHA + `_verify_copy` pass.
-- Evidence base: `~/Remote/hades/Music/maintain.{a,b}.out` (runs 3 and 4; ANSI structlog + console report).  Key
-  facts: move sets 194/10/184 identical across runs; the first `*_moved` log line after each `Proceed?` prompt
-  carries a `> ` echo prefix (parsers must strip it); event histogram and per-cluster counts are reproducible by
-  stripping ANSI and grouping structlog event names.
-- The W2b deletion (S2) removes `unify`'s only non-classical consolidation mechanism — the replacement is
-  consolidation to the ALBUMARTIST-led canonical, NOT removal of consolidation.  A fragmented non-classical release
-  must still unify; it just unifies to the un-prefixed top dir.
-- `_canonical_composer_component` / `_is_composer_split_release` may retain a genuinely-classical arm if S1's survey
-  finds real composer-split classical releases in scope; the deletion target is the manufactured-composer path
-  (ALBUMARTISTSORT/`"Various"`), not classical composer handling.
-- dedup's 8 standing groups are operator work at S8, not code work; do not attempt auto-resolution (INSTR).
+- Evidence base: `~/Remote/hades/Music/maintain.{d,e}.out` (ANSI structlog; strip ANSI + timestamps to compare —
+  the two files are then byte-identical).  Key facts: 123 repath moves, 123 unify moves (exact inverses, verified
+  pairwise); `inverse_move_detected` ×246 with `current_pass=repath prior_pass=unified`; composer-chain component
+  differs in 112 pairs, work-subdir depth in the remainder; `regroup_nothing_to_regroup` (regroup is converged);
+  `changed=246` in both runs.
+- The deletion in S1 removes `unify`'s only classical chain handling — there is **no replacement**.  A release
+  whose movements carry divergent embedded chains legitimately renders multiple top dirs; consolidation of that
+  shape is re-annotation's job (BACKLOG), not maintenance's.
+- S2's helper must be the single source for modal depth in ingest parity too — check `run()`'s computation
+  (`_pipeline.py:1826-1833`) against the helper and unify only if behaviour is identical; if ingest's membership
+  is per-release by construction (it only sees one release), document that at the helper, don't force it.
 
 ## Progress ledger
 
@@ -249,117 +175,32 @@ ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and cove
 
 | ID | Title                                                                          | Status | Commit | Notes |
 |----|--------------------------------------------------------------------------------|--------|--------|-------|
-| S1 | STYLEGUIDE: C-CANON + C-NC-TOP; attribution + code-site survey                 | done   | 9c8eb85 | Wagner ping-pong is same-run ordering issue (not depth-arg omission); flagged for S3. Remote output files unavailable; attribution from code analysis. |
-| S2 | Top-dir canonical unification (C-NC-TOP)                                       | done   | 04887ef | _tags.py needed IS_CLASSICAL seam in _top_dir_component; W2b deleted; all 4 KATs pass. |
-| S3 | Depth canonical unification (C-CANON)                                          | done   | 9f01a24 | Wagner ping-pong fixed by extending regroup's modal depth to full library; unify now threads group_modal_depth. |
-| S4 | Composite-idempotence KATs + inverse-move tripwire (C-IDEM)                    | done   | af119d7 | New test_idempotence.py; tripwire warns (does not block); all KATs pass. |
-| S5 | Evidence-gap predicate fix (current-path resolution + census de-dup)           | done   | 51406e8 | _resolve_move_chain helper added; all 3 KATs pass. |
-| S6 | dedup prompt re-prompt + name_too_long noise fix                               | done   | 22371df | Re-prompt loop added; EOF treated as abort; clamp warning suppressed on no-op. |
-| S7 | albumid_tag_read_error diagnosis + exception detail in event                   | done   | fec53bd | exc_type + exc_msg added to warning event; KAT passes. Operator samples hades at S8. |
-| S9 | Fix xref-census move-chain resolution (cycle hang + quadratic loop)            | done   | ad66872 | _resolve_move_chain deleted; _resolve_tagged_to_current O(N) chronological helper added; both call sites updated; cycle-hang KAT + perf sanity guard added. |
-| S8 | Acceptance gate on hades: converge to "no changes" by run 2                    | done   | —      | Operator confirmed 2026-08-28: maintain converges, dedup adjudicated, gap report clean. |
+| S1 | Delete unify's composer-chain render patch (C-CANON)                          | todo   | —      | |
+| S2 | Shared library-wide modal-depth computation (C-CANON, C-GROUPSCOPE)           | todo   | —      | |
+| S3 | Composite-idempotence KATs for both residual shapes (C-IDEM)                  | todo   | —      | |
+| S4 | Reopened acceptance gate on hades: "no changes" by run 2                      | todo   | —      | |
 
-Frozen contracts: C-CANON, C-NC-TOP, C-IDEM (frozen at derivation 2026-08-28, operator rulings).  C-MAINTAIN,
-C-CONFLUENCE, C-RETIRE, INSTR, PERM, C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE,
-NORM-2-as-revised, C-W3b-INT inherited unchanged.
+Frozen contracts: C-CANON, C-NC-TOP, C-IDEM (frozen 2026-08-28, prior derivation); C-GROUPSCOPE (frozen at this
+derivation, operator ruling).  C-MAINTAIN, C-CONFLUENCE, C-RETIRE, INSTR, PERM, C-JRNL, C-FATAL, C-XREF, C-DEDUP,
+C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, NORM-2-as-revised, C-W3b-INT inherited unchanged.
 
 ## Action-frame digest
 
 (append non-trivial discoveries, contract flexes, and notable texture here as sessions run)
 
-- Derivation (2026-08-28): two sequential live `maintain` runs (3 and 4) each changed exactly 388 files with
-  byte-identical move sets — a stable orbit, not divergence: end-of-run state is constant (post-unify shape); the
-  churn is intra-composition (repath/regroup reverse unify's prior-run moves, unify redoes them).  Root cause
-  adjudicated: the canonical destination was not single-sourced — unify's in-memory composer patch (W2b) and the
-  unthreaded modal-depth argument gave three passes divergent renders for the same file.  Operator ruled Option A
-  (ALBUMARTIST-led non-classical top dir; no manufactured composers) over persisting the patch to tags (rejected:
-  fake scholarship + freezes the per-track Various scattering) and over an ownership guard (rejected: leaves two
-  contradictory canonicals live).  Also adjudicated: the prior sub-track's journal-backfill task was superseded —
-  the evidence-gap predicate keys exclusion on original tagged dest while post-move xref entries key on current
-  path, so backfill at current paths could never silence the report; fix the predicate first, then re-scope backfill
-  from live evidence.  Durable lesson (CAPTURE-CANDIDATE, chat 2026-08-28): per-pass idempotence does not compose
-  when any pass derives the canonical from inputs another pass cannot see — an in-memory tag patch is an unshared
-  input, and the composition oscillates at exactly the files where the patch changes the render.
-- Derivation texture: dedup's integrity prompt aborts on any unrecognized input, so `yes y` piped consent killed the
-  pass silently every run (8 groups standing, 0 resolved, 4 runs); 1167 files (~10% of library) fail the albumid tag
-  read inside fragmentation detection and are silently outside unify/regroup/dedup scope — integrity conclusions
-  about them are unsupported until diagnosed.
-- S1 code-site survey (2026-08-28):
-  - **W2b block** (`_pipeline_maint.py:2589-2602`): the composer-split pre-processing block.
-    `_is_composer_split_release` is defined at line 2324; `_canonical_composer_component` at line
-    2365.  The patch loop is lines 2601-2602 (`tags.cea_composer_lastnames = canonical_composer`).
-    `_is_composer_split_release` gates on non-classical (any track with empty `cwp_work_top` OR
-    `cwp_worktype_genres_top` not containing `"Classical"`) AND ≥2 distinct `CEA_COMPOSER_LASTNAMES`
-    values.  `_canonical_composer_component` reads `ALBUMARTISTSORT` from the first track and
-    applies `last_name`; falls back to `"Various"` when `ALBUMARTISTSORT` is empty or
-    `"Various Artists"`.  The W2b block is the sole deletion target for C-NC-TOP; the W2c block
-    (lines 2616-2617, `_unify_classical_composer_groups`) is a separate classical-only path and is
-    not deleted.
-  - **`_top_dir_component` fallback chain** (`_tags.py:251-313`): two cases, first match wins.
-    Case 1 (performer-led, lines 298-308): `CWP_COMPOSER_LASTNAMES` and `CEA_COMPOSER_LASTNAMES`
-    both empty → return `safe_name(ALBUMARTIST)`, or `safe_name(ARTIST)` if ALBUMARTIST empty, or
-    `safe_name(ALBUM or "Unknown Album")` as floor.  Case 2 (composer-bearing, lines 310-313):
-    either composer tag non-empty → return `None` (caller uses `"<composer> - <performers>"`
-    shape).  The function reads only `tags.to_file_dict()` keys — no network calls, no
-    `releasetype_secondary`.
-  - **Per-pass `build_dest_path` call sites and `group_modal_depth` arguments**:
-    - `run()` in `_pipeline.py:1848-1854`: `group_modal_depth=modal_depth_by_idx.get(global_idx)`.
-      Modal depth computed at lines 1826-1833 from `cwp_part_levels` via `work_group_modal_depth`.
-    - `repath()` in `_pipeline_maint.py:1740-1746`: `group_modal_depth=_repath_modal_by_idx.get(_ri)`.
-      Modal depth computed at lines 1701-1709.
-    - `regroup()` in `_pipeline_maint.py:2170-2176`: `group_modal_depth=_regroup_modal_by_idx.get(_ri)`.
-      Modal depth computed at lines 2137-2145.
-    - `unify()` in `_pipeline_maint.py:2639`: `build_dest_path(dest_root, stub_release, stub_track,
-      tags, global_track_idx=0)` — **`group_modal_depth` argument is absent**.  This is the depth
-      disagreement that causes the depth-insertion churn (cycle class 3 and the Wagner ping-pong).
-      Fix for S3: add `group_modal_depth=<per-group modal depth>` computed over the release group.
-  - **Regroup's depth target**: `regroup` does compute and thread `group_modal_depth` (lines
-    2137-2145, 2176), so it agrees with `repath` on depth.  The Wagner ping-pong (cycle class 2,
-    4 moves/run) is NOT a regroup depth disagreement — it is a same-run ordering issue: `repath`
-    moves a track into its work-subdir (modal-depth render), then `regroup` moves it back the same
-    run.  The root cause is that `regroup`'s consolidation target (the canonical `build_dest_path`
-    result) disagrees with the post-repath location for that specific track.  Exact mechanism
-    requires the maintain output files for confirmation (see attribution note below).
-  - **Work-type predicate (classical/non-classical discriminator)**: `_tags.py:1041`:
-    `tags.is_classical = "1" if (tags.cwp_work_top and "Classical" in tags.cwp_worktype_genres_top) else "0"`.
-    This is the `IS_CLASSICAL` tag predicate (REND-21).  The same predicate is used in
-    `_is_composer_split_release` (`_pipeline_maint.py:2357-2360`) as the scope gate.  S2 must use
-    this predicate (or its equivalent field-level check) as the classical/non-classical discriminator
-    — never a per-run in-memory majority vote.
-- S1 attribution (2026-08-28): `~/Remote/hades/Music/maintain.{a,b}.out` were not accessible at
-  survey time (remote mount empty).  Attribution from code analysis:
-  - **Cycle class 1 (~184 files, 97 releases)**: repath ↔ unify top-dir oscillation.  Cause:
-    W2b patches `cea_composer_lastnames` in memory only; `repath` reads unpatched disk tags and
-    computes ALBUMARTIST-led shape; `unify` re-applies the patch and moves back.  Every non-classical
-    release where `_is_composer_split_release` returns True is in this class.  Examples confirmed
-    by PLAN derivation: Kidz Bop, Benny Goodman, Mormon Tabernacle Choir, Various Artists jazz
-    compilation.  Fix: delete W2b (S2).
-  - **Cycle class 2 (2 files, 4 moves/run — Wagner Meistersinger)**: repath ↔ regroup ping-pong
-    within the same run.  `repath` moves the track into its work-subdir (modal-depth render);
-    `regroup` moves it back.  Both passes thread `group_modal_depth` correctly, so the disagreement
-    is not a depth-argument omission — it is a same-run ordering issue where `regroup`'s
-    consolidation target for the split-release group does not match the post-repath location.
-    Exact mechanism requires the output files for full confirmation; flagged for S3 investigation.
-  - **Cycle class 3 (depth-insertion churn — La traviata, Saint-Saëns, ~10 files)**: unify omits
-    `group_modal_depth` (`_pipeline_maint.py:2639`), so its depth renders disagree with
-    repath/regroup.  Fix: thread `group_modal_depth` into `unify`'s `build_dest_path` call (S3).
-  - **No undiscovered cycle classes**: all 388 moves (194 repath + 10 regroup + 184 unify per run)
-    are accounted for by classes 1–3 as described in the PLAN derivation.  The counts are
-    consistent with the code analysis: class 1 dominates (184 unify moves + 184 repath counter-moves
-    = 368 of the 388); class 2 contributes 4 moves; class 3 contributes the remaining ~16 moves
-    (10 regroup + some unify depth disagreements).  No discovery flagged.  Full per-file
-    confirmation deferred to when the output files are accessible.
-- S8 first attempt / S9 derivation (2026-08-28): the first live acceptance run on hades hung after
-  `unify_complete` (18:11:23) — one core at max, RSS flat at ~5.7%, no further output.  py-spy dump
-  (pid 137938): `_resolve_move_chain:3154` ← `_census_journal_for_xrefs:3271` ←
-  `reconstruct_cross_references:3332` ← `maintain:4117`.  The S5-added resolver builds the move
-  chain ahistorically and fixpoint-follows it with no cycle guard; the hades journal necessarily
-  contains inverse move pairs (the 388-move oscillation this sub-track was derived from wrote
-  `A→B` and `B→A` for every affected file), so 2-cycles were guaranteed.  Durable lesson
-  (CAPTURE-CANDIDATE): S5's KATs used linear move chains only — the fixture set omitted the exact
-  pathological history the sub-track exists to repair.  When a repair session adds a reader that
-  walks journal history, its KATs must include the pathology documented in the sub-track's own
-  derivation evidence; and any journal reader must treat inverse pairs as a legitimate permanent
-  shape, because the C-IDEM tripwire warns without blocking.  Secondary find folded into S9: the
-  chronological resolution loop in `reconstruct_cross_references` (`:3342-3355`) is cycle-safe but
-  O(tagged × moves) with a per-move dict copy — same-shape near-hang risk on large journals.
+- Derivation (2026-08-28): two post-acceptance live runs are byte-identical modulo timestamps with `changed=246` —
+  the residual orbit lives exactly in the two mechanisms the prior repair spared: the classical chain patch
+  (survey-classified as "genuine classical handling, not deleted") and unify's release-local modal-depth
+  membership.  Durable lesson (CAPTURE-CANDIDATE, chat 2026-08-28): **group-scope canonicalization is shared only
+  when both the function and the group membership are identical across passes** — the prior repair aligned the
+  function argument (`group_modal_depth` threaded everywhere) but not the membership (library-wide vs
+  release-local), and the same statistic over different denominators diverges exactly like an in-memory patch.
+  Second lesson: a comment asserting a scope gate is not a scope gate — the claimed classical gate on the chain
+  patch never existed in the function body, and the `musicbrainz_workid` fallback silently widened the patch to
+  jazz and musicals, including a shape flip (empty-composer files rendered composer-led) that re-violated C-NC-TOP
+  after its own repair session had landed.
+- Operator rulings at derivation: delete the chain patch (over persist-to-tags — rejected here not on the fake-
+  scholarship ground alone but because the chooser provably clobbers real distinctions: one top-work MBID spanning
+  arrangement sources with conflicting chains — and over symmetrizing the patch into other passes, which preserves
+  two render sources and fragile membership identity).  Divergent embedded chains rendering multiple top dirs is
+  accepted as truthful; repair routes through re-annotation (BACKLOG).
