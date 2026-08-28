@@ -3138,22 +3138,43 @@ def _journal_capacity(
 # ---------------------------------------------------------------------------
 
 
-def _resolve_move_chain(path_str: str, move_chain: dict[str, str]) -> str:
-    """Follow the move chain to resolve ``path_str`` to its current on-disk path.
+def _resolve_tagged_to_current(journal: TransactionLog) -> dict[str, str]:
+    """Map each tagged-destination path string to its current path string.
 
-    Iteratively applies ``move_chain`` (a mapping from source path to destination path built from
-    ``"repathed"``, ``"regrouped"``, and ``"unified"`` journal entries) until no further move
-    applies.  Handles multi-hop chains (a file moved more than once) by repeating until stable.
+    Walks ``journal.entries`` in chronological order (list order is chronological), maintaining
+    an inverse index so each move entry updates affected tagged-destination pointers in O(1)
+    amortized; O(N) total over all entries.  Cycle-proof because no fixpoint-follow occurs — an
+    inverse move (A→B then B→A) simply moves the pointer back to A; no loop ever happens.
 
-    :param path_str: The starting path string (e.g. the original tagged destination).
-    :param move_chain: Mapping from source path string to destination path string for every
-        recorded move-type journal entry.
-    :returns: The resolved current path string (equal to ``path_str`` when no moves apply).
+    Two dicts are maintained:
+
+    * ``tagged_to_current`` — tagged-dest → current path (the output).
+    * ``current_to_tagged`` — current path → list of tagged-dests currently there (inverse index).
+
+    On a ``"tagged"`` entry the destination is registered as its own current path.  On a
+    ``"repathed"``, ``"regrouped"``, or ``"unified"`` entry all tagged-dests currently at
+    ``entry.source`` are forwarded to ``entry.destination``.  All other actions are ignored.
+
+    :param journal: The :class:`~music_annotator.models.TransactionLog` to walk.
+    :returns: Mapping from each tagged-destination path string to its current path string.
+        Tagged destinations that were never subsequently moved map to themselves.
     """
-    current = path_str
-    while (nxt := move_chain.get(current)) is not None:
-        current = nxt
-    return current
+    tagged_to_current: dict[str, str] = {}
+    current_to_tagged: dict[str, list[str]] = {}
+
+    for entry in journal.entries:
+        dest = entry.destination
+        if entry.action == "tagged":
+            tagged_to_current[dest] = dest
+            current_to_tagged.setdefault(dest, []).append(dest)
+        elif entry.action in {"repathed", "regrouped", "unified"}:
+            affected = current_to_tagged.pop(entry.source, [])
+            for tagged_dest in affected:
+                tagged_to_current[tagged_dest] = dest
+            if affected:
+                current_to_tagged.setdefault(dest, []).extend(affected)
+
+    return tagged_to_current
 
 
 def _census_journal_for_xrefs(
@@ -3177,9 +3198,9 @@ def _census_journal_for_xrefs(
     **Move-chain resolution for the evidence-gap predicate**: ``"cross-referenced"`` journal
     entries are keyed on the file's path *at the time of cross-referencing*, which is the current
     path after any subsequent moves.  The evidence-gap exclusion resolves each tagged destination
-    through the move chain (``"repathed"``, ``"regrouped"``, ``"unified"`` entries) to its current
-    path before checking against ``xref_by_dest``, so a file that was tagged at path A, moved to
-    path B, and then cross-referenced at path B is correctly excluded from the gap report.
+    to its current path via :func:`_resolve_tagged_to_current` before checking against
+    ``xref_by_dest``, so a file that was tagged at path A, moved to path B, and then
+    cross-referenced at path B is correctly excluded from the gap report.
 
     **De-duplication**: when two tagged destinations resolve to the same current path (e.g. two
     journal entries for the same file after a move), only one evidence-gap candidate is emitted.
@@ -3197,14 +3218,14 @@ def _census_journal_for_xrefs(
           the journal), or where the journal evidence is otherwise ambiguous.  These are reported
           for operator review.  Each current path appears at most once (de-duplicated).
     """
+    tagged_to_current = _resolve_tagged_to_current(journal)
+
     # Collect tagged entries per destination (in chronological order).
     tagged_by_dest: dict[str, list[str]] = {}  # dest → [release_id, ...]
     # Collect skipped entries per destination.
     skipped_by_dest: dict[str, list[str]] = {}  # dest → [release_id, ...]
     # Collect already-journalled cross-references per destination.
     xref_by_dest: dict[str, set[str]] = {}  # dest → {secondary_mbid, ...}
-    # Build move chain: source → destination for every recorded move-type entry.
-    move_chain: dict[str, str] = {}  # source_path_str → dest_path_str
 
     for entry in journal.entries:
         dest = entry.destination
@@ -3214,8 +3235,6 @@ def _census_journal_for_xrefs(
             skipped_by_dest.setdefault(dest, []).append(entry.release_id)
         elif entry.action == "cross-referenced":
             xref_by_dest.setdefault(dest, set()).add(entry.release_id)
-        elif entry.action in {"repathed", "regrouped", "unified"}:
-            move_chain[entry.source] = entry.destination
 
     groups: dict[str, tuple[str, list[str]]] = {}
 
@@ -3268,7 +3287,7 @@ def _census_journal_for_xrefs(
         seen_ids: set[str] = {rid for rid in tagged_ids if rid}
         if len(seen_ids) != 1 or dest in skipped_by_dest or dest in groups:
             continue
-        current_dest = _resolve_move_chain(dest, move_chain)
+        current_dest = tagged_to_current.get(dest, dest)
         if current_dest in xref_by_dest:
             continue
         if current_dest not in seen_current_paths:
@@ -3336,23 +3355,10 @@ def reconstruct_cross_references(
     # When a file has been subsequently repathed, the tagged destination is the old (legacy)
     # path; we need the current on-disk path to read and write the live file.
     #
-    # Build tagged_dest_to_current: for each "tagged" destination, track its current path by
-    # walking journal entries in chronological order.  On each move (repathed/regrouped/unified),
-    # update all tracked destinations that currently point to the old path.
-    tagged_dest_to_current: dict[str, Path] = {}  # tagged_dest_str → current Path
-    # Intermediate tracking: tagged_dest_str → current_path_str (updated on each move).
-    _current_by_tagged: dict[str, str] = {}
-    for entry in journal.entries:
-        if entry.action == "tagged":
-            _current_by_tagged[entry.destination] = entry.destination
-        elif entry.action in {"repathed", "regrouped", "unified"}:
-            # Update all tracked tagged dests that currently point to entry.source.
-            for tagged_dest, current_str in list(_current_by_tagged.items()):
-                if current_str == entry.source:
-                    _current_by_tagged[tagged_dest] = entry.destination
-
-    for tagged_dest, current_str in _current_by_tagged.items():
-        tagged_dest_to_current[tagged_dest] = Path(current_str)
+    # _resolve_tagged_to_current walks journal entries in chronological order with an inverse
+    # index, resolving each tagged destination to its current path in O(N) total and without
+    # fixpoint-follow, so inverse move pairs (A→B then B→A) are handled correctly.
+    tagged_dest_to_current: dict[str, Path] = {k: Path(v) for k, v in _resolve_tagged_to_current(journal).items()}
 
     # --- Filter groups to files that exist on disk ---
     actionable: list[tuple[Path, str, list[str]]] = []  # (current_path, primary_mbid, [secondary_mbids])

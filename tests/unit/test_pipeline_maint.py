@@ -62,7 +62,7 @@ from music_annotator._pipeline_maint import (
     _read_tags_cached,
     _reference_evidence,
     _resolve_current_lib,
-    _resolve_move_chain,
+    _resolve_tagged_to_current,
     _scatter_consequence_note,
     _unify_classical_composer_groups,
     _write_xref_and_journal,
@@ -13030,9 +13030,9 @@ class TestCensusJournalForXrefs:
         When two tagged destinations both resolve to the same current path through the move chain
         (e.g. a file moved from A to C, and a second tagged entry at B also moved to C), the
         evidence-gap list must contain the current path at most once (de-duplicated by current
-        path).
+        path).  The de-duplication is performed inside _census_journal_for_xrefs via
+        _resolve_tagged_to_current, so the returned gaps list has at most one entry.
         """
-        move_chain = {"/lib/Work/01.flac": "/lib/NewWork/01.flac", "/lib/Work/02.flac": "/lib/NewWork/01.flac"}
         journal = self._make_journal(
             [
                 {
@@ -13068,8 +13068,7 @@ class TestCensusJournalForXrefs:
         )
         _groups, gaps = _census_journal_for_xrefs(journal)
         # Both tagged dests resolve to /lib/NewWork/01.flac → reported at most once.
-        resolved_gaps = [_resolve_move_chain(g, move_chain) for g in gaps]
-        assert resolved_gaps.count("/lib/NewWork/01.flac") <= 1
+        assert len(gaps) <= 1
 
     def test_non_move_non_xref_actions_ignored(self) -> None:
         """Journal entries with unhandled actions (e.g. 'enriched') are silently ignored.
@@ -13099,6 +13098,213 @@ class TestCensusJournalForXrefs:
         # 'enriched' entry is ignored; single tagged entry → evidence gap.
         assert "/lib/Work/01.flac" not in groups
         assert "/lib/Work/01.flac" in gaps
+
+
+# ---------------------------------------------------------------------------
+# _resolve_tagged_to_current
+# ---------------------------------------------------------------------------
+
+
+class TestResolveTaggedToCurrent:
+    """Unit tests for :func:`_resolve_tagged_to_current`.
+
+    Verifies the O(N) chronological resolver: cycle-proof handling of inverse move pairs,
+    multi-hop chains, and large synthetic journals.
+    """
+
+    @staticmethod
+    def _make_journal(entries: list[dict[str, str]]) -> TransactionLog:
+        """Build a :class:`TransactionLog` from a list of raw entry dicts.
+
+        :param entries: List of raw entry dicts.
+        :returns: A :class:`TransactionLog` with the entries validated.
+        """
+        return TransactionLog(entries=[TransactionEntry(**e) for e in entries])
+
+    def test_cycle_fixture_terminates_and_resolves_to_current(self) -> None:
+        """KAT (a): inverse move pair (A→B, B→A) terminates and resolves the file to A.
+
+        A journal with tagged-at-A, moved A→B, moved B→A must terminate in finite time and
+        resolve the tagged destination to A (its current path after the inverse move).  This is
+        the cycle-hang regression guard: the old fixpoint-follow loop would spin indefinitely on
+        this shape; the chronological resolver simply moves the pointer back to A.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/A/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/A/01.flac",
+                    "destination": "/lib/B/01.flac",
+                    "action": "repathed",
+                },
+                {
+                    "timestamp": "2024-01-01T00:02:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/B/01.flac",
+                    "destination": "/lib/A/01.flac",
+                    "action": "repathed",
+                },
+            ]
+        )
+        result = _resolve_tagged_to_current(journal)
+        # After A→B→A the file is back at A.
+        assert result["/lib/A/01.flac"] == "/lib/A/01.flac"
+
+    def test_cycle_fixture_census_terminates_and_resolves(self) -> None:
+        """KAT (a) via census: _census_journal_for_xrefs terminates on an inverse move pair.
+
+        Calls _census_journal_for_xrefs with the same inverse-move-pair journal and asserts
+        that it returns (does not hang) and that the evidence-gap list resolves the file to A
+        (its current path after the inverse move).
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/A/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/A/01.flac",
+                    "destination": "/lib/B/01.flac",
+                    "action": "repathed",
+                },
+                {
+                    "timestamp": "2024-01-01T00:02:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/B/01.flac",
+                    "destination": "/lib/A/01.flac",
+                    "action": "repathed",
+                },
+            ]
+        )
+        _groups, gaps = _census_journal_for_xrefs(journal)
+        # File is back at A after the inverse move; no cross-reference record → evidence gap.
+        assert "/lib/A/01.flac" in gaps
+
+    def test_inverse_pair_plus_onward_move_resolves_to_final(self) -> None:
+        """KAT (b): tagged-at-A, A→B, B→A, A→C resolves to C.
+
+        An inverse move pair followed by an onward move must resolve to the final destination C,
+        not to A (the intermediate state after the inverse move).
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/A/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/A/01.flac",
+                    "destination": "/lib/B/01.flac",
+                    "action": "repathed",
+                },
+                {
+                    "timestamp": "2024-01-01T00:02:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/B/01.flac",
+                    "destination": "/lib/A/01.flac",
+                    "action": "repathed",
+                },
+                {
+                    "timestamp": "2024-01-01T00:03:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/A/01.flac",
+                    "destination": "/lib/C/01.flac",
+                    "action": "repathed",
+                },
+            ]
+        )
+        result = _resolve_tagged_to_current(journal)
+        assert result["/lib/A/01.flac"] == "/lib/C/01.flac"
+
+    def test_move_with_no_tagged_files_at_source_is_ignored(self) -> None:
+        """Move entry whose source has no tracked tagged destinations is silently ignored.
+
+        When a move entry (repathed/regrouped/unified) references a source path that has no
+        tagged destinations currently tracked there, the inverse-index lookup returns an empty
+        list and no update is made.  The resolver must not raise and must return only the
+        tagged destinations it has seen.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/A/01.flac",
+                    "action": "tagged",
+                },
+                # Move of a path that has no tagged files currently tracked there.
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/Untracked/01.flac",
+                    "destination": "/lib/B/01.flac",
+                    "action": "repathed",
+                },
+            ]
+        )
+        result = _resolve_tagged_to_current(journal)
+        # Only the tagged destination is tracked; the unrelated move has no effect.
+        assert result == {"/lib/A/01.flac": "/lib/A/01.flac"}
+
+    def test_large_synthetic_journal_completes(self) -> None:
+        """KAT (d): soft O(N) sanity guard — resolver over ~10,000 entries completes.
+
+        Builds a synthetic journal with 1,000 tagged entries each moved 9 times (9,000 move
+        entries; 10,000 total).  Calls _resolve_tagged_to_current and asserts it completes and
+        returns the correct final mapping.  No formal timeout assertion is made — the test
+        existing and passing is the guard against reintroduced quadratic walks.
+        """
+        entries: list[dict[str, str]] = []
+        n_files = 1000
+        n_moves = 9
+        # Tag each file at its initial path.
+        for i in range(n_files):
+            entries.append(
+                {
+                    "timestamp": f"2024-01-01T00:00:{i:02d}+00:00",
+                    "release_id": f"rel-{i}",
+                    "source": f"/src/{i}.flac",
+                    "destination": f"/lib/step0/{i}.flac",
+                    "action": "tagged",
+                }
+            )
+        # Move each file through 9 successive paths.
+        for step in range(1, n_moves + 1):
+            for i in range(n_files):
+                entries.append(
+                    {
+                        "timestamp": f"2024-01-0{step + 1}T00:00:{i:02d}+00:00",
+                        "release_id": f"rel-{i}",
+                        "source": f"/lib/step{step - 1}/{i}.flac",
+                        "destination": f"/lib/step{step}/{i}.flac",
+                        "action": "repathed",
+                    }
+                )
+        journal = TransactionLog(entries=[TransactionEntry(**e) for e in entries])
+        result = _resolve_tagged_to_current(journal)
+        assert len(result) == n_files
+        for i in range(n_files):
+            assert result[f"/lib/step0/{i}.flac"] == f"/lib/step{n_moves}/{i}.flac"
 
 
 # ---------------------------------------------------------------------------
