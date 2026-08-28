@@ -95,7 +95,8 @@ unified, the first live run performs the one-time un-scatter and the second run 
 | S5 | build    | Fix reconstruct-xrefs evidence-gap predicate: resolve tagged-dest to current path; de-dup census      | S1          | todo   |
 | S6 | build    | dedup-library prompt: re-prompt on invalid input, abort only on 'a'; name_too_long warns only on change | —           | todo   |
 | S7 | build    | Diagnose albumid_tag_read_error: log exception class, sample the 1167-file cluster, route repair      | —           | todo   |
-| S8 | operator | Acceptance gate on hades: maintain converges to "no changes" by run 2; dedup groups adjudicated; gap report clean or genuinely-unresolved only | S2–S7       | todo   |
+| S9 | build    | Fix xref-census move-chain resolution: chronological O(N) resolver, cycle-proof; delete _resolve_move_chain | S5          | todo   |
+| S8 | operator | Acceptance gate on hades: maintain converges to "no changes" by run 2; dedup groups adjudicated; gap report clean or genuinely-unresolved only | S2–S7,S9    | todo   |
 
 ### S1 — canonical contract + attribution survey (design; no code)
 
@@ -166,6 +167,42 @@ legacy never-ingested files), and **route at the boundary** — repair rides a f
 files are currently invisible to unify/regroup/dedup; until routed, treat any integrity conclusion about them as
 unsupported.
 
+### S9 — xref-census move-chain resolution regression (cycle hang + quadratic loop)
+
+**Why (discovered at the S8 attempt, 2026-08-28):** the first live acceptance run on hades hung indefinitely (one
+core pegged, flat RSS, no output) immediately after `unify_complete`.  py-spy confirmed the spin:
+`_resolve_move_chain` (`_pipeline_maint.py:3154`) ← `_census_journal_for_xrefs:3271` ←
+`reconstruct_cross_references:3332` ← `maintain:4117`.  Root cause: the evidence-gap resolver builds its move chain
+**ahistorically** (`move_chain[entry.source] = entry.destination` over all history, `:3217-3218`) and follows it with
+a guardless `while` (`:3153-3156`).  The hades journal **provably contains inverse move pairs** — the sub-track's own
+derivation evidence (388 byte-identical moves across runs 3/4) guarantees an `A→B` and `B→A` entry for every
+oscillating file — so the flattened map contains 2-cycles and the loop never terminates.  The inverse-move tripwire
+is warn-only by contract (C-IDEM), so inverse pairs in the journal are a legitimate, permanent condition that any
+history-walking reader MUST tolerate.
+
+Files: `src/music_annotator/_pipeline_maint.py`, tests.
+
+1. **One shared chronological resolver.**  Add a helper (shape: `_resolve_tagged_to_current(journal) ->
+   dict[str, str]`, tagged-dest → current path) that walks entries **in chronological order** — same principle as
+   `_resolve_current_lib` — maintaining an inverse index (current path → tagged dests currently there) so each move
+   entry updates its affected keys in O(1) amortized: O(N) total, cycle-proof by construction (a later inverse move
+   just moves the pointer back; no fixpoint-follow ever happens).
+2. **Replace both call sites.**  (a) `_census_journal_for_xrefs`'s evidence-gap exclusion (`:3265-3276`) — drop
+   `move_chain` and `_resolve_move_chain` entirely; (b) `reconstruct_cross_references`'s path resolution
+   (`:3342-3355`), which is chronological/cycle-safe already but O(tagged × moves) with a full dict copy per move
+   entry (`list(_current_by_tagged.items())` at `:3350`) — replace with the shared helper.
+3. **Delete `_resolve_move_chain`** (sole production caller is `:3271`; update the test import at
+   `test_pipeline_maint.py:65` and the usage at `:13071`).
+
+KATs: (a) **cycle fixture** — journal with tagged-at-A, moved A→B, moved B→A (the recorded-oscillation shape from
+the derivation evidence): census terminates and resolves the file to A; (b) inverse pair plus onward move
+(A→B, B→A, A→C) resolves to C; (c) existing S5 KATs (moved-then-xref'd exclusion, single-report de-dup) still pass
+through the new resolver; (d) a soft O(N) sanity guard — resolver over a synthetic ~10k-entry journal with many
+moves completes without timeout (no formal perf assertion; the KAT exists to catch reintroduced quadratic walks).
+
+Not built: cycle *repair* (journal entries are historical facts; inverse pairs are legitimate under warn-only
+C-IDEM), tripwire behavior changes, any journal mutation.
+
 ### S8 — operator acceptance gate (hades)
 
 Interactive live runs (integrity prompts must be answered by the operator — `yes y` cannot consent and now cannot
@@ -219,7 +256,8 @@ ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and cove
 | S5 | Evidence-gap predicate fix (current-path resolution + census de-dup)           | done   | 51406e8 | _resolve_move_chain helper added; all 3 KATs pass. |
 | S6 | dedup prompt re-prompt + name_too_long noise fix                               | done   | 22371df | Re-prompt loop added; EOF treated as abort; clamp warning suppressed on no-op. |
 | S7 | albumid_tag_read_error diagnosis + exception detail in event                   | done   | fec53bd | exc_type + exc_msg added to warning event; KAT passes. Operator samples hades at S8. |
-| S8 | Acceptance gate on hades: converge to "no changes" by run 2                    | todo   |        |       |
+| S9 | Fix xref-census move-chain resolution (cycle hang + quadratic loop)            | todo   |        | Regression from S5; blocks S8 (first live run hung; py-spy-confirmed). |
+| S8 | Acceptance gate on hades: converge to "no changes" by run 2                    | todo   |        | First attempt 2026-08-28 hung in pass 6 (see S9); kill the stuck pid and re-run after S9 lands. |
 
 Frozen contracts: C-CANON, C-NC-TOP, C-IDEM (frozen at derivation 2026-08-28, operator rulings).  C-MAINTAIN,
 C-CONFLUENCE, C-RETIRE, INSTR, PERM, C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE,
@@ -311,3 +349,17 @@ NORM-2-as-revised, C-W3b-INT inherited unchanged.
     = 368 of the 388); class 2 contributes 4 moves; class 3 contributes the remaining ~16 moves
     (10 regroup + some unify depth disagreements).  No discovery flagged.  Full per-file
     confirmation deferred to when the output files are accessible.
+- S8 first attempt / S9 derivation (2026-08-28): the first live acceptance run on hades hung after
+  `unify_complete` (18:11:23) — one core at max, RSS flat at ~5.7%, no further output.  py-spy dump
+  (pid 137938): `_resolve_move_chain:3154` ← `_census_journal_for_xrefs:3271` ←
+  `reconstruct_cross_references:3332` ← `maintain:4117`.  The S5-added resolver builds the move
+  chain ahistorically and fixpoint-follows it with no cycle guard; the hades journal necessarily
+  contains inverse move pairs (the 388-move oscillation this sub-track was derived from wrote
+  `A→B` and `B→A` for every affected file), so 2-cycles were guaranteed.  Durable lesson
+  (CAPTURE-CANDIDATE): S5's KATs used linear move chains only — the fixture set omitted the exact
+  pathological history the sub-track exists to repair.  When a repair session adds a reader that
+  walks journal history, its KATs must include the pathology documented in the sub-track's own
+  derivation evidence; and any journal reader must treat inverse pairs as a legitimate permanent
+  shape, because the C-IDEM tripwire warns without blocking.  Secondary find folded into S9: the
+  chronological resolution loop in `reconstruct_cross_references` (`:3342-3355`) is cycle-safe but
+  O(tagged × moves) with a per-move dict copy — same-shape near-hang risk on large journals.
