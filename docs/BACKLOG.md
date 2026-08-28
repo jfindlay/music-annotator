@@ -735,7 +735,7 @@ deletion.
   entries by recomputed destination before the move loop; skip entries that share a destination).
   Any future repath-style loop must include this guard.
 
-- **`cwp_composer_lastnames` / `cea_composer_lastnames` priority in `build_dest_path` (W2c)**:
+- **`cwp_composer_lastnames` / `cea_composer_lastnames` priority in `build_dest_path`**:
   `build_dest_path` prefers `CWP_COMPOSER_LASTNAMES` (from `cwp_composer_lastnames`) over
   `CEA_COMPOSER_LASTNAMES`.  Retroactive tag-patching code that only patches the `cea_` field
   silently produces the wrong path.  Always patch both fields when overriding the composer

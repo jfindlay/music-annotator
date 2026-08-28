@@ -5538,7 +5538,7 @@ class TestUnify:
             musicbrainz_albumid="nc-top-rel-1",
         )
 
-        # Files placed under composer-bearing paths (the old W2b shape — now incorrect).
+        # Files placed under composer-bearing paths (the old non-classical composer manufacture shape — now incorrect).
         path_a = _make_library_flac(dest_root, "Goodman - Benny Goodman/The Story/01 - Track 1.flac", tags_a)
         path_b = _make_library_flac(dest_root, "Berlin - Benny Goodman/The Story/02 - Track 2.flac", tags_b)
 
@@ -5618,8 +5618,9 @@ class TestUnify:
         """Classical releases with CEA_COMPOSER_LASTNAMES still use the composer-bearing top dir.
 
         A classical release (CWP_WORK_TOP non-empty AND CWP_WORKTYPE_GENRES_TOP contains
-        "Classical") with varying CEA_COMPOSER_LASTNAMES routes through the W2c path, not the
-        ALBUMARTIST-led path.  The composer-bearing shape is preserved for classical releases.
+        "Classical") with varying CEA_COMPOSER_LASTNAMES routes through the classical
+        composer-chain unification path, not the ALBUMARTIST-led path.  The composer-bearing
+        shape is preserved for classical releases.
 
         :param fs: pyfakefs fixture.
         """
@@ -5641,7 +5642,7 @@ class TestUnify:
             musicbrainz_albumid="classical-rel-1",
         )
         tags_b = TrackTags(
-            cea_composer_lastnames="Haydn",  # different composer — classical → W2c path
+            cea_composer_lastnames="Haydn",  # different composer — classical → classical composer-chain unification path
             albumartistsort="Goodman, Benny",
             cwp_work_top="Symphony No. 40",
             cwp_worktype_genres_top="Classical",

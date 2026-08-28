@@ -3,9 +3,10 @@
 Covers every observed cycle shape that was fixed by the canonical unification work:
 
 1. **Non-classical release (Kidz-Bop / Goodman shape)** — a release fragmented across top dirs
-   because ``unify``'s old W2b patch manufactured a composer from ``ALBUMARTISTSORT``.  After the
-   fix, ``unify`` consolidates to the ALBUMARTIST-led top dir (C-NC-TOP).  The second ``maintain``
-   run must report "no changes" and append zero journal entries.
+   because the deleted non-classical composer manufacture patch manufactured a composer from
+   ``ALBUMARTISTSORT``.  After the fix, ``unify`` consolidates to the ALBUMARTIST-led top dir
+   (C-NC-TOP).  The second ``maintain`` run must report "no changes" and append zero journal
+   entries.
 
 2. **Various-Artists compilation** — a release whose tracks were scattered across per-track top
    dirs because ``"Various"`` was treated as a composer.  After the fix, all tracks consolidate to
@@ -144,10 +145,10 @@ class TestNonClassicalIdempotence:
     """KAT: non-classical release consolidation is idempotent (C-IDEM, C-NC-TOP).
 
     Covers the Kidz-Bop / Goodman cycle shape: a non-classical release whose tracks were
-    fragmented across top dirs because the old W2b patch manufactured a composer from
-    ``ALBUMARTISTSORT``.  After the fix, ``unify`` consolidates all tracks to the
-    ALBUMARTIST-led top dir.  The second ``maintain`` run must report "no changes" and
-    append zero journal entries.
+    fragmented across top dirs because the deleted non-classical composer manufacture patch
+    manufactured a composer from ``ALBUMARTISTSORT``.  After the fix, ``unify`` consolidates
+    all tracks to the ALBUMARTIST-led top dir.  The second ``maintain`` run must report "no
+    changes" and append zero journal entries.
     """
 
     @staticmethod
@@ -197,7 +198,8 @@ class TestNonClassicalIdempotence:
         canonical_2 = _canonical_path(dest_root, tags_2)
 
         # Place tracks at fragmented (wrong) top dirs — simulating the pre-fix state where
-        # W2b manufactured a composer from ALBUMARTISTSORT and scattered the release.
+        # the deleted non-classical composer manufacture patch manufactured a composer from
+        # ALBUMARTISTSORT and scattered the release.
         wrong_top_1 = dest_root / "Kidz Bop Kids - Kidz Bop Kids" / "Kidz Bop [2010]" / "01 - Party Rock Anthem.flac"
         wrong_top_2 = dest_root / "Kidz Bop Kids - Kidz Bop Kids" / "Kidz Bop [2010]" / "02 - Call Me Maybe.flac"
         wrong_top_1.parent.mkdir(parents=True, exist_ok=True)

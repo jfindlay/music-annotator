@@ -3124,10 +3124,11 @@ class TestRunFullPipeline:
         """KAT (SEL-8): non-classical composer-split pre-processing is untouched by upward unification.
 
         For a non-classical release where CEA_COMPOSER_LASTNAMES varies across tracks (the
-        composer-split shape), the W2b pre-processing in unify() patches every track to the
-        canonical composer component derived from ALBUMARTISTSORT.  The upward-unification pass
-        in _apply_workgroup_unification does not apply to non-classical releases (it operates on
-        cwp_composers_is_fallback, which is only set when a work hierarchy is present).
+        composer-split shape), the deleted non-classical composer manufacture patch in unify()
+        patched every track to the canonical composer component derived from ALBUMARTISTSORT.
+        The upward-unification pass in _apply_workgroup_unification does not apply to
+        non-classical releases (it operates on cwp_composers_is_fallback, which is only set
+        when a work hierarchy is present).
 
         This test verifies that a non-classical release with no work hierarchy produces tags
         where cwp_composers is empty (no work link → no composer unification), and that the
@@ -3181,8 +3182,8 @@ class TestRunFullPipeline:
         tags2: TrackTags = mock_tag.call_args_list[1][0][1]
 
         # Non-classical tracks with no work hierarchy: cwp_composers must be empty (no work link).
-        # The composer-split pre-processing (W2b) in unify() is a separate maintenance pass and
-        # does not run during ingest.  The upward-unification pass in _apply_workgroup_unification
+        # The deleted non-classical composer manufacture patch in unify() was a separate maintenance
+        # pass and does not run during ingest.  The upward-unification pass in _apply_workgroup_unification
         # only fires when a non-fallback movement with cwp_composers exists — which requires a
         # work hierarchy.  Without a work link, cwp_composers stays empty for both tracks.
         assert tags1.cwp_composers == "", (
