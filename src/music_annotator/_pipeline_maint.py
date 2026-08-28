@@ -3102,6 +3102,24 @@ def _journal_capacity(
 # ---------------------------------------------------------------------------
 
 
+def _resolve_move_chain(path_str: str, move_chain: dict[str, str]) -> str:
+    """Follow the move chain to resolve ``path_str`` to its current on-disk path.
+
+    Iteratively applies ``move_chain`` (a mapping from source path to destination path built from
+    ``"repathed"``, ``"regrouped"``, and ``"unified"`` journal entries) until no further move
+    applies.  Handles multi-hop chains (a file moved more than once) by repeating until stable.
+
+    :param path_str: The starting path string (e.g. the original tagged destination).
+    :param move_chain: Mapping from source path string to destination path string for every
+        recorded move-type journal entry.
+    :returns: The resolved current path string (equal to ``path_str`` when no moves apply).
+    """
+    current = path_str
+    while (nxt := move_chain.get(current)) is not None:
+        current = nxt
+    return current
+
+
 def _census_journal_for_xrefs(
     journal: TransactionLog,
 ) -> tuple[dict[str, tuple[str, list[str]]], list[str]]:
@@ -3120,6 +3138,16 @@ def _census_journal_for_xrefs(
     destination so that idempotency can be enforced: a secondary MBID already journalled as
     ``"cross-referenced"`` at a destination is excluded from the returned secondary sets.
 
+    **Move-chain resolution for the evidence-gap predicate**: ``"cross-referenced"`` journal
+    entries are keyed on the file's path *at the time of cross-referencing*, which is the current
+    path after any subsequent moves.  The evidence-gap exclusion resolves each tagged destination
+    through the move chain (``"repathed"``, ``"regrouped"``, ``"unified"`` entries) to its current
+    path before checking against ``xref_by_dest``, so a file that was tagged at path A, moved to
+    path B, and then cross-referenced at path B is correctly excluded from the gap report.
+
+    **De-duplication**: when two tagged destinations resolve to the same current path (e.g. two
+    journal entries for the same file after a move), only one evidence-gap candidate is emitted.
+
     :param journal: The :class:`~music_annotator.models.TransactionLog` to census.
     :returns: A tuple ``(groups, evidence_gap_dests)`` where:
 
@@ -3131,7 +3159,7 @@ def _census_journal_for_xrefs(
           only one ``"tagged"`` entry but the file currently carries a
           ``MUSICBRAINZ_SECONDARY_ALBUMID`` tag (suggesting a cross-reference was written outside
           the journal), or where the journal evidence is otherwise ambiguous.  These are reported
-          for operator review.
+          for operator review.  Each current path appears at most once (de-duplicated).
     """
     # Collect tagged entries per destination (in chronological order).
     tagged_by_dest: dict[str, list[str]] = {}  # dest → [release_id, ...]
@@ -3139,6 +3167,8 @@ def _census_journal_for_xrefs(
     skipped_by_dest: dict[str, list[str]] = {}  # dest → [release_id, ...]
     # Collect already-journalled cross-references per destination.
     xref_by_dest: dict[str, set[str]] = {}  # dest → {secondary_mbid, ...}
+    # Build move chain: source → destination for every recorded move-type entry.
+    move_chain: dict[str, str] = {}  # source_path_str → dest_path_str
 
     for entry in journal.entries:
         dest = entry.destination
@@ -3148,6 +3178,8 @@ def _census_journal_for_xrefs(
             skipped_by_dest.setdefault(dest, []).append(entry.release_id)
         elif entry.action == "cross-referenced":
             xref_by_dest.setdefault(dest, set()).add(entry.release_id)
+        elif entry.action in {"repathed", "regrouped", "unified"}:
+            move_chain[entry.source] = entry.destination
 
     groups: dict[str, tuple[str, list[str]]] = {}
 
@@ -3188,10 +3220,23 @@ def _census_journal_for_xrefs(
     # are excluded: the secondary MBID was written by a prior reconstruct-xrefs run and is
     # correctly recorded.  Reported for operator review; the caller reads the live file to check
     # for an existing MUSICBRAINZ_SECONDARY_ALBUMID tag.
+    #
+    # The exclusion resolves each tagged destination through the move chain to its current path
+    # before checking xref_by_dest, because "cross-referenced" entries are keyed on the current
+    # path at the time of cross-referencing (C-XREF: the exclusion must compare on the same path
+    # basis as the cross-reference record).  De-duplication ensures each current path appears at
+    # most once even when multiple tagged destinations resolve to the same current path.
     evidence_gap_dests: list[str] = []
+    seen_current_paths: set[str] = set()
     for dest, tagged_ids in tagged_by_dest.items():
         seen_ids: set[str] = {rid for rid in tagged_ids if rid}
-        if len(seen_ids) == 1 and dest not in skipped_by_dest and dest not in groups and dest not in xref_by_dest:
+        if len(seen_ids) != 1 or dest in skipped_by_dest or dest in groups:
+            continue
+        current_dest = _resolve_move_chain(dest, move_chain)
+        if current_dest in xref_by_dest:
+            continue
+        if current_dest not in seen_current_paths:
+            seen_current_paths.add(current_dest)
             evidence_gap_dests.append(dest)
 
     return groups, evidence_gap_dests

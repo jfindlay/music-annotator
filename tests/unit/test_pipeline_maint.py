@@ -62,6 +62,7 @@ from music_annotator._pipeline_maint import (
     _read_tags_cached,
     _reference_evidence,
     _resolve_current_lib,
+    _resolve_move_chain,
     _scatter_consequence_note,
     _unify_classical_composer_groups,
     _write_xref_and_journal,
@@ -12772,6 +12773,149 @@ class TestCensusJournalForXrefs:
         assert "/lib/Work/01.flac" not in groups
         # Already journal-provable → not an evidence gap.
         assert "/lib/Work/01.flac" not in gaps
+
+    def test_moved_then_cross_referenced_not_a_gap(self) -> None:
+        """KAT: tagged-at-A → moved A→B → cross-referenced-at-B is NOT reported as a gap.
+
+        The evidence-gap exclusion resolves each tagged destination through the move chain to its
+        current path before checking xref_by_dest (C-XREF).  A file tagged at A, moved to B, and
+        cross-referenced at B must be excluded from the gap report because the cross-reference
+        record at B is the current-path evidence that the secondary MBID is already recorded.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/lib/Work/01.flac",
+                    "destination": "/lib/NewWork/01.flac",
+                    "action": "repathed",
+                },
+                {
+                    "timestamp": "2024-01-01T00:02:00+00:00",
+                    "release_id": "secondary-rel",
+                    "source": "/lib/NewWork/01.flac",
+                    "destination": "/lib/NewWork/01.flac",
+                    "action": "cross-referenced",
+                },
+            ]
+        )
+        _groups, gaps = _census_journal_for_xrefs(journal)
+        # The file was cross-referenced at its current path → not an evidence gap.
+        assert "/lib/Work/01.flac" not in gaps
+        assert "/lib/NewWork/01.flac" not in gaps
+
+    def test_genuinely_gapped_file_reported_exactly_once(self) -> None:
+        """KAT: a genuinely-gapped file (no cross-reference record) IS reported exactly once.
+
+        A file with a single tagged entry, no skipped entries, and no cross-referenced journal
+        entry at its current path must appear in evidence_gap_dests exactly once.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/lib/Work/01.flac",
+                    "destination": "/lib/NewWork/01.flac",
+                    "action": "repathed",
+                },
+            ]
+        )
+        _groups, gaps = _census_journal_for_xrefs(journal)
+        # No cross-reference record at the current path → genuinely gapped.
+        assert "/lib/Work/01.flac" in gaps
+        assert gaps.count("/lib/Work/01.flac") == 1
+
+    def test_duplicate_tagged_entries_resolving_to_same_current_path_reported_once(self) -> None:
+        """KAT: two tagged entries resolving to one current file are reported at most once.
+
+        When two tagged destinations both resolve to the same current path through the move chain
+        (e.g. a file moved from A to C, and a second tagged entry at B also moved to C), the
+        evidence-gap list must contain the current path at most once (de-duplicated by current
+        path).
+        """
+        move_chain = {"/lib/Work/01.flac": "/lib/NewWork/01.flac", "/lib/Work/02.flac": "/lib/NewWork/01.flac"}
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/b.flac",
+                    "destination": "/lib/Work/02.flac",
+                    "action": "tagged",
+                },
+                # Both tagged destinations are moved to the same current path.
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/Work/01.flac",
+                    "destination": "/lib/NewWork/01.flac",
+                    "action": "repathed",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:01+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/Work/02.flac",
+                    "destination": "/lib/NewWork/01.flac",
+                    "action": "repathed",
+                },
+            ]
+        )
+        _groups, gaps = _census_journal_for_xrefs(journal)
+        # Both tagged dests resolve to /lib/NewWork/01.flac → reported at most once.
+        resolved_gaps = [_resolve_move_chain(g, move_chain) for g in gaps]
+        assert resolved_gaps.count("/lib/NewWork/01.flac") <= 1
+
+    def test_non_move_non_xref_actions_ignored(self) -> None:
+        """Journal entries with unhandled actions (e.g. 'enriched') are silently ignored.
+
+        Actions other than 'tagged', 'skipped', 'cross-referenced', 'repathed', 'regrouped',
+        and 'unified' do not affect the census result.
+        """
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "only-rel",
+                    "source": "/lib/Work/01.flac",
+                    "destination": "/lib/Work/01.flac",
+                    "action": "enriched",
+                },
+            ]
+        )
+        groups, gaps = _census_journal_for_xrefs(journal)
+        # 'enriched' entry is ignored; single tagged entry → evidence gap.
+        assert "/lib/Work/01.flac" not in groups
+        assert "/lib/Work/01.flac" in gaps
 
 
 # ---------------------------------------------------------------------------
