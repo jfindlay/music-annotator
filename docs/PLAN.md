@@ -216,7 +216,7 @@ ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and cove
 | S2 | Top-dir canonical unification (C-NC-TOP)                                       | done   | 04887ef | _tags.py needed IS_CLASSICAL seam in _top_dir_component; W2b deleted; all 4 KATs pass. |
 | S3 | Depth canonical unification (C-CANON)                                          | done   | 9f01a24 | Wagner ping-pong fixed by extending regroup's modal depth to full library; unify now threads group_modal_depth. |
 | S4 | Composite-idempotence KATs + inverse-move tripwire (C-IDEM)                    | done   | af119d7 | New test_idempotence.py; tripwire warns (does not block); all KATs pass. |
-| S5 | Evidence-gap predicate fix (current-path resolution + census de-dup)           | todo   |        |       |
+| S5 | Evidence-gap predicate fix (current-path resolution + census de-dup)           | done   | 51406e8 | _resolve_move_chain helper added; all 3 KATs pass. |
 | S6 | dedup prompt re-prompt + name_too_long noise fix                               | todo   |        |       |
 | S7 | albumid_tag_read_error diagnosis + exception detail in event                   | todo   |        |       |
 | S8 | Acceptance gate on hades: converge to "no changes" by run 2                    | todo   |        |       |
