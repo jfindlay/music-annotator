@@ -64,7 +64,6 @@ from music_annotator._pipeline_maint import (
     _resolve_current_lib,
     _resolve_tagged_to_current,
     _scatter_consequence_note,
-    _unify_classical_composer_groups,
     _write_xref_and_journal,
     dedup_library,
     maintain,
@@ -5762,316 +5761,291 @@ class TestUnify:
         assert suffixed, "Expected at least one destination with an intra-plan collision suffix"
 
     # ------------------------------------------------------------------
-    # W2c: Classical arranger/finisher work-level path credit
+    # KAT: raw-embedded-chain render — no pass-local in-memory patch (C-CANON)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _make_classical_arranger_tags(
-        composer_lastnames: str,
-        work_id: str = "work-k626",
-        movt_num: str = "1",
-        title: str = "Mvt 1",
-    ) -> TrackTags:
-        """Build TrackTags for a classical movement with the given composer credit.
+    def test_kat_completer_shape_raw_chain_render_fixpoint(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """KAT (C-CANON): completer-shape fixture renders raw embedded chains; unify and repath agree.
 
-        Sets CWP_WORKID_TOP so :func:`_unify_classical_composer_groups` groups movements by work.
-        Sets CWP_WORK_TOP and CWP_WORKTYPE_GENRES_TOP="Classical" so the IS_CLASSICAL predicate
-        is True (classical releases route through W2c).
+        Fixture: movements of one work carry two distinct embedded composer chains — ``Mozart``
+        (primary-only) and ``Mozart; Süßmayr`` (primary + completer).  Both chains are durable
+        on-disk tags; no pass may apply a pass-local in-memory patch that alters the rendered path.
 
-        :param composer_lastnames: The CEA_COMPOSER_LASTNAMES value to embed.
-        :param work_id: The CWP_WORKID_TOP value (shared across movements of the same work).
-        :param movt_num: The CWP_MOVT_NUM value (1-based movement index).
-        :param title: The track title.
-        :returns: A :class:`TrackTags` instance.
-        """
-        tags = TrackTags(
-            cea_composer_lastnames=composer_lastnames,
-            cwp_composer_lastnames=composer_lastnames,
-            cwp_workid_top=work_id,
-            cwp_work_top="Requiem K. 626",
-            cwp_worktype_genres_top="Classical",
-            cwp_movt_num=movt_num,
-            movementtotal="2",
-            cwp_part_levels="1",
-            title=title,
-            artist="Karajan",
-            recording_date="1962",
-            musicbrainz_albumid="classical-arranger-rel-1",
-        )
-        return tags
-
-    def test_w2c_kat_completion_shape_upward_unification(self, fs: FakeFilesystem) -> None:
-        """KAT (W2c / SEL-8 / REND-27): completion shape unifies upward — primary + completer everywhere.
-
-        Composer unification direction is upward: the fullest author chain (primary + completer)
-        propagates to every movement in the work group, including movements that only credited the
-        primary composer alone.
-
-        Work group:
-        - Movement 1: "Mozart" only (primary-only, 1 composer)
-        - Movement 2: "Mozart; Süßmayr" (primary + completer, 2 composers — the fullest chain)
-        - Movement 3: "Mozart" only (primary-only, 1 composer)
-
-        After W2c unification, all three movements must carry "Mozart; Süßmayr" and land in the
-        same top_dir.  Movements 1 and 3 (previously at "Mozart - Karajan/...") must move to
-        "Mozart; Süßmayr - Karajan/...".  Movement 2 (already at "Mozart; Süßmayr - Karajan/...")
-        stays in place.
+        Assertions:
+        1. ``build_dest_path`` is called by ``unify`` with the raw embedded composer values
+           (mock-enforced: the spy captures every call's ``tags.cwp_composer_lastnames`` and
+           ``tags.cea_composer_lastnames`` and asserts they equal the values read from disk).
+        2. ``unify`` produces zero moves — each file is already at the path its raw tags render.
+        3. ``repath`` dry-run destinations equal ``unify`` dry-run destinations for every file
+           (both passes derive the same canonical path from the same durable inputs).
+        4. The two chains render two distinct top dirs; that is the accepted fixpoint, not a
+           regression.
 
         :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        # Movement 1: primary composer "Mozart" only (1 composer — not the fullest chain)
-        tags_mvt1 = self._make_classical_arranger_tags("Mozart", movt_num="1", title="Introitus")
-        # Movement 2: primary Mozart + completer Süßmayr (2 composers — the fullest chain)
-        tags_mvt2 = self._make_classical_arranger_tags("Mozart; Süßmayr", movt_num="2", title="Kyrie")
-        # Movement 3: primary composer "Mozart" only (1 composer — not the fullest chain)
-        tags_mvt3 = self._make_classical_arranger_tags("Mozart", movt_num="3", title="Lacrimosa")
-
-        # Place files under different top_dirs (fragmentation: two distinct top_dirs for same albumid)
-        path_mvt1 = _make_library_flac(dest_root, "Mozart - Karajan/Requiem K. 626 [rec 1962]/01 - Introitus.flac", tags_mvt1)
-        _make_library_flac(dest_root, "Mozart; Süßmayr - Karajan/Requiem K. 626 [rec 1962]/02 - Kyrie.flac", tags_mvt2)
-        path_mvt3 = _make_library_flac(dest_root, "Mozart - Karajan/Requiem K. 626 [rec 1962]/03 - Lacrimosa.flac", tags_mvt3)
-
-        music_annotator.unify(dest_root=dest_root, yes=True)
-
-        # After W2c upward unification, movements 1 and 3 must have moved to the
-        # "Mozart; Süßmayr" top_dir (the fullest chain).
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        unified = [e for e in journal.entries if e.action == "unified"]
-        assert len(unified) >= 2, f"Expected at least 2 unified entries (mvt1 and mvt3), got {len(unified)}"
-
-        # All moved destinations must be under the "Mozart; Süßmayr" top_dir.
-        moved_dests = {e.destination for e in unified}
-        for dest_str in moved_dests:
-            dest_path = Path(dest_str)
-            rel = dest_path.relative_to(dest_root)
-            assert rel.parts[0].startswith("Mozart; Süßmayr"), (
-                f"W2c KAT: movement in top_dir={rel.parts[0]!r}, expected 'Mozart; Süßmayr' "
-                "(upward unification: fullest chain propagates to all movements)"
+        def _make_movement_tags(composer: str, movt_num: str, title: str) -> TrackTags:
+            return TrackTags(
+                cwp_composer_lastnames=composer,
+                cea_composer_lastnames=composer,
+                cwp_workid_top="work-k626",
+                cwp_work_top="Requiem K. 626",
+                cwp_worktype_genres_top="Classical",
+                cwp_movt_num=movt_num,
+                movementtotal="3",
+                cwp_part_levels="1",
+                title=title,
+                artist="Karajan",
+                recording_date="1962",
+                musicbrainz_albumid="completer-rel-1",
             )
 
-        # Movements 1 and 3 must no longer exist at their original "Mozart" top_dir paths.
-        assert not path_mvt1.exists(), "Movement 1 must have moved away from the 'Mozart' top_dir"
-        assert not path_mvt3.exists(), "Movement 3 must have moved away from the 'Mozart' top_dir"
+        tags_mvt1 = _make_movement_tags("Mozart", "1", "Introitus")
+        tags_mvt2 = _make_movement_tags("Mozart; Süßmayr", "2", "Kyrie")
+        tags_mvt3 = _make_movement_tags("Mozart", "3", "Lacrimosa")
 
-        # All three movements must now exist under the "Mozart; Süßmayr" top_dir.
-        new_mvt1 = dest_root / "Mozart; Süßmayr - Karajan" / "Requiem K. 626 [rec 1962]" / "01 - Introitus.flac"
-        new_mvt2 = dest_root / "Mozart; Süßmayr - Karajan" / "Requiem K. 626 [rec 1962]" / "02 - Kyrie.flac"
-        new_mvt3 = dest_root / "Mozart; Süßmayr - Karajan" / "Requiem K. 626 [rec 1962]" / "03 - Lacrimosa.flac"
-        assert new_mvt1.exists(), f"Movement 1 not found at canonical path {new_mvt1}"
-        assert new_mvt2.exists(), f"Movement 2 not found at canonical path {new_mvt2}"
-        assert new_mvt3.exists(), f"Movement 3 not found at canonical path {new_mvt3}"
+        # Place each file at the path its raw embedded tags render (the canonical fixpoint).
+        canon_mvt1 = self._canonical_path(dest_root, tags_mvt1)
+        canon_mvt2 = self._canonical_path(dest_root, tags_mvt2)
+        canon_mvt3 = self._canonical_path(dest_root, tags_mvt3)
 
-    def test_w2c_classical_uniform_composer_is_noop(self, fs: FakeFilesystem) -> None:
-        """W2c: classical release where all movements agree on CEA_COMPOSER_LASTNAMES is a no-op.
+        _make_library_flac(dest_root, str(canon_mvt1.relative_to(dest_root)), tags_mvt1)
+        _make_library_flac(dest_root, str(canon_mvt2.relative_to(dest_root)), tags_mvt2)
+        _make_library_flac(dest_root, str(canon_mvt3.relative_to(dest_root)), tags_mvt3)
 
-        When all movements of a work group have the same non-empty CEA_COMPOSER_LASTNAMES,
-        ``_unify_classical_composer_groups`` finds ``len(composer_counts) < 2`` and skips the
-        group.  No files are moved.
+        # Spy on build_dest_path inside _pipeline_maint to capture the composer tag values
+        # passed by unify.  The real function still executes (wraps); we only record the args.
+        # Reference the real function via the already-imported name (same object as the module binding).
+        captured_cwp: list[str] = []
+        captured_cea: list[str] = []
+
+        def _spy_build(root: Path, rel: object, trk: object, tags: TrackTags, **kwargs: object) -> Path:
+            captured_cwp.append(tags.cwp_composer_lastnames)
+            captured_cea.append(tags.cea_composer_lastnames)
+            return build_dest_path(root, rel, trk, tags, **kwargs)  # type: ignore[arg-type]
+
+        mocker.patch("music_annotator._pipeline_maint.build_dest_path", side_effect=_spy_build)
+
+        # unify dry-run: plan is built but no files are moved.
+        unify_plan = music_annotator.unify(dest_root=dest_root, dry_run=True)
+        assert unify_plan is not None
+
+        # Assertion 1: build_dest_path was called with raw embedded composer values — no patching.
+        # Every captured cwp value must be one of the two raw embedded chains.
+        raw_chains = {"Mozart", "Mozart; Süßmayr"}
+        for cwp_val in captured_cwp:
+            assert cwp_val in raw_chains, (
+                f"unify passed a patched composer chain to build_dest_path: {cwp_val!r} (expected one of {raw_chains})"
+            )
+        for cea_val in captured_cea:
+            assert cea_val in raw_chains, (
+                f"unify passed a patched CEA composer chain to build_dest_path: {cea_val!r} (expected one of {raw_chains})"
+            )
+
+        # Assertion 2: unify produces zero moves — each file is already at its raw-tag canonical path.
+        assert unify_plan.count == 0, (
+            f"unify must produce zero moves when files are at their raw-tag canonical paths; "
+            f"got {unify_plan.count} planned move(s): {unify_plan.entries}"
+        )
+
+        # Assertion 3: repath dry-run destinations agree with unify dry-run destinations.
+        # Seed the journal so repath can find the files.
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "completer-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(canon_mvt1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "completer-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(canon_mvt2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "completer-rel-1",
+                    "source": "/src/03.flac",
+                    "destination": str(canon_mvt3),
+                    "action": "tagged",
+                },
+            ],
+        )
+        repath_plan = music_annotator.repath(dest_root=dest_root, dry_run=True)
+        assert repath_plan is not None
+        # Both passes must agree: zero planned moves (files already at canonical paths).
+        assert repath_plan.count == 0, (
+            f"repath must produce zero moves when files are at their raw-tag canonical paths; "
+            f"got {repath_plan.count} planned move(s): {repath_plan.entries}"
+        )
+
+        # Assertion 4: two distinct top dirs exist — the raw-chain fixpoint.
+        top_dirs = {canon_mvt1.relative_to(dest_root).parts[0], canon_mvt2.relative_to(dest_root).parts[0]}
+        assert len(top_dirs) == 2, (  # noqa: PLR2004 — 2 is the expected number of distinct top dirs
+            f"Completer shape must render two distinct top dirs (one per chain); got {top_dirs}"
+        )
+
+    def test_kat_mixed_arrangement_shape_no_chain_rewrite(self, fs: FakeFilesystem) -> None:
+        """KAT (C-CANON): mixed-arrangement shape — no pass rewrites either chain's render.
+
+        Fixture: sub-works of one release carry genuinely different embedded composer chains
+        (``Vivaldi; Bach`` vs ``Bach; Marcello``) sharing one top-work MBID.  No pass may
+        rewrite either chain's render — both chains are scholarship-stable durable tags and
+        must be preserved verbatim.
+
+        Assertions:
+        1. After ``unify``, both files remain at their original paths (zero moves).
+        2. The two chains render two distinct top dirs; that is the accepted fixpoint.
 
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        # Both movements have the same CEA_COMPOSER_LASTNAMES — no variation to unify
-        tags_mvt1 = self._make_classical_arranger_tags("Mozart", movt_num="1", title="Introitus")
-        tags_mvt2 = self._make_classical_arranger_tags("Mozart", movt_num="2", title="Kyrie")
+        def _make_concerto_tags(composer: str, movt_num: str, title: str) -> TrackTags:
+            return TrackTags(
+                cwp_composer_lastnames=composer,
+                cea_composer_lastnames=composer,
+                cwp_workid_top="work-16konzerte",
+                cwp_work_top="16 Konzerte",
+                cwp_worktype_genres_top="Classical",
+                cwp_movt_num=movt_num,
+                movementtotal="2",
+                cwp_part_levels="1",
+                title=title,
+                artist="Musici",
+                recording_date="1970",
+                musicbrainz_albumid="mixed-arr-rel-1",
+            )
 
-        # Place both files under the same top_dir (not fragmented — only one top_dir)
-        canonical_path_1 = self._canonical_path(dest_root, tags_mvt1)
-        canonical_path_2 = self._canonical_path(dest_root, tags_mvt2)
-        _make_library_flac(dest_root, str(canonical_path_1.relative_to(dest_root)), tags_mvt1)
-        _make_library_flac(dest_root, str(canonical_path_2.relative_to(dest_root)), tags_mvt2)
+        tags_vivaldi = _make_concerto_tags("Vivaldi; Bach", "1", "Concerto in A minor")
+        tags_marcello = _make_concerto_tags("Bach; Marcello", "2", "Concerto in D minor")
 
-        # Not fragmented (same top_dir) → unify() returns immediately with nothing to do
-        music_annotator.unify(dest_root=dest_root, yes=True)
+        # Place each file at the path its raw embedded tags render.
+        canon_vivaldi = self._canonical_path(dest_root, tags_vivaldi)
+        canon_marcello = self._canonical_path(dest_root, tags_marcello)
 
-        # No "unified" entries — nothing was moved
-        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
-        unified = [e for e in journal.entries if e.action == "unified"]
-        assert len(unified) == 0
+        _make_library_flac(dest_root, str(canon_vivaldi.relative_to(dest_root)), tags_vivaldi)
+        _make_library_flac(dest_root, str(canon_marcello.relative_to(dest_root)), tags_marcello)
 
-    def test_w2c_unify_classical_composer_groups_skips_no_work_id(self) -> None:
-        """_unify_classical_composer_groups skips tracks with no CWP_WORKID_TOP or MUSICBRAINZ_WORKID.
-
-        Exercises the ``if not work_id: continue`` branch: a track with both fields empty is
-        grouped under ``""`` and skipped, so its CEA_COMPOSER_LASTNAMES is never patched.
-
-        :returns: None.
-        """
-        # Build a group_tags list with one track that has no work ID
-        tags_no_work = TrackTags(
-            cea_composer_lastnames="Mozart; Süßmayr",
-            cwp_workid_top="",
-            musicbrainz_workid="",
+        # unify: both files are already at their canonical paths → zero moves.
+        unify_plan = music_annotator.unify(dest_root=dest_root, dry_run=True)
+        assert unify_plan is not None
+        assert unify_plan.count == 0, (
+            f"unify must not rewrite either chain's render; got {unify_plan.count} planned move(s): {unify_plan.entries}"
         )
-        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = [
-            (Path("/lib/Mozart; Süßmayr - Karajan/Requiem/01 - Introitus.flac"), tags_no_work, {}),
-        ]
 
-        _unify_classical_composer_groups(group_tags)
-
-        # The track with no work ID must not be patched
-        assert tags_no_work.cea_composer_lastnames == "Mozart; Süßmayr"
-
-    def test_w2c_unify_classical_composer_groups_skips_uniform_group(self) -> None:
-        """_unify_classical_composer_groups skips a work group where all movements agree.
-
-        Exercises the ``if len(composer_values) < 2: continue`` branch: when all movements of a
-        work group carry the same non-empty ``cea_composer_lastnames``, the function finds only one
-        distinct value and skips the group without patching anything.
-
-        :returns: None.
-        """
-        work_id = "work-k626"
-
-        tags_a = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
-        tags_b = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
-
-        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = [
-            (Path("/lib/Mozart - Karajan/Requiem/01 - Introitus.flac"), tags_a, {}),
-            (Path("/lib/Mozart - Karajan/Requiem/02 - Kyrie.flac"), tags_b, {}),
-        ]
-
-        _unify_classical_composer_groups(group_tags)
-
-        # Both tracks already agree — no patching needed
-        assert tags_a.cea_composer_lastnames == "Mozart"
-        assert tags_b.cea_composer_lastnames == "Mozart"
-
-    def test_w2c_unify_classical_composer_groups_kat_completion_shape(self) -> None:
-        """KAT (_unify_classical_composer_groups): completion shape unifies upward — primary + completer everywhere.
-
-        Directly exercises the function with the completion shape: some movements credit only the
-        primary composer, one movement credits both primary and completer.  Upward unification
-        (SEL-8 / REND-27) propagates the fullest author chain to every movement.
-
-        Work group:
-        - tags_a: "Mozart" (primary only, 1 composer)
-        - tags_b: "Mozart; Süßmayr" (primary + completer, 2 composers — the fullest chain)
-
-        After unification, both must carry "Mozart; Süßmayr".
-
-        :returns: None.
-        """
-        work_id = "work-k626"
-
-        tags_a = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
-        tags_b = TrackTags(cea_composer_lastnames="Mozart; Süßmayr", cwp_workid_top=work_id)
-
-        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = [
-            (Path("/lib/Mozart - Karajan/Requiem/01 - Introitus.flac"), tags_a, {}),
-            (Path("/lib/Mozart; Süßmayr - Karajan/Requiem/02 - Kyrie.flac"), tags_b, {}),
-        ]
-
-        _unify_classical_composer_groups(group_tags)
-
-        # Upward unification: both movements must carry the fullest chain (Mozart; Süßmayr).
-        assert tags_a.cea_composer_lastnames == "Mozart; Süßmayr", (
-            f"Primary-only movement must be upward-unified to 'Mozart; Süßmayr', got '{tags_a.cea_composer_lastnames}'"
+        # Both chains render distinct top dirs — the accepted fixpoint.
+        top_dir_vivaldi = canon_vivaldi.relative_to(dest_root).parts[0]
+        top_dir_marcello = canon_marcello.relative_to(dest_root).parts[0]
+        assert top_dir_vivaldi != top_dir_marcello, (
+            "Mixed-arrangement shape must render two distinct top dirs (one per chain); "
+            f"got identical top dir {top_dir_vivaldi!r} for both chains"
         )
-        assert tags_b.cea_composer_lastnames == "Mozart; Süßmayr", (
-            f"Primary+completer movement must be unchanged at 'Mozart; Süßmayr', got '{tags_b.cea_composer_lastnames}'"
+        assert "Vivaldi" in top_dir_vivaldi, f"Expected 'Vivaldi' in top dir, got {top_dir_vivaldi!r}"
+        assert "Marcello" in top_dir_marcello, f"Expected 'Marcello' in top dir, got {top_dir_marcello!r}"
+
+    def test_kat_work_id_non_classical_stays_albumartist_led(self, fs: FakeFilesystem) -> None:
+        """KAT (C-NC-TOP / C-CANON): work-ID'd non-classical release stays ALBUMARTIST-led.
+
+        Fixture: a jazz release whose tracks carry ``MUSICBRAINZ_WORKID`` and empty composer tags.
+        The IS_CLASSICAL predicate (``cwp_work_top`` non-empty AND ``"Classical"`` in
+        ``cwp_worktype_genres_top``) is False for these tracks, so ``build_dest_path`` must
+        produce an ALBUMARTIST-led top dir.  Without the deleted composer-chain patch, the
+        back-door C-NC-TOP flip (empty-composer files rendered composer-led) is impossible.
+
+        Assertions:
+        1. ``repath`` dry-run produces zero moves — files are already at their ALBUMARTIST-led
+           canonical paths.
+        2. ``unify`` produces zero moves — no fragmentation detected (all files share one top dir).
+        3. The top dir is ALBUMARTIST-led (starts with the album artist name, not a composer name).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        def _make_jazz_tags(title: str, movt_num: str) -> TrackTags:
+            return TrackTags(
+                # Non-classical: cwp_work_top empty, cwp_worktype_genres_top does not contain "Classical"
+                cwp_work_top="",
+                cwp_worktype_genres_top="Jazz",
+                # Work ID present (the back-door that the deleted patch exploited)
+                musicbrainz_workid="work-jazz-1",
+                # Composer tags empty — non-classical release, no scholarship-stable composer
+                cwp_composer_lastnames="",
+                cea_composer_lastnames="",
+                # ALBUMARTIST-led identity
+                albumartist="Benny Goodman",
+                album="Sing, Sing, Sing",
+                releasetype="Album",
+                cwp_movt_num=movt_num,
+                movementtotal="2",
+                cwp_part_levels="0",
+                title=title,
+                artist="Benny Goodman",
+                recording_date="1937",
+                musicbrainz_albumid="jazz-work-rel-1",
+            )
+
+        tags_trk1 = _make_jazz_tags("Sing, Sing, Sing (Part 1)", "1")
+        tags_trk2 = _make_jazz_tags("Sing, Sing, Sing (Part 2)", "2")
+
+        # Place each file at the ALBUMARTIST-led canonical path.
+        canon_trk1 = self._canonical_path(dest_root, tags_trk1)
+        canon_trk2 = self._canonical_path(dest_root, tags_trk2)
+
+        _make_library_flac(dest_root, str(canon_trk1.relative_to(dest_root)), tags_trk1)
+        _make_library_flac(dest_root, str(canon_trk2.relative_to(dest_root)), tags_trk2)
+
+        # Assertion 3: top dir is ALBUMARTIST-led (not composer-led).
+        top_dir = canon_trk1.relative_to(dest_root).parts[0]
+        assert top_dir.startswith("Benny Goodman"), f"Non-classical release must have ALBUMARTIST-led top dir; got {top_dir!r}"
+
+        # Seed the journal so repath can find the files.
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "jazz-work-rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(canon_trk1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "jazz-work-rel-1",
+                    "source": "/src/02.flac",
+                    "destination": str(canon_trk2),
+                    "action": "tagged",
+                },
+            ],
         )
-        # cwp_composer_lastnames must also be patched (build_dest_path prefers CWP_COMPOSER_LASTNAMES)
-        assert tags_a.cwp_composer_lastnames == "Mozart; Süßmayr"
-        assert tags_b.cwp_composer_lastnames == "Mozart; Süßmayr"
 
-    def test_w2c_unify_classical_composer_groups_empty_composer_not_counted(self) -> None:
-        """_unify_classical_composer_groups ignores tracks with empty CEA_COMPOSER_LASTNAMES.
+        # Assertion 1: repath produces zero moves — files already at ALBUMARTIST-led canonical paths.
+        repath_plan = music_annotator.repath(dest_root=dest_root, dry_run=True)
+        assert repath_plan is not None
+        assert repath_plan.count == 0, (
+            f"repath must produce zero moves for non-classical release at canonical paths; "
+            f"got {repath_plan.count} planned move(s): {repath_plan.entries}"
+        )
 
-        Exercises the ``if val:`` False branch: a track with an empty ``cea_composer_lastnames``
-        contributes nothing to the fullest-chain selection, so the canonical value is determined
-        by the non-empty values only.  The empty-composer track is still patched to the canonical
-        value.  With upward unification (SEL-8 / REND-27), the canonical value is the fullest
-        chain: "Mozart; Süßmayr" (2 composers) beats "Mozart" (1 composer).
-
-        :returns: None.
-        """
-        work_id = "work-k626"
-
-        tags_a = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
-        tags_b = TrackTags(cea_composer_lastnames="Mozart; Süßmayr", cwp_workid_top=work_id)
-        # tags_c has empty cea_composer_lastnames — should not be counted but should be patched
-        tags_c = TrackTags(cea_composer_lastnames="", cwp_workid_top=work_id)
-
-        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = [
-            (Path("/lib/Mozart - Karajan/Requiem/01 - Introitus.flac"), tags_a, {}),
-            (Path("/lib/Mozart; Süßmayr - Karajan/Requiem/02 - Kyrie.flac"), tags_b, {}),
-            (Path("/lib/Mozart - Karajan/Requiem/03 - Lacrimosa.flac"), tags_c, {}),
-        ]
-
-        _unify_classical_composer_groups(group_tags)
-
-        # Fullest chain is "Mozart; Süßmayr" (2 composers); primary-only and empty tracks are patched upward.
-        assert tags_a.cea_composer_lastnames == "Mozart; Süßmayr"
-        assert tags_b.cea_composer_lastnames == "Mozart; Süßmayr"
-        # tags_c had empty composer — empty values are not counted but the track is still patched
-        # to the canonical value (the condition ``tags.cea_composer_lastnames != canonical`` fires
-        # because ``"" != "Mozart; Süßmayr"``).
-        assert tags_c.cea_composer_lastnames == "Mozart; Süßmayr"
-
-    def test_w2c_unify_classical_composer_groups_patches_primary_only_to_fullest_chain(self) -> None:
-        """_unify_classical_composer_groups patches primary-only movements to the fullest author chain.
-
-        Directly exercises the function with a group where "Mozart" appears twice and
-        "Mozart; Süßmayr" appears once.  The fullest chain is "Mozart; Süßmayr" (2 composers),
-        so all movements must be patched to "Mozart; Süßmayr" (upward unification per SEL-8 /
-        REND-27: primary + completer propagates to every movement).
-
-        :returns: None.
-        """
-        work_id = "work-k626"
-
-        tags_a = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
-        tags_b = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
-        tags_c = TrackTags(cea_composer_lastnames="Mozart; Süßmayr", cwp_workid_top=work_id)
-
-        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = [
-            (Path("/lib/Mozart - Karajan/Requiem/01 - Introitus.flac"), tags_a, {}),
-            (Path("/lib/Mozart - Karajan/Requiem/02 - Kyrie.flac"), tags_b, {}),
-            (Path("/lib/Mozart; Süßmayr - Karajan/Requiem/03 - Lacrimosa.flac"), tags_c, {}),
-        ]
-
-        _unify_classical_composer_groups(group_tags)
-
-        # Fullest chain is "Mozart; Süßmayr" (2 composers); primary-only movements must be patched upward.
-        assert tags_a.cea_composer_lastnames == "Mozart; Süßmayr"
-        assert tags_b.cea_composer_lastnames == "Mozart; Süßmayr"
-        assert tags_c.cea_composer_lastnames == "Mozart; Süßmayr"
-
-    def test_w2c_unify_classical_composer_groups_already_canonical_not_patched(self) -> None:
-        """_unify_classical_composer_groups does not re-patch tracks already at the canonical value.
-
-        Exercises the ``if tags.cea_composer_lastnames != canonical`` branch: tracks that already
-        carry the fullest-chain value are not mutated.  With upward unification (SEL-8 / REND-27),
-        the canonical value is "Mozart; Süßmayr" (the fullest chain, 2 composers), so tags_b is
-        already canonical and tags_a (primary-only) is patched upward.
-
-        :returns: None.
-        """
-        work_id = "work-k626"
-
-        tags_a = TrackTags(cea_composer_lastnames="Mozart", cwp_workid_top=work_id)
-        tags_b = TrackTags(cea_composer_lastnames="Mozart; Süßmayr", cwp_workid_top=work_id)
-
-        original_b_id = id(tags_b)
-
-        group_tags: list[tuple[Path, TrackTags, dict[str, str]]] = [
-            (Path("/lib/Mozart - Karajan/Requiem/01 - Introitus.flac"), tags_a, {}),
-            (Path("/lib/Mozart; Süßmayr - Karajan/Requiem/02 - Kyrie.flac"), tags_b, {}),
-        ]
-
-        _unify_classical_composer_groups(group_tags)
-
-        # tags_b already had the canonical value (fullest chain); its identity (object id) is unchanged
-        assert id(tags_b) == original_b_id
-        assert tags_b.cea_composer_lastnames == "Mozart; Süßmayr"
-        # tags_a was patched upward to the fullest chain
-        assert tags_a.cea_composer_lastnames == "Mozart; Süßmayr"
+        # Assertion 2: unify produces zero moves — no fragmentation (all files share one top dir).
+        unify_plan = music_annotator.unify(dest_root=dest_root, dry_run=True)
+        assert unify_plan is not None
+        assert unify_plan.count == 0, (
+            f"unify must produce zero moves for non-classical release at canonical paths; "
+            f"got {unify_plan.count} planned move(s): {unify_plan.entries}"
+        )
 
 
 # ---------------------------------------------------------------------------
