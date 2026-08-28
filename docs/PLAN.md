@@ -1,326 +1,248 @@
-<!-- Rolling action frame.  The previous sub-track (repair-turn hardening: journal store, collision completeness,
-     duplicate cross-referencing) closed 2026-08-27 with its S8 acceptance gate passed on hades; its plan and ledger
-     live in this file's git history (through commit 1b791ab).  This sub-track was derived 2026-08-27 from an operator
-     request to unify all idempotent library-maintenance passes behind a single `maintain` action, combined with a
-     design ruling that the maintenance passes be treated as a composition of morphisms whose confluence (ordering,
-     dry-run fidelity, idempotence across applications, absence of oscillating cycles) is analysed and contracted
-     before the umbrella is built.  Rewritten at the next boundary. -->
+<!-- Rolling action frame.  The previous sub-track (unified maintenance action: pass-composition confluence + the
+     `maintain` action) closed 2026-08-27 with its acceptance gate passed on hades; its plan and ledger live in this
+     file's git history (through the commit that landed this rewrite).  Its S6 (hades journal backfill for
+     evidence-gap files) is SUPERSEDED, not carried forward: the gap-report predicate itself is defective (see S4
+     below) and must be fixed before any backfill is scoped.  This sub-track was derived 2026-08-28 from the operator's
+     analysis request over two sequential live `maintain` runs (runs 3 and 4 on hades, `maintain.{a,b}.out`), which
+     proved the composition is in a stable non-converging orbit.  Rewritten at the next boundary. -->
 
-# PLAN — unified maintenance action: pass-composition confluence + `maintain` umbrella
+# PLAN — maintain convergence repair: single-source canonical + gap-report and dedup fixes
 
 ## Why this sub-track exists
 
-Every recurring library-maintenance capability now exists as a standalone subcommand (`repath`, `regroup`, `unify`,
-`enrich`, `origin-time`, `reconstruct-xrefs`, `dedup-library`), plus two one-shot migration subcommands
-(`repatch-catalogue-colon`, `repatch-acoustid`) whose library-wide purpose was completed by the S8 hades run, plus a
-read-only `preflight` action that dry-runs six of the passes and emits a consolidated report.  The operator wants one
-action — `music-annotator maintain <dest>` — that runs the whole recurring maintenance set, with `--dry-run` standing
-in for (and superseding) `preflight`.
+Runs 3 and 4 of `maintain` on hades each reported **changed 388 file(s)**, and the 388 journal-entry changes are
+**byte-identical between the runs** (repath 194 + regroup 10 + unify 184 = 388; every old→new move pair recurs
+exactly).  The composition never converges: each run, `repath`/`regroup` undo what `unify` did the previous run, then
+`unify` redoes it.  C-CONFLUENCE anticipated this class and deliberately deferred it ("if such a non-converging cycle
+is ever observed in practice, it is a bug in a specific pass's canonical, fixed there") — it has now been observed, in
+three cycle classes, plus four non-cycle problems:
 
-The request is not a wiring job.  The passes are **morphisms on library state**, and composing them exposes four
-confluence properties that must be adjudicated before the umbrella can make honest guarantees:
+1. **repath ↔ unify top-dir oscillation (~184 files, 97 releases — dominant).**  `unify`'s composer-split
+   pre-processing patches `cea_composer_lastnames` **in memory only** (`_pipeline_maint.py:2589-2602`;
+   `last_name(ALBUMARTISTSORT)` or `"Various"`), flipping `_top_dir_component` (`_tags.py:251-313`) from its
+   ALBUMARTIST fallback to the `"<composer> - <performers>"` shape (`Kidz Bop` → `Kidz Bop - Kidz Bop`,
+   `Benny Goodman` → `Goodman - Benny Goodman` / `Goodman - [no artist]`, `Mormon Tabernacle Choir` →
+   `Tabernacle Choir at Temple Square - …`).  The patch is never written to disk, so `repath` (embedded tags as-is)
+   computes the ALBUMARTIST shape and moves everything back next run.  Worse, the manufactured shape is
+   **self-defeating**: the performers component varies per track, so `unify` scatters consolidated releases
+   (`Various Artists/The Jazz Collection` → 16 top dirs; one MJ release across three `Jackson - …` dirs) —
+   the de-fragmentation pass is the fragmenter.
+2. **repath ↔ regroup depth ping-pong, same run (2 Wagner Meistersinger files, 4 moves/run).**  `repath` moves the
+   track into its work-subdir (`…/04 - Akt III/…`, modal-depth render); `regroup` moves it straight back the same run.
+3. **Depth-insertion churn (small population).**  `unify` omits the `group_modal_depth` argument `repath` passes
+   (`_pipeline_maint.py:2639` vs `:1746`), so its depth renders (`La traviata …/01 - Atto I/…`) disagree with
+   repath/regroup's and recur every run.  regroup's Saint-Saëns movement-subdir moves (8 files) likewise repeat.
+4. **dedup-library is dead under piped consent.**  8 duplicate groups found every run, 0 resolved: the integrity
+   prompt accepts `1/2/b/a`; piped `y` hits `case _` → aborts the whole pass (`_pipeline_maint.py:870-880`).
+5. **reconstruct-xrefs evidence-gap false positives (~29 lines/run, with intra-list duplicates).**  The gap predicate
+   keys its exclusion on the **original tagged destination**, but `"cross-referenced"` entries written after a file
+   moved are keyed on the **current path** — those files fail the exclusion forever.  The prior sub-track's backfill
+   plan would NOT have silenced them.
+6. **`albumid_tag_read_error` × 1167/run.**  ~10% of the library fails the `MUSICBRAINZ_ALBUMID` read inside
+   fragmentation detection (`_pipeline_io.py:1418`, blanket `except`) and is silently excluded from unify/regroup/
+   dedup scope.  Legacy-shaped paths (pre-annotator dir names, empty album components, truncated `…op.flac` leaves).
+   Cause undiagnosed — the blanket except hides the exception class.
+7. **Chronic no-op noise.**  `name_too_long` ×24/run re-warns on already-clamped names that produce no move;
+   `enrich_acoustid_inconclusive` ×93/run is a stable unresolvable-without-key population (informational).
 
-1. **Non-commutativity.** Order is load-bearing and already documented in-code
-   (`_pipeline_maint.py:1956`): tag-content rewrites must precede path-moves because the destination path is *computed
-   from* the tags.  The pass set has a required topological order; naive iteration corrupts.
-2. **Dry-run fidelity gap (the dangerous one).** `preflight` runs every pass against the *same* unmutated current
-   state (`compose_preflight_report`, `_pipeline_maint.py:3504-3509` — six independent `dry_run=True` calls, no state
-   threading).  A *live* run feeds pass `k+1` the output of pass `k`.  So for any pass downstream of a mutating pass,
-   the dry-run plan is computed against a state that will never exist at that pass's live execution.  The dry-run
-   report is truthful only for the first mutating pass and for genuinely independent passes.  A `--dry-run` that
-   claims to preview a live `maintain` run is lying unless it either threads a simulated state or explicitly declares
-   its guarantee and flags the cascade points.
-3. **Decision-divergence.** The two integrity passes (`reconstruct-xrefs`, `dedup-library`) fork the downstream graph
-   on operator choice (survivor / keep-both / abort).  Dry-run cannot know the branch taken.
-4. **Idempotence across applications + oscillation.** Per-pass single-application idempotence is documented, but
-   *composite* idempotence — `f(f(L)) == f(L)` — is not established and does not follow from per-pass idempotence once
-   the passes are ordered and state-threaded.  Two hazards: (a) a legitimate multi-application fixpoint (`enrich` adds
-   an acoustid this run → `dedup-library` can cluster it only on the *next* run), which is acceptable if declared and
-   reported; and (b) an **irreducible inter-pass oscillation** (A→B→A) that never converges — the silently
-   counterproductive case.  C-SEQ swap-cycle detection (`_pipeline_maint.py:974,981`) covers intra-pass swap cycles
-   only, not inter-pass oscillation.
-
-The operator ruling frames the goal precisely: look for covariances or intersections among the sub-actions that could
-lead to contradictory or counterproductive results — silently destructive or incorrect transforms, or irreducible
-action cycles across multiple `maintain` applications — and provide basic preparation for the edge cases where
-commutativity does not flow with optimal ease.
-
-## Design principle in play (durable vocabulary)
-
-**INSTR (instrument-the-editorial-decision).** A design principle of music-annotator: the tool instruments and
-automates human editorial decision points to optimise human efficiency, error-rate, and ergonomics.  An
-operator-driven maintenance pass is as legitimate a mode as matching a release to an MBID.  This is why `maintain` is
-deliberately **interactive** in its live mode — the C-XREF / C-DEDUP integrity prompts fire inline and are not
-suppressed by `--yes` (integrity prompts are not bulk consent), consistent with the passes' existing contracts.
+Root cause of classes 1–3 is one property violation: **the canonical destination is not single-sourced** — passes
+derive "where does this file live" from different effective inputs (in-memory patches vs disk tags; with vs without
+modal depth).  Per-pass idempotence composes into oscillation exactly at the files where the inputs diverge.
 
 ## Cross-session contracts
 
-Frozen at derivation (operator rulings 2026-08-27).  The governing lens is **user ergonomics and archival fidelity,
-not a formal composition calculus** (operator ruling): the passes compose informally; `maintain` is judged by whether
-the operator's editorial time is well spent and no data is silently harmed, not by whether it reaches a provable
-fixpoint in one application.
+Frozen at derivation (operator rulings 2026-08-28):
 
-- **C-MAINTAIN** — the `maintain` action runs the recurring maintenance set (`enrich`, `origin-time`, `repath`,
-  `regroup`, `unify`, `reconstruct-xrefs`, `dedup-library`) as a single composition over one dest_root.  The journal
-  is read once at the top and threaded in memory through all passes (C-JRNL / the in-memory pattern from the prior
-  sub-track); no pass re-reads the journal.  Live mode is interactive: move-confirmation prompts (repath/regroup/
-  unify) are suppressible by `-y/--yes`; integrity prompts (reconstruct-xrefs, dedup-library) are **never** suppressed
-  by `--yes` (INSTR + C-XREF/C-DEDUP).  `--dry-run` renders every pass report-only — including the two integrity
-  passes, which degrade to census-only — and emits the consolidated report that supersedes `preflight`.
-- **C-CONFLUENCE** — the pass-composition contract, kept deliberately at the ergonomics/fidelity register (no
-  simulated-state theory).  Three plain rulings:
-  (a) **Pass order.**  Passes run in a fixed sequence: content-before-path (`enrich`, `origin-time` before the move
-      passes), then the move passes, then the integrity passes last (they delete/prompt and nothing downstream may
-      depend on their operator-divergent outcome).  The order exists for correctness (a moved path is computed from
-      tags, so tags must be corrected first); it is not claimed to be a unique or provably-optimal order.
-  (b) **Dry-run is a preview, not a rehearsal.**  `maintain --dry-run` runs each pass against the *current* library
-      state (the existing `preflight` behaviour — cheap, reuses existing machinery), so a pass downstream of a
-      mutating pass may plan differently in a live run.  This is **accepted and stated to the operator**, not
-      engineered away.  The report labels files that appear in more than one pass's plan (the existing cross-pass
-      overlap map) as the places where a live run may diverge from the preview.  Deliberately *not* built:
-      simulated-state threading that would make dry-run a faithful rehearsal — the token/LoC cost is not worth it when
-      the operator can simply re-run (operator ruling).
-  (c) **Convergence is "a run that changed nothing."**  `maintain` does not auto-loop and does not compute a formal
-      fixpoint.  Its final line states whether the run enacted changes; the operator re-runs `maintain` until a run
-      reports zero changes, which is the practical convergence signal.  Some legitimate cases need a second run (e.g.
-      `enrich` adds an acoustid this run, so `dedup-library` can cluster it only next run) — this is normal and the
-      operator is told, in plain language, that re-running is expected, not a defect.
-  No formal oscillation detector is built.  The one concrete oscillation risk — `repath`'s policy-canonical
-  disagreeing with `regroup`/`unify`'s consolidation-canonical on a file's home — is handled by the fixed pass order
-  and by the operator noticing a run that never reaches zero changes; if such a non-converging cycle is ever observed
-  in practice, it is a bug in a specific pass's canonical, fixed there, not a class of behaviour `maintain` polices
-  abstractly.
-- **C-RETIRE (this instance only)** — no general policy.  The two completed migration commands
-  (`repatch-catalogue-colon`, `repatch-acoustid`) are removed this sub-track; their journal action-verbs and every
-  reader that interprets them are retained forever (durable content in `docs/NOTES.md` § "Journal action-verbs are
-  append-only vocabulary").  **Forward stance (PERM, operator ruling 2026-08-27):** the project prefers *fewer or no*
-  temporary library refactors.  A newly-discovered maintenance need is first evaluated as a candidate for the
-  permanent action basis — a new durable action, or a refinement/extension of an existing one — and only falls back
-  to a throwaway singleton when it genuinely cannot be expressed as durable grammar.  The maturing maintenance grammar
-  is meant to *absorb* future needs, not spawn disposable passes.
+- **C-CANON** — every move pass (`repath`, `regroup`, `unify`) derives a file's destination from the *same* canonical
+  function over the *same* durable inputs: embedded tags as read from disk, plus the shared work-group modal-depth
+  computation, threaded identically into every pass.  No pass may apply a pass-local in-memory tag patch that alters
+  the rendered path.  A pass needing different render inputs is a destructive-HALT signal that the canonical is
+  mis-specified, not a licence to patch.
+- **C-NC-TOP** — non-classical releases take the **ALBUMARTIST-led** top dir (operator ruling, Option A): the
+  `"<composer> - <performers>"` shape requires a real, scholarship-stable composer from embedded tags; manufacturing a
+  composer from `ALBUMARTISTSORT` (unify's W2b patch) is deleted, and `"Various"` is never a composer.  `unify`
+  consolidates fragmented non-classical releases to the same ALBUMARTIST-led shape `build_dest_path` produces for
+  every other pass.  The discriminator (classical vs non-classical) must be computable per file from durable tags
+  (the work-type predicate that already backs `IS_CLASSICAL`), never from a per-run in-memory majority.  Consistent
+  with C-UNIVERSAL and the epistemic criterion (NOTES): no fake scholarship enters library topology.
+- **C-IDEM** — composite idempotence is test-enforced: a KAT fixture library covering every observed cycle shape
+  (composer-manufacture top dirs, Various scattering, work-subdir depth disagreement) runs `maintain` twice; the
+  second run MUST report "no changes".  Additionally `maintain` carries a runtime **inverse-move tripwire**: a pass
+  planning a move whose (old, new) inverts a journal-recorded move from this run or a prior run logs a loud warning
+  naming both passes — converting any future canonical divergence from silent churn into a visible signal.  The
+  tripwire warns; it does not block (C-CONFLUENCE's ergonomics register stands — no formal oscillation calculus).
 
-Inherited unchanged: C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, NORM-2-as-revised.
+Inherited unchanged: C-MAINTAIN, C-CONFLUENCE (this sub-track implements its "fix the specific canonical" rider),
+C-RETIRE (readers stay), INSTR, PERM, C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE,
+NORM-2-as-revised, C-W3b-INT.
 
 ## Sessions
 
-Ordering rationale: S1 confirms the pass order and registers C-CONFLUENCE (already ruled at derivation — a short
-write-up, not an open adjudication).  S2 builds the umbrella against that order.  S3 folds the surviving `preflight`
-report logic into `maintain --dry-run` and deletes `preflight`.  S4 removes the two completed singletons (commands
-only; journal readers retained).  S5 is the operator acceptance gate on hades.  Each build session is one conceptual
-unit, `tox -m analyze` green (100% branch coverage, mypy strict, pylint 10.00).
+Ordering rationale: S1 is the substrate/design session — it registers C-CANON/C-NC-TOP in the styleguide, confirms
+complete inverse-pairing attribution of all 388 moves, and surveys the exact code sites, fixing S2/S3 scope.  S2 and
+S3 land the canonical fix in two commit-shaped units (top-dir axis, then depth axis) — split because each is a clean
+conceptual unit with its own KATs and the cost-of-wrong is high (library-wide move policy).  S4 adds the tripwire +
+composite-idempotence harness (test-enforced C-IDEM) once both axes agree.  S5/S6/S7 are mutually independent repairs
+(gap predicate, dedup input handling, read-error diagnosis).  S8 is the operator acceptance gate: with the canonical
+unified, the first live run performs the one-time un-scatter and the second run must report "no changes".
 
-| ID | Type   | Deliverable (commit-title shape)                                                                    | Deps       | Status |
-|----|--------|-----------------------------------------------------------------------------------------------------|------------|--------|
-| S1 | design | STYLEGUIDE: maintenance-pass order + dry-run-is-a-preview + convergence-is-a-quiet-run (C-CONFLUENCE) | —          | todo   |
-| S2 | build  | `maintain` umbrella action: single-composition run, in-memory journal threading, interactive live mode (C-MAINTAIN) | S1         | todo   |
-| S3 | build  | Fold preflight report into `maintain --dry-run`; remove `preflight` subcommand + compose_preflight_report | S2         | todo   |
-| S4 | build  | Retire completed singletons: remove repatch-catalogue-colon / repatch-acoustid commands; retain journal readers (C-RETIRE) | S2         | todo   |
-| S5 | operator | Acceptance gate: `maintain` and `maintain --dry-run` end-to-end on hades                            | S2,S3,S4   | todo   |
+| ID | Type     | Deliverable (commit-title shape)                                                                     | Deps        | Status |
+|----|----------|------------------------------------------------------------------------------------------------------|-------------|--------|
+| S1 | design   | STYLEGUIDE: single-source canonical + ALBUMARTIST-led non-classical top dir (C-CANON, C-NC-TOP); move-pair attribution + code-site survey | —           | todo   |
+| S2 | build    | Unify top-dir canonical: delete W2b composer manufacture; non-classical → ALBUMARTIST-led in all passes (C-NC-TOP) | S1          | todo   |
+| S3 | build    | Unify depth canonical: thread group_modal_depth into regroup/unify; align regroup's depth target (C-CANON) | S1          | todo   |
+| S4 | build    | Composite-idempotence KAT harness + inverse-move tripwire in maintain (C-IDEM)                        | S2,S3       | todo   |
+| S5 | build    | Fix reconstruct-xrefs evidence-gap predicate: resolve tagged-dest to current path; de-dup census      | S1          | todo   |
+| S6 | build    | dedup-library prompt: re-prompt on invalid input, abort only on 'a'; name_too_long warns only on change | —           | todo   |
+| S7 | build    | Diagnose albumid_tag_read_error: log exception class, sample the 1167-file cluster, route repair      | —           | todo   |
+| S8 | operator | Acceptance gate on hades: maintain converges to "no changes" by run 2; dedup groups adjudicated; gap report clean or genuinely-unresolved only | S2–S7       | todo   |
 
-### S1 — pass order + ergonomic contract (C-CONFLUENCE)
+### S1 — canonical contract + attribution survey (design; no code)
 
-No code.  Short write-up registering C-CONFLUENCE (above) in `docs/STYLEGUIDE.md`.  The rulings are already made at
-derivation; S1 only confirms the pass order against the code and records the plain-language ergonomic contract.  It
-does **not** design simulated-state machinery, a formal convergence predicate, or an oscillation detector — those were
-ruled out (operator: ergonomics and archival fidelity over computational rigor).
+1. **Register C-CANON and C-NC-TOP** in `docs/STYLEGUIDE.md` (plain-language: one canonical function, same inputs,
+   every pass; non-classical top dir is ALBUMARTIST-led; no manufactured composers; `Various` is not a composer).
+2. **Confirm complete inverse pairing**: from `maintain.{a,b}.out` (hades, `~/Music/` on the operator workstation
+   mount), pair every run-3 move with its inverse and attribute each of the 388 to cycle class 1, 2, or 3.  Any move
+   not explained by the three classes is a discovery — append to the digest and adjudicate before S2 freezes scope.
+3. **Code-site survey** for S2/S3: the W2b block (`_is_composer_split_release`, `_canonical_composer_component`, the
+   patch loop), `_top_dir_component`'s fallback chain, the per-pass `build_dest_path` call sites and their
+   `group_modal_depth` arguments, regroup's depth target, and the work-type predicate to be used as the
+   classical/non-classical discriminator.  Record exact spans in this PLAN's digest for the build sessions.
 
-1. **Confirm the pass order** against the actual passes: content-before-path (`enrich`, `origin-time` → move passes),
-   move passes (`reconstruct-xrefs` before `dedup-library` so survivors carry known secondaries and dedup does not
-   re-prompt; `repath`/`regroup`/`unify` mutual order confirmed against how each computes its canonical), integrity
-   passes last.  Record the order and the one-line reason per edge.
-2. **State the dry-run contract in plain language:** `maintain --dry-run` previews each pass against current state and
-   flags cross-pass-overlap files as "may change after earlier passes run"; it is a preview, not a rehearsal; re-run
-   `maintain` if a pass's real input shifts.  No shadow-state build.
-3. **State the convergence contract in plain language:** `maintain` reports whether it changed anything; a run that
-   changes nothing is "done"; some cases legitimately need a second run and the operator is told so.  No auto-loop, no
-   formal fixpoint.
+### S2 — top-dir canonical unification (C-NC-TOP)
 
-Output: C-CONFLUENCE registered.  S2's scope is fixed and small (option B; no simulated state).
+Files: `src/music_annotator/_pipeline_maint.py` (delete/restrict W2b: `unify` consolidates non-classical releases to
+the ALBUMARTIST-led shape; keep genuine classical composer-split handling only where real composer tags exist),
+`src/music_annotator/_tags.py` (only if the discriminator needs a seam in `_top_dir_component`; the ALBUMARTIST
+fallback itself already renders the ruled shape), tests.  KATs: Kidz-Bop shape (single artist), Goodman shape
+(per-track composer variation on a non-classical release, including `[no artist]` tracks), Various-Artists
+compilation (must consolidate to ONE top dir, never scatter per-track), Tabernacle long-name shape; for each, `unify`
+and `repath` must compute the identical destination (mock-enforced equality), and a fragmented fixture must
+consolidate then hold still.  Not built: tag writes (no composer is persisted — C-NC-TOP forbids the fake), ownership
+guards (rejected Option C).
 
-### S2 — `maintain` umbrella (C-MAINTAIN)
+### S3 — depth canonical unification (C-CANON)
 
-Files: `src/music_annotator/_pipeline_maint.py` (new `maintain(dest_root, *, dry_run, yes)` orchestrator + a uniform
-pass-adapter seam absorbing the non-uniform signatures — `repatch_acoustid_tags`'s journal-first positional and the
-varied return types `DryRunPlan | None`, `list[str]`, `int`, `None`; note the two repatch passes are gone by S4, so
-the surviving seam covers `enrich`/`origin-time`/`repath`/`regroup`/`unify`/`reconstruct-xrefs`/`dedup-library`),
-`src/music_annotator/__main__.py` (new `maintain` subcommand), `src/music_annotator/__init__.py` (export), tests.  The
-journal is read once and threaded in memory (prior sub-track's in-memory pattern); passes execute in the C-CONFLUENCE
-order.  A "changed anything?" flag is accumulated across passes for the final convergence line — a plain boolean/count,
-not a fixpoint computation.  KATs: composition runs all recurring passes in frozen order (mock-enforced call order);
-journal read exactly once (mock-enforced); `-y` suppresses move prompts but NOT integrity prompts (both asserted);
-`--dry-run` renders all passes report-only including the two integrity passes (no prompt, no mutation asserted); the
-final line reports "changed N" vs "no changes"; a no-change run over a settled fixture reports "no changes" (the
-practical convergence signal).  Not built: shadow-state dry-run, oscillation detector (KAT for the
-candidate cycle).
+Files: `src/music_annotator/_pipeline_maint.py` (thread `work_group_modal_depth` into `regroup`'s and `unify`'s
+`build_dest_path` calls exactly as `repath` computes it; align regroup's consolidation target so it no longer
+flattens a work-subdir repath just created), tests.  KATs: the Wagner shape (single track whose work-subdir render
+depends on modal depth — repath and regroup must agree, same-run ping-pong impossible by construction); the La
+traviata / Guglielmo Tell shape (unify's depth render equals repath's); ingest/maintenance parity re-asserted
+(C-W3b-INT KAT extended to regroup/unify).
 
-### S3 — fold preflight into `maintain --dry-run`; remove preflight
+### S4 — composite-idempotence harness + tripwire (C-IDEM)
 
-Files: `src/music_annotator/_pipeline_maint.py` (migrate the report-assembly worth keeping — cross-pass overlap map,
-journal-capacity projection, Reference/ evidence — into the `maintain` dry-run arm, now extended to the three passes
-preflight never covered; delete `compose_preflight_report` and its private helpers once nothing references them),
-`src/music_annotator/__main__.py` (delete the `preflight` subcommand + its `_run_preflight` closure),
-`src/music_annotator/__init__.py` (drop the export), `src/music_annotator/models.py` (retire `PreflightReport` /
-`PreflightPassSummary` / `PreflightOverlapEntry` if unused after migration, or rename to the maintain-report shape),
-tests (delete/port the preflight test module).  KATs: `maintain --dry-run` emits overlap map + journal capacity +
-reference evidence covering all recurring passes; the `--json PATH` serialisation preflight offered is preserved on
-`maintain --dry-run`; no dangling references to removed symbols (import-graph clean).
+Files: `tests/` (fixture library covering every S2/S3 cycle shape; run `maintain` twice via the public API with all
+boundaries mocked/pyfakefs; second run asserts "no changes" and zero journal delta), `src/music_annotator/
+_pipeline_maint.py` (inverse-move tripwire: before executing a pass's plan, warn per move whose (old, new) inverts a
+journal entry; include both pass names in the event).  KATs: settled fixture → second run reports no changes; a
+deliberately-divergent stub canonical triggers the tripwire warning (and nothing blocks).
 
-### S4 — retire completed singletons (C-RETIRE)
+### S5 — evidence-gap predicate fix
 
-Predicate confirmed empirically (operator 2026-08-27): both passes ran library-wide on hades, each twice, second run a
-no-op — composite fixpoint reached, purpose complete.
+Files: `src/music_annotator/_pipeline_maint.py` (`_census_journal_for_xrefs`: resolve each tagged destination through
+the move chain (`"repathed"`/`"regrouped"`/`"unified"`) to its current path before the `xref_by_dest` exclusion — or
+equivalently key both sides on resolved-current paths; de-duplicate the candidate list), tests.  KATs: fixture
+journal with tagged-at-A → moved A→B → cross-referenced-at-B is NOT reported; genuinely-gapped file IS reported
+exactly once; the duplicate-listing shape (two tagged entries resolving to one current file) reports once.
+After this lands, the prior sub-track's backfill question is re-scoped from live evidence in S8 — backfill only what
+the *fixed* predicate still reports, if anything.
 
-Files: `src/music_annotator/_pipeline_maint.py` (delete `repatch_catalogue_colon` and `repatch_acoustid_tags` pass
-functions + their private log helpers), `src/music_annotator/__main__.py` (delete both subcommands + docstring lines
-1065-1067), `src/music_annotator/__init__.py` (drop exports at lines 141-142, 223-224; and `is_catalogue_colon_corrupt`
-at 168/195 — see below), `src/music_annotator/models.py` (drop the `repatch_*` mentions in the DryRunPlan/pass-summary
-docstrings at 1888/1922/1944), tests (delete the corresponding test modules/cases).
+### S6 — dedup prompt handling + warning noise
 
-**`_works.py` split — verified 2026-08-27:** `rederive_part_label` is the *forward* label rule used by ingest, not
-repair scaffolding — it **stays** (confirm the ingest reference holds before touching it).  `is_catalogue_colon_corrupt`
-is referenced only by the repair pass and by `rederive_part_label`'s neighbourhood — it goes with the command *if* the
-grep after deletion shows no other referent.
+Files: `src/music_annotator/_pipeline_maint.py` (`resolve_duplicate_group` input loop: unrecognized input re-prompts
+with the valid-choice reminder; only `a` aborts the pass — preserves INSTR/C-DEDUP: integrity consent stays
+interactive and is still never satisfied by `--yes` or piped `y`; `_clamp_maint_dest`: emit `name_too_long` only when
+the clamped destination differs from the file's current path), tests.  KATs: invalid input then `b` cross-references
+without deletion; `a` aborts; piped-`y` stream no longer silently kills the pass (it re-prompts until EOF → treated
+as abort with a clear message); clamp warning suppressed on no-op.
 
-**Retention invariant (C-RETIRE) — residual journal-read surface.**  The journal is append-only history: every
-`"repatched"` / `"acoustid-repatched"` entry the two commands ever wrote stays in the journal forever, and multiple
-readers walk *every* entry.  Deleting the *writers* is safe only if all *readers* still interpret those verbs.  Three
-residual sites, all **preservation, no new logic**:
+### S7 — albumid read-error diagnosis
 
-1. **Resolver arm** — `_resolve_current_lib` (`_pipeline_maint.py:540`): the members `"repatched"` /
-   `"acoustid-repatched"` in the in-place-update set MUST remain verbatim, with the docstring at `:514`.  These entries
-   are source==destination in-place updates; dropping them from the set would silently no-op today but removes the
-   documented intent and is a latent trap if the arm logic changes.
-2. **Audit/diff/rebuild readers** — `_audit.py` filters on action verbs via allow-lists (`{"tagged", "enriched"}` at
-   `:147/193/251/340`) and `action != "tagged"` skips (`:490/544`).  These already exclude the repatch verbs by
-   omission, so they need no change — but S4 must *confirm* none of them is a deny-by-default that would misclassify a
-   retired verb.  Verify, don't assume.
-3. **Model field** — `models.py:1832` `action: str` is a bare string, so historical entries deserialize regardless of
-   which verbs the current code emits.  **C-RETIRE trap:** if `action` is ever tightened to a `Literal[...]` union
-   (a plausible future hardening), the retired verbs `"repatched"` / `"acoustid-repatched"` (and every other
-   historical verb) MUST stay in the union or `model_validate` rejects the hades journal on read.  Record this on the
-   field docstring in S4 so the constraint travels with the code.
+Files: `src/music_annotator/_pipeline_io.py` (`_read_albumid_tag`: include the exception class/message in the warning
+event so the failure mode is visible), tests.  Then an operator-paced diagnostic on hades: sample the 1167-path
+cluster (paths recorded in `maintain.{a,b}.out`), classify (unreadable FLAC vs wrong container vs reader bug vs
+legacy never-ingested files), and **route at the boundary** — repair rides a follow-on shard, not this one.  These
+files are currently invisible to unify/regroup/dedup; until routed, treat any integrity conclusion about them as
+unsupported.
 
-Only the two pass functions (the writers) are deleted; all three read sites stay.
+### S8 — operator acceptance gate (hades)
 
-KATs: resolver still replays both retained action-verbs against a fixture journal containing them; `read_journal` +
-`_resolve_current_lib` + `audit` + `rebuild_journal` all round-trip a fixture journal that includes `"repatched"` and
-`"acoustid-repatched"` entries with no error and correct resolution; no source or test references the removed commands;
-`maintain` does not invoke the removed passes (they are complete, not folded in).
+Interactive live runs (integrity prompts must be answered by the operator — `yes y` cannot consent and now cannot
+abort silently):
 
-### S6 — patch hades journal: backfill cross-referenced entries for evidence-gap files
+- Run 1: expect the one-time un-scatter (repath returns the ~184 files to ALBUMARTIST-led homes; no unify reversal);
+  adjudicate the 8 dedup groups at the prompt; tripwire silent.
+- Run 2: MUST report **"no changes"**.  This is the composite-fixpoint acceptance criterion.
+- Evidence-gap report after S5: empty or genuinely-unresolved only; backfill scoped from what remains (if anything).
+- `albumid_tag_read_error` events now carry exception detail; capture a sample for the S7 routing decision.
 
-Operator task + in-session script.  During the S5 acceptance run, `maintain --dry-run` reported
-~29 evidence-gap candidates — files carrying a `MUSICBRAINZ_SECONDARY_ALBUMID` tag with no
-corresponding `"cross-referenced"` journal entry.  Root cause: a bug in `_census_journal_for_xrefs`
-(`_pipeline_maint.py`) where the gap-candidate predicate did not exclude destinations that already
-had a `"cross-referenced"` entry, so files written by a prior `reconstruct-xrefs` run were
-re-reported as gaps on subsequent runs.  The bug is fixed (commit `9916fee`); the fix will suppress
-false positives going forward.  However, the hades journal genuinely lacks the `"cross-referenced"`
-entries for the files that were written by the earlier `reconstruct-xrefs` run (run completed a few
-hours before the bug was identified), so the fix alone does not silence the report for those files
-on the current journal — the entries need to be backfilled.
-
-Procedure:
-
-1. Remount hades FS read-write locally.
-2. For each evidence-gap file, read its `MUSICBRAINZ_SECONDARY_ALBUMID` tag to get the secondary
-   MBID(s).
-3. Append one `"cross-referenced"` JSONL entry per file per secondary MBID to the journal, using
-   the current timestamp and `source == destination` (the in-place-update shape).  Entries are
-   simulated but accurate: the tag write did happen, the journal entry is the missing provenance
-   record.
-4. Verify: re-run `music-annotator maintain --dry-run <dest>` and confirm the evidence-gap section
-   is empty (or contains only genuinely unresolved cases).
-
-The journal is append-only (C-JRNL); appending correct entries is safe and does not alter any
-existing record.  No source code changes are needed beyond the already-committed bug fix.
-
-Files affected: hades journal only (`music_annotator_journal.jsonl`).  No repo files change.
-
-### S5 — operator acceptance gate
-
-Full `maintain` and `maintain --dry-run` on hades.  Acceptance criteria:
-
-- `maintain --dry-run` emits the consolidated report (overlap map, journal capacity, reference evidence) across all
-  recurring passes; matches the shape the old `preflight` produced plus the three newly-covered passes.
-- `maintain` (live) runs the passes in C-CONFLUENCE order; move prompts honour `-y`; integrity prompts fire regardless.
-- The final line reports whether the run changed anything.  Re-running `maintain` until it reports "no changes" reaches
-  a settled library in a small number of runs; the operator experience is legible (a run that still changes things says
-  so, and re-running is understood as normal, not a defect).
-- `preflight`, `repatch-catalogue-colon`, `repatch-acoustid` subcommands are gone; `rebuild`/`audit` still read the
-  journal cleanly; the resolver still replays the two retained singleton action-verbs.
-
-On acceptance: continue the repair turn / library-completion arc per ROADMAP, and rewrite this PLAN at the boundary.
+On acceptance: rewrite this PLAN at the boundary; the ROADMAP repair-turn item continues (preflight re-run → R5 drain
+→ J3 → R6d per ROADMAP).
 
 ## Notes for executors
 
 - **Register rule** (repo AGENTS.md): durable files state the property/invariant, never the plan coordinate.  Anneal
-  denylist for this sub-track: `\bS[1-5]\b` (session ids), `unified maintenance action`, `sub-track`, `plan-run`,
-  `boundary rewrite`, `umbrella action` (in durable prose; use "the `maintain` action").  Contract names (C-MAINTAIN,
-  C-CONFLUENCE, C-RETIRE, INSTR, PERM, C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, NORM-*,
-  REND-*, EPIST-*) are legitimate durable vocabulary.
+  denylist for this sub-track: `\bS[1-8]\b` (session ids), `sub-track`, `plan-run`, `boundary rewrite`, `Option A`,
+  `cycle class`, `run 3`/`run 4` (in durable prose; state the invariant — "all passes derive destinations from the
+  same canonical inputs" — instead).  Contract names (C-CANON, C-NC-TOP, C-IDEM, C-MAINTAIN, C-CONFLUENCE, INSTR,
+  PERM, C-JRNL, C-XREF, C-DEDUP, C-PROV, C-MOVE, C-W3b-INT, NORM-*, REND-*, EPIST-*) are legitimate durable
+  vocabulary.
 - Full gate before declaring any session done: `~/.local/bin/tox -m analyze` (100% branch coverage, mypy strict,
   pylint 10.00/10, ruff, pyupgrade).
 - Patch targets bind where the name is imported, not where it originates (repo testing convention).
-- C-PROV/C-MOVE provenance chain is inviolable: no journal entry before SHA + `_verify_copy` pass.  `maintain` changes
-  the *composition* of passes, never the intra-pass verification ordering.
-- The confluence evidence base: `compose_preflight_report`'s overlap map (`_pipeline_maint.py:3540-3554`) already
-  identifies cross-pass file intersections — the raw material for the S1 pass-order confirmation and the dry-run
-  overlap labels.  The dry-run-is-a-preview behaviour is exactly today's six-independent-dry-run-calls structure
-  (`compose_preflight_report`, `:3504-3509`) — reused, not replaced.
-- S3 deletion is a coverage cliff: migrate the report logic and its tests into `maintain --dry-run` in the *same*
-  commit as the deletion so coverage never dips and no report evidence is lost.
-- S4 deletion must NOT touch the journal replay arms.  The exact line is `_pipeline_maint.py:540` (the
-  `_resolve_current_lib` action set); `"repatched"` / `"acoustid-repatched"` stay as members.  Delete only the two
-  writer functions.  S4 predicate is operator-confirmed (both passes run twice on hades, second run a no-op).
+- **C-PROV/C-MOVE are untouched**: this sub-track changes which destination is computed, never the intra-pass
+  move/verify/journal ordering.  No journal entry before SHA + `_verify_copy` pass.
+- Evidence base: `~/Remote/hades/Music/maintain.{a,b}.out` (runs 3 and 4; ANSI structlog + console report).  Key
+  facts: move sets 194/10/184 identical across runs; the first `*_moved` log line after each `Proceed?` prompt
+  carries a `> ` echo prefix (parsers must strip it); event histogram and per-cluster counts are reproducible by
+  stripping ANSI and grouping structlog event names.
+- The W2b deletion (S2) removes `unify`'s only non-classical consolidation mechanism — the replacement is
+  consolidation to the ALBUMARTIST-led canonical, NOT removal of consolidation.  A fragmented non-classical release
+  must still unify; it just unifies to the un-prefixed top dir.
+- `_canonical_composer_component` / `_is_composer_split_release` may retain a genuinely-classical arm if S1's survey
+  finds real composer-split classical releases in scope; the deletion target is the manufactured-composer path
+  (ALBUMARTISTSORT/`"Various"`), not classical composer handling.
+- dedup's 8 standing groups are operator work at S8, not code work; do not attempt auto-resolution (INSTR).
 
 ## Progress ledger
 
-VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch coverage + mypy strict + pylint 10.00 + ruff
-+ pyupgrade).  One green run satisfies tests, types, lint, format, and coverage.
+VERIFY: `~/.local/bin/tox -m analyze` (combined gate: tests + 100% branch coverage + mypy strict + pylint 10.00 +
+ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and coverage.
 
-| ID | Title                                                                     | Status | Commit | Notes |
-|----|---------------------------------------------------------------------------|--------|--------|-------|
-| S1 | STYLEGUIDE: maintenance-pass order + dry-run/convergence ergonomics (C-CONFLUENCE) | done   | 9e030e7 | C-CONFLUENCE registered in STYLEGUIDE.md; pass order confirmed against code |
-| S2 | `maintain` umbrella action (C-MAINTAIN)                                   | done   | 98797eb | extra: _pipeline_io.py (journal threading seam for enrich_origin_time) |
-| S3 | Fold preflight report into `maintain --dry-run`; remove preflight         | done   | ad63cd0 | Preflight* models renamed to Maintain*; test_main.py updated (preflight tests removed) |
-| S4 | Retire completed singletons; retain journal readers (C-RETIRE)            | done   | 5a19d68 | extras: _works.py (is_catalogue_colon_corrupt), test_annotator.py, test_main.py; C-RETIRE trap warning added to action: str docstring |
-| S5 | Acceptance gate on hades                                                  | done   |        | regroup moves confirmed (not collisions); maintain live run accepted; bug fix committed (9916fee) |
-| S6 | Patch hades journal: backfill cross-referenced entries for evidence-gap files | todo   |        | depends on S5 |
+| ID | Title                                                                          | Status | Commit | Notes |
+|----|--------------------------------------------------------------------------------|--------|--------|-------|
+| S1 | STYLEGUIDE: C-CANON + C-NC-TOP; attribution + code-site survey                 | todo   |        |       |
+| S2 | Top-dir canonical unification (C-NC-TOP)                                       | todo   |        |       |
+| S3 | Depth canonical unification (C-CANON)                                          | todo   |        |       |
+| S4 | Composite-idempotence KATs + inverse-move tripwire (C-IDEM)                    | todo   |        |       |
+| S5 | Evidence-gap predicate fix (current-path resolution + census de-dup)           | todo   |        |       |
+| S6 | dedup prompt re-prompt + name_too_long noise fix                               | todo   |        |       |
+| S7 | albumid_tag_read_error diagnosis + exception detail in event                   | todo   |        |       |
+| S8 | Acceptance gate on hades: converge to "no changes" by run 2                    | todo   |        |       |
 
-Frozen contracts: C-MAINTAIN, C-CONFLUENCE, C-RETIRE (frozen at derivation 2026-08-27; C-CONFLUENCE registered — not
-adjudicated — at S1); INSTR and PERM (design principles, durable).  C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER,
-C-SEQ, C-PROV, C-MOVE, NORM-2-as-revised inherited unchanged from the prior sub-track.
+Frozen contracts: C-CANON, C-NC-TOP, C-IDEM (frozen at derivation 2026-08-28, operator rulings).  C-MAINTAIN,
+C-CONFLUENCE, C-RETIRE, INSTR, PERM, C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE,
+NORM-2-as-revised, C-W3b-INT inherited unchanged.
 
 ## Action-frame digest
 
 (append non-trivial discoveries, contract flexes, and notable texture here as sessions run)
 
-- Derivation (2026-08-27): operator surfaced, then deliberately bounded, the pass-composition question.  The passes
-  *do* compose non-trivially (order matters; a dry-run can mispredict a live run; some sequences need a second run),
-  but the operator ruled the governing lens is **user ergonomics and archival fidelity, not a formal state/composition
-  calculus** — a `maintain` that is imperfect but cost the project ~nothing extra beats a provably-confluent one that
-  cost 10M tokens and 15k LoC, even if the operator must run it a few times or think between `--dry-run` and live.
-  Rulings: (1) `maintain` is deliberately interactive (INSTR — the tool instruments editorial decisions; an
-  operator-run maintenance pass is as legitimate as MBID matching); all recurring passes, including the two integrity
-  passes, are unified, accepting that the integrity passes' idempotence kernel is predicated on operator discretion.
-  (2) **Dry-run is a preview, not a rehearsal** — reuse today's per-pass-against-current-state behaviour
-  (`compose_preflight_report`), label cross-pass-overlap files as "may change," and do NOT build simulated-state
-  threading.  (3) **Convergence is a quiet run** — `maintain` reports "changed N" vs "no changes"; the operator
-  re-runs to settle; no auto-loop, no formal fixpoint, no oscillation detector.  (4) `preflight` folds into
-  `maintain --dry-run` and is removed.  (5) The two completed migration singletons are removed (commands only; journal
-  readers retained — the durable content is captured in NOTES § "Journal action-verbs are append-only vocabulary").
-  (6) **No general C-RETIRE policy — PERM instead:** the project prefers fewer/no temporary refactors; future
-  maintenance needs are evaluated first as candidates for the permanent action basis (new durable action, or refine an
-  existing one), the maintenance grammar absorbing needs rather than spawning disposable passes.
-- S4 predicate confirmed (2026-08-27): operator ran `repatch-catalogue-colon` and `repatch-acoustid` library-wide on
-  hades, each twice, second run a no-op → both at fixpoint, safe to remove.  Removal is clean: the only durable
-  retention is `_resolve_current_lib`'s replay of the `"repatched"` / `"acoustid-repatched"` action-verbs
-  (`_pipeline_maint.py:540`) — the reader stays, the writers go.  `rederive_part_label` stays (forward ingest rule);
-  `is_catalogue_colon_corrupt` goes with the command.
-- S5 acceptance + bug discovery (2026-08-27): gate accepted.  During the live run, `maintain --dry-run` surfaced ~29
-  evidence-gap candidates — files with a `MUSICBRAINZ_SECONDARY_ALBUMID` tag but no `"cross-referenced"` journal
-  entry.  Root cause: `_census_journal_for_xrefs` gap-candidate predicate was missing the `xref_by_dest` exclusion,
-  so files written by a prior `reconstruct-xrefs` run were re-reported as gaps on subsequent runs.  Bug fixed
-  (commit `9916fee`); hades journal needs backfill of the missing entries (S6).  No contract flex — C-XREF and
-  C-JRNL are unchanged; this was a reporting bug, not a data-integrity issue.
+- Derivation (2026-08-28): two sequential live `maintain` runs (3 and 4) each changed exactly 388 files with
+  byte-identical move sets — a stable orbit, not divergence: end-of-run state is constant (post-unify shape); the
+  churn is intra-composition (repath/regroup reverse unify's prior-run moves, unify redoes them).  Root cause
+  adjudicated: the canonical destination was not single-sourced — unify's in-memory composer patch (W2b) and the
+  unthreaded modal-depth argument gave three passes divergent renders for the same file.  Operator ruled Option A
+  (ALBUMARTIST-led non-classical top dir; no manufactured composers) over persisting the patch to tags (rejected:
+  fake scholarship + freezes the per-track Various scattering) and over an ownership guard (rejected: leaves two
+  contradictory canonicals live).  Also adjudicated: the prior sub-track's journal-backfill task was superseded —
+  the evidence-gap predicate keys exclusion on original tagged dest while post-move xref entries key on current
+  path, so backfill at current paths could never silence the report; fix the predicate first, then re-scope backfill
+  from live evidence.  Durable lesson (CAPTURE-CANDIDATE, chat 2026-08-28): per-pass idempotence does not compose
+  when any pass derives the canonical from inputs another pass cannot see — an in-memory tag patch is an unshared
+  input, and the composition oscillates at exactly the files where the patch changes the render.
+- Derivation texture: dedup's integrity prompt aborts on any unrecognized input, so `yes y` piped consent killed the
+  pass silently every run (8 groups standing, 0 resolved, 4 runs); 1167 files (~10% of library) fail the albumid tag
+  read inside fragmentation detection and are silently outside unify/regroup/dedup scope — integrity conclusions
+  about them are unsupported until diagnosed.
