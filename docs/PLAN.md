@@ -213,7 +213,7 @@ ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and cove
 | ID | Title                                                                          | Status | Commit | Notes |
 |----|--------------------------------------------------------------------------------|--------|--------|-------|
 | S1 | STYLEGUIDE: C-CANON + C-NC-TOP; attribution + code-site survey                 | done   | 9c8eb85 | Wagner ping-pong is same-run ordering issue (not depth-arg omission); flagged for S3. Remote output files unavailable; attribution from code analysis. |
-| S2 | Top-dir canonical unification (C-NC-TOP)                                       | todo   |        |       |
+| S2 | Top-dir canonical unification (C-NC-TOP)                                       | done   | 04887ef | _tags.py needed IS_CLASSICAL seam in _top_dir_component; W2b deleted; all 4 KATs pass. |
 | S3 | Depth canonical unification (C-CANON)                                          | todo   |        |       |
 | S4 | Composite-idempotence KATs + inverse-move tripwire (C-IDEM)                    | todo   |        |       |
 | S5 | Evidence-gap predicate fix (current-path resolution + census de-dup)           | todo   |        |       |
