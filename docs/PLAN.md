@@ -176,7 +176,7 @@ ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and cove
 | ID | Title                                                                          | Status | Commit | Notes |
 |----|--------------------------------------------------------------------------------|--------|--------|-------|
 | S1 | Delete unify's composer-chain render patch (C-CANON)                          | done   | 6eb7669 | `_unify_classical_composer_groups` deleted; 3 KATs pass (completer, mixed-arrangement, non-classical ALBUMARTIST-led). |
-| S2 | Shared library-wide modal-depth computation (C-CANON, C-GROUPSCOPE)           | todo   | —      | |
+| S2 | Shared library-wide modal-depth computation (C-CANON, C-GROUPSCOPE)           | done   | aba7285 | `compute_library_modal_depth` helper extracted; maintain threads map into all passes; 3 KATs pass. |
 | S3 | Composite-idempotence KATs for both residual shapes (C-IDEM)                  | todo   | —      | |
 | S4 | Reopened acceptance gate on hades: "no changes" by run 2                      | todo   | —      | |
 
