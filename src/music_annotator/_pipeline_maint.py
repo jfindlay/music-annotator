@@ -19,6 +19,9 @@ without making MusicBrainz network calls:
 Also provides the shared primitives consumed by all commands:
 
 * :func:`_move_verify_journal`    — the single journal-append site for move-type entries (C-PROV).
+* :func:`_warn_inverse_moves`     — C-IDEM tripwire: warns before a pass executes its plan when any
+  planned ``(old, new)`` move inverts a journal-recorded move from this run or a prior run.  The
+  tripwire warns; it does not block.
 * :func:`_resolve_current_lib`    — lineage walk that resolves the current on-disk path per file.
 * :func:`resolve_duplicate_group` — shared group-resolution flow for same-audio collisions (C-DEDUP):
   prompts the operator (survivor / keep-both / abort) and executes the C-DEDUP ordering (xref write +
@@ -1073,6 +1076,60 @@ def _topo_sort_moves(
     return non_cycle_pairs, swap_pairs
 
 
+def _warn_inverse_moves(
+    plan_pairs: list[tuple[Path, Path]],
+    current_pass: str,
+    journal: TransactionLog,
+) -> None:
+    """Warn when any planned move inverts a move already recorded in the journal (C-IDEM tripwire).
+
+    Before a pass executes its move plan, this function checks each ``(old, new)`` pair against
+    every move-type journal entry (``"repathed"``, ``"regrouped"``, ``"unified"``).  If a planned
+    move's ``(old, new)`` is the inverse of a recorded entry's ``(source, destination)`` — that is,
+    the journal has ``source == new`` and ``destination == old`` — a structlog warning is emitted
+    naming both the current pass and the pass that recorded the inverse move.
+
+    The tripwire warns; it does not block.  Blocking would violate C-CONFLUENCE's ergonomics
+    register (no formal oscillation calculus).  The warning converts any future canonical divergence
+    from silent churn into a visible signal: if a pass plans a move that undoes a prior move, the
+    operator sees it immediately rather than discovering it after the library has churned.
+
+    Both the in-memory journal (moves recorded during this run) and the on-disk journal (moves from
+    prior runs) are checked via the ``journal`` parameter, which is the single in-memory
+    :class:`~music_annotator.models.TransactionLog` threaded through all passes by :func:`maintain`
+    (C-JRNL: the journal is read once and updated in place as moves are journalled).
+
+    :param plan_pairs: The ``(old_path, new_path)`` pairs the current pass is about to execute.
+    :param current_pass: The name of the pass building this plan (e.g. ``"repath"``,
+        ``"regroup"``, ``"unify"``).
+    :param journal: The in-memory :class:`~music_annotator.models.TransactionLog` containing all
+        journal entries seen so far (both prior-run entries loaded at startup and current-run
+        entries appended by earlier passes).
+    """
+    # Build a mapping from (source, destination) → pass name for all move-type journal entries.
+    # Only move-type actions carry a meaningful (source, destination) pair where source != destination.
+    _move_actions = frozenset({"repathed", "regrouped", "unified"})
+    recorded_moves: dict[tuple[str, str], str] = {}
+    for entry in journal.entries:
+        if entry.action in _move_actions:
+            recorded_moves[(entry.source, entry.destination)] = entry.action
+
+    for old_path, new_path in plan_pairs:
+        old_str = str(old_path)
+        new_str = str(new_path)
+        # An inverse move is one where the journal has (source=new, destination=old).
+        inverse_key = (new_str, old_str)
+        if inverse_key in recorded_moves:
+            prior_pass = recorded_moves[inverse_key]
+            log.warning(
+                "inverse_move_detected",
+                current_pass=current_pass,
+                prior_pass=prior_pass,
+                old=old_str,
+                new=new_str,
+            )
+
+
 def _move_verify_journal(
     plan_pairs: list[tuple[Path, Path]],
     *,
@@ -1993,6 +2050,8 @@ def repath(  # pylint: disable=too-many-return-statements
     # The cache is threaded through so each successful move re-keys the entry to the new path.
     now = datetime.datetime.now(datetime.UTC)
     move_pairs = [(src, dest) for src, dest, _, _, _ in plan_pairs]
+    # C-IDEM tripwire: warn before executing if any planned move inverts a prior journal entry.
+    _warn_inverse_moves(move_pairs, "repath", journal)
     moved = _move_verify_journal(
         move_pairs,
         journal=journal,
@@ -2336,6 +2395,10 @@ def regroup(  # pylint: disable=too-many-return-statements
     release_groups: dict[str, list[tuple[Path, Path]]] = {}
     for src, dest, _, _, rid in plan_pairs:
         release_groups.setdefault(rid, []).append((src, dest))
+
+    # C-IDEM tripwire: warn before executing if any planned move inverts a prior journal entry.
+    all_regroup_pairs = [(src, dest) for src, dest, _, _, _ in plan_pairs]
+    _warn_inverse_moves(all_regroup_pairs, "regroup", journal)
 
     for rid, move_pairs in release_groups.items():
         total_moved += _move_verify_journal(
@@ -2738,6 +2801,10 @@ def unify(  # pylint: disable=too-many-return-statements
     release_groups: dict[str, list[tuple[Path, Path]]] = {}
     for src, dest, _, _, rid in plan_pairs:
         release_groups.setdefault(rid, []).append((src, dest))
+
+    # C-IDEM tripwire: warn before executing if any planned move inverts a prior journal entry.
+    all_unify_pairs = [(src, dest) for src, dest, _, _, _ in plan_pairs]
+    _warn_inverse_moves(all_unify_pairs, "unify", journal)
 
     for rid, move_pairs in release_groups.items():
         total_moved += _move_verify_journal(
