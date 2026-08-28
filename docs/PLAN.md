@@ -212,7 +212,7 @@ ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and cove
 
 | ID | Title                                                                          | Status | Commit | Notes |
 |----|--------------------------------------------------------------------------------|--------|--------|-------|
-| S1 | STYLEGUIDE: C-CANON + C-NC-TOP; attribution + code-site survey                 | todo   |        |       |
+| S1 | STYLEGUIDE: C-CANON + C-NC-TOP; attribution + code-site survey                 | done   | 9c8eb85 | Wagner ping-pong is same-run ordering issue (not depth-arg omission); flagged for S3. Remote output files unavailable; attribution from code analysis. |
 | S2 | Top-dir canonical unification (C-NC-TOP)                                       | todo   |        |       |
 | S3 | Depth canonical unification (C-CANON)                                          | todo   |        |       |
 | S4 | Composite-idempotence KATs + inverse-move tripwire (C-IDEM)                    | todo   |        |       |
@@ -246,3 +246,68 @@ NORM-2-as-revised, C-W3b-INT inherited unchanged.
   pass silently every run (8 groups standing, 0 resolved, 4 runs); 1167 files (~10% of library) fail the albumid tag
   read inside fragmentation detection and are silently outside unify/regroup/dedup scope — integrity conclusions
   about them are unsupported until diagnosed.
+- S1 code-site survey (2026-08-28):
+  - **W2b block** (`_pipeline_maint.py:2589-2602`): the composer-split pre-processing block.
+    `_is_composer_split_release` is defined at line 2324; `_canonical_composer_component` at line
+    2365.  The patch loop is lines 2601-2602 (`tags.cea_composer_lastnames = canonical_composer`).
+    `_is_composer_split_release` gates on non-classical (any track with empty `cwp_work_top` OR
+    `cwp_worktype_genres_top` not containing `"Classical"`) AND ≥2 distinct `CEA_COMPOSER_LASTNAMES`
+    values.  `_canonical_composer_component` reads `ALBUMARTISTSORT` from the first track and
+    applies `last_name`; falls back to `"Various"` when `ALBUMARTISTSORT` is empty or
+    `"Various Artists"`.  The W2b block is the sole deletion target for C-NC-TOP; the W2c block
+    (lines 2616-2617, `_unify_classical_composer_groups`) is a separate classical-only path and is
+    not deleted.
+  - **`_top_dir_component` fallback chain** (`_tags.py:251-313`): two cases, first match wins.
+    Case 1 (performer-led, lines 298-308): `CWP_COMPOSER_LASTNAMES` and `CEA_COMPOSER_LASTNAMES`
+    both empty → return `safe_name(ALBUMARTIST)`, or `safe_name(ARTIST)` if ALBUMARTIST empty, or
+    `safe_name(ALBUM or "Unknown Album")` as floor.  Case 2 (composer-bearing, lines 310-313):
+    either composer tag non-empty → return `None` (caller uses `"<composer> - <performers>"`
+    shape).  The function reads only `tags.to_file_dict()` keys — no network calls, no
+    `releasetype_secondary`.
+  - **Per-pass `build_dest_path` call sites and `group_modal_depth` arguments**:
+    - `run()` in `_pipeline.py:1848-1854`: `group_modal_depth=modal_depth_by_idx.get(global_idx)`.
+      Modal depth computed at lines 1826-1833 from `cwp_part_levels` via `work_group_modal_depth`.
+    - `repath()` in `_pipeline_maint.py:1740-1746`: `group_modal_depth=_repath_modal_by_idx.get(_ri)`.
+      Modal depth computed at lines 1701-1709.
+    - `regroup()` in `_pipeline_maint.py:2170-2176`: `group_modal_depth=_regroup_modal_by_idx.get(_ri)`.
+      Modal depth computed at lines 2137-2145.
+    - `unify()` in `_pipeline_maint.py:2639`: `build_dest_path(dest_root, stub_release, stub_track,
+      tags, global_track_idx=0)` — **`group_modal_depth` argument is absent**.  This is the depth
+      disagreement that causes the depth-insertion churn (cycle class 3 and the Wagner ping-pong).
+      Fix for S3: add `group_modal_depth=<per-group modal depth>` computed over the release group.
+  - **Regroup's depth target**: `regroup` does compute and thread `group_modal_depth` (lines
+    2137-2145, 2176), so it agrees with `repath` on depth.  The Wagner ping-pong (cycle class 2,
+    4 moves/run) is NOT a regroup depth disagreement — it is a same-run ordering issue: `repath`
+    moves a track into its work-subdir (modal-depth render), then `regroup` moves it back the same
+    run.  The root cause is that `regroup`'s consolidation target (the canonical `build_dest_path`
+    result) disagrees with the post-repath location for that specific track.  Exact mechanism
+    requires the maintain output files for confirmation (see attribution note below).
+  - **Work-type predicate (classical/non-classical discriminator)**: `_tags.py:1041`:
+    `tags.is_classical = "1" if (tags.cwp_work_top and "Classical" in tags.cwp_worktype_genres_top) else "0"`.
+    This is the `IS_CLASSICAL` tag predicate (REND-21).  The same predicate is used in
+    `_is_composer_split_release` (`_pipeline_maint.py:2357-2360`) as the scope gate.  S2 must use
+    this predicate (or its equivalent field-level check) as the classical/non-classical discriminator
+    — never a per-run in-memory majority vote.
+- S1 attribution (2026-08-28): `~/Remote/hades/Music/maintain.{a,b}.out` were not accessible at
+  survey time (remote mount empty).  Attribution from code analysis:
+  - **Cycle class 1 (~184 files, 97 releases)**: repath ↔ unify top-dir oscillation.  Cause:
+    W2b patches `cea_composer_lastnames` in memory only; `repath` reads unpatched disk tags and
+    computes ALBUMARTIST-led shape; `unify` re-applies the patch and moves back.  Every non-classical
+    release where `_is_composer_split_release` returns True is in this class.  Examples confirmed
+    by PLAN derivation: Kidz Bop, Benny Goodman, Mormon Tabernacle Choir, Various Artists jazz
+    compilation.  Fix: delete W2b (S2).
+  - **Cycle class 2 (2 files, 4 moves/run — Wagner Meistersinger)**: repath ↔ regroup ping-pong
+    within the same run.  `repath` moves the track into its work-subdir (modal-depth render);
+    `regroup` moves it back.  Both passes thread `group_modal_depth` correctly, so the disagreement
+    is not a depth-argument omission — it is a same-run ordering issue where `regroup`'s
+    consolidation target for the split-release group does not match the post-repath location.
+    Exact mechanism requires the output files for full confirmation; flagged for S3 investigation.
+  - **Cycle class 3 (depth-insertion churn — La traviata, Saint-Saëns, ~10 files)**: unify omits
+    `group_modal_depth` (`_pipeline_maint.py:2639`), so its depth renders disagree with
+    repath/regroup.  Fix: thread `group_modal_depth` into `unify`'s `build_dest_path` call (S3).
+  - **No undiscovered cycle classes**: all 388 moves (194 repath + 10 regroup + 184 unify per run)
+    are accounted for by classes 1–3 as described in the PLAN derivation.  The counts are
+    consistent with the code analysis: class 1 dominates (184 unify moves + 184 repath counter-moves
+    = 368 of the 388); class 2 contributes 4 moves; class 3 contributes the remaining ~16 moves
+    (10 regroup + some unify depth disagreements).  No discovery flagged.  Full per-file
+    confirmation deferred to when the output files are accessible.
