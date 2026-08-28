@@ -257,7 +257,7 @@ ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and cove
 | S6 | dedup prompt re-prompt + name_too_long noise fix                               | done   | 22371df | Re-prompt loop added; EOF treated as abort; clamp warning suppressed on no-op. |
 | S7 | albumid_tag_read_error diagnosis + exception detail in event                   | done   | fec53bd | exc_type + exc_msg added to warning event; KAT passes. Operator samples hades at S8. |
 | S9 | Fix xref-census move-chain resolution (cycle hang + quadratic loop)            | done   | ad66872 | _resolve_move_chain deleted; _resolve_tagged_to_current O(N) chronological helper added; both call sites updated; cycle-hang KAT + perf sanity guard added. |
-| S8 | Acceptance gate on hades: converge to "no changes" by run 2                    | todo   |        | First attempt 2026-08-28 hung in pass 6 (see S9); kill the stuck pid and re-run after S9 lands. |
+| S8 | Acceptance gate on hades: converge to "no changes" by run 2                    | done   | —      | Operator confirmed 2026-08-28: maintain converges, dedup adjudicated, gap report clean. |
 
 Frozen contracts: C-CANON, C-NC-TOP, C-IDEM (frozen at derivation 2026-08-28, operator rulings).  C-MAINTAIN,
 C-CONFLUENCE, C-RETIRE, INSTR, PERM, C-JRNL, C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE,
