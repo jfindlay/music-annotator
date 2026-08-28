@@ -260,14 +260,22 @@ def _top_dir_component(tags: TrackTags) -> str | None:
     Two cases evaluated in order (first match wins); both read only release facts and
     composer-convergent MB data:
 
-    1. **Performer-led** (no single dominant composer) — ``CWP_COMPOSER_LASTNAMES`` and
-       ``CEA_COMPOSER_LASTNAMES`` are both empty: use ``<albumartist>`` (performer-first), or bare
-       ``<album>`` when albumartist is empty (floor: an empty top dir corrupts downstream
-       ``work_top_dir`` derivation).  The album name never appears in the topmost component — album
-       identity belongs to the playlist lens.  This branch is universal: a pop album with no linked
-       composer routes here exactly as a classical recital does.  The honest tag-derivable signal is
-       composer linkage in the MB work hierarchy; when absent, the album artist is the primary
-       attribution.
+    1. **Performer-led** (no single dominant composer) — the scholarship-stable composer signal is
+       absent: use ``<albumartist>`` (performer-first), or bare ``<album>`` when albumartist is
+       empty (floor: an empty top dir corrupts downstream ``work_top_dir`` derivation).  The album
+       name never appears in the topmost component — album identity belongs to the playlist lens.
+       This branch is universal: a pop album with no linked composer routes here exactly as a
+       classical recital does.  The honest tag-derivable signal is composer linkage in the MB work
+       hierarchy; when absent, the album artist is the primary attribution.
+
+       **C-NC-TOP:** non-classical releases (``CWP_WORK_TOP`` empty or ``CWP_WORKTYPE_GENRES_TOP``
+       not containing ``"Classical"``) always take the ALBUMARTIST-led top dir.
+       ``CEA_COMPOSER_LASTNAMES`` is scholarship-stable only for classical releases where it derives
+       from the MB work hierarchy via CWP.  For non-classical releases it may reflect per-track
+       songwriter credits that vary across tracks and are not a stable library-topology anchor;
+       manufacturing a composer from such credits is forbidden (C-NC-TOP).  Only
+       ``CWP_COMPOSER_LASTNAMES`` (which requires a real MB work link) triggers the
+       composer-bearing shape for non-classical releases.
 
     2. **Composer-bearing** (dominant population) — returns ``None`` to signal the caller should use
        the default ``<composer> - <performers>`` shape.  This applies regardless of
@@ -275,7 +283,7 @@ def _top_dir_component(tags: TrackTags) -> str | None:
        renders ``<composer> - <performers>``, not ``<…> - <album>``.
 
     **Tag-derivable source requirement (C-UNIVERSAL substrate correctness):** reads only
-    ``tags.albumartistsort``, ``tags.albumartist``, and the ``CWP_COMPOSER_LASTNAMES`` /
+    ``tags.cwp_work_top``, ``tags.cwp_worktype_genres_top``, and the ``CWP_COMPOSER_LASTNAMES`` /
     ``CEA_COMPOSER_LASTNAMES`` / ``ALBUM`` / ``ALBUMARTIST`` / ``ARTIST`` keys from
     ``tags.to_file_dict()`` — all of which survive ``to_file_dict()`` and round-trip via
     ``_tags_from_file_dict``.  Never reads ``release.release_group`` or ``releasetype_secondary``
@@ -288,14 +296,18 @@ def _top_dir_component(tags: TrackTags) -> str | None:
     """
     file_dict = tags.to_file_dict()
 
-    # Case 1: Performer-led (no single dominant composer).
-    # Signal: CWP_COMPOSER_LASTNAMES and CEA_COMPOSER_LASTNAMES are both empty.
-    # This is the honest tag-derivable signal: if no composer is linked in the MB work hierarchy,
-    # the release is performer-led and the album artist is the primary attribution.
-    # Universal: a pop album routes here exactly as a classical recital does.
-    # A "Compilation" secondary type with a linked composer does NOT route here — the composer
-    # is the scholarship-stable anchor and the topmost component must reflect it.
-    raw_composer = file_dict.get("CWP_COMPOSER_LASTNAMES") or file_dict.get("CEA_COMPOSER_LASTNAMES", "")
+    # IS_CLASSICAL predicate (C-NC-TOP): cwp_work_top non-empty AND "Classical" in
+    # cwp_worktype_genres_top.  Both fields survive to_file_dict() and round-trip via
+    # _tags_from_file_dict, so this discriminator is computable per file from durable tags.
+    is_classical = bool(tags.cwp_work_top and "Classical" in tags.cwp_worktype_genres_top)
+
+    # Case 1: Performer-led (no scholarship-stable dominant composer).
+    # CWP_COMPOSER_LASTNAMES derives from the MB work hierarchy and is always scholarship-stable.
+    # CEA_COMPOSER_LASTNAMES is scholarship-stable only for classical releases; for non-classical
+    # releases it may reflect per-track songwriter credits that vary across tracks (C-NC-TOP).
+    raw_cwp_composer = file_dict.get("CWP_COMPOSER_LASTNAMES", "")
+    raw_cea_composer = file_dict.get("CEA_COMPOSER_LASTNAMES", "")
+    raw_composer = raw_cwp_composer or (raw_cea_composer if is_classical else "")
     if not raw_composer:
         albumartist = file_dict.get("ALBUMARTIST") or file_dict.get("ARTIST", "")
         if albumartist:
