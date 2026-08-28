@@ -18,6 +18,10 @@ without making MusicBrainz network calls:
 
 Also provides the shared primitives consumed by all commands:
 
+* :func:`compute_library_modal_depth` — compute the library-wide ``cwp_workid_top`` → modal-depth
+  map from ``(cwp_workid_top, cwp_part_levels)`` pairs.  All move passes must use this single
+  function over the same pass-invariant membership so that every pass derives the same canonical
+  destination from the same group-scope statistic (C-GROUPSCOPE).
 * :func:`_move_verify_journal`    — the single journal-append site for move-type entries (C-PROV).
 * :func:`_warn_inverse_moves`     — C-IDEM tripwire: warns before a pass executes its plan when any
   planned ``(old, new)`` move inverts a journal-recorded move from this run or a prior run.  The
@@ -1616,12 +1620,56 @@ def _execute_swap_cycles(
     return moved_count
 
 
+def compute_library_modal_depth(
+    pairs: list[tuple[str, int]],
+) -> dict[str, int | None]:
+    """Compute the library-wide work-group modal depth for every top-work MBID.
+
+    Groups ``(cwp_workid_top, cwp_part_levels)`` pairs by top-work MBID and computes the modal
+    ``CWP_PART_LEVELS`` value for each group via :func:`~music_annotator._works.work_group_modal_depth`.
+    The result is the single authoritative depth map that all move passes must use so that every
+    pass derives the same canonical destination from the same group membership (C-GROUPSCOPE).
+
+    When ``maintain`` runs, it computes this map once over the full library scan and threads it
+    into ``repath``, ``regroup``, and ``unify``.  When a pass runs standalone, it computes the
+    map itself over its available data via this same function — one function, one membership
+    definition.
+
+    Ingest parity note: the ingest pipeline (``run()``) computes modal depth over the single
+    release being ingested, which is per-release by construction (it only sees one release at a
+    time).  That membership is narrower than the library-wide scan, but the computation is
+    identical in structure.  When the library holds only one release for a given top-work MBID,
+    the two computations agree exactly.
+
+    :param pairs: List of ``(cwp_workid_top, cwp_part_levels_int)`` pairs for all files in scope.
+        Empty-string top-work MBIDs are included in the map under the ``""`` key (files with no
+        top-work link); callers that do not want a depth clamp for those files should treat
+        ``map.get("")`` as ``None``.
+    :returns: Mapping from ``cwp_workid_top`` to modal depth (``int``) or ``None`` when the
+        group is all-orphan (every file has ``CWP_PART_LEVELS == 0``).  ``None`` means
+        ``build_dest_path`` should use the file's own depth unchanged.
+    """
+    work_groups: dict[str, list[int]] = {}
+    for twid, pl in pairs:
+        work_groups.setdefault(twid, []).append(pl)
+
+    result: dict[str, int | None] = {}
+    for twid, part_levels in work_groups.items():
+        modal = work_group_modal_depth(part_levels)
+        # When modal is 0 (all-orphan group), store None so build_dest_path uses own depth
+        # unchanged — equivalent outcome, avoids a redundant min(0, 0) clamp.
+        result[twid] = modal if modal > 0 else None
+
+    return result
+
+
 def repath(  # pylint: disable=too-many-return-statements
     dest_root: Path,
     *,
     dry_run: bool = False,
     yes: bool = False,
     _journal: TransactionLog | None = None,
+    _modal_depth_map: dict[str, int | None] | None = None,
 ) -> DryRunPlan | None:
     """Re-path all verified library files under ``dest_root`` to their corrected destinations.
 
@@ -1671,6 +1719,11 @@ def repath(  # pylint: disable=too-many-return-statements
     :param dry_run: When ``True``, log planned moves without performing any filesystem
         operations or writing journal entries.
     :param yes: When ``True``, skip the confirmation prompt and move files immediately.
+    :param _modal_depth_map: Pre-computed library-wide ``cwp_workid_top`` → modal-depth map
+        from :func:`compute_library_modal_depth`.  When supplied by ``maintain``, this map was
+        computed over the full library scan before any pass ran, ensuring all passes use the same
+        group membership (C-GROUPSCOPE).  When ``None`` (standalone invocation), ``repath``
+        computes the map itself over its own file scan via the same helper.
     """
     journal_path = dest_root / JOURNAL_FILENAME
     journal = _journal if _journal is not None else read_journal(journal_path)
@@ -1773,27 +1826,27 @@ def repath(  # pylint: disable=too-many-return-statements
         _repath_file_data.append((current_path, tags, file_dict, ext, release_id))
 
     # --- Compute work-group modal depth per group (once per group, not per track) ---
-    # Groups tracks by CWP_WORKID_TOP, mirroring the scanner grouping in
-    # scripts/scan_nonuniform_depth.py (which groups by (release_dir, CWP_WORKID_TOP)).
-    # repath operates across the whole library, so release_dir is implicit in the path; the
-    # grouping key is CWP_WORKID_TOP alone (consistent with the scanner's per-release-dir
-    # grouping because each release dir maps to one top-work MBID in practice).
-    _repath_work_groups: dict[str, list[int]] = {}
-    for _ri, (_rp, _rt, _rfd, _re, _rrid) in enumerate(_repath_file_data):
-        _twid = _rt.cwp_workid_top
-        if _twid not in _repath_work_groups:
-            _repath_work_groups[_twid] = []
-        _repath_work_groups[_twid].append(_ri)
+    # When _modal_depth_map is supplied by maintain (computed once over the full library scan
+    # before any pass ran), use it directly — all passes share the same group membership
+    # (C-GROUPSCOPE).  When None (standalone invocation), compute the map from the files
+    # visible to this pass via the shared helper so the same function and membership definition
+    # are used regardless of call site.
+    if _modal_depth_map is not None:
+        _repath_depth_map: dict[str, int | None] = _modal_depth_map
+    else:
+        # Standalone: compute over the full library scan visible to this pass.
+        # Groups tracks by CWP_WORKID_TOP, mirroring the scanner grouping in
+        # scripts/scan_nonuniform_depth.py (which groups by (release_dir, CWP_WORKID_TOP)).
+        # repath operates across the whole library, so release_dir is implicit in the path; the
+        # grouping key is CWP_WORKID_TOP alone (consistent with the scanner's per-release-dir
+        # grouping because each release dir maps to one top-work MBID in practice).
+        _repath_depth_map = compute_library_modal_depth(
+            [(_rt.cwp_workid_top, int(_rt.cwp_part_levels or "0")) for _, _rt, _, _, _ in _repath_file_data]
+        )
 
-    _repath_modal_by_idx: dict[int, int | None] = {}
-    for _twid, _group_idxs in _repath_work_groups.items():
-        _part_levels = [int(_repath_file_data[_i][1].cwp_part_levels or "0") for _i in _group_idxs]
-        _modal = work_group_modal_depth(_part_levels)
-        # When modal is 0 (all-orphan group), pass None so build_dest_path uses own depth
-        # unchanged — equivalent outcome, avoids a redundant min(0, 0) clamp.
-        _modal_or_none: int | None = _modal if _modal > 0 else None
-        for _i in _group_idxs:
-            _repath_modal_by_idx[_i] = _modal_or_none
+    _repath_modal_by_idx: dict[int, int | None] = {
+        _ri: _repath_depth_map.get(_rt.cwp_workid_top) for _ri, (_, _rt, _, _, _) in enumerate(_repath_file_data)
+    }
 
     # --- SEL-23 ensemble patch (release-scope ensemble expansion) ---
     # Group files by MUSICBRAINZ_ALBUMID and apply the SEL-23 rule over each release group so
@@ -2106,6 +2159,7 @@ def regroup(  # pylint: disable=too-many-return-statements
     yes: bool = False,
     dry_run: bool = False,
     _journal: TransactionLog | None = None,
+    _modal_depth_map: dict[str, int | None] | None = None,
 ) -> DryRunPlan | None:
     """Consolidate confirmed split-release files into their canonical destinations.
 
@@ -2155,6 +2209,12 @@ def regroup(  # pylint: disable=too-many-return-statements
     :param yes: When ``True``, skip the interactive confirmation prompt.
     :param dry_run: When ``True``, log planned moves without performing any filesystem
         operations or writing journal entries.
+    :param _modal_depth_map: Pre-computed library-wide ``cwp_workid_top`` → modal-depth map
+        from :func:`compute_library_modal_depth`.  When supplied by ``maintain``, this map was
+        computed over the full library scan before any pass ran, ensuring all passes use the same
+        group membership (C-GROUPSCOPE).  When ``None`` (standalone invocation), ``regroup``
+        computes the map itself over its own file scan (confirmed files plus non-confirmed library
+        context files sharing the same top-work MBIDs) via the same helper.
     """
     journal_path = dest_root / JOURNAL_FILENAME
     journal = _journal if _journal is not None else read_journal(journal_path)
@@ -2214,59 +2274,50 @@ def regroup(  # pylint: disable=too-many-return-statements
         _regroup_file_data.append((current_path, tags, file_dict, ext, release_id))
 
     # --- Compute work-group modal depth per group (once per group, not per track) ---
-    # Groups tracks by CWP_WORKID_TOP, mirroring the scanner grouping in
-    # scripts/scan_nonuniform_depth.py (which groups by (release_dir, CWP_WORKID_TOP)).
-    _regroup_work_groups: dict[str, list[int]] = {}
-    for _ri, (_rp, _rt, _rfd, _re, _rrid) in enumerate(_regroup_file_data):
-        _twid = _rt.cwp_workid_top
-        if _twid not in _regroup_work_groups:
-            _regroup_work_groups[_twid] = []
-        _regroup_work_groups[_twid].append(_ri)
+    # When _modal_depth_map is supplied by maintain (computed once over the full library scan
+    # before any pass ran), use it directly — all passes share the same group membership
+    # (C-GROUPSCOPE).  When None (standalone invocation), compute the map from the confirmed
+    # files plus non-confirmed library context files sharing the same top-work MBIDs, so the
+    # modal depth ceiling matches repath's full-library computation and avoids the same-run
+    # ping-pong (repath moves to work-subdir at full-library modal depth; regroup moves back
+    # at subset modal depth).
+    if _modal_depth_map is not None:
+        _regroup_depth_map: dict[str, int | None] = _modal_depth_map
+    else:
+        # Standalone: extend the modal depth computation to include all library files that share
+        # the same CWP_WORKID_TOP as the confirmed-release tracks, even if those files belong to
+        # other releases.  Files outside confirmed_release_ids are read for depth context only —
+        # they are never moved.
+        _regroup_work_ids_in_scope: frozenset[str] = frozenset(
+            _rt.cwp_workid_top for _, _rt, _, _, _ in _regroup_file_data if _rt.cwp_workid_top
+        )
+        _regroup_confirmed_paths: frozenset[Path] = frozenset(p for p, _, _, _, _ in _regroup_file_data)
+        _regroup_ctx_pairs: list[tuple[str, int]] = [
+            (_rt.cwp_workid_top, int(_rt.cwp_part_levels or "0")) for _, _rt, _, _, _ in _regroup_file_data
+        ]
+        for _ctx_path, _ctx_rid in full_lib.items():
+            if _ctx_rid in confirmed_release_ids:
+                continue  # already in _regroup_file_data
+            if _ctx_path in _regroup_confirmed_paths:
+                continue  # pragma: no cover — defensive: a non-confirmed path cannot be in confirmed set
+            if not _ctx_path.exists():
+                continue
+            _ctx_ext = _ctx_path.suffix.lower()
+            if _ctx_ext not in {".flac", ".mp3"}:  # pragma: no cover — full_lib only contains tagged audio files
+                continue
+            try:
+                _ctx_file_dict = _read_tags_cached(_ctx_path, _ctx_ext, cache)
+            except Exception:  # noqa: BLE001 — tag read failure: skip for depth context  # pragma: no cover
+                continue
+            _ctx_twid = _ctx_file_dict.get("CWP_WORKID_TOP", "")
+            if _ctx_twid not in _regroup_work_ids_in_scope:
+                continue
+            _regroup_ctx_pairs.append((_ctx_twid, int(_ctx_file_dict.get("CWP_PART_LEVELS") or "0")))
+        _regroup_depth_map = compute_library_modal_depth(_regroup_ctx_pairs)
 
-    # Extend the modal depth computation to include all library files that share the same
-    # CWP_WORKID_TOP as the confirmed-release tracks, even if those files belong to other
-    # releases.  Without this, regroup computes modal depth over only the confirmed-release
-    # subset, which may differ from repath's computation (which scans the full library).
-    # The disagreement causes a same-run ping-pong: repath moves a track into its work-subdir
-    # (full-library modal depth), then regroup moves it back (subset modal depth).
-    # Files outside confirmed_release_ids are read for depth context only — they are never moved.
-    _regroup_work_ids_in_scope: frozenset[str] = frozenset(
-        _rt.cwp_workid_top for _, _rt, _, _, _ in _regroup_file_data if _rt.cwp_workid_top
-    )
-    # Map from cwp_workid_top → extra part_levels from non-confirmed library files.
-    _regroup_extra_part_levels: dict[str, list[int]] = {}
-    _regroup_confirmed_paths: frozenset[Path] = frozenset(p for p, _, _, _, _ in _regroup_file_data)
-    for _ctx_path, _ctx_rid in full_lib.items():
-        if _ctx_rid in confirmed_release_ids:
-            continue  # already in _regroup_file_data
-        if _ctx_path in _regroup_confirmed_paths:
-            continue  # pragma: no cover — defensive: a non-confirmed path cannot be in confirmed set
-        if not _ctx_path.exists():
-            continue
-        _ctx_ext = _ctx_path.suffix.lower()
-        if _ctx_ext not in {".flac", ".mp3"}:  # pragma: no cover — full_lib only contains tagged audio files
-            continue
-        try:
-            _ctx_file_dict = _read_tags_cached(_ctx_path, _ctx_ext, cache)
-        except Exception:  # noqa: BLE001 — tag read failure: skip for depth context  # pragma: no cover
-            continue
-        _ctx_twid = _ctx_file_dict.get("CWP_WORKID_TOP", "")
-        if _ctx_twid not in _regroup_work_ids_in_scope:
-            continue
-        _regroup_extra_part_levels.setdefault(_ctx_twid, []).append(int(_ctx_file_dict.get("CWP_PART_LEVELS") or "0"))
-
-    _regroup_modal_by_idx: dict[int, int | None] = {}
-    for _twid, _group_idxs in _regroup_work_groups.items():
-        _part_levels = [int(_regroup_file_data[_i][1].cwp_part_levels or "0") for _i in _group_idxs]
-        # Include part_levels from non-confirmed library files sharing the same top-work MBID
-        # so the modal depth ceiling matches repath's full-library computation.
-        _part_levels.extend(_regroup_extra_part_levels.get(_twid, []))
-        _modal = work_group_modal_depth(_part_levels)
-        # When modal is 0 (all-orphan group), pass None so build_dest_path uses own depth
-        # unchanged — equivalent outcome, avoids a redundant min(0, 0) clamp.
-        _modal_or_none: int | None = _modal if _modal > 0 else None
-        for _i in _group_idxs:
-            _regroup_modal_by_idx[_i] = _modal_or_none
+    _regroup_modal_by_idx: dict[int, int | None] = {
+        _ri: _regroup_depth_map.get(_rt.cwp_workid_top) for _ri, (_, _rt, _, _, _) in enumerate(_regroup_file_data)
+    }
 
     # --- SEL-23 ensemble patch (release-scope ensemble expansion) ---
     # Group files by MUSICBRAINZ_ALBUMID and apply the SEL-23 rule over each release group so
@@ -2455,6 +2506,7 @@ def unify(  # pylint: disable=too-many-return-statements
     yes: bool = False,
     dry_run: bool = False,
     _journal: TransactionLog | None = None,
+    _modal_depth_map: dict[str, int | None] | None = None,
 ) -> DryRunPlan | None:
     """Consolidate fragmented releases into their canonical top_dirs (C-CANON, C-NC-TOP).
 
@@ -2504,6 +2556,13 @@ def unify(  # pylint: disable=too-many-return-statements
     :param yes: When ``True``, skip the interactive confirmation prompt.
     :param dry_run: When ``True``, log planned moves without performing any filesystem
         operations or writing journal entries.
+    :param _modal_depth_map: Pre-computed library-wide ``cwp_workid_top`` → modal-depth map
+        from :func:`compute_library_modal_depth`.  When supplied by ``maintain``, this map was
+        computed over the full library scan before any pass ran, ensuring all passes use the same
+        group membership (C-GROUPSCOPE).  When ``None`` (standalone invocation), ``unify``
+        computes the map itself over each fragmented release's files — a release-local membership
+        that may differ from the library-wide membership when the same top-work MBID appears in
+        multiple releases with different ``CWP_PART_LEVELS`` distributions.
     """
     journal_path = dest_root / JOURNAL_FILENAME
     # Use the pre-read journal when provided (C-JRNL: journal read once at the top of maintain
@@ -2566,25 +2625,22 @@ def unify(  # pylint: disable=too-many-return-statements
             _hydrate_performer_lists(_tags, _file_dict)
         sel23_ensemble_patch([_tags for _, _tags, _ in group_tags])
 
-        # --- Work-group modal depth per CWP_WORKID_TOP group (C-CANON / C-W3b-INT) ---
-        # Compute once per top-work group within this release, then pass to build_dest_path
-        # so unify's depth render agrees with repath's and regroup's.  Without this, unify
-        # omits the group_modal_depth argument and produces a depth render that disagrees
-        # with the other passes, causing depth-insertion churn every run.
-        _unify_work_groups: dict[str, list[int]] = {}
-        for _ui, (_, _ut, _) in enumerate(group_tags):
-            _twid = _ut.cwp_workid_top
-            _unify_work_groups.setdefault(_twid, []).append(_ui)
+        # --- Work-group modal depth per CWP_WORKID_TOP group (C-CANON / C-GROUPSCOPE) ---
+        # When _modal_depth_map is supplied by maintain (computed once over the full library scan
+        # before any pass ran), look up each file's top-work MBID directly — all passes share the
+        # same group membership (C-GROUPSCOPE).  When None (standalone invocation), compute the
+        # map from this release's files only; the membership is release-local by construction
+        # (unify only sees the fragmented release's files at this point).
+        if _modal_depth_map is not None:
+            _unify_depth_map: dict[str, int | None] = _modal_depth_map
+        else:
+            _unify_depth_map = compute_library_modal_depth(
+                [(_ut.cwp_workid_top, int(_ut.cwp_part_levels or "0")) for _, _ut, _ in group_tags]
+            )
 
-        _unify_modal_by_idx: dict[int, int | None] = {}
-        for _twid, _group_idxs in _unify_work_groups.items():
-            _part_levels = [int(group_tags[_i][1].cwp_part_levels or "0") for _i in _group_idxs]
-            _modal = work_group_modal_depth(_part_levels)
-            # When modal is 0 (all-orphan group), pass None so build_dest_path uses own depth
-            # unchanged — equivalent outcome, avoids a redundant min(0, 0) clamp.
-            _modal_or_none: int | None = _modal if _modal > 0 else None
-            for _i in _group_idxs:
-                _unify_modal_by_idx[_i] = _modal_or_none
+        _unify_modal_by_idx: dict[int, int | None] = {
+            _ui: _unify_depth_map.get(_ut.cwp_workid_top) for _ui, (_, _ut, _) in enumerate(group_tags)
+        }
 
         for _ui, (file_path, tags, file_dict) in enumerate(group_tags):
             ext = file_path.suffix.lower()
@@ -3982,6 +4038,32 @@ def maintain(
 
     total_changed: int = 0
 
+    # --- Pre-pass: compute library-wide work-group modal depth (C-GROUPSCOPE) ---
+    # All three move passes (repath, regroup, unify) must derive each file's destination from
+    # the same group-scope statistic over the same pass-invariant membership definition.
+    # Computing the map once here and threading it into every pass guarantees that the same
+    # cwp_workid_top → modal_depth value is used regardless of which pass is running or which
+    # subset of files each pass operates on.
+    #
+    # The scan reads CWP_WORKID_TOP and CWP_PART_LEVELS from the tag-read cache (fast on
+    # subsequent runs) for every file currently in the library.  Tag-read failures are skipped
+    # silently — a file that cannot be read will be skipped by the move passes too.
+    _maintain_cache = TagReadCache.load(dest_root / _TAG_CACHE_FILENAME)
+    _maintain_lib = _resolve_current_lib(journal)
+    _maintain_pairs: list[tuple[str, int]] = []
+    for _mp, _mrid in _maintain_lib.items():
+        if not _mp.exists():
+            continue
+        _mext = _mp.suffix.lower()
+        if _mext not in {".flac", ".mp3"}:
+            continue
+        try:
+            _mfd = _read_tags_cached(_mp, _mext, _maintain_cache)
+        except Exception:  # noqa: BLE001 — tag read failure: skip for depth context
+            continue
+        _maintain_pairs.append((_mfd.get("CWP_WORKID_TOP", ""), int(_mfd.get("CWP_PART_LEVELS") or "0")))
+    _lib_modal_depth_map: dict[str, int | None] = compute_library_modal_depth(_maintain_pairs)
+
     # --- Pass 1: enrich (content pass — backfill fingerprint fields) ---
     enrich_plan = enrich(dest_root, dry_run=dry_run, _journal=journal)
     if dry_run and enrich_plan is not None:
@@ -3994,17 +4076,17 @@ def maintain(
         total_changed += origin_time_changed
 
     # --- Pass 3: repath (move pass — re-path files to corrected destinations) ---
-    repath_plan = repath(dest_root, dry_run=dry_run, yes=yes, _journal=journal)
+    repath_plan = repath(dest_root, dry_run=dry_run, yes=yes, _journal=journal, _modal_depth_map=_lib_modal_depth_map)
     if dry_run and repath_plan is not None:
         total_changed += repath_plan.count
 
     # --- Pass 4: regroup (move pass — consolidate confirmed split-release files) ---
-    regroup_plan = regroup(dest_root, dry_run=dry_run, yes=yes, _journal=journal)
+    regroup_plan = regroup(dest_root, dry_run=dry_run, yes=yes, _journal=journal, _modal_depth_map=_lib_modal_depth_map)
     if dry_run and regroup_plan is not None:
         total_changed += regroup_plan.count
 
     # --- Pass 5: unify (move pass — consolidate performer-split fragmented releases) ---
-    unify_plan = unify(dest_root, dry_run=dry_run, yes=yes, _journal=journal)
+    unify_plan = unify(dest_root, dry_run=dry_run, yes=yes, _journal=journal, _modal_depth_map=_lib_modal_depth_map)
     if dry_run and unify_plan is not None:
         total_changed += unify_plan.count
 

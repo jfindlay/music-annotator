@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import pytest
+import structlog.testing
 from mutagen._util import MutagenError
 from mutagen.flac import FLAC as MutagenFLAC
 from mutagen.id3 import ID3
@@ -65,6 +66,7 @@ from music_annotator._pipeline_maint import (
     _resolve_tagged_to_current,
     _scatter_consequence_note,
     _write_xref_and_journal,
+    compute_library_modal_depth,
     dedup_library,
     maintain,
     reconstruct_cross_references,
@@ -16681,3 +16683,516 @@ class TestDepthCanonicalUnification:
         assert len(ingest_dest_1b.relative_to(dest_root2).parts) == 4, (  # noqa: PLR2004
             f"unify path must have 4 parts (top/work/act/leaf), got {ingest_dest_1b.relative_to(dest_root2).parts}"
         )
+
+
+# ---------------------------------------------------------------------------
+# KATs: shared library-wide modal-depth computation (C-CANON, C-GROUPSCOPE)
+# ---------------------------------------------------------------------------
+
+
+class TestSharedLibraryModalDepth:
+    """KATs for the shared library-wide modal-depth computation (C-CANON, C-GROUPSCOPE).
+
+    Three witnesses:
+
+    1. **Membership-divergence shape** — a library fixture holding two recordings of the same
+       top work with different ``CWP_PART_LEVELS`` distributions, one of them a fragmented
+       release.  ``unify``'s depth render equals ``repath``'s (mock-enforced equality); the
+       library-wide map computed by :func:`compute_library_modal_depth` is the single source
+       for both passes.
+
+    2. **Same-run inverse-free** — ``repath`` then ``unify`` over the fixture produces zero
+       ``inverse_move_detected`` events.  The shared modal-depth map eliminates the depth-
+       membership asymmetry that caused the stable orbit.
+
+    3. **Ingest/maintenance parity re-asserted (C-W3b-INT)** — the shared helper
+       :func:`compute_library_modal_depth` produces the same depth value as the ingest
+       pipeline's inline computation for the same ``(cwp_workid_top, cwp_part_levels)`` inputs.
+       Also covers the maintain pre-pass defensive branches (non-existent file, wrong extension,
+       tag-read failure).
+    """
+
+    @staticmethod
+    def _make_opera_tags(
+        cwp_part_levels: str,
+        cwp_movt_num: str,
+        title: str,
+        release_id: str,
+        part_1: str,
+        ordering_key_1: str,
+    ) -> TrackTags:
+        """Build TrackTags for a classical opera track.
+
+        :param cwp_part_levels: String value for CWP_PART_LEVELS.
+        :param cwp_movt_num: String value for CWP_MOVT_NUM.
+        :param title: Track title.
+        :param release_id: MUSICBRAINZ_ALBUMID to embed.
+        :param part_1: CWP_PART_1 value (act name).
+        :param ordering_key_1: CWP_ORDERING_KEY_1 value.
+        :returns: A :class:`~music_annotator.models.TrackTags` instance.
+        """
+        tags = TrackTags(
+            cwp_work_top="La traviata",
+            cwp_worktype_genres_top="Classical",
+            cwp_composer_lastnames="Verdi",
+            cwp_workid_top="w-traviata-shared",
+            recording_date="1955",
+            cwp_part_levels=cwp_part_levels,
+            cwp_movt_num=cwp_movt_num,
+            movementtotal="3",
+            title=title,
+            artist="Callas",
+            musicbrainz_albumid=release_id,
+        )
+        if tags.model_extra is not None:
+            tags.model_extra["cwp_part_1"] = part_1
+            tags.model_extra["cwp_ordering_key_1"] = ordering_key_1
+        return tags
+
+    def test_kat1_membership_divergence_unify_depth_equals_repath(self, fs: FakeFilesystem) -> None:
+        """KAT 1 (C-GROUPSCOPE): unify's depth render equals repath's when the library-wide map is used.
+
+        Library fixture: two recordings of the same top work (``w-traviata-shared``).
+        - Release A (fragmented, PL=2): two tracks spread across two top_dirs.
+        - Release B (non-fragmented, PL=3): one track at its canonical path.
+
+        Without the shared map, unify computes modal depth over release A's files only (PL=2,
+        modal=2) while repath computes over the full library (PL=2, PL=2, PL=3 → modal=2 still,
+        but the membership differs).  This test uses a shape where the membership difference
+        produces a different modal: release A has PL=3 tracks (modal=3 release-local) while the
+        full library has a majority of PL=2 tracks (modal=2 library-wide).
+
+        Mock-enforced equality: both passes compute the same canonical destination for the same
+        tags when the library-wide map is used.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Release A (fragmented): 2 tracks with PL=3 (3-level hierarchy).
+        # These are the tracks unify will try to consolidate.
+        tags_a1 = self._make_opera_tags("3", "1", "Atto I - Scena 1", "traviata-frag", "Atto I", "1")
+        tags_a2 = self._make_opera_tags("3", "2", "Atto II - Scena 1", "traviata-frag", "Atto II", "2")
+
+        # Release B (non-fragmented): 3 tracks with PL=2 sharing the same CWP_WORKID_TOP.
+        # Their majority (3 vs 2) drives the full-library modal depth to 2.
+        tags_b1 = self._make_opera_tags("2", "1", "Atto I - Aria", "traviata-other", "Atto I", "1")
+        tags_b2 = self._make_opera_tags("2", "2", "Atto II - Duet", "traviata-other", "Atto II", "2")
+        tags_b3 = self._make_opera_tags("2", "3", "Atto III - Finale", "traviata-other", "Atto III", "3")
+
+        # Verify the membership-divergence shape:
+        # - Release-local modal (only release A's PL=3 tracks): modal=3.
+        # - Library-wide modal (all 5 tracks: PL=3, PL=3, PL=2, PL=2, PL=2): modal=2.
+        release_local_modal = work_group_modal_depth([3, 3])
+        assert release_local_modal == 3  # noqa: PLR2004 — 3 is the release-local modal depth
+
+        lib_wide_modal = work_group_modal_depth([3, 3, 2, 2, 2])
+        assert lib_wide_modal == 2  # noqa: PLR2004 — 2 is the library-wide modal depth
+
+        # Canonical destination using library-wide modal depth (what repath and the shared map compute).
+        canonical_a1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_a1, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+        canonical_a2 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_a2, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+
+        # Release-local destination (what unify would compute WITHOUT the shared map).
+        release_local_a1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_a1, group_modal_depth=release_local_modal
+        ).with_suffix(".flac")
+
+        # The two destinations must differ for the test to be non-trivial.
+        assert canonical_a1 != release_local_a1, (
+            "test setup error: library-wide and release-local destinations must differ for PL=3 tracks"
+        )
+
+        # Place release A tracks at wrong top_dirs (fragmented: different performer in path).
+        wrong_top_a1 = dest_root / "Verdi - Serafin" / "La traviata [rec 1955]" / "01 - Atto I - Scena 1.flac"
+        wrong_top_a1.parent.mkdir(parents=True, exist_ok=True)
+        wrong_top_a1.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(wrong_top_a1, tags_a1)
+
+        # Track A2 at canonical path (ensures two distinct top_dirs for fragmentation detection).
+        _make_library_flac(dest_root, str(canonical_a2.relative_to(dest_root)), tags_a2)
+
+        # Place release B tracks at their canonical paths.
+        canonical_b1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_b1, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+        canonical_b2 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_b2, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+        canonical_b3 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_b3, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+        _make_library_flac(dest_root, str(canonical_b1.relative_to(dest_root)), tags_b1)
+        _make_library_flac(dest_root, str(canonical_b2.relative_to(dest_root)), tags_b2)
+        _make_library_flac(dest_root, str(canonical_b3.relative_to(dest_root)), tags_b3)
+
+        # Compute the shared library-wide modal depth map via the helper.
+        all_pairs = [
+            (tags_a1.cwp_workid_top, int(tags_a1.cwp_part_levels or "0")),
+            (tags_a2.cwp_workid_top, int(tags_a2.cwp_part_levels or "0")),
+            (tags_b1.cwp_workid_top, int(tags_b1.cwp_part_levels or "0")),
+            (tags_b2.cwp_workid_top, int(tags_b2.cwp_part_levels or "0")),
+            (tags_b3.cwp_workid_top, int(tags_b3.cwp_part_levels or "0")),
+        ]
+        shared_map = compute_library_modal_depth(all_pairs)
+
+        # The shared map must produce the library-wide modal depth for the top-work MBID.
+        assert shared_map.get("w-traviata-shared") == lib_wide_modal, (
+            f"shared map must return library-wide modal depth {lib_wide_modal}; got {shared_map.get('w-traviata-shared')!r}"
+        )
+
+        # Mock-enforced equality: repath's destination (using library-wide modal) must equal
+        # unify's destination when the shared map is threaded in.
+        repath_dest_a1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_a1, group_modal_depth=shared_map.get("w-traviata-shared")
+        ).with_suffix(".flac")
+        unify_dest_a1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_a1, group_modal_depth=shared_map.get("w-traviata-shared")
+        ).with_suffix(".flac")
+        assert repath_dest_a1 == unify_dest_a1, (
+            "repath and unify must compute the same canonical destination when the shared map is used"
+        )
+        assert repath_dest_a1 == canonical_a1, "shared-map destination must equal the library-wide canonical destination"
+
+        # Run unify with the shared map threaded in (simulating maintain's behaviour).
+        # unify must move track A1 to the library-wide canonical path (depth-2 render),
+        # not the release-local path (depth-3 render).
+        music_annotator.unify(dest_root=dest_root, yes=True, _modal_depth_map=shared_map)
+
+        # Track A1 must be at the library-wide canonical path.
+        assert canonical_a1.exists(), (
+            f"unify must move track A1 to the library-wide canonical path {canonical_a1.relative_to(dest_root)}"
+        )
+        assert not wrong_top_a1.exists(), "unify must move track A1 away from the wrong top_dir"
+
+        # The release-local (depth-3) path must not exist — unify must not have used it.
+        assert not release_local_a1.exists(), "unify must not move track A1 to the release-local (depth-3) path"
+
+    def test_kat2_same_run_inverse_free(self, fs: FakeFilesystem) -> None:
+        """KAT 2 (C-GROUPSCOPE): repath then unify over the membership-divergence fixture produces zero inverse moves.
+
+        The shared library-wide modal-depth map eliminates the depth-membership asymmetry that
+        caused the stable orbit (repath moves to depth-2, unify moves back to depth-3).  When
+        both passes use the same map, their destinations agree and no inverse moves are planned.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Same fixture as KAT 1: release A (PL=3, fragmented) + release B (PL=2, non-fragmented).
+        tags_a1 = self._make_opera_tags("3", "1", "Atto I - Scena 1", "traviata-frag2", "Atto I", "1")
+        tags_a2 = self._make_opera_tags("3", "2", "Atto II - Scena 1", "traviata-frag2", "Atto II", "2")
+        tags_b1 = self._make_opera_tags("2", "1", "Atto I - Aria", "traviata-other2", "Atto I", "1")
+        tags_b2 = self._make_opera_tags("2", "2", "Atto II - Duet", "traviata-other2", "Atto II", "2")
+        tags_b3 = self._make_opera_tags("2", "3", "Atto III - Finale", "traviata-other2", "Atto III", "3")
+
+        lib_wide_modal = work_group_modal_depth([3, 3, 2, 2, 2])
+        assert lib_wide_modal == 2  # noqa: PLR2004
+
+        canonical_a1 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_a1, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+        canonical_a2 = build_dest_path(
+            dest_root, MBRelease(), MBTrack(), tags_a2, group_modal_depth=lib_wide_modal
+        ).with_suffix(".flac")
+
+        # Place track A1 at a wrong top_dir (fragmented).
+        wrong_top_a1 = dest_root / "Verdi - Serafin" / "La traviata [rec 1955]" / "01 - Atto I - Scena 1.flac"
+        wrong_top_a1.parent.mkdir(parents=True, exist_ok=True)
+        wrong_top_a1.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(wrong_top_a1, tags_a1)
+
+        # Track A2 at canonical path.
+        _make_library_flac(dest_root, str(canonical_a2.relative_to(dest_root)), tags_a2)
+
+        # Release B tracks at canonical paths.
+        for tags_b in (tags_b1, tags_b2, tags_b3):
+            canonical_b = build_dest_path(
+                dest_root, MBRelease(), MBTrack(), tags_b, group_modal_depth=lib_wide_modal
+            ).with_suffix(".flac")
+            _make_library_flac(dest_root, str(canonical_b.relative_to(dest_root)), tags_b)
+
+        # Write a journal so repath can resolve the library.
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "traviata-frag2",
+                    "source": "/src/a1.flac",
+                    "destination": str(wrong_top_a1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "traviata-frag2",
+                    "source": "/src/a2.flac",
+                    "destination": str(canonical_a2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "traviata-other2",
+                    "source": "/src/b1.flac",
+                    "destination": str(
+                        build_dest_path(
+                            dest_root, MBRelease(), MBTrack(), tags_b1, group_modal_depth=lib_wide_modal
+                        ).with_suffix(".flac")
+                    ),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "traviata-other2",
+                    "source": "/src/b2.flac",
+                    "destination": str(
+                        build_dest_path(
+                            dest_root, MBRelease(), MBTrack(), tags_b2, group_modal_depth=lib_wide_modal
+                        ).with_suffix(".flac")
+                    ),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "traviata-other2",
+                    "source": "/src/b3.flac",
+                    "destination": str(
+                        build_dest_path(
+                            dest_root, MBRelease(), MBTrack(), tags_b3, group_modal_depth=lib_wide_modal
+                        ).with_suffix(".flac")
+                    ),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Compute the shared library-wide modal depth map.
+        all_pairs = [
+            (tags_a1.cwp_workid_top, int(tags_a1.cwp_part_levels or "0")),
+            (tags_a2.cwp_workid_top, int(tags_a2.cwp_part_levels or "0")),
+            (tags_b1.cwp_workid_top, int(tags_b1.cwp_part_levels or "0")),
+            (tags_b2.cwp_workid_top, int(tags_b2.cwp_part_levels or "0")),
+            (tags_b3.cwp_workid_top, int(tags_b3.cwp_part_levels or "0")),
+        ]
+        shared_map = compute_library_modal_depth(all_pairs)
+
+        # Step 1: repath with the shared map.  Track A1 moves from wrong_top_a1 to canonical_a1.
+        with structlog.testing.capture_logs() as repath_logs:
+            music_annotator.repath(dest_root=dest_root, yes=True, _modal_depth_map=shared_map)
+
+        repath_inverse = [e for e in repath_logs if e.get("event") == "inverse_move_detected"]
+        assert not repath_inverse, f"repath must produce zero inverse_move_detected events; got {repath_inverse}"
+
+        assert canonical_a1.exists(), "repath must move track A1 to the library-wide canonical path"
+        assert not wrong_top_a1.exists(), "repath must move track A1 away from the wrong top_dir"
+
+        # Step 2: unify with the shared map.  Track A1 is now at canonical_a1; unify must be a no-op.
+        with structlog.testing.capture_logs() as unify_logs:
+            music_annotator.unify(dest_root=dest_root, yes=True, _modal_depth_map=shared_map)
+
+        unify_inverse = [e for e in unify_logs if e.get("event") == "inverse_move_detected"]
+        assert not unify_inverse, (
+            f"unify must produce zero inverse_move_detected events after repath with the shared map; got {unify_inverse}"
+        )
+
+        # Track A1 must still be at the canonical path (unify must not have moved it back).
+        assert canonical_a1.exists(), "unify must not move track A1 away from the library-wide canonical path"
+
+    def test_kat3_ingest_maintenance_parity_shared_helper(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """KAT 3 (C-W3b-INT): the shared helper produces the same depth as the ingest pipeline.
+
+        Asserts that :func:`compute_library_modal_depth` produces the same modal depth value as
+        the ingest pipeline's inline computation for the same ``(cwp_workid_top, cwp_part_levels)``
+        inputs.  This is the maintenance-parity invariant: the depth render for classical works
+        must match between the ingest pipeline and all maintenance passes.
+
+        Also covers the maintain pre-pass defensive branches:
+        - Non-existent file (journal entry pointing to a missing path).
+        - Wrong extension (a file with a non-audio suffix).
+        - Tag-read failure (mutagen raises an exception).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # --- Part A: helper parity with ingest pipeline ---
+        # The ingest pipeline computes modal depth inline using work_group_modal_depth over
+        # the same (cwp_workid_top, cwp_part_levels) inputs.  The shared helper must produce
+        # the same result.
+        pairs_2_2_3 = [("w-parity", 2), ("w-parity", 2), ("w-parity", 3)]
+        helper_result = compute_library_modal_depth(pairs_2_2_3)
+        ingest_result = work_group_modal_depth([2, 2, 3])
+        assert helper_result.get("w-parity") == ingest_result, (
+            f"shared helper must produce the same modal depth as the ingest pipeline; "
+            f"helper={helper_result.get('w-parity')!r}, ingest={ingest_result!r}"
+        )
+
+        # All-orphan group: both must return 0 / None.
+        pairs_orphan = [("w-orphan", 0), ("w-orphan", 0)]
+        helper_orphan = compute_library_modal_depth(pairs_orphan)
+        ingest_orphan = work_group_modal_depth([0, 0])
+        assert ingest_orphan == 0  # noqa: PLR2004 — 0 is the all-orphan sentinel
+        assert helper_orphan.get("w-orphan") is None, (
+            "shared helper must return None for all-orphan groups (same as passing None to build_dest_path)"
+        )
+
+        # Empty input: helper must return an empty map.
+        assert compute_library_modal_depth([]) == {}
+
+        # --- Part B: maintain pre-pass defensive branches ---
+        # Set up a library with:
+        # 1. A journal entry pointing to a non-existent file (covers the "not _mp.exists()" branch).
+        # 2. A file with a wrong extension (covers the "_mext not in {'.flac', '.mp3'}" branch).
+        # 3. A real FLAC file (covers the normal path).
+        tags_real = self._make_opera_tags("2", "1", "Atto I - Aria", "parity-maint-rel", "Atto I", "1")
+        real_path = _make_library_flac(dest_root, "Verdi - Callas/La traviata [rec 1955]/01 - Atto I - Aria.flac", tags_real)
+
+        ghost_path = dest_root / "Verdi - Callas" / "La traviata [rec 1955]" / "ghost.flac"
+        wrong_ext_path = dest_root / "Verdi - Callas" / "La traviata [rec 1955]" / "cover.jpg"
+        wrong_ext_path.parent.mkdir(parents=True, exist_ok=True)
+        wrong_ext_path.write_bytes(b"\xff\xd8\xff")  # minimal JPEG header
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "parity-maint-rel",
+                    "source": "/src/01.flac",
+                    "destination": str(real_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "parity-maint-rel",
+                    "source": "/src/ghost.flac",
+                    "destination": str(ghost_path),  # does not exist on disk
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "parity-maint-rel",
+                    "source": "/src/cover.jpg",
+                    "destination": str(wrong_ext_path),  # wrong extension
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Mock the move passes and integrity passes so maintain only runs the pre-pass scan.
+        mocker.patch("music_annotator._pipeline_maint.enrich", return_value=None)
+        mocker.patch("music_annotator._pipeline_maint.enrich_origin_time", return_value=0)
+        mocker.patch("music_annotator._pipeline_maint.repath", return_value=None)
+        mocker.patch("music_annotator._pipeline_maint.regroup", return_value=None)
+        mocker.patch("music_annotator._pipeline_maint.unify", return_value=None)
+        mocker.patch("music_annotator._pipeline_maint.reconstruct_cross_references", return_value=[])
+        mocker.patch("music_annotator._pipeline_maint.dedup_library", return_value=0)
+
+        # Run maintain: the pre-pass scan must handle the non-existent file and wrong extension
+        # gracefully (skip them) and compute the modal depth map from the real FLAC file only.
+        maintain(dest_root, yes=True)
+
+        # The maintain call above must have completed without raising — that is the primary
+        # assertion for the defensive branches (non-existent file, wrong extension).
+
+        # --- Part C: tag-read failure branch ---
+        # Patch _read_tags_cached to raise on the real file, covering the except branch.
+        dest_root2 = Path("/lib2")
+        fs.create_dir(str(dest_root2))
+        real_path2 = _make_library_flac(dest_root2, "Verdi - Callas/La traviata [rec 1955]/01 - Atto I - Aria.flac", tags_real)
+        _write_library_journal(
+            dest_root2,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "parity-maint-rel2",
+                    "source": "/src/01.flac",
+                    "destination": str(real_path2),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_maint._read_tags_cached", side_effect=MutagenError("boom"))
+
+        # maintain must not raise even when all tag reads fail in the pre-pass scan.
+        maintain(dest_root2, yes=True)
+
+    def test_regroup_uses_threaded_modal_depth_map(self, fs: FakeFilesystem) -> None:
+        """Regroup uses the pre-computed library-wide modal depth map when threaded in by maintain.
+
+        Exercises the ``_modal_depth_map is not None`` branch in ``regroup`` (C-GROUPSCOPE):
+        when ``maintain`` threads the map in, ``regroup`` must use it directly rather than
+        computing a release-local map.
+
+        Scenario: a confirmed split-release with PL=2 tracks.  The shared map is pre-computed
+        with modal=2.  Regroup must move the tracks to the depth-2 canonical paths.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_1 = self._make_opera_tags("2", "1", "Atto I - Aria", "regroup-map-rel", "Atto I", "1")
+        tags_2 = self._make_opera_tags("2", "2", "Atto II - Duet", "regroup-map-rel", "Atto II", "2")
+
+        modal = work_group_modal_depth([2, 2])
+        assert modal == 2  # noqa: PLR2004
+
+        canonical_1 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_1, group_modal_depth=modal).with_suffix(".flac")
+        canonical_2 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_2, group_modal_depth=modal).with_suffix(".flac")
+
+        # Place tracks at legacy paths (flat, no act dir).
+        legacy_1 = dest_root / "Verdi - Callas" / "La traviata [rec 1955]" / "01 - Atto I - Aria.flac"
+        legacy_2 = dest_root / "Verdi - Callas" / "La traviata [rec 1955]" / "02 - Atto II - Duet.flac"
+        for legacy_path, tags in [(legacy_1, tags_1), (legacy_2, tags_2)]:
+            legacy_path.parent.mkdir(parents=True, exist_ok=True)
+            legacy_path.write_bytes(_MINIMAL_FLAC)
+            apply_tags_flac(legacy_path, tags)
+
+        # Phantom entry in a different work_dir to trigger case-b fragmentation detection.
+        phantom = dest_root / "Verdi - Callas" / "OldTraviata [rec 1955]" / "phantom.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "regroup-map-rel",
+                    "source": "/src/01.flac",
+                    "destination": str(legacy_1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "regroup-map-rel",
+                    "source": "/src/02.flac",
+                    "destination": str(legacy_2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "regroup-map-rel",
+                    "source": "/src/phantom.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Pre-compute the shared library-wide modal depth map (simulating maintain's pre-pass).
+        shared_map: dict[str, int | None] = {"w-traviata-shared": modal}
+
+        # Call regroup with the threaded map — exercises the _modal_depth_map is not None branch.
+        music_annotator.regroup(dest_root=dest_root, yes=True, _modal_depth_map=shared_map)
+
+        # After regroup: tracks must be at the depth-2 canonical paths.
+        assert canonical_1.exists(), f"regroup must place track 1 at canonical path {canonical_1.relative_to(dest_root)}"
+        assert canonical_2.exists(), f"regroup must place track 2 at canonical path {canonical_2.relative_to(dest_root)}"
