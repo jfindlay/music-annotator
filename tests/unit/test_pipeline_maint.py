@@ -246,6 +246,80 @@ class TestClampMaintDest:
         assert len(new_leaf.encode("utf-8")) <= _NAME_MAX
         assert new_leaf.endswith(".flac")
 
+    def test_warning_suppressed_when_clamped_dest_equals_current_path(self, mocker: MockerFixture) -> None:
+        """KAT: name_too_long warning is suppressed when the clamped destination equals the current path.
+
+        When a file is already at its canonical clamped location (the clamped dest equals the
+        current path), no move would occur and no warning should be emitted.  This prevents
+        chronic re-warning on already-clamped names that produce no move.
+
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/music")
+        long_stem = "Canon in 3 Parts for 3 Female Voices " + ("x" * 220)
+        leaf = long_stem + ".flac"
+        assert len(leaf.encode("utf-8")) > _NAME_MAX
+        clamped_leaf = _proposed_short(leaf, ".flac")
+        # The file is already at the clamped destination (no move needed).
+        current_path = dest_root / "Mozart - Karajan" / "Work [rec 2000]" / clamped_leaf
+        dest = dest_root / "Mozart - Karajan" / "Work [rec 2000]" / leaf
+
+        mock_log_warning = mocker.patch("music_annotator._pipeline_maint.log.warning")
+
+        result = _clamp_maint_dest(dest_root, dest, current_path)
+
+        # The clamped result equals the current path — no warning should be emitted.
+        assert result == current_path
+        mock_log_warning.assert_not_called()
+
+    def test_warning_emitted_when_clamped_dest_differs_from_current_path(self, mocker: MockerFixture) -> None:
+        """name_too_long warning is emitted when the clamped destination differs from the current path.
+
+        When a file needs to be moved to its clamped canonical location, the warning is emitted
+        to inform the operator that a name-length truncation is occurring.
+
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/music")
+        long_stem = "Canon in 3 Parts for 3 Female Voices " + ("x" * 220)
+        leaf = long_stem + ".flac"
+        assert len(leaf.encode("utf-8")) > _NAME_MAX
+        # The file is at a different (non-clamped) current path.
+        current_path = dest_root / "Mozart - Karajan" / "Work [rec 2000]" / "01 - OldTitle.flac"
+        dest = dest_root / "Mozart - Karajan" / "Work [rec 2000]" / leaf
+
+        mock_log_warning = mocker.patch("music_annotator._pipeline_maint.log.warning")
+
+        result = _clamp_maint_dest(dest_root, dest, current_path)
+
+        # The clamped result differs from the current path — warning must be emitted.
+        assert result != current_path
+        assert len(result.name.encode("utf-8")) <= _NAME_MAX
+        mock_log_warning.assert_called_once()
+        call_kwargs = mock_log_warning.call_args[0]
+        assert call_kwargs[0] == "name_too_long"
+
+    def test_warning_emitted_when_no_current_path_provided(self, mocker: MockerFixture) -> None:
+        """name_too_long warning is emitted when current_path is None (legacy callers).
+
+        When no current_path is provided, the function always emits the warning for clamped
+        components (backward-compatible behaviour for callers that do not supply current_path).
+
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/music")
+        long_stem = "Canon in 3 Parts for 3 Female Voices " + ("x" * 220)
+        leaf = long_stem + ".flac"
+        assert len(leaf.encode("utf-8")) > _NAME_MAX
+        dest = dest_root / "Mozart - Karajan" / "Work [rec 2000]" / leaf
+
+        mock_log_warning = mocker.patch("music_annotator._pipeline_maint.log.warning")
+
+        result = _clamp_maint_dest(dest_root, dest)
+
+        assert len(result.name.encode("utf-8")) <= _NAME_MAX
+        mock_log_warning.assert_called_once()
+
 
 class TestRepath:
     """Tests for :func:`music_annotator.repath` — the library re-path maintenance mode.
@@ -11371,6 +11445,115 @@ class TestResolveDuplicateGroup:
         assert resolution.choice == "keep_both"
         assert resolution.proceed_with_move is False
         # No journal mutations in dry-run.
+        assert not any(e.action in {"cross-referenced", "deduplicated"} for e in journal.entries)
+
+    def test_invalid_input_then_b_cross_references_without_deletion(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """KAT: invalid input re-prompts; subsequent 'b' cross-references without deletion.
+
+        Verifies that unrecognised input (e.g. 'y', 'x', '') causes a re-prompt rather than
+        aborting the pass.  The operator's eventual 'b' choice cross-references both files and
+        keeps both on disk.  This is the primary guard against piped-y streams silently killing
+        the dedup pass (INSTR/C-DEDUP: integrity consent stays interactive).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        occupant = self._make_flac(dest_root, "A/occupant.flac", "rel-occupant")
+        mover = self._make_flac(dest_root, "B/mover.flac", "rel-mover")
+
+        journal, journal_path = self._make_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occupant",
+                    "source": "/src/occ.flac",
+                    "destination": str(occupant),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-mover",
+                    "source": "/src/mov.flac",
+                    "destination": str(mover),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Simulate: first two inputs are invalid ('y', 'x'), third is valid ('b').
+        mocker.patch("builtins.input", side_effect=["y", "x", "b"])
+
+        resolution = resolve_duplicate_group(
+            occupant,
+            "rel-occupant",
+            mover,
+            "rel-mover",
+            "sha256",
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=datetime.datetime(2024, 1, 2, tzinfo=datetime.UTC),
+        )
+
+        assert resolution.choice == "keep_both"
+        assert resolution.proceed_with_move is False
+        assert occupant.exists(), "Occupant must survive"
+        assert mover.exists(), "Mover must survive"
+        xref_entries = [e for e in journal.entries if e.action == "cross-referenced"]
+        assert len(xref_entries) == 1
+        assert xref_entries[0].release_id == "rel-mover"
+
+    def test_eof_on_input_aborts_with_clear_message(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """KAT: piped-y stream exhausted (EOFError) → abort with a clear message.
+
+        When stdin is a piped stream that raises EOFError (e.g. a piped 'y' stream that has been
+        consumed), the function treats it as an abort and emits a clear message rather than
+        silently killing the pass.  This prevents piped consent from satisfying the integrity
+        prompt (INSTR/C-DEDUP).
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        occupant = self._make_flac(dest_root, "A/occupant.flac", "rel-occupant")
+        mover = self._make_flac(dest_root, "B/mover.flac", "rel-mover")
+
+        journal, journal_path = self._make_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-occupant",
+                    "source": "/src/occ.flac",
+                    "destination": str(occupant),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Simulate EOF immediately (piped stream exhausted).
+        mocker.patch("builtins.input", side_effect=EOFError)
+
+        resolution = resolve_duplicate_group(
+            occupant,
+            "rel-occupant",
+            mover,
+            "rel-mover",
+            "sha256",
+            journal=journal,
+            journal_path=journal_path,
+            dest_root=dest_root,
+            now=datetime.datetime(2024, 1, 2, tzinfo=datetime.UTC),
+        )
+
+        assert resolution.choice == "abort"
+        assert resolution.proceed_with_move is False
+        assert occupant.exists()
+        assert mover.exists()
         assert not any(e.action in {"cross-referenced", "deduplicated"} for e in journal.entries)
 
 

@@ -658,7 +658,7 @@ def _write_xref_and_journal(
     )
 
 
-def resolve_duplicate_group(
+def resolve_duplicate_group(  # pylint: disable=too-many-return-statements
     occupant_path: Path,
     occupant_release_id: str,
     mover_path: Path,
@@ -766,7 +766,7 @@ def resolve_duplicate_group(
             proceed_with_move=False,
         )
 
-    # Interactive prompt — survives --yes (integrity prompts are not bulk consent).
+    # Interactive prompt — survives --yes (integrity prompts are not bulk consent, per INSTR/C-DEDUP).
     occ_rel = str(occupant_path.relative_to(dest_root)) if occupant_path.is_relative_to(dest_root) else str(occupant_path)
     mov_rel = str(mover_path.relative_to(dest_root)) if mover_path.is_relative_to(dest_root) else str(mover_path)
     _console.print(
@@ -779,97 +779,17 @@ def resolve_duplicate_group(
         f"  [bold]b[/] — keep both (cross-reference only, no deletion)\n"
         f"  [bold]a[/] — abort run\n"
     )
-    _console.print("[bold cyan]>[/] ", end="")
-    answer = input("").strip().lower()
 
-    match answer:
-        case "1":
-            # Survivor = occupant.  Cross-reference mover's MBID onto occupant, then delete mover.
-            _write_xref_and_journal(
-                occupant_path,
-                mover_release_id,
-                journal=journal,
-                journal_path=journal_path,
-                now_str=now_str,
-            )
-            dedup_entry = TransactionEntry(
-                timestamp=now_str,
-                release_id=mover_release_id,
-                source=str(mover_path),
-                destination=str(occupant_path),
-                action="deduplicated",
-            )
-            os.unlink(mover_path)
-            append_journal_entry(journal_path, dedup_entry)
-            journal.entries.append(dedup_entry)
-            log.info(
-                "deduplicated",
-                deleted=str(mover_path),
-                survivor=str(occupant_path),
-                deleted_release_id=mover_release_id,
-            )
-            return DuplicateResolution(
-                choice="survivor_occupant",
-                survivor_path=occupant_path,
-                deleted_path=mover_path,
-                deleted_release_id=mover_release_id,
-                secondary_mbid=mover_release_id,
-                proceed_with_move=False,
-            )
-        case "2":
-            # Survivor = mover.  Cross-reference occupant's MBID onto the mover (at its current
-            # source path), then delete the occupant.  The move itself proceeds afterward.
-            _write_xref_and_journal(
-                mover_path,
-                occupant_release_id,
-                journal=journal,
-                journal_path=journal_path,
-                now_str=now_str,
-            )
-            dedup_entry = TransactionEntry(
-                timestamp=now_str,
-                release_id=occupant_release_id,
-                source=str(occupant_path),
-                destination=str(mover_path),
-                action="deduplicated",
-            )
-            os.unlink(occupant_path)
-            append_journal_entry(journal_path, dedup_entry)
-            journal.entries.append(dedup_entry)
-            log.info(
-                "deduplicated",
-                deleted=str(occupant_path),
-                survivor=str(mover_path),
-                deleted_release_id=occupant_release_id,
-            )
-            return DuplicateResolution(
-                choice="survivor_mover",
-                survivor_path=mover_path,
-                deleted_path=occupant_path,
-                deleted_release_id=occupant_release_id,
-                secondary_mbid=occupant_release_id,
-                proceed_with_move=True,
-            )
-        case "b":
-            # Keep both: cross-reference mover's MBID onto occupant; drop the move.
-            _write_xref_and_journal(
-                occupant_path,
-                mover_release_id,
-                journal=journal,
-                journal_path=journal_path,
-                now_str=now_str,
-            )
-            return DuplicateResolution(
-                choice="keep_both",
-                survivor_path=occupant_path,
-                deleted_path=None,
-                deleted_release_id="",
-                secondary_mbid=mover_release_id,
-                proceed_with_move=False,
-            )
-        case _:
-            # Any other input (including "a") aborts the run.
-            log.info("duplicate_group_aborted", occupant=str(occupant_path), mover=str(mover_path))
+    # Re-prompt loop: unrecognised input re-prompts; only 'a' aborts; EOF (piped stream exhausted)
+    # is treated as abort with a clear message.  This ensures a piped 'y' stream does not silently
+    # kill the pass — the operator must supply a valid choice interactively (INSTR/C-DEDUP).
+    while True:
+        _console.print("[bold cyan]>[/] ", end="")
+        try:
+            answer = input("").strip().lower()
+        except EOFError:
+            _console.print("[bold red]No input available — aborting dedup pass.[/]")
+            log.info("duplicate_group_aborted_eof", occupant=str(occupant_path), mover=str(mover_path))
             return DuplicateResolution(
                 choice="abort",
                 survivor_path=occupant_path,
@@ -878,6 +798,108 @@ def resolve_duplicate_group(
                 secondary_mbid="",
                 proceed_with_move=False,
             )
+
+        match answer:
+            case "1":
+                # Survivor = occupant.  Cross-reference mover's MBID onto occupant, then delete mover.
+                _write_xref_and_journal(
+                    occupant_path,
+                    mover_release_id,
+                    journal=journal,
+                    journal_path=journal_path,
+                    now_str=now_str,
+                )
+                dedup_entry = TransactionEntry(
+                    timestamp=now_str,
+                    release_id=mover_release_id,
+                    source=str(mover_path),
+                    destination=str(occupant_path),
+                    action="deduplicated",
+                )
+                os.unlink(mover_path)
+                append_journal_entry(journal_path, dedup_entry)
+                journal.entries.append(dedup_entry)
+                log.info(
+                    "deduplicated",
+                    deleted=str(mover_path),
+                    survivor=str(occupant_path),
+                    deleted_release_id=mover_release_id,
+                )
+                return DuplicateResolution(
+                    choice="survivor_occupant",
+                    survivor_path=occupant_path,
+                    deleted_path=mover_path,
+                    deleted_release_id=mover_release_id,
+                    secondary_mbid=mover_release_id,
+                    proceed_with_move=False,
+                )
+            case "2":
+                # Survivor = mover.  Cross-reference occupant's MBID onto the mover (at its current
+                # source path), then delete the occupant.  The move itself proceeds afterward.
+                _write_xref_and_journal(
+                    mover_path,
+                    occupant_release_id,
+                    journal=journal,
+                    journal_path=journal_path,
+                    now_str=now_str,
+                )
+                dedup_entry = TransactionEntry(
+                    timestamp=now_str,
+                    release_id=occupant_release_id,
+                    source=str(occupant_path),
+                    destination=str(mover_path),
+                    action="deduplicated",
+                )
+                os.unlink(occupant_path)
+                append_journal_entry(journal_path, dedup_entry)
+                journal.entries.append(dedup_entry)
+                log.info(
+                    "deduplicated",
+                    deleted=str(occupant_path),
+                    survivor=str(mover_path),
+                    deleted_release_id=occupant_release_id,
+                )
+                return DuplicateResolution(
+                    choice="survivor_mover",
+                    survivor_path=mover_path,
+                    deleted_path=occupant_path,
+                    deleted_release_id=occupant_release_id,
+                    secondary_mbid=occupant_release_id,
+                    proceed_with_move=True,
+                )
+            case "b":
+                # Keep both: cross-reference mover's MBID onto occupant; drop the move.
+                _write_xref_and_journal(
+                    occupant_path,
+                    mover_release_id,
+                    journal=journal,
+                    journal_path=journal_path,
+                    now_str=now_str,
+                )
+                return DuplicateResolution(
+                    choice="keep_both",
+                    survivor_path=occupant_path,
+                    deleted_path=None,
+                    deleted_release_id="",
+                    secondary_mbid=mover_release_id,
+                    proceed_with_move=False,
+                )
+            case "a":
+                # Explicit abort.
+                log.info("duplicate_group_aborted", occupant=str(occupant_path), mover=str(mover_path))
+                return DuplicateResolution(
+                    choice="abort",
+                    survivor_path=occupant_path,
+                    deleted_path=None,
+                    deleted_release_id="",
+                    secondary_mbid="",
+                    proceed_with_move=False,
+                )
+            case _:
+                # Unrecognised input: re-prompt with the valid-choice reminder.
+                _console.print(
+                    "[bold red]Unrecognised input.[/] Please enter [bold]1[/], [bold]2[/], [bold]b[/], or [bold]a[/]."
+                )
 
 
 def _detect_audio_suffix(path: Path) -> str | None:
@@ -906,7 +928,7 @@ def _detect_audio_suffix(path: Path) -> str | None:
         return None
 
 
-def _clamp_maint_dest(dest_root: Path, dest: Path) -> Path:
+def _clamp_maint_dest(dest_root: Path, dest: Path, current_path: Path | None = None) -> Path:
     """Clamp each component of ``dest`` to at most :data:`~music_annotator._tags._NAME_MAX` UTF-8 bytes.
 
     Maintenance passes (``repath``, ``regroup``, ``unify``) build destination paths from embedded
@@ -920,12 +942,18 @@ def _clamp_maint_dest(dest_root: Path, dest: Path) -> Path:
     :func:`~music_annotator._pipeline._resolve_long_names`: ``_proposed_short`` is applied once per
     over-limit component, with the audio suffix bytes reserved for the leaf so that stem + suffix
     together fit within ``_NAME_MAX``.  A ``name_too_long`` warning is logged for each clamped
-    component.  The function is idempotent: components already within the limit pass through
+    component **only when the clamped result differs from ``current_path``** — i.e. only when a
+    move would actually occur.  When the clamped destination equals the file's current path the
+    component is already at its canonical clamped form on disk; no move is needed and no warning
+    is emitted.  The function is idempotent: components already within the limit pass through
     unchanged.
 
     :param dest_root: Library root.  Used only to compute the relative parts of ``dest``.
     :param dest: Full absolute destination path including the audio extension (i.e. the result of
         ``build_dest_path(...).with_suffix(ext)``).
+    :param current_path: The file's current on-disk path.  When provided, ``name_too_long``
+        warnings are suppressed if the clamped result equals ``current_path`` (no-op move).
+        When ``None``, warnings are always emitted for clamped components.
     :returns: A new :class:`~pathlib.Path` with every component guaranteed to be at most
         ``_NAME_MAX`` UTF-8 bytes.
     """
@@ -937,21 +965,29 @@ def _clamp_maint_dest(dest_root: Path, dest: Path) -> Path:
     # (".flac" or ".mp3"), so Path.suffix is safe to use here.
     leaf_audio_suffix = Path(leaf).suffix.lower()
     new_parts: list[str] = []
+    clamped_components: list[tuple[str, str]] = []  # (original, clamped) pairs for deferred logging
     for part in rel_parts:
         if len(part.encode("utf-8")) > _NAME_MAX:
             part_audio_suffix = leaf_audio_suffix if part == leaf else ""
             clamped = _proposed_short(part, part_audio_suffix)
-            log.warning(
-                "name_too_long",
-                component=part,
-                bytes=len(part.encode("utf-8")),
-                limit=_NAME_MAX,
-                shortened=clamped,
-            )
+            clamped_components.append((part, clamped))
             new_parts.append(clamped)
         else:
             new_parts.append(part)
-    return dest_root.joinpath(*new_parts)
+    result = dest_root.joinpath(*new_parts)
+    # Emit name_too_long warnings only when the clamped result differs from the current path,
+    # i.e. only when a move would actually occur.  Suppressing the warning on no-op moves avoids
+    # chronic re-warning on already-clamped names that are already at their canonical location.
+    if clamped_components and (current_path is None or result != current_path):
+        for original, clamped in clamped_components:
+            log.warning(
+                "name_too_long",
+                component=original,
+                bytes=len(original.encode("utf-8")),
+                limit=_NAME_MAX,
+                shortened=clamped,
+            )
+    return result
 
 
 def _topo_sort_moves(
@@ -1799,7 +1835,7 @@ def repath(  # pylint: disable=too-many-return-statements
             global_track_idx=0,
             group_modal_depth=_repath_modal_by_idx.get(_ri),
         )
-        new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext))
+        new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext), current_path)
 
         if new_dest == current_path:
             log.debug("repath_noop", path=str(current_path.relative_to(dest_root)))
@@ -2266,7 +2302,7 @@ def regroup(  # pylint: disable=too-many-return-statements
             global_track_idx=0,
             group_modal_depth=_regroup_modal_by_idx.get(_ri),
         )
-        new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext))
+        new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext), current_path)
 
         if new_dest == current_path:
             log.debug("regroup_noop", path=str(current_path.relative_to(dest_root)))
@@ -2670,7 +2706,7 @@ def unify(  # pylint: disable=too-many-return-statements
                 global_track_idx=0,
                 group_modal_depth=_unify_modal_by_idx.get(_ui),
             )
-            new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext))
+            new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext), file_path)
 
             if new_dest == file_path:
                 log.debug("unify_noop", path=str(file_path.relative_to(dest_root)))
