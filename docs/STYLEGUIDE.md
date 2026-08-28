@@ -833,6 +833,72 @@ verbatim credit is `_cea_MB_artists` → `CEA_MB_ARTISTS`, already correctly rea
 `ARTIST`.  The assembled composite stays under `CEA_RECORDING_ARTIST`; no rename, no new verbatim
 tag.  Resolved at the S2 juncture (C-RA-GRAMMAR, 2026-07-31).
 
+## Library maintenance: canonical destination (C-CANON, C-NC-TOP)
+
+Two contracts govern how every maintenance pass computes a file's destination path.  Both derive
+from the same root requirement: per-pass idempotence composes into library-wide convergence only
+when every pass derives "where does this file live" from the same inputs.  When any pass uses an
+input another pass cannot see, the composition oscillates at exactly the files where the inputs
+diverge.
+
+### C-CANON — single-source canonical destination
+
+Every move pass (`repath`, `regroup`, `unify`) derives each file's destination from the same
+canonical function over the same durable inputs: the embedded tags as read from disk, plus the
+shared work-group modal-depth computation, threaded identically into every pass.
+
+**No pass may apply a pass-local in-memory tag patch that alters the rendered path.**  A patch
+that is not written to disk is an input no other pass can see; any path it changes will be moved
+back by the next pass that reads the unpatched tags.  The oscillation is not a composition
+defect — it is the correct consequence of a mis-specified canonical.  A pass that needs different
+render inputs to produce its intended result is a signal that the canonical function itself is
+wrong, not a licence to patch around it.
+
+The canonical function is `build_dest_path` (`_tags.py`).  Its inputs are:
+
+- Embedded tags as read from disk (`_tags_from_file_dict` over the on-disk tag dict).
+- The work-group modal depth, computed once per top-work group from `cwp_part_levels` values
+  across all tracks in the group (`work_group_modal_depth`), then threaded as the
+  `group_modal_depth` argument.  Every pass must compute and thread this argument; omitting it
+  causes depth renders to disagree with passes that do thread it.
+
+The SEL-23 ensemble patch (`sel23_ensemble_patch`) is also a shared pre-processing step that must
+run before `build_dest_path` in every pass, for the same reason: it expands
+`cea_album_ensembles_list` from the full release track set, and any pass that skips it will
+compute a different performers component.
+
+### C-NC-TOP — ALBUMARTIST-led top directory for non-classical releases
+
+Non-classical releases take the ALBUMARTIST-led top directory.  The `"<composer> - <performers>"`
+shape requires a real, scholarship-stable composer from embedded tags.  Two manufacturing paths
+are prohibited:
+
+1. **Manufacturing a composer from `ALBUMARTISTSORT`.**  Deriving a composer last-name from the
+   album artist sort name and patching it into `cea_composer_lastnames` in memory produces a
+   path shape the embedded tags do not support.  The patch is never written to disk, so the next
+   pass reads the unpatched tags and computes the ALBUMARTIST-led shape — the oscillation is
+   exact and repeating.  Worse, the manufactured shape is self-defeating: when `ALBUMARTISTSORT`
+   varies per track (or when the album artist is a performer, not a composer), the manufactured
+   component varies per track and scatters a release across multiple top directories — the
+   consolidation pass becomes the fragmentation pass.
+
+2. **Using `"Various"` as a composer.**  `"Various"` is not a composer.  A compilation with no
+   single dominant composer has no composer to lead the top directory; it takes the ALBUMARTIST-led
+   shape.  Routing it to `"Various - <album>"` manufactures a composer-shaped path from a
+   non-composer token, violating the epistemic criterion (P3): no fake scholarship enters library
+   topology.
+
+The discriminator between classical and non-classical is the work-type predicate already backing
+the `IS_CLASSICAL` tag: a file is classical when `cwp_work_top` is non-empty (an MB work link
+exists) AND `cwp_worktype_genres_top` contains `"Classical"`.  This predicate is computable per
+file from durable embedded tags alone — it never depends on a per-run in-memory majority vote or
+on any input not present in the file itself.
+
+`unify`'s role for non-classical releases is consolidation, not composer-manufacture: it gathers
+tracks of a fragmented non-classical release into the single ALBUMARTIST-led top directory that
+`build_dest_path` already produces for every other pass.  The consolidation mechanism is the
+canonical function itself — no pre-processing patch is needed or permitted.
+
 ## Library maintenance: pass composition (C-CONFLUENCE)
 
 The `maintain` action runs the recurring maintenance passes as a single composition over one library
