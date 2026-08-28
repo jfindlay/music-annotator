@@ -204,3 +204,9 @@ C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, NORM-2-as-revised, C-W3b-INT inherited uncha
   arrangement sources with conflicting chains — and over symmetrizing the patch into other passes, which preserves
   two render sources and fragile membership identity).  Divergent embedded chains rendering multiple top dirs is
   accepted as truthful; repair routes through re-annotation (BACKLOG).
+
+### Boundary (S1–S3) — 2026-08-28
+Discovery/flex: none — all three sessions delivered exactly as specified; anneal found W2b/W2c plan coordinate labels in test files (fixed before boundary fork).
+Affected: none
+Deferred: no — the live-fixpoint claim (S4 acceptance) is genuinely deferred to the operator gate; the boundary fork confirmed code/tests track intent; the albumid read-error watch item (~1167 files) is anticipated in the PLAN and does not retroactively invalidate the boundary.
+Texture: boundary fork noted that deleting the chain patch outright means releases with divergent embedded chains now legitimately render multiple top dirs (accepted-as-truthful per operator ruling); S4 should read any such split as expected, not as a new anomaly.
