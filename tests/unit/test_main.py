@@ -2604,3 +2604,200 @@ class TestReconstructXrefsSubcommand:
 
 
 # ---------------------------------------------------------------------------
+# ingest subcommand
+# ---------------------------------------------------------------------------
+
+
+class TestIngestSubcommand:
+    """Tests for the ``ingest`` CLI subcommand.
+
+    Verifies that the subcommand parser is registered correctly, that arguments are forwarded
+    to :func:`~music_annotator.ingest_local`, and that error paths exit with code 1.
+    """
+
+    _INGEST_BASE = ["ingest", "/src/album", "/dest"]
+
+    # ------------------------------------------------------------------
+    # Parser registration
+    # ------------------------------------------------------------------
+
+    def test_ingest_parser_registered(self) -> None:
+        """ingest subcommand is registered in the argument parser.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args(self._INGEST_BASE)
+        assert args.subcommand == "ingest"
+        assert args.src_dir == Path("/src/album")
+        assert args.dest_dir == Path("/dest")
+        assert args.date_unknown is False
+        assert args.dry_run is False
+
+    def test_ingest_date_unknown_flag(self) -> None:
+        """ingest --date-unknown sets date_unknown=True.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args([*self._INGEST_BASE, "--date-unknown"])
+        assert args.date_unknown is True
+
+    def test_ingest_dry_run_flag(self) -> None:
+        """ingest --dry-run sets dry_run=True.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args([*self._INGEST_BASE, "--dry-run"])
+        assert args.dry_run is True
+
+    def test_ingest_requires_src_dir(self) -> None:
+        """ingest exits with code 2 when src_dir positional is missing.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["ingest", "/dest"])
+        assert exc.value.code == 2
+
+    def test_ingest_requires_dest_dir(self) -> None:
+        """ingest exits with code 2 when dest_dir positional is missing.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["ingest"])
+        assert exc.value.code == 2
+
+    def test_ingest_no_release_id_arg(self) -> None:
+        """ingest does not accept --release-id (no MB calls are made).
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args([*self._INGEST_BASE, "--release-id", "abc"])
+        assert exc.value.code == 2
+
+    def test_ingest_no_user_agent_email_arg(self) -> None:
+        """ingest does not accept --user-agent-email (no MB calls are made).
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args([*self._INGEST_BASE, "--user-agent-email", "t@x.com"])
+        assert exc.value.code == 2
+
+    # ------------------------------------------------------------------
+    # Dispatch
+    # ------------------------------------------------------------------
+
+    def test_ingest_dispatches_to_ingest_local(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """ingest subcommand dispatches to ingest_local with correct arguments.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        src_dir = Path("/src/album")
+        dest_dir = Path("/dest")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(dest_dir))
+
+        mock_fn = mocker.patch("music_annotator.ingest_local")
+
+        sys.argv = ["music-annotator", "ingest", str(src_dir), str(dest_dir)]
+        main()
+
+        mock_fn.assert_called_once_with(
+            src_dir=src_dir,
+            dest_root=dest_dir,
+            date_unknown=False,
+            dry_run=False,
+        )
+
+    def test_ingest_date_unknown_forwarded(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """ingest --date-unknown forwards date_unknown=True to ingest_local.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        src_dir = Path("/src/album")
+        dest_dir = Path("/dest")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(dest_dir))
+
+        mock_fn = mocker.patch("music_annotator.ingest_local")
+
+        sys.argv = ["music-annotator", "ingest", str(src_dir), str(dest_dir), "--date-unknown"]
+        main()
+
+        mock_fn.assert_called_once_with(
+            src_dir=src_dir,
+            dest_root=dest_dir,
+            date_unknown=True,
+            dry_run=False,
+        )
+
+    def test_ingest_dry_run_forwarded(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """ingest --dry-run forwards dry_run=True to ingest_local.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        src_dir = Path("/src/album")
+        dest_dir = Path("/dest")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(dest_dir))
+
+        mock_fn = mocker.patch("music_annotator.ingest_local")
+
+        sys.argv = ["music-annotator", "ingest", str(src_dir), str(dest_dir), "--dry-run"]
+        main()
+
+        mock_fn.assert_called_once_with(
+            src_dir=src_dir,
+            dest_root=dest_dir,
+            date_unknown=False,
+            dry_run=True,
+        )
+
+    def test_ingest_src_dir_not_found_exits_1(self, fs: FakeFilesystem) -> None:
+        """ingest exits with code 1 when src_dir does not exist.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_dir = Path("/dest")
+        fs.create_dir(str(dest_dir))
+
+        sys.argv = ["music-annotator", "ingest", "/nonexistent/src", str(dest_dir)]
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    def test_ingest_error_exits_1(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """ingest subcommand exits with code 1 on unhandled exception from ingest_local.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        src_dir = Path("/src/album")
+        dest_dir = Path("/dest")
+        fs.create_dir(str(src_dir))
+        fs.create_dir(str(dest_dir))
+
+        mocker.patch(
+            "music_annotator.ingest_local",
+            side_effect=ValueError("Required tag 'ALBUMARTIST' is missing"),
+        )
+
+        sys.argv = ["music-annotator", "ingest", str(src_dir), str(dest_dir)]
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------

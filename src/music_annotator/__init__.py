@@ -131,6 +131,11 @@ from music_annotator._pipeline_io import (
     rebuild_journal,
     write_transaction_log,
 )
+from music_annotator._pipeline_local import (
+    build_local_track_tags,
+    ingest_local,
+    validate_local_tags,
+)
 from music_annotator._pipeline_maint import (
     DuplicateResolution,
     dedup_library,
@@ -219,6 +224,9 @@ __all__ = [
     "repath",
     "run",
     "unify",
+    "validate_local_tags",
+    "build_local_track_tags",
+    "ingest_local",
     "parse_disc_info_yaml",
     "parse_disc_title",
     "parse_disc_toc",

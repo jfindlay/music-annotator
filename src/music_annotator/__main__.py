@@ -1,10 +1,13 @@
 """CLI entry point for music-annotator.
 
-Configures structlog for human-friendly console output and exposes fourteen subcommands:
+Configures structlog for human-friendly console output and exposes fifteen subcommands:
 
 * ``apply``                    — copy and tag a directory of tracks for a known MusicBrainz release MBID.
 * ``search``                   — search MusicBrainz for a release matching a source directory, prompt for
   confirmation, then apply tags.
+* ``ingest``                   — copy and tag a never-in-MB release from a pre-tagged source directory at
+  the ``source-tags-only`` annotation tier.  Mints a local accession UUID into
+  ``MUSICANNOTATOR_RELEASEID`` on every track.  No MusicBrainz calls are made.
 * ``prune``                    — read the journal, verify source and destination file presence, and prompt to
   delete the source directory.
 * ``repath``                   — re-path all verified library files to their corrected destinations under
@@ -53,6 +56,11 @@ Usage::
         --user-agent-email contact@example.com \\
         [--user-agent-app "MyApp/1.0"] \\
         [--limit 10] [--dry-run] [--no-fetch-rels] [--delete] [--no-cache]
+
+    music-annotator ingest \\
+        <src_dir> <dest_dir> \\
+        [--date-unknown] \\
+        [--dry-run]
 
     music-annotator prune \\
         <src_dir> <dest_dir> \\
@@ -275,6 +283,32 @@ def _add_common_args(parser: argparse.ArgumentParser) -> None:
     _add_acoustid_arg(parser)
 
 
+def _add_local_ingest_args(parser: argparse.ArgumentParser) -> None:
+    """Add arguments specific to the ``ingest`` subcommand.
+
+    The ``ingest`` verb accepts only ``src_dir``, ``dest_dir``, ``--date-unknown``, and
+    ``--dry-run``.  No MusicBrainz user-agent arguments are accepted because no MB calls are
+    made.  No ``--release-id`` is accepted because the accession UUID is minted locally.
+
+    :param parser: The subcommand parser to which the arguments are added.
+    """
+    parser.add_argument(
+        "--date-unknown",
+        action="store_true",
+        dest="date_unknown",
+        help=(
+            "Affirm that the release date is genuinely unknown.  "
+            "Accepts a missing or empty DATE tag and renders no [rel YYYY] suffix in the "
+            "destination path.  Without this flag, a missing DATE is a gate failure."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log planned operations without copying or writing any files.",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the top-level CLI argument parser with all subcommands.
 
@@ -283,7 +317,10 @@ def _build_parser() -> argparse.ArgumentParser:
     ``search`` and ``prune`` accept one or more ``src_dir`` positionals so an entire staging area can be
     processed in a single invocation.  ``dest_dir`` is always singular — all sources share the same library
     root.  ``apply`` and ``search`` share ``--user-agent-app``, ``--user-agent-email``, ``--dry-run``,
-    ``--no-fetch-rels``, and ``--delete`` via :func:`_add_common_args`.  ``prune`` only adds ``-y``/``--yes``.
+    ``--no-fetch-rels``, and ``--delete`` via :func:`_add_common_args`.  ``ingest`` takes a single
+    ``src_dir`` and ``dest_dir`` positional, plus ``--date-unknown`` and ``--dry-run`` via
+    :func:`_add_local_ingest_args`; no user-agent or release-id arguments are accepted because no MB
+    calls are made.  ``prune`` only adds ``-y``/``--yes``.
     ``repath`` takes only ``dest_dir`` and an optional ``--dry-run`` flag.
     ``audit`` takes only ``dest_dir`` and requires no network credentials (read-only journal analysis).
     ``enrich`` retroactively backfills fingerprint fields; accepts ``--dry-run``, ``--re-resolve``, and
@@ -297,8 +334,8 @@ def _build_parser() -> argparse.ArgumentParser:
     ``unify`` scans the library for releases fragmented across ≥2 top_dirs (by ``MUSICBRAINZ_ALBUMID`` tag),
     computes the canonical top_dir for each, and moves the fragments.  Supports ``--dry-run`` and ``-y``/``--yes``.
     ``maintain`` runs all recurring maintenance passes as a single composition; accepts ``--dry-run``,
-    ``-y``/``--yes``, and ``--json PATH``.  Move-confirmation prompts are suppressible by ``--yes``;
-    integrity prompts are not.  When ``--dry-run`` is supplied, a consolidated report is emitted
+    ``-y``/``--yes``, and ``--json PATH``.  Move-confirmation prompts are suppressible by ``--yes`` but
+    integrity prompts are never suppressed.  When ``--dry-run`` is supplied, a consolidated report is emitted
     covering all seven passes; ``--json PATH`` serialises the report to JSON.
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
@@ -424,6 +461,59 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Maximum number of MusicBrainz search candidates to display.",
     )
     _add_common_args(search_parser)
+
+    # ------------------------------------------------------------------
+    # ingest subcommand
+    # ------------------------------------------------------------------
+    ingest_parser = subparsers.add_parser(
+        "ingest",
+        help="Copy and tag a never-in-MB release from a pre-tagged source directory at source-tags-only tier.",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Ingests a release that has no MusicBrainz identity and will never acquire one (e.g.
+            a self-recorded chamber performance).  The source directory must be pre-tagged with
+            standard Vorbis/Picard vocabulary satisfying the required tag set:
+
+              Required non-empty: ALBUMARTIST, ALBUM, TITLE (per track), TRACKNUMBER (per track,
+              unique and contiguous 1..n).
+
+              DATE: required unless --date-unknown is supplied.  A missing DATE without
+              --date-unknown is a gate failure (distinguishes "declared unknown" from "forgot").
+
+              CWP_* composer/work fields: optional.  Supply them only when the knowledge is
+              genuinely possessed; their presence routes the composer-led path branch.
+
+            A single UUIDv4 accession ID is minted and embedded in every track as
+            MUSICANNOTATOR_RELEASEID.  It is never written to MUSICBRAINZ_ALBUMID.
+
+            No MusicBrainz network calls are made.
+
+            Examples:
+              music-annotator ingest \\
+                  "/mnt/music/My Chamber Recording" /tmp/music_library
+
+              music-annotator ingest \\
+                  "/mnt/music/Undated Session" /tmp/music_library \\
+                  --date-unknown
+
+              music-annotator ingest \\
+                  "/mnt/music/My Chamber Recording" /tmp/music_library \\
+                  --dry-run
+            """),
+    )
+    ingest_parser.add_argument(
+        "src_dir",
+        metavar="src_dir",
+        type=_resolve_path,
+        help="Directory containing the source audio files to copy and tag.",
+    )
+    ingest_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root destination directory for the annotated music library.",
+    )
+    _add_local_ingest_args(ingest_parser)
 
     # ------------------------------------------------------------------
     # prune subcommand
@@ -965,14 +1055,16 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     """Parse CLI arguments, configure logging, and dispatch to subcommands.
 
-    Supported subcommands: ``apply``, ``search``, ``prune``, ``repath``, ``regroup``, ``audit``,
-    ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``, ``reconstruct-xrefs``,
-    ``dedup-library``, ``maintain``.
+    Supported subcommands: ``apply``, ``search``, ``ingest``, ``prune``, ``repath``, ``regroup``,
+    ``audit``, ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``,
+    ``reconstruct-xrefs``, ``dedup-library``, ``maintain``.
 
-    The ``repath`` subcommand dispatches to :func:`~music_annotator.repath` with ``dry_run`` and
-    ``yes`` forwarded from the parsed arguments.  The ``regroup`` subcommand dispatches to
-    :func:`~music_annotator.regroup` with ``yes`` and ``dry_run`` forwarded.  The ``audit``
-    subcommand dispatches to :func:`~music_annotator.audit` (read-only).  The ``enrich``
+    The ``ingest`` subcommand dispatches to :func:`~music_annotator.ingest_local` with
+    ``date_unknown`` and ``dry_run`` forwarded.  No MusicBrainz user-agent is required because
+    no MB calls are made.  The ``repath`` subcommand dispatches to :func:`~music_annotator.repath`
+    with ``dry_run`` and ``yes`` forwarded from the parsed arguments.  The ``regroup`` subcommand
+    dispatches to :func:`~music_annotator.regroup` with ``yes`` and ``dry_run`` forwarded.  The
+    ``audit`` subcommand dispatches to :func:`~music_annotator.audit` (read-only).  The ``enrich``
     subcommand dispatches to :func:`~music_annotator.enrich` with ``re_resolve``, ``dry_run``,
     and ``acoustid_key`` forwarded.  The ``diff`` subcommand dispatches to
     :func:`~music_annotator.diff_journal`.  The ``origin-time`` subcommand dispatches to
@@ -1048,6 +1140,21 @@ def main() -> None:
                     acoustid_key=args.acoustid_key,
                 ),
                 "fatal_error",
+            )
+
+        case "ingest":
+            if not args.src_dir.is_dir():
+                log.error("src_dir_not_found", path=str(args.src_dir))
+                sys.exit(1)
+            _dispatch(
+                lambda: music_annotator.ingest_local(
+                    src_dir=args.src_dir,
+                    dest_root=args.dest_dir,
+                    date_unknown=args.date_unknown,
+                    dry_run=args.dry_run,
+                ),
+                "ingest_error",
+                src_dir=str(args.src_dir),
             )
 
         case "prune":

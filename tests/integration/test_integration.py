@@ -1,4 +1,4 @@
-"""Integration tests for music_annotator.run(), discover(), and unify().
+"""Integration tests for music_annotator.run(), discover(), unify(), and ingest_local().
 
 These tests exercise the full pipeline end-to-end against a fabricated release.  All MusicBrainz API calls are replaced by
 pytest-mock stubs and all file I/O is handled by pyfakefs so no real network or disk access occurs.  Internal helpers such as
@@ -3318,3 +3318,363 @@ class TestCInitIntegration:
         work_top = _work_top_dir(flac_files[0], dest)
         prov_path = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
         assert prov_path.exists(), f"provenance sidecar must be written at {prov_path}"
+
+
+# ---------------------------------------------------------------------------
+# Local-accession ingest integration tests (C-LOCAL-ID, C-ACCESSION-GATE)
+# ---------------------------------------------------------------------------
+
+
+def _write_local_tags_flac(path: Path, tags: TrackTags) -> None:
+    """Write Vorbis comment tags to a FLAC file using mutagen directly.
+
+    Used to pre-tag source files for local-ingest integration tests.  Only the fields
+    consumed by the C-ACCESSION-GATE gate and by :func:`~music_annotator._tags.build_dest_path`
+    are written; all others default to empty.
+
+    :param path: Path to the FLAC file (must already exist with valid FLAC bytes).
+    :param tags: :class:`~music_annotator.models.TrackTags` whose non-empty fields are written.
+    """
+    audio = FLAC(str(path))
+    for key, value in tags.to_file_dict().items():
+        if value:
+            audio[key] = [value]
+    audio.save(str(path))
+
+
+class TestLocalIngestIntegration:
+    """Integration KATs for :func:`~music_annotator.ingest_local`.
+
+    Exercises the full ingest verb end-to-end: gate validation, UUID minting, copy→SHA→tag→verify→
+    journal chain, and provenance sidecar.  No internal helpers are patched; the real mutagen
+    write-and-read-back path executes.
+    """
+
+    def test_end_to_end_local_ingest_flac(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """End-to-end local ingest: FLAC source lands at build_dest_path with correct tier and UUID.
+
+        Verifies KAT 1 (end-to-end), KAT 3 (MUSICBRAINZ_ALBUMID stays empty), and KAT 4
+        (confirmation-provenance: "tagged" entry appended only after _verify_copy passes).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        src = Path("/src/local_album")
+        dest = Path("/dest/library")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+
+        # Write pre-tagged FLAC source files.
+        for i in (1, 2):
+            p = src / f"0{i} - track{i}.flac"
+            p.write_bytes(_MINIMAL_FLAC)
+            _write_local_tags_flac(
+                p,
+                TrackTags(
+                    albumartist="Self-Recorded Ensemble",
+                    album="Chamber Session 2024",
+                    title=f"Movement {i}",
+                    tracknumber=str(i),
+                    date="2024",
+                ),
+            )
+
+        music_annotator.ingest_local(src_dir=src, dest_root=dest)
+
+        # Destination FLAC files must exist.
+        dest_flacs = sorted(dest.rglob("*.flac"))
+        assert len(dest_flacs) == 2, f"expected 2 FLAC files, got {len(dest_flacs)}"
+
+        # Every track must carry the accession UUID in MUSICANNOTATOR_RELEASEID.
+        uuids: set[str] = set()
+        for f in dest_flacs:
+            audio = FLAC(str(f))
+            rel_id = audio.get("musicannotator_releaseid", [""])[0]
+            assert rel_id, f"MUSICANNOTATOR_RELEASEID must be non-empty in {f}"
+            uuids.add(rel_id)
+
+        # All tracks share exactly one UUID (KAT 2 partial: one UUID per release).
+        assert len(uuids) == 1, f"all tracks must share one accession UUID, got {uuids}"
+
+        # MUSICBRAINZ_ALBUMID must be absent / empty (KAT 3: never-mint rule).
+        for f in dest_flacs:
+            audio = FLAC(str(f))
+            mb_id = audio.get("musicbrainz_albumid", [""])[0]
+            assert not mb_id, f"MUSICBRAINZ_ALBUMID must be empty in {f}, got {mb_id!r}"
+
+        # Annotation tier must be source-tags-only (KAT 1).
+        work_top = _work_top_dir(dest_flacs[0], dest)
+        prov_path_local = _find_freedb_sidecar(work_top) or (work_top / PROVENANCE_FILENAME)
+        assert prov_path_local.exists(), f"provenance sidecar must be written at {prov_path_local}"
+        prov = _read_provenance_sidecar(prov_path_local)
+        assert prov.annotation_tier == AnnotationTier.SOURCE_TAGS_ONLY, (
+            f"expected source-tags-only tier, got {prov.annotation_tier!r}"
+        )
+        assert not prov.needs_spot_check, "needs_spot_check must be False for source-tags-only"
+
+        # Journal must have one "tagged" entry per track (KAT 1, KAT 4).
+        journal_path = dest / JOURNAL_FILENAME
+        assert journal_path.exists(), "journal must be written"
+        entries = _read_jsonl_journal(journal_path)
+        tagged = [e for e in entries if e.get("action") == "tagged"]
+        assert len(tagged) == 2, f"expected 2 tagged journal entries, got {len(tagged)}"
+
+        # Every "tagged" entry must carry the accession UUID as release_id (KAT 1).
+        accession_uuid = next(iter(uuids))
+        for entry in tagged:
+            assert entry.get("release_id") == accession_uuid, (
+                f"journal entry release_id must equal accession UUID, got {entry.get('release_id')!r}"
+            )
+
+    def test_one_uuid_per_release_two_ingests_differ(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Two independent ingests mint different UUIDs (KAT 2: never reused or reassigned).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        for run_idx in (1, 2):
+            src = Path(f"/src/album{run_idx}")
+            dest = Path(f"/dest/lib{run_idx}")
+            fs.create_dir(str(src))
+            fs.create_dir(str(dest))
+            p = src / "01 - track.flac"
+            p.write_bytes(_MINIMAL_FLAC)
+            _write_local_tags_flac(
+                p,
+                TrackTags(
+                    albumartist="Ensemble",
+                    album=f"Album {run_idx}",
+                    title="Track",
+                    tracknumber="1",
+                    date="2024",
+                ),
+            )
+            music_annotator.ingest_local(src_dir=src, dest_root=dest)
+
+        # Collect UUIDs from both destinations.
+        all_uuids: list[str] = []
+        for run_idx in (1, 2):
+            dest = Path(f"/dest/lib{run_idx}")
+            for f in dest.rglob("*.flac"):
+                audio = FLAC(str(f))
+                rel_id = audio.get("musicannotator_releaseid", [""])[0]
+                all_uuids.append(rel_id)
+
+        assert len(all_uuids) == 2, f"expected 2 UUID values, got {all_uuids}"
+        assert all_uuids[0] != all_uuids[1], f"two independent ingests must mint different UUIDs, got {all_uuids[0]!r} twice"
+
+    def test_dry_run_writes_nothing(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Dry-run mode reports the plan but writes no files and no journal entries (KAT 5).
+
+        Also covers the branch where dest_root does not exist in dry-run mode (no mkdir is
+        performed — dry-run must not create the destination directory).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        src = Path("/src/dry_album")
+        dest = Path("/dest/dry_lib")
+        fs.create_dir(str(src))
+        # dest is intentionally NOT pre-created to cover the dry-run / dest-absent branch.
+
+        p = src / "01 - track.flac"
+        p.write_bytes(_MINIMAL_FLAC)
+        _write_local_tags_flac(
+            p,
+            TrackTags(
+                albumartist="Ensemble",
+                album="Dry Run Album",
+                title="Track",
+                tracknumber="1",
+                date="2024",
+            ),
+        )
+
+        music_annotator.ingest_local(src_dir=src, dest_root=dest, dry_run=True)
+
+        # No FLAC files must be written to dest.
+        dest_flacs = list(dest.rglob("*.flac"))
+        assert not dest_flacs, f"dry-run must write no FLAC files, got {dest_flacs}"
+
+        # No journal must be written.
+        journal_path = dest / JOURNAL_FILENAME
+        assert not journal_path.exists(), "dry-run must not write a journal"
+
+    def test_gate_rejection_missing_albumartist(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Gate rejects a source dir missing ALBUMARTIST; no files written (KAT 6).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        src = Path("/src/bad_album")
+        dest = Path("/dest/bad_lib")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+
+        p = src / "01 - track.flac"
+        p.write_bytes(_MINIMAL_FLAC)
+        # Intentionally omit ALBUMARTIST.
+        _write_local_tags_flac(
+            p,
+            TrackTags(
+                album="Album",
+                title="Track",
+                tracknumber="1",
+                date="2024",
+            ),
+        )
+
+        with pytest.raises(ValueError, match="ALBUMARTIST"):
+            music_annotator.ingest_local(src_dir=src, dest_root=dest)
+
+        # No destination files must be written.
+        assert not list(dest.rglob("*.flac")), "gate failure must produce no destination files"
+        assert not (dest / JOURNAL_FILENAME).exists(), "gate failure must produce no journal"
+
+    def test_gate_rejection_silently_missing_date(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """Gate rejects a source dir with a silently-missing DATE (no date_unknown=True) (KAT 6).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        src = Path("/src/nodate_album")
+        dest = Path("/dest/nodate_lib")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+
+        p = src / "01 - track.flac"
+        p.write_bytes(_MINIMAL_FLAC)
+        # DATE is absent and date_unknown=False (default) — gate failure.
+        _write_local_tags_flac(
+            p,
+            TrackTags(
+                albumartist="Ensemble",
+                album="Album",
+                title="Track",
+                tracknumber="1",
+            ),
+        )
+
+        with pytest.raises(ValueError, match="DATE"):
+            music_annotator.ingest_local(src_dir=src, dest_root=dest)
+
+        assert not list(dest.rglob("*.flac")), "gate failure must produce no destination files"
+        assert not (dest / JOURNAL_FILENAME).exists(), "gate failure must produce no journal"
+
+    def test_date_unknown_flag_accepted(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """date_unknown=True accepts a missing DATE and renders no [rel YYYY] suffix.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        src = Path("/src/undated_album")
+        dest = Path("/dest/undated_lib")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+
+        p = src / "01 - track.flac"
+        p.write_bytes(_MINIMAL_FLAC)
+        _write_local_tags_flac(
+            p,
+            TrackTags(
+                albumartist="Ensemble",
+                album="Undated Album",
+                title="Track",
+                tracknumber="1",
+                # DATE intentionally absent.
+            ),
+        )
+
+        # Must not raise with date_unknown=True.
+        music_annotator.ingest_local(src_dir=src, dest_root=dest, date_unknown=True)
+
+        dest_flacs = list(dest.rglob("*.flac"))
+        assert len(dest_flacs) == 1, f"expected 1 FLAC file, got {dest_flacs}"
+
+        # Destination path must not contain a [rel YYYY] component.
+        rel_path = str(dest_flacs[0].relative_to(dest))
+        assert "[rel " not in rel_path, f"date_unknown path must have no [rel YYYY] suffix, got {rel_path!r}"
+
+    def test_dest_root_created_when_absent(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """ingest_local creates dest_root when it does not exist yet.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        src = Path("/src/new_album")
+        dest = Path("/dest/new_lib")
+        fs.create_dir(str(src))
+        # dest is intentionally NOT pre-created.
+
+        p = src / "01 - track.flac"
+        p.write_bytes(_MINIMAL_FLAC)
+        _write_local_tags_flac(
+            p,
+            TrackTags(
+                albumartist="Ensemble",
+                album="New Album",
+                title="Track",
+                tracknumber="1",
+                date="2024",
+            ),
+        )
+
+        music_annotator.ingest_local(src_dir=src, dest_root=dest)
+
+        dest_flacs = list(dest.rglob("*.flac"))
+        assert len(dest_flacs) == 1, f"expected 1 FLAC file, got {dest_flacs}"
+
+    def test_end_to_end_local_ingest_mp3(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """End-to-end local ingest with MP3 source: UUID embedded in TXXX frame.
+
+        Verifies that the MUSICANNOTATOR_RELEASEID is written as a TXXX frame with description
+        "MusicAnnotator Release Id" (C-LOCAL-ID MP3 contract), and that MUSICBRAINZ_ALBUMID
+        is absent (KAT 3).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs filesystem fixture.
+        """
+        mocker.patch("music_annotator._pipeline._run_fpcalc", return_value="")
+        src = Path("/src/mp3_album")
+        dest = Path("/dest/mp3_lib")
+        fs.create_dir(str(src))
+        fs.create_dir(str(dest))
+
+        p = src / "01 - track.mp3"
+        p.write_bytes(_MINIMAL_MP3)
+        # Write required tags via apply_tags_mp3 (pyfakefs-compatible).
+        apply_tags_mp3(
+            p,
+            TrackTags(
+                title="MP3 Track",
+                albumartist="MP3 Ensemble",
+                album="MP3 Album",
+                tracknumber="1",
+                date="2024",
+            ),
+        )
+
+        music_annotator.ingest_local(src_dir=src, dest_root=dest)
+
+        dest_mp3s = list(dest.rglob("*.mp3"))
+        assert len(dest_mp3s) == 1, f"expected 1 MP3 file, got {dest_mp3s}"
+
+        # MUSICANNOTATOR_RELEASEID must be in a TXXX frame with the correct description.
+        audio_out = ID3(str(dest_mp3s[0]))  # type: ignore[no-untyped-call]
+        txxx_frames = {f.desc: f.text[0] for f in audio_out.getall("TXXX")}  # type: ignore[no-untyped-call]
+        assert "MusicAnnotator Release Id" in txxx_frames, (
+            f"TXXX 'MusicAnnotator Release Id' must be present, got TXXX descs: {list(txxx_frames)}"
+        )
+        rel_id = txxx_frames["MusicAnnotator Release Id"]
+        assert rel_id, "MUSICANNOTATOR_RELEASEID must be non-empty"
+
+        # MUSICBRAINZ_ALBUMID must be absent (KAT 3).
+        mb_txxx = txxx_frames.get("MusicBrainz Album Id", "")
+        assert not mb_txxx, f"MUSICBRAINZ_ALBUMID must be empty in MP3, got {mb_txxx!r}"
