@@ -220,7 +220,7 @@ release routes through the same `build_dest_path` shape).  The epistemic criteri
 
 | # | Session                                                                   | Status  | Commit | Froze          |
 |---|---------------------------------------------------------------------------|---------|--------|----------------|
-| S1 | Add MUSICANNOTATOR_RELEASEID accession-identity tag (FLAC + MP3 TXXX)      | pending | —      | C-LOCAL-ID     |
+| S1 | Add MUSICANNOTATOR_RELEASEID accession-identity tag (FLAC + MP3 TXXX)      | done    | 9bd7b4e | C-LOCAL-ID    |
 | S2 | Validate operator tag set and build renderable TrackTags for local ingest | pending | —      | C-ACCESSION-GATE |
 | S3 | Add local-ingest verb: mint accession UUID, journal at source-tags-only   | pending | —      | —              |
 
