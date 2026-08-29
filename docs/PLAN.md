@@ -195,7 +195,7 @@ ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and cove
 
 | ID | Title                                                                          | Status | Commit | Notes |
 |----|--------------------------------------------------------------------------------|--------|--------|-------|
-| S1 | Journal the cross-reference a fixed write-bug suppressed for evidence-gap survivors (C-AMEND) | todo   | —      | Wire the report-only evidence-gap path to append a truthful `"cross-referenced"` entry sourced from the survivor's embedded secondary MBID via `_write_xref_and_journal`; idempotent noop on re-run; C-PROV/C-MOVE preserved. Acceptance folded into the operator's own `reconstruct-xrefs`/`maintain` run on hades (the five candidates gain journal-provable entries; the gap list empties; a re-run is a noop). |
+| S1 | Journal the cross-reference a fixed write-bug suppressed for evidence-gap survivors (C-AMEND) | done   | be68c38 | All 5 KATs pass (suppressed-entry reconstructed, idempotent noop, already-provable untouched, empty-evidence not amendable, C-PROV/C-MOVE preserved) plus multi-MBID / declined / dry-run / MP3 coverage. Amendment appends via existing `_write_xref_and_journal`; strictly append-only, sourced solely from embedded secondary MBID. Awaiting operator acceptance run on hades (`reconstruct-xrefs`/`maintain`): five candidates gain journal-provable entries, gap list empties, re-run is a noop. |
 
 Frozen contracts: C-AMEND (frozen at this derivation, operator ruling 2026-08-29: a one-time truthful amendment —
 append-only, sourced from surviving embedded evidence, recording what the current correct code would have journalled —
@@ -264,3 +264,18 @@ Reconciliation confidence: HIGH.  Confirmed by direct code read — the detectio
   already present) rather than a journal-only append; this is marginally more work than a pure append but keeps a single
   C-PROV write path and its read-back verification shared with the primary xref case — chosen for simplicity and one
   verification surface over a second journal-only code path.
+
+### S1 — 2026-08-29 (this sub-track)
+Discovery/flex: none — the design held exactly as adjudicated.  The amendment reused `_write_xref_and_journal`
+  unchanged; the tag write is a verified set-union no-op for the already-embedded case and only the `"cross-referenced"`
+  append is new.  All 5 KATs plus multi-MBID / declined-prompt / dry-run / MP3 coverage pass; full gate green (2040
+  tests, 100% branch, mypy/pylint/ruff/pyupgrade clean).
+Affected: C-AMEND (implemented as specified; append-only, sourced solely from embedded evidence, idempotent via the
+  existing census exclusion at the resolved current path).  No inherited contract flexed.
+Deferred: yes — operator acceptance on hades is the remaining gate (folded into the operator's own `reconstruct-xrefs`
+  or `maintain` run by design, not a separate planned session).  Acceptance predicate: the five survivors gain
+  journal-provable entries, the evidence-gap report empties, and a re-run appends nothing.  On acceptance, rewrite this
+  PLAN at the boundary.
+Texture: implementation session was interrupted mid-run; recovery was by re-deriving state from disk (git status +
+  full gate + KAT presence grep) rather than trusting a returned summary — the "state lives on disk" invariant carried
+  the recovery cleanly, the tree was green and complete on inspection.
