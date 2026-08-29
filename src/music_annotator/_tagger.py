@@ -119,6 +119,8 @@ _MP3_TXXX_MAP: dict[str, str] = {
     "PUBLISHED_DATE": "PUBLISHED_DATE",
     "PREMIERED_DATE": "PREMIERED_DATE",
     "MUSICBRAINZ_RELEASETRACKID": "MusicBrainz Release Track Id",
+    # Local accession identity (C-LOCAL-ID) — own namespace, TXXX-only, never a standard ID3 frame.
+    "MUSICANNOTATOR_RELEASEID": "MusicAnnotator Release Id",
     "ACOUSTID_ID": "Acoustid Id",
     "AUDIO_HASH": "Audio Hash",
     "ACOUSTID_FINGERPRINT": "Acoustid Fingerprint",

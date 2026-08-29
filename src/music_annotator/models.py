@@ -1396,6 +1396,17 @@ class TrackTags(BaseModel):
     producer: str = ""
     engineer: str = ""
 
+    # Local accession identity (C-LOCAL-ID).  The MUSICANNOTATOR_* namespace is the local
+    # provenance namespace; this is its first member.  Never mint into musicbrainz_albumid —
+    # the accession ID and the MB ID are independent fields.
+    musicannotator_releaseid: str = ""
+    """Locally-minted UUIDv4 that permanently identifies a never-in-MB release.
+
+    Carried in every track of the release as the Vorbis comment ``musicannotator_releaseid``
+    (FLAC) or MP3 TXXX frame with desc ``"MusicAnnotator Release Id"``.  Retained, never
+    reused.  Independent of ``musicbrainz_albumid``: setting one never populates the other.
+    """
+
     # MusicBrainz IDs
     musicbrainz_albumid: str = ""
     musicbrainz_trackid: str = ""

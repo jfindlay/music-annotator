@@ -1782,3 +1782,150 @@ class TestAcoustidTagPolicy:
         """
         tags = TrackTags(acoustid_fingerprint="")
         assert tags.acoustid_id == "", "acoustid_id must be empty when no fingerprint is available (empty-not-fallback rule)"
+
+
+# ---------------------------------------------------------------------------
+# KAT: Local accession identity tag substrate (C-LOCAL-ID freeze witness)
+# ---------------------------------------------------------------------------
+
+
+class TestLocalAccessionIdentityTag:
+    """KAT witnesses for the C-LOCAL-ID accession-identity tag substrate.
+
+    Four groups:
+    (a) FLAC round-trip — ``musicannotator_releaseid`` writes the lowercase Vorbis comment
+        ``musicannotator_releaseid`` and reads back equal.
+    (b) MP3 round-trip — the same value lands in a TXXX frame with desc
+        ``"MusicAnnotator Release Id"`` and reads back equal.
+    (c) Empty-not-written — ``musicannotator_releaseid=""`` produces no FLAC comment and no
+        MP3 TXXX frame (same discipline as every other optional ``TrackTags`` field).
+    (d) Namespace independence — ``musicannotator_releaseid`` and ``musicbrainz_albumid`` are
+        independent fields; setting one never populates the other (the never-mint rule).
+    """
+
+    # --- (a) FLAC round-trip ---
+
+    def test_flac_round_trip_musicannotator_releaseid(self, fs: FakeFilesystem) -> None:
+        """TrackTags.musicannotator_releaseid writes lowercase Vorbis comment and reads back equal.
+
+        Pins the FLAC write path: the field is serialised by ``to_file_dict()`` as the uppercase
+        key ``MUSICANNOTATOR_RELEASEID``, which ``apply_tags_flac`` lowercases to the Vorbis
+        comment ``musicannotator_releaseid``.
+
+        :param fs: pyfakefs fixture.
+        :raises AssertionError: if the Vorbis comment is absent or has the wrong value.
+        """
+        dest = Path("/lib")
+        fs.create_dir(str(dest))
+        path = dest / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+
+        uuid_val = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        tags = TrackTags(musicannotator_releaseid=uuid_val)
+        apply_tags_flac(path, tags)
+
+        audio = FLAC(str(path))
+        assert (audio.get("musicannotator_releaseid") or [""])[0] == uuid_val
+
+    # --- (b) MP3 round-trip ---
+
+    def test_mp3_round_trip_musicannotator_releaseid(self, fs: FakeFilesystem) -> None:
+        """TrackTags.musicannotator_releaseid writes TXXX 'MusicAnnotator Release Id' and reads back equal.
+
+        Pins the MP3 write path: the field is written as a TXXX frame with desc
+        ``"MusicAnnotator Release Id"`` via the ``_MP3_TXXX_MAP`` loop in ``apply_tags_mp3``.
+
+        :param fs: pyfakefs fixture.
+        :raises AssertionError: if the TXXX frame is absent or has the wrong value.
+        """
+        dest = Path("/lib")
+        fs.create_dir(str(dest))
+        path = dest / "track.mp3"
+        path.write_bytes(_MINIMAL_MP3)
+
+        uuid_val = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        tags = TrackTags(musicannotator_releaseid=uuid_val)
+        apply_tags_mp3(path, tags)
+
+        audio = ID3(str(path))  # type: ignore[no-untyped-call]
+        txxx_frames = {f.desc: f.text[0] for f in audio.getall("TXXX")}  # type: ignore[no-untyped-call]
+        assert txxx_frames.get("MusicAnnotator Release Id") == uuid_val
+
+    # --- (c) Empty-not-written ---
+
+    def test_empty_musicannotator_releaseid_not_written_flac(self, fs: FakeFilesystem) -> None:
+        """musicannotator_releaseid="" produces no Vorbis comment in the FLAC file.
+
+        Pins the empty-not-written discipline: ``to_file_dict()`` excludes empty-string fields,
+        so no ``musicannotator_releaseid`` comment is written when the field is empty.
+
+        :param fs: pyfakefs fixture.
+        :raises AssertionError: if the Vorbis comment is present when the field is empty.
+        """
+        dest = Path("/lib")
+        fs.create_dir(str(dest))
+        path = dest / "track.flac"
+        path.write_bytes(_MINIMAL_FLAC)
+
+        tags = TrackTags(musicannotator_releaseid="")
+        apply_tags_flac(path, tags)
+
+        audio = FLAC(str(path))
+        assert not audio.get("musicannotator_releaseid"), "musicannotator_releaseid must not be written when empty"
+
+    def test_empty_musicannotator_releaseid_not_written_mp3(self, fs: FakeFilesystem) -> None:
+        """musicannotator_releaseid="" produces no TXXX frame in the MP3 file.
+
+        Pins the empty-not-written discipline for MP3: no TXXX frame with desc
+        ``"MusicAnnotator Release Id"`` is written when the field is empty.
+
+        :param fs: pyfakefs fixture.
+        :raises AssertionError: if the TXXX frame is present when the field is empty.
+        """
+        dest = Path("/lib")
+        fs.create_dir(str(dest))
+        path = dest / "track.mp3"
+        path.write_bytes(_MINIMAL_MP3)
+
+        tags = TrackTags(musicannotator_releaseid="")
+        apply_tags_mp3(path, tags)
+
+        audio = ID3(str(path))  # type: ignore[no-untyped-call]
+        txxx_frames = {f.desc: f.text[0] for f in audio.getall("TXXX")}  # type: ignore[no-untyped-call]
+        assert "MusicAnnotator Release Id" not in txxx_frames, (
+            "MusicAnnotator Release Id TXXX frame must not be written when musicannotator_releaseid is empty"
+        )
+
+    # --- (d) Namespace independence ---
+
+    def test_namespace_independence_releaseid_does_not_populate_albumid(self) -> None:
+        """Setting musicannotator_releaseid never populates musicbrainz_albumid.
+
+        Pins the never-mint rule at the type level: the two fields are independent; the local
+        accession ID and the MB release ID occupy separate ``TrackTags`` fields and neither
+        derives from the other.
+
+        :raises AssertionError: if musicbrainz_albumid is non-empty after setting only
+            musicannotator_releaseid.
+        """
+        uuid_val = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        tags = TrackTags(musicannotator_releaseid=uuid_val)
+        assert tags.musicannotator_releaseid == uuid_val
+        assert tags.musicbrainz_albumid == "", (
+            "musicbrainz_albumid must remain empty when only musicannotator_releaseid is set (never-mint rule)"
+        )
+
+    def test_namespace_independence_albumid_does_not_populate_releaseid(self) -> None:
+        """Setting musicbrainz_albumid never populates musicannotator_releaseid.
+
+        Pins the never-mint rule in the other direction: a TrackTags constructed with only an MB
+        release ID leaves the local accession field empty.
+
+        :raises AssertionError: if musicannotator_releaseid is non-empty after setting only
+            musicbrainz_albumid.
+        """
+        tags = TrackTags(musicbrainz_albumid="some-mb-release-id")
+        assert tags.musicbrainz_albumid == "some-mb-release-id"
+        assert tags.musicannotator_releaseid == "", (
+            "musicannotator_releaseid must remain empty when only musicbrainz_albumid is set (never-mint rule)"
+        )
