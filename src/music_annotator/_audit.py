@@ -8,8 +8,8 @@ The three identity-integrity passes (journal scan, tag adjudication, audio ancho
 are implemented as private helpers and called by :func:`audit`.  The tier-enumeration pass
 (:func:`_audit_tier_pass`) reads ``annotation_tier`` from each work directory's provenance sidecar
 and counts per-tier, provisional, and spot-check populations.  The fragmentation-detection
-helpers (:func:`_journal_fragmentation_groups`, :func:`_confirm_fragmentation`) are also private
-and called by :func:`audit` and :func:`detect_fragmented_releases`.
+helper (:func:`_confirm_fragmentation`) is also private and called by :func:`audit` and
+:func:`detect_fragmented_releases`.
 """
 # pylint: disable=duplicate-code  # journal-entry iteration and library-walk patterns are
 # structurally identical to _pipeline_io.py; the duplication is inherent to the module split.
@@ -31,6 +31,7 @@ from music_annotator._pipeline_io import (
     _read_albumid_tag,
     _read_audio_hash_tag,
     _read_provenance_sidecar,
+    _resolve_tagged_to_current,
     read_journal,
     rebuild_journal,
 )
@@ -461,64 +462,32 @@ def _audit_tier_pass(
             )
 
 
-def _journal_fragmentation_groups(
-    dest_root: Path,
-    journal: TransactionLog,
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """Derive work-dir → release-id and release-id → work-dir groupings from ``action == "tagged"`` journal entries.
-
-    Iterates only ``action == "tagged"`` entries.  For each entry, the ``work_dir`` component is extracted via
-    :func:`~music_annotator._tags._work_dir_component`, which handles both legacy two-level paths
-    (``parts[1]`` in ``<top_dir>/<work_dir>/…``) and class-prefixed three-level paths
-    (``parts[2]`` in ``<class>/<top_dir>/<work_dir>/…`` introduced by C-CLASS).
-
-    Entries whose ``destination`` is not under ``dest_root`` or whose relative path has fewer than two parts are
-    silently skipped: they represent malformed or foreign journal entries that cannot be safely attributed to a
-    work directory.
-
-    Groupings are returned sorted for deterministic output.
-
-    :param dest_root: Root of the annotated music library.
-    :param journal: :class:`~music_annotator.models.TransactionLog` to analyse.
-    :returns: A pair ``(work_dir_to_release_ids, release_id_to_work_dirs)`` where each value is a sorted
-        list of unique identifiers.
-    """
-    work_dir_to_release_ids: dict[str, set[str]] = {}
-    release_id_to_work_dirs: dict[str, set[str]] = {}
-
-    for entry in journal.entries:
-        if entry.action != "tagged":
-            continue
-        try:
-            rel = Path(entry.destination).relative_to(dest_root)
-        except ValueError:
-            continue
-        if len(rel.parts) < 2:  # noqa: PLR2004 — min 2 parts required for work_dir extraction
-            continue
-        work_dir = _work_dir_component(rel.parts)
-        release_id = entry.release_id
-        work_dir_to_release_ids.setdefault(work_dir, set()).add(release_id)
-        release_id_to_work_dirs.setdefault(release_id, set()).add(work_dir)
-
-    return (
-        {k: sorted(v) for k, v in sorted(work_dir_to_release_ids.items())},
-        {k: sorted(v) for k, v in sorted(release_id_to_work_dirs.items())},
-    )
-
-
 def _confirm_fragmentation(
     dest_root: Path,
     journal: TransactionLog,
 ) -> tuple[dict[str, tuple[list[str], bool]], dict[str, tuple[list[str], bool]]]:
-    """Adjudicate each fragmentation candidate by reading ``MUSICBRAINZ_ALBUMID`` from destination files.
+    """Adjudicate each fragmentation candidate using present-state paths resolved through the move chain.
 
-    Extends the groupings from :func:`_journal_fragmentation_groups` with present-state tag evidence:
-    for every journal entry backing a candidate, :func:`_read_albumid_tag` is called on
-    ``entry.destination`` and the result is compared to ``entry.release_id``.  A candidate is
-    **CONFIRMED** (real present-state fragmentation) when at least one backing entry's embedded tag
-    matches the journal's ``release_id``.  A candidate is **STALE** when every backing entry's tag is
-    absent, differs, or the file is missing/unreadable — meaning the present state no longer backs
-    the journal's claim.
+    Resolves each ``action == "tagged"`` journal entry's destination to its current on-disk path
+    via :func:`~music_annotator._pipeline_io._resolve_tagged_to_current` before grouping or reading
+    tags.  This ensures that present-state questions (which work_dir does a file currently live in?
+    what does its embedded tag say?) are answered with present-state evidence, not historical paths
+    that may have been renamed by repath/regroup/unify since tagging.
+
+    Tagged destinations that fail to resolve (no chain successor, or chain terminates at a
+    deduplicated-deleted file) are counted as unresolvable history; they are adjudicated stale
+    without per-file warnings.  A single aggregate info event (``fragmentation_unresolvable_history``)
+    is emitted at the end of the call carrying the total count.
+
+    Grouping semantics: a split-release candidate is a release whose **currently existing** files
+    span more than one work_dir, where work_dir is computed from the *current* path.  Historical-only
+    phantoms (files that have since moved to a single work_dir) dissolve; presently-real candidates
+    (files that have since moved to span multiple work_dirs) become visible.
+
+    A candidate is **CONFIRMED** (real present-state fragmentation) when at least one backing
+    current-path file's embedded ``MUSICBRAINZ_ALBUMID`` tag matches the journal's ``release_id``.
+    A candidate is **STALE** when every backing current-path file's tag is absent, differs, or the
+    file is missing/unreadable.
 
     Only candidates that exhibit fragmentation (case-a: more than one release_id for a work_dir;
     case-b: more than one work_dir for a release_id) are returned.  Clean work_dirs and release_ids
@@ -531,48 +500,77 @@ def _confirm_fragmentation(
         * ``case_a`` maps ``work_dir → (release_ids, confirmed)`` for work_dirs with >1 release_id.
         * ``case_b`` maps ``release_id → (work_dirs, confirmed)`` for release_ids with >1 work_dir.
 
-        The ``confirmed`` bool is ``True`` when at least one backing entry's embedded
+        The ``confirmed`` bool is ``True`` when at least one backing current-path file's embedded
         ``MUSICBRAINZ_ALBUMID`` tag matches the journal's ``release_id``.
     """
-    work_dir_to_ids, release_id_to_dirs = _journal_fragmentation_groups(dest_root, journal)
+    tagged_to_current = _resolve_tagged_to_current(journal)
 
-    # Build a per-(work_dir, release_id) and per-(release_id, work_dir) lookup of entries so we
-    # can retrieve the destination files backing each candidate without a second full scan.
-    wd_rid_to_dests: dict[tuple[str, str], list[str]] = {}
-    rid_wd_to_dests: dict[tuple[str, str], list[str]] = {}
+    # Build present-state groupings by iterating tagged entries and resolving each to its current
+    # path.  Unresolvable entries (absent from tagged_to_current) are counted as stale history.
+    work_dir_to_release_ids: dict[str, set[str]] = {}
+    release_id_to_work_dirs: dict[str, set[str]] = {}
+
+    # Per-(work_dir, release_id) and per-(release_id, work_dir) lookup of *current* paths for
+    # confirmation reads.  Deduplicated by current path so each file is read at most once.
+    wd_rid_to_current: dict[tuple[str, str], set[str]] = {}
+    rid_wd_to_current: dict[tuple[str, str], set[str]] = {}
+
+    unresolvable_count = 0
+
     for entry in journal.entries:
         if entry.action != "tagged":
             continue
+        current_path_str = tagged_to_current.get(entry.destination)
+        if current_path_str is None:
+            # Unresolvable: no chain successor or chain terminated at a deduplicated-deleted file.
+            # Adjudicate stale; count for the aggregate event.
+            unresolvable_count += 1
+            continue
+        current_path = Path(current_path_str)
         try:
-            rel = Path(entry.destination).relative_to(dest_root)
+            rel = current_path.relative_to(dest_root)
         except ValueError:
             continue
         if len(rel.parts) < 2:  # noqa: PLR2004 — min 2 parts required for work_dir extraction
             continue
         work_dir = _work_dir_component(rel.parts)
         release_id = entry.release_id
-        wd_rid_to_dests.setdefault((work_dir, release_id), []).append(entry.destination)
-        rid_wd_to_dests.setdefault((release_id, work_dir), []).append(entry.destination)
+        work_dir_to_release_ids.setdefault(work_dir, set()).add(release_id)
+        release_id_to_work_dirs.setdefault(release_id, set()).add(work_dir)
+        wd_rid_to_current.setdefault((work_dir, release_id), set()).add(current_path_str)
+        rid_wd_to_current.setdefault((release_id, work_dir), set()).add(current_path_str)
 
-    def _is_confirmed(dests: list[str], expected_release_id: str) -> bool:
-        """Return True if any destination file's MUSICBRAINZ_ALBUMID matches expected_release_id."""
-        for dest in dests:
-            if _read_albumid_tag(Path(dest)) == expected_release_id:
+    if unresolvable_count > 0:
+        log.info(
+            "fragmentation_unresolvable_history",
+            count=unresolvable_count,
+            message=(
+                "tagged destinations that no longer resolve to a current path "
+                "(moved and then deleted by dedup, or chain has no successor) — adjudicated stale"
+            ),
+        )
+
+    def _is_confirmed(current_paths: set[str], expected_release_id: str) -> bool:
+        """Return True if any current-path file's MUSICBRAINZ_ALBUMID matches expected_release_id."""
+        for path_str in current_paths:
+            if _read_albumid_tag(Path(path_str)) == expected_release_id:
                 return True
         return False
 
     case_a: dict[str, tuple[list[str], bool]] = {}
-    for work_dir, release_ids in work_dir_to_ids.items():
+    for work_dir, release_ids_set in sorted(work_dir_to_release_ids.items()):
+        release_ids = sorted(release_ids_set)
         if len(release_ids) <= 1:
             continue
-        confirmed = any(_is_confirmed(wd_rid_to_dests.get((work_dir, rid), []), rid) for rid in release_ids)
+        confirmed = any(_is_confirmed(wd_rid_to_current.get((work_dir, rid), set()), rid) for rid in release_ids)
         case_a[work_dir] = (release_ids, confirmed)
 
     case_b: dict[str, tuple[list[str], bool]] = {}
-    for release_id, work_dirs in release_id_to_dirs.items():
+    for release_id, work_dirs_set in sorted(release_id_to_work_dirs.items()):
+        work_dirs = sorted(work_dirs_set)
         if len(work_dirs) <= 1:
             continue
-        confirmed = any(_is_confirmed(rid_wd_to_dests.get((release_id, wd), []), release_id) for wd in work_dirs)
+        confirmed = any(_is_confirmed(rid_wd_to_current.get((release_id, wd), set()), release_id) for wd in work_dirs)
         case_b[release_id] = (work_dirs, confirmed)
 
     return case_a, case_b

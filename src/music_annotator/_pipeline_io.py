@@ -1388,13 +1388,84 @@ def read_journal(journal_path: Path) -> TransactionLog:
     return _parse_jsonl_journal(journal_path, raw)
 
 
+def _resolve_tagged_to_current(journal: TransactionLog) -> dict[str, str]:
+    """Map each tagged-destination path string to its current path string.
+
+    Walks ``journal.entries`` in chronological order (list order is chronological), maintaining
+    an inverse index so each move entry updates affected tagged-destination pointers in O(1)
+    amortized; O(N) total over all entries.  Cycle-proof because no fixpoint-follow occurs — an
+    inverse move (A→B then B→A) simply moves the pointer back to A; no loop ever happens.
+
+    Two dicts are maintained:
+
+    * ``tagged_to_current`` — tagged-dest → current path (the output).
+    * ``current_to_tagged`` — current path → list of tagged-dests currently there (inverse index).
+
+    On a ``"tagged"`` entry the destination is registered as its own current path.  On a
+    ``"repathed"``, ``"regrouped"``, or ``"unified"`` entry all tagged-dests currently at
+    ``entry.source`` are forwarded to ``entry.destination``.  On a ``"deduplicated"`` entry the
+    source (the deleted copy) is a terminal: all tagged-dests currently at ``entry.source`` are
+    removed from both maps — the chain ends here and those tagged-dests resolve to nothing.
+    All other actions are ignored.
+
+    :param journal: The :class:`~music_annotator.models.TransactionLog` to walk.
+    :returns: Mapping from each tagged-destination path string to its current path string.
+        Tagged destinations that were never subsequently moved map to themselves.
+        Tagged destinations whose chain terminates at a deduplicated-deleted file are absent
+        from the returned mapping (they resolve to nothing).
+    """
+    tagged_to_current: dict[str, str] = {}
+    current_to_tagged: dict[str, list[str]] = {}
+
+    for entry in journal.entries:
+        dest = entry.destination
+        if entry.action == "tagged":
+            tagged_to_current[dest] = dest
+            current_to_tagged.setdefault(dest, []).append(dest)
+        elif entry.action in {"repathed", "regrouped", "unified"}:
+            affected = current_to_tagged.pop(entry.source, [])
+            for tagged_dest in affected:
+                tagged_to_current[tagged_dest] = dest
+            if affected:
+                current_to_tagged.setdefault(dest, []).extend(affected)
+        elif entry.action == "deduplicated":
+            # The source was deleted by dedup; its chain is terminal.  Remove all tagged-dests
+            # that currently point to the deleted source so they resolve to nothing — they are
+            # expected history, not present-state evidence.
+            affected = current_to_tagged.pop(entry.source, [])
+            for tagged_dest in affected:
+                tagged_to_current.pop(tagged_dest, None)
+
+    return tagged_to_current
+
+
+def _is_enoent(exc: BaseException) -> bool:
+    """Return True when ``exc`` is or wraps an ENOENT (errno 2) OS error.
+
+    Mutagen wraps ``FileNotFoundError`` in ``mutagen.MutagenError`` (a plain ``Exception``
+    subclass, not ``OSError``), so a direct ``isinstance(exc, OSError)`` check misses the common
+    case.  This helper unwraps one level of chaining (``exc.args[0]``) to catch both the direct
+    and wrapped forms.
+
+    :param exc: The exception to inspect.
+    :returns: ``True`` when the exception or its first wrapped argument is an ``OSError`` with
+        ``errno == 2`` (ENOENT).
+    """
+    if isinstance(exc, OSError) and exc.errno == 2:  # noqa: PLR2004 — ENOENT is errno 2
+        return True
+    inner = exc.args[0] if exc.args else None
+    return isinstance(inner, OSError) and inner.errno == 2  # noqa: PLR2004 — ENOENT is errno 2
+
+
 def _read_albumid_tag(path: Path) -> str:
     """Read the ``MUSICBRAINZ_ALBUMID`` tag from a FLAC or MP3 file, returning ``""`` on any failure.
 
     Uses suffix-dispatch to invoke :func:`_read_tags_flac` or :func:`_read_tags_mp3`, then
-    extracts the ``MUSICBRAINZ_ALBUMID`` key (uppercased by both readers).  On a missing file, an
-    unsupported extension, or any read error the function returns ``""`` and logs a warning so the
-    caller can treat the entry as unconfirmed/stale without crashing.
+    extracts the ``MUSICBRAINZ_ALBUMID`` key (uppercased by both readers).  On a missing file
+    (ENOENT — either a direct ``FileNotFoundError`` or a ``mutagen.MutagenError`` wrapping one)
+    the function returns ``""`` silently — the caller is responsible for deciding whether a missing
+    file is expected history or a real error.  On any other read error a warning is logged so
+    unexpected failures are visible.
 
     Factored into a dedicated helper so the regroup-move path can reuse it and the suffix-dispatch is
     testable in isolation.
@@ -1415,6 +1486,9 @@ def _read_albumid_tag(path: Path) -> str:
                 return ""
         return file_dict.get("MUSICBRAINZ_ALBUMID", "")
     except Exception as exc:  # noqa: BLE001 — best-effort read; any failure means unconfirmed/stale
+        if _is_enoent(exc):
+            # File absent: expected for historical journal paths; adjudicate stale silently.
+            return ""
         log.warning("albumid_tag_read_error", path=str(path), exc_type=type(exc).__name__, exc_msg=str(exc))
         return ""
 

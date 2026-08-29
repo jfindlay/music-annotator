@@ -9,6 +9,7 @@ TestAuditConfirmsViaTag) and test_pipeline.py (TestDiffJournal, TestDetectFragme
 
 from __future__ import annotations
 
+import errno
 import json
 import sys
 from pathlib import Path
@@ -31,6 +32,7 @@ from music_annotator._audit import (
     _audit_journal_scan,
     _audit_tag_adjudication,
     _audit_tier_pass,
+    _confirm_fragmentation,
     _make_audit_counts,
     detect_fragmented_releases,
     diff_journal,
@@ -41,7 +43,7 @@ from music_annotator._pipeline_io import (
     _read_albumid_tag,
     _write_provenance_fields,
 )
-from music_annotator.models import AnnotationTier, ProvenanceSidecar, TrackTags, TransactionEntry
+from music_annotator.models import AnnotationTier, ProvenanceSidecar, TrackTags, TransactionEntry, TransactionLog
 from tests.conftest import _MINIMAL_FLAC, _MINIMAL_MP3
 
 # ---------------------------------------------------------------------------
@@ -1772,7 +1774,547 @@ class TestAuditConfirmsViaTag:
 
 
 # ---------------------------------------------------------------------------
+# TestConfirmFragmentationKATs — present-state adjudication (C-RESOLVE)
+# ---------------------------------------------------------------------------
 
+
+class TestConfirmFragmentationKATs:
+    """Known-answer tests for the present-state fragmentation adjudication (C-RESOLVE).
+
+    Verifies that :func:`_confirm_fragmentation` resolves journal-historical tagged destinations
+    through the move chain before grouping or reading tags, so that present-state questions are
+    answered with present-state evidence.
+
+    KAT 1 — Moved-file confirmation: tagged at A, journal records A→B move, file exists at B
+    with matching embedded albumid → candidate adjudicates CONFIRMED.
+
+    KAT 2 — Re-tag adjudicates stale: resolved current file carries a different albumid →
+    candidate STALE.
+
+    KAT 3 — Dedup-terminated chain: tagged at A, A later deleted by dedup → adjudicates stale
+    with zero per-file warnings.
+
+    KAT 4 — Phantom dissolution / present-state visibility: a release whose current files sit in
+    one work_dir is not a candidate despite historical tagged dests spanning two; the converse
+    shape (historically one dir, currently two) is a candidate.
+
+    KAT 5 — Aggregate logging: a fixture with several unresolvable tagged dests produces exactly
+    one info event carrying the count, and no warnings.
+    """
+
+    @staticmethod
+    def _make_journal(entries: list[dict[str, str]]) -> TransactionLog:
+        """Build a :class:`TransactionLog` from a list of raw entry dicts.
+
+        :param entries: List of raw entry dicts.
+        :returns: A :class:`TransactionLog` with the entries validated.
+        """
+        return TransactionLog(entries=[TransactionEntry(**e) for e in entries])
+
+    def test_kat1_moved_file_confirmation(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT 1: tagged at A, moved A→B, file at B with matching albumid → CONFIRMED.
+
+        The raw historical path A no longer exists; the resolved current path B does.  The
+        confirmation gate must read from B (not A) and return confirmed=True when the embedded
+        MUSICBRAINZ_ALBUMID matches the journal's release_id.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File was tagged at path A (Work-Old), then moved to path B (Work-New).
+        path_a = dest_root / "Composer - Performer" / "Work-Old [2020]" / "01.flac"
+        path_b = dest_root / "Composer - Performer" / "Work-New [2020]" / "01.flac"
+        path_b.parent.mkdir(parents=True, exist_ok=True)
+        path_b.write_bytes(_MINIMAL_FLAC)
+        # Embed the matching albumid at the current path B.
+        apply_tags_flac(path_b, TrackTags(musicbrainz_albumid="rel-split"))
+
+        # A second file also tagged for the same release but in a different work_dir (Work-Other),
+        # also moved to its current location.
+        path_c_old = dest_root / "Composer - Performer" / "Work-Other-Old [2020]" / "02.flac"
+        path_c_new = dest_root / "Composer - Performer" / "Work-Other-New [2020]" / "02.flac"
+        path_c_new.parent.mkdir(parents=True, exist_ok=True)
+        path_c_new.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path_c_new, TrackTags(musicbrainz_albumid="rel-split"))
+
+        journal = self._make_journal(
+            [
+                # Tagged at A (Work-Old)
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-split",
+                    "source": "/src/01.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                # Tagged at C-old (Work-Other-Old)
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-split",
+                    "source": "/src/02.flac",
+                    "destination": str(path_c_old),
+                    "action": "tagged",
+                },
+                # Moved A → B
+                {
+                    "timestamp": "2024-01-01T00:02:00+00:00",
+                    "release_id": "rel-split",
+                    "source": str(path_a),
+                    "destination": str(path_b),
+                    "action": "repathed",
+                },
+                # Moved C-old → C-new
+                {
+                    "timestamp": "2024-01-01T00:03:00+00:00",
+                    "release_id": "rel-split",
+                    "source": str(path_c_old),
+                    "destination": str(path_c_new),
+                    "action": "repathed",
+                },
+            ]
+        )
+
+        mocker.patch("music_annotator._audit.log")
+        _case_a, case_b = _confirm_fragmentation(dest_root, journal)
+
+        # rel-split spans Work-New [2020] and Work-Other-New [2020] → case-b candidate
+        assert "rel-split" in case_b
+        _work_dirs, confirmed = case_b["rel-split"]
+        assert confirmed is True, "candidate must be CONFIRMED: file at B has matching albumid"
+
+    def test_kat2_retag_adjudicates_stale(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT 2: resolved current file carries a different albumid → candidate STALE.
+
+        The file was tagged for rel-split, moved to its current path, then re-tagged for a
+        different release.  The embedded albumid no longer matches the journal's release_id, so
+        the candidate must adjudicate STALE (confirmed=False).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        path_a = dest_root / "Composer - Performer" / "Work-Old [2020]" / "01.flac"
+        path_b = dest_root / "Composer - Performer" / "Work-New [2020]" / "01.flac"
+        path_b.parent.mkdir(parents=True, exist_ok=True)
+        path_b.write_bytes(_MINIMAL_FLAC)
+        # File at B now carries a DIFFERENT albumid (re-tagged for a different release).
+        apply_tags_flac(path_b, TrackTags(musicbrainz_albumid="rel-other"))
+
+        path_c = dest_root / "Composer - Performer" / "Work-Other [2020]" / "02.flac"
+        path_c.parent.mkdir(parents=True, exist_ok=True)
+        path_c.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path_c, TrackTags(musicbrainz_albumid="rel-other"))
+
+        journal = self._make_journal(
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-split",
+                    "source": "/src/01.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-split",
+                    "source": "/src/02.flac",
+                    "destination": str(path_c),
+                    "action": "tagged",
+                },
+                # Moved A → B
+                {
+                    "timestamp": "2024-01-01T00:02:00+00:00",
+                    "release_id": "rel-split",
+                    "source": str(path_a),
+                    "destination": str(path_b),
+                    "action": "repathed",
+                },
+            ]
+        )
+
+        mocker.patch("music_annotator._audit.log")
+        _case_a, case_b = _confirm_fragmentation(dest_root, journal)
+
+        assert "rel-split" in case_b
+        _work_dirs, confirmed = case_b["rel-split"]
+        assert confirmed is False, "candidate must be STALE: current file carries a different albumid"
+
+    def test_kat3_dedup_terminated_chain_stale_no_warnings(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT 3: tagged at A, A later deleted by dedup → stale with zero per-file warnings.
+
+        When the move chain terminates at a deduplicated-deleted file, the tagged destination
+        resolves to nothing.  The candidate must adjudicate stale without emitting any per-file
+        albumid_tag_read_error warnings — the unresolvable count is reported as an aggregate
+        info event only.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File tagged at A, then deduplicated (A deleted, B is the surviving copy).
+        path_a = dest_root / "Composer - Performer" / "Work-A [2020]" / "01.flac"
+        path_b = dest_root / "Composer - Performer" / "Work-B [2020]" / "01.flac"
+
+        # A second file tagged for the same release in a different work_dir (still alive).
+        path_c = dest_root / "Composer - Performer" / "Work-C [2020]" / "02.flac"
+        path_c.parent.mkdir(parents=True, exist_ok=True)
+        path_c.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path_c, TrackTags(musicbrainz_albumid="rel-split"))
+
+        journal = self._make_journal(
+            [
+                # Tagged at A
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-split",
+                    "source": "/src/01.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                # Tagged at C (different work_dir — creates the split-release shape)
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-split",
+                    "source": "/src/02.flac",
+                    "destination": str(path_c),
+                    "action": "tagged",
+                },
+                # A deduplicated into B (A deleted, B survives) — chain terminates
+                {
+                    "timestamp": "2024-01-01T00:02:00+00:00",
+                    "release_id": "rel-split",
+                    "source": str(path_a),
+                    "destination": str(path_b),
+                    "action": "deduplicated",
+                },
+            ]
+        )
+
+        mock_log = mocker.patch("music_annotator._audit.log")
+        _case_a, case_b = _confirm_fragmentation(dest_root, journal)
+
+        # The dedup-terminated entry for path_a resolves to nothing → counted as unresolvable.
+        # The aggregate info event must be emitted.
+        info_events = [c.args[0] for c in mock_log.info.call_args_list]
+        assert "fragmentation_unresolvable_history" in info_events, (
+            "one aggregate info event must be emitted for unresolvable history"
+        )
+
+        # Zero per-file albumid_tag_read_error warnings must be emitted.
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "albumid_tag_read_error" not in warning_events, (
+            "no per-file warnings for dedup-terminated (expected-missing) paths"
+        )
+
+        # The candidate for rel-split: only path_c resolves; it spans Work-C only → not a
+        # split-release candidate (only one work_dir after resolution).
+        # So rel-split must NOT appear in case_b (phantom dissolved).
+        assert "rel-split" not in case_b, (
+            "dedup-terminated entry must not contribute to grouping; "
+            "remaining file is in one work_dir → not a split-release candidate"
+        )
+
+    def test_kat4_phantom_dissolution_and_present_state_visibility(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT 4: phantom dissolution and present-state visibility.
+
+        Two sub-scenarios:
+
+        (a) Phantom dissolution: rel-phantom was historically tagged in two work_dirs (Work-X and
+        Work-Y), but both files have since been moved to the same work_dir (Work-Z).  The
+        historical grouping would see two work_dirs; the present-state grouping sees one → not a
+        candidate.
+
+        (b) Present-state visibility: rel-visible was historically tagged in one work_dir
+        (Work-P), but the file has since been moved to a different work_dir (Work-Q), while
+        another file for the same release remains in Work-P.  The historical grouping would see
+        one work_dir; the present-state grouping sees two → IS a candidate.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # --- (a) Phantom dissolution ---
+        # Both files were tagged in different work_dirs but have since converged to Work-Z.
+        path_x = dest_root / "Composer - Performer" / "Work-X [2020]" / "01.flac"
+        path_y = dest_root / "Composer - Performer" / "Work-Y [2020]" / "02.flac"
+        path_z1 = dest_root / "Composer - Performer" / "Work-Z [2020]" / "01.flac"
+        path_z2 = dest_root / "Composer - Performer" / "Work-Z [2020]" / "02.flac"
+        path_z1.parent.mkdir(parents=True, exist_ok=True)
+        path_z1.write_bytes(_MINIMAL_FLAC)
+        path_z2.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path_z1, TrackTags(musicbrainz_albumid="rel-phantom"))
+        apply_tags_flac(path_z2, TrackTags(musicbrainz_albumid="rel-phantom"))
+
+        # --- (b) Present-state visibility ---
+        # One file was tagged in Work-P and has since moved to Work-Q; another remains in Work-P.
+        path_p1 = dest_root / "Composer - Performer" / "Work-P [2020]" / "01.flac"
+        path_p2 = dest_root / "Composer - Performer" / "Work-P [2020]" / "02.flac"
+        path_q = dest_root / "Composer - Performer" / "Work-Q [2020]" / "01.flac"
+        path_p2.parent.mkdir(parents=True, exist_ok=True)
+        path_p2.write_bytes(_MINIMAL_FLAC)
+        path_q.parent.mkdir(parents=True, exist_ok=True)
+        path_q.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path_p2, TrackTags(musicbrainz_albumid="rel-visible"))
+        apply_tags_flac(path_q, TrackTags(musicbrainz_albumid="rel-visible"))
+
+        journal = self._make_journal(
+            [
+                # (a) phantom: tagged at X and Y, then moved to Z1 and Z2
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-phantom",
+                    "source": "/src/01.flac",
+                    "destination": str(path_x),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-phantom",
+                    "source": "/src/02.flac",
+                    "destination": str(path_y),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:02:00+00:00",
+                    "release_id": "rel-phantom",
+                    "source": str(path_x),
+                    "destination": str(path_z1),
+                    "action": "repathed",
+                },
+                {
+                    "timestamp": "2024-01-01T00:03:00+00:00",
+                    "release_id": "rel-phantom",
+                    "source": str(path_y),
+                    "destination": str(path_z2),
+                    "action": "repathed",
+                },
+                # (b) visible: tagged at P1 and P2; P1 moved to Q
+                {
+                    "timestamp": "2024-01-01T00:04:00+00:00",
+                    "release_id": "rel-visible",
+                    "source": "/src/03.flac",
+                    "destination": str(path_p1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:05:00+00:00",
+                    "release_id": "rel-visible",
+                    "source": "/src/04.flac",
+                    "destination": str(path_p2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:06:00+00:00",
+                    "release_id": "rel-visible",
+                    "source": str(path_p1),
+                    "destination": str(path_q),
+                    "action": "repathed",
+                },
+            ]
+        )
+
+        mocker.patch("music_annotator._audit.log")
+        _case_a, case_b = _confirm_fragmentation(dest_root, journal)
+
+        # (a) phantom: both files now in Work-Z → not a split-release candidate
+        assert "rel-phantom" not in case_b, "phantom must dissolve: both files now in the same work_dir (Work-Z)"
+
+        # (b) visible: files now in Work-P and Work-Q → IS a split-release candidate
+        assert "rel-visible" in case_b, "present-state candidate must be visible: files span Work-P and Work-Q after move"
+
+    def test_kat5_aggregate_logging_one_event_no_warnings(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """KAT 5: several unresolvable tagged dests → exactly one info event with count, no warnings.
+
+        A fixture with multiple tagged entries that are dedup-terminated (chain ends at dedup).
+        Exactly one ``fragmentation_unresolvable_history`` info event must be emitted carrying the
+        total count; no per-file warnings must be emitted.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Three tagged entries for rel-split, all dedup-terminated (chain ends at dedup).
+        # One additional tagged entry that resolves to a live path (to ensure the aggregate
+        # event only counts the unresolvable ones).
+        path_a = dest_root / "Composer - Performer" / "Work-A [2020]" / "01.flac"
+        path_c = dest_root / "Composer - Performer" / "Work-C [2020]" / "02.flac"
+        path_d = dest_root / "Composer - Performer" / "Work-D [2020]" / "03.flac"
+        # Surviving copies for dedup
+        path_surv_a = dest_root / "Composer - Performer" / "Work-Surv [2020]" / "01.flac"
+        path_surv_c = dest_root / "Composer - Performer" / "Work-Surv [2020]" / "02.flac"
+        path_surv_d = dest_root / "Composer - Performer" / "Work-Surv [2020]" / "03.flac"
+
+        # One live file that resolves correctly (not dedup-terminated)
+        path_live = dest_root / "Composer - Performer" / "Work-Live [2020]" / "04.flac"
+        path_live.parent.mkdir(parents=True, exist_ok=True)
+        path_live.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path_live, TrackTags(musicbrainz_albumid="rel-split"))
+
+        journal = self._make_journal(
+            [
+                # Three entries that will be dedup-terminated
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-split",
+                    "source": "/src/01.flac",
+                    "destination": str(path_a),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-split",
+                    "source": "/src/02.flac",
+                    "destination": str(path_c),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:02:00+00:00",
+                    "release_id": "rel-split",
+                    "source": "/src/03.flac",
+                    "destination": str(path_d),
+                    "action": "tagged",
+                },
+                # One live entry (not dedup-terminated)
+                {
+                    "timestamp": "2024-01-01T00:03:00+00:00",
+                    "release_id": "rel-split",
+                    "source": "/src/04.flac",
+                    "destination": str(path_live),
+                    "action": "tagged",
+                },
+                # Dedup entries: sources deleted; survivors are path_surv_*
+                {
+                    "timestamp": "2024-01-01T00:04:00+00:00",
+                    "release_id": "rel-split",
+                    "source": str(path_a),
+                    "destination": str(path_surv_a),
+                    "action": "deduplicated",
+                },
+                {
+                    "timestamp": "2024-01-01T00:05:00+00:00",
+                    "release_id": "rel-split",
+                    "source": str(path_c),
+                    "destination": str(path_surv_c),
+                    "action": "deduplicated",
+                },
+                {
+                    "timestamp": "2024-01-01T00:06:00+00:00",
+                    "release_id": "rel-split",
+                    "source": str(path_d),
+                    "destination": str(path_surv_d),
+                    "action": "deduplicated",
+                },
+            ]
+        )
+
+        mock_log = mocker.patch("music_annotator._audit.log")
+        _confirm_fragmentation(dest_root, journal)
+
+        # Exactly one aggregate info event must be emitted.
+        info_calls = [c for c in mock_log.info.call_args_list if c.args[0] == "fragmentation_unresolvable_history"]
+        assert len(info_calls) == 1, "exactly one aggregate info event must be emitted"
+        assert info_calls[0].kwargs["count"] == 3, "count must equal the number of unresolvable entries"
+
+        # No per-file albumid_tag_read_error warnings must be emitted.
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "albumid_tag_read_error" not in warning_events, (
+            "no per-file warnings for dedup-terminated (expected-missing) paths"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestReadAlbumidTagEnoent — ENOENT is silent (C-RESOLVE log calibration)
+# ---------------------------------------------------------------------------
+
+
+class TestReadAlbumidTagEnoent:
+    """Tests for the ENOENT-silent branch of :func:`_read_albumid_tag`.
+
+    Verifies that a missing file (ENOENT / errno=2) returns ``""`` without logging a warning,
+    while other OSErrors still log ``albumid_tag_read_error``.
+    """
+
+    # pylint: disable-next=unused-argument
+    def test_enoent_returns_empty_silently(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_read_albumid_tag returns "" without warning when the file does not exist (ENOENT).
+
+        A missing file is expected history for historical journal paths; the caller is responsible
+        for deciding whether absence is expected.  No per-file warning must be emitted.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/missing.flac")
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+
+        result = _read_albumid_tag(path)
+
+        assert result == ""
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "albumid_tag_read_error" not in warning_events, (
+            "ENOENT must not produce a per-file albumid_tag_read_error warning"
+        )
+
+    # pylint: disable-next=unused-argument
+    def test_direct_enoent_oserror_returns_empty_silently(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_read_albumid_tag returns "" silently when _read_tags_flac raises a direct OSError(errno=2).
+
+        Covers the first branch of _is_enoent: isinstance(exc, OSError) and exc.errno == 2.
+        This is distinct from the mutagen-wrapped case (test_enoent_returns_empty_silently) where
+        mutagen wraps FileNotFoundError in MutagenError.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/direct-enoent.flac")
+        direct_enoent = OSError(errno.ENOENT, "No such file or directory")
+        mocker.patch("music_annotator._pipeline_io._read_tags_flac", side_effect=direct_enoent)
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+
+        result = _read_albumid_tag(path)
+
+        assert result == ""
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "albumid_tag_read_error" not in warning_events, (
+            "direct OSError(errno=2) must not produce a per-file albumid_tag_read_error warning"
+        )
+
+    # pylint: disable-next=unused-argument
+    def test_non_enoent_oserror_logs_warning(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_read_albumid_tag logs albumid_tag_read_error for non-ENOENT OSErrors.
+
+        An OSError with errno != 2 (e.g. permission denied) is unexpected and must still produce
+        a per-file warning so the operator can investigate.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        path = Path("/lib/perm-denied.flac")
+        perm_error = OSError(errno.EACCES, "Permission denied")
+        mocker.patch("music_annotator._pipeline_io._read_tags_flac", side_effect=perm_error)
+        mock_log = mocker.patch("music_annotator._pipeline_io.log")
+
+        result = _read_albumid_tag(path)
+
+        assert result == ""
+        warning_events = [c.args[0] for c in mock_log.warning.call_args_list]
+        assert "albumid_tag_read_error" in warning_events, (
+            "non-ENOENT OSError must produce a per-file albumid_tag_read_error warning"
+        )
+
+
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # diff_journal

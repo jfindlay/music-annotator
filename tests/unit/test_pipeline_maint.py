@@ -44,6 +44,7 @@ from music_annotator._pipeline_io import (
     _read_albumid_tag,
     _read_tags_flac,
     _read_tags_mp3,
+    _resolve_tagged_to_current,
     _sha256_file,
 )
 from music_annotator._pipeline_maint import (
@@ -63,7 +64,6 @@ from music_annotator._pipeline_maint import (
     _read_tags_cached,
     _reference_evidence,
     _resolve_current_lib,
-    _resolve_tagged_to_current,
     _scatter_consequence_note,
     _write_xref_and_journal,
     compute_library_modal_depth,
@@ -8944,36 +8944,22 @@ class TestDryRunPlanReturn:
         assert result.count == 0
         assert result.entries == []
 
-    def test_regroup_dry_run_empty_plan_no_existing_files_on_disk(self, fs: FakeFilesystem) -> None:
+    def test_regroup_dry_run_empty_plan_no_existing_files_on_disk(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
         """regroup(dry_run=True) returns DryRunPlan(count=0) when confirmed files don't exist on disk.
 
-        Exercises the early-return path when confirmed release IDs exist in the journal but the
-        files resolved by _resolve_current_lib don't exist on disk.  This is achieved by having
-        a "tagged" entry at old_path (so _confirm_fragmentation can confirm the release) and a
-        "repathed" entry that moves the file to a path that doesn't exist on disk.
+        Exercises the early-return path when confirmed release IDs exist (from _confirm_fragmentation)
+        but the files resolved by _resolve_current_lib don't exist on disk.  _confirm_fragmentation
+        is patched to return a confirmed release ID; the journal has a "tagged" entry at a path that
+        doesn't exist on disk, so _resolve_current_lib resolves to that non-existent path and
+        existing_files is empty.
 
+        :param mocker: pytest-mock fixture.
         :param fs: pyfakefs fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
 
-        split_tags = TrackTags(
-            cwp_composer_lastnames="Brahms",
-            cwp_work_top="Piano Concerto No. 1",
-            recording_date="2021",
-            cwp_movt_num="1",
-            movementtotal="1",
-            cwp_part_levels="1",
-            title="First movement",
-            artist="Vienna PO",
-            musicbrainz_albumid="split-rel-nofile",
-        )
-        old_path = dest_root / "Brahms - Vienna PO/OldWork [2021]/01 - First movement.flac"
-        phantom_path = dest_root / "Brahms - Vienna PO/Piano Concerto No. 1 [rec 2021]/01 - First movement.flac"
-        repathed_path = dest_root / "Brahms - Vienna PO/Piano Concerto No. 1 [rec 2021]/02 - First movement.flac"
-
-        # Write a FLAC at old_path so _confirm_fragmentation can read the MUSICBRAINZ_ALBUMID tag
-        _make_library_flac(dest_root, str(old_path.relative_to(dest_root)), split_tags)
+        nonexistent_path = dest_root / "Brahms - Vienna PO/Work-A [2021]/01 - First movement.flac"
 
         _write_library_journal(
             dest_root,
@@ -8982,29 +8968,21 @@ class TestDryRunPlanReturn:
                     "timestamp": "2024-01-01T00:00:00+00:00",
                     "release_id": "split-rel-nofile",
                     "source": "/src/01.flac",
-                    "destination": str(old_path),
+                    "destination": str(nonexistent_path),
                     "action": "tagged",
-                },
-                {
-                    "timestamp": "2024-01-01T00:00:01+00:00",
-                    "release_id": "split-rel-nofile",
-                    "source": "/src/phantom.flac",
-                    "destination": str(phantom_path),
-                    "action": "tagged",
-                },
-                # "repathed" entry moves old_path to repathed_path (which doesn't exist on disk)
-                {
-                    "timestamp": "2024-01-01T00:00:02+00:00",
-                    "release_id": "",
-                    "source": str(old_path),
-                    "destination": str(repathed_path),
-                    "action": "repathed",
                 },
             ],
         )
 
-        # old_path still exists (for _confirm_fragmentation), but _resolve_current_lib
-        # resolves it to repathed_path (which doesn't exist) → existing_files is empty
+        # Patch _confirm_fragmentation to return a confirmed release ID so regroup proceeds past
+        # the "no confirmed candidates" early return and reaches the "no existing files" path.
+        mocker.patch(
+            "music_annotator._pipeline_maint._confirm_fragmentation",
+            return_value=({}, {"split-rel-nofile": (["Work-A [2021]", "Work-B [2021]"], True)}),
+        )
+
+        # _resolve_current_lib resolves nonexistent_path (which doesn't exist on disk) →
+        # existing_files is empty → DryRunPlan(count=0)
         result = music_annotator.regroup(dest_root=dest_root, dry_run=True)
 
         assert isinstance(result, DryRunPlan)
@@ -13282,6 +13260,51 @@ class TestResolveTaggedToCurrent:
         assert len(result) == n_files
         for i in range(n_files):
             assert result[f"/lib/step0/{i}.flac"] == f"/lib/step{n_moves}/{i}.flac"
+
+    def test_deduplicated_entry_terminates_chain(self) -> None:
+        """A 'deduplicated' entry removes the tagged-dest from the resolver output.
+
+        When a file is tagged at A and then deduplicated (A deleted, B survives), the tagged
+        destination A must be absent from the returned mapping — the chain terminates at the
+        dedup entry and the tagged-dest resolves to nothing.  The surviving copy B is not a
+        tagged destination and must also be absent.
+
+        A second file tagged at C (not involved in dedup) must still resolve to itself.
+        """
+        journal = self._make_journal(
+            [
+                # File 1: tagged at A, then deduplicated (A deleted, B survives)
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/src/a.flac",
+                    "destination": "/lib/A/01.flac",
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:01:00+00:00",
+                    "release_id": "rel-a",
+                    "source": "/lib/A/01.flac",
+                    "destination": "/lib/B/01.flac",
+                    "action": "deduplicated",
+                },
+                # File 2: tagged at C, not involved in dedup — must still resolve
+                {
+                    "timestamp": "2024-01-01T00:02:00+00:00",
+                    "release_id": "rel-b",
+                    "source": "/src/c.flac",
+                    "destination": "/lib/C/01.flac",
+                    "action": "tagged",
+                },
+            ]
+        )
+        result = _resolve_tagged_to_current(journal)
+        # A was deduplicated → chain terminates → absent from result
+        assert "/lib/A/01.flac" not in result, "dedup-terminated tagged-dest must resolve to nothing"
+        # B is the surviving copy but was never tagged → not in result
+        assert "/lib/B/01.flac" not in result
+        # C was not involved in dedup → resolves to itself
+        assert result["/lib/C/01.flac"] == "/lib/C/01.flac"
 
 
 # ---------------------------------------------------------------------------

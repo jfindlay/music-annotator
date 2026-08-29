@@ -77,6 +77,7 @@ from music_annotator._pipeline_io import (
     _read_duration_ms,
     _read_tags_flac,
     _read_tags_mp3,
+    _resolve_tagged_to_current,
     _sha256_file,
     _verify_copy,
     append_journal_entry,
@@ -3082,45 +3083,6 @@ def _journal_capacity(
 # ---------------------------------------------------------------------------
 # Cross-reference reconstruction pass
 # ---------------------------------------------------------------------------
-
-
-def _resolve_tagged_to_current(journal: TransactionLog) -> dict[str, str]:
-    """Map each tagged-destination path string to its current path string.
-
-    Walks ``journal.entries`` in chronological order (list order is chronological), maintaining
-    an inverse index so each move entry updates affected tagged-destination pointers in O(1)
-    amortized; O(N) total over all entries.  Cycle-proof because no fixpoint-follow occurs — an
-    inverse move (A→B then B→A) simply moves the pointer back to A; no loop ever happens.
-
-    Two dicts are maintained:
-
-    * ``tagged_to_current`` — tagged-dest → current path (the output).
-    * ``current_to_tagged`` — current path → list of tagged-dests currently there (inverse index).
-
-    On a ``"tagged"`` entry the destination is registered as its own current path.  On a
-    ``"repathed"``, ``"regrouped"``, or ``"unified"`` entry all tagged-dests currently at
-    ``entry.source`` are forwarded to ``entry.destination``.  All other actions are ignored.
-
-    :param journal: The :class:`~music_annotator.models.TransactionLog` to walk.
-    :returns: Mapping from each tagged-destination path string to its current path string.
-        Tagged destinations that were never subsequently moved map to themselves.
-    """
-    tagged_to_current: dict[str, str] = {}
-    current_to_tagged: dict[str, list[str]] = {}
-
-    for entry in journal.entries:
-        dest = entry.destination
-        if entry.action == "tagged":
-            tagged_to_current[dest] = dest
-            current_to_tagged.setdefault(dest, []).append(dest)
-        elif entry.action in {"repathed", "regrouped", "unified"}:
-            affected = current_to_tagged.pop(entry.source, [])
-            for tagged_dest in affected:
-                tagged_to_current[tagged_dest] = dest
-            if affected:
-                current_to_tagged.setdefault(dest, []).extend(affected)
-
-    return tagged_to_current
 
 
 def _census_journal_for_xrefs(
