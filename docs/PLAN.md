@@ -182,7 +182,7 @@ ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and cove
 |----|-----------------------------------------------------------------------------|--------|--------|-------|
 | S1 | Present-state fragmentation adjudication (C-RESOLVE)                       | done   | 1cc4cb0 | All 5 KATs pass. `_resolve_tagged_to_current` handles deduplicated-terminal; `_confirm_fragmentation` groups and reads from resolved current paths; unresolvable history → one aggregate info event, zero per-file warnings. |
 | S2 | Enrich summary counts acoustid-inconclusive files truthfully               | done   | d4cbdd4 | Both KATs pass. Counter moved before noop gate; per-file event demoted to debug; enrich_complete is the operator-facing signal. |
-| S3 | Acceptance gate on hades: warnings gone, gate opens, fixpoint holds        | todo   | —      | |
+| S3 | Acceptance gate on hades: warnings gone, gate opens, fixpoint holds        | done   | n/a    | PASSED on hades (`maintain.{h,i}.out`, 2026-08-29). Zero albumid_tag_read_error; one aggregate `fragmentation_unresolvable_history count=24` (vs predicted ≈32 — resolver healed more than static analysis estimated, trends toward intent); regroup gate noops; `inconclusive_acoustid=93`; run 2 `changed=0` (fixpoint holds). |
 
 Frozen contracts: C-RESOLVE (frozen at this derivation, operator ruling: code-only healing, no journal edits, no
 tombstones).  C-CANON, C-NC-TOP, C-IDEM, C-GROUPSCOPE, C-MAINTAIN, C-CONFLUENCE, C-RETIRE, INSTR, PERM, C-JRNL,
@@ -206,3 +206,21 @@ C-FATAL, C-XREF, C-DEDUP, C-NOCLOBBER, C-SEQ, C-PROV, C-MOVE, NORM-2-as-revised,
   full history); no tombstone action type at a 32-path dead-end population (mechanism cost exceeds re-derivation
   cost); confirmation-gate criterion (release spans >1 current work_dir) stays broad — it is a pre-filter feeding a
   nooping recompute, and narrowing it belongs to BACKLOG only with first-run cost measurements in hand.
+
+### S3 acceptance — 2026-08-29
+Discovery/flex: acceptance PASSED on hades (`maintain.{h,i}.out`) — zero read-error warnings, one aggregate
+  `fragmentation_unresolvable_history count=24` (predicted ≈32; resolver healed more chains than static analysis
+  estimated), regroup gate noops, `inconclusive_acoustid=93`, run 2 `changed=0`.  NEW discovery surfaced by operator:
+  five Vaughan Williams / Marriner tracks are persistent "evidence-gap candidates" (secondary MBID embedded but not
+  journal-provable) because a *dedup-pass write bug* (since fixed) suppressed the journal writes when their
+  originating files existed; those files are now gone.  Operator asks whether retroactive journal entries can
+  reconstruct that lost provenance.
+Affected: C-JRNL (append-only, no-history-edit) and the derivation's frozen "no journal-history edits" ruling — a
+  retroactive-entry feature is a direct tension with both and must be adjudicated, not folded in.
+Deferred: yes — this is a boundary-rewrite trigger, NOT in-scope for the just-closed sub-track.  The next sub-track's
+  design intent is provenance reconstruction for now-deleted originating files given the write-path bug is fixed.
+  The juncture adjudicator must reconcile: can synthesized entries be *truthful* (provably derived from surviving
+  evidence) without making the journal a rewritable record, and does this widen or merely annotate C-JRNL?
+Texture: the deviation count 24-vs-32 is benign (trends toward intent — more healing, not less); it is not drift and
+  does not reopen S1.  The evidence-gap candidates are a *different defect class* (a past write-path bug) than this
+  sub-track's read-resolution fix — they were correctly invisible to this sub-track's scope.
