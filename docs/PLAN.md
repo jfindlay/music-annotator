@@ -180,7 +180,7 @@ ruff + pyupgrade).  One green run satisfies tests, types, lint, format, and cove
 
 | ID | Title                                                                       | Status | Commit | Notes |
 |----|-----------------------------------------------------------------------------|--------|--------|-------|
-| S1 | Present-state fragmentation adjudication (C-RESOLVE)                       | todo   | —      | |
+| S1 | Present-state fragmentation adjudication (C-RESOLVE)                       | done   | 1cc4cb0 | All 5 KATs pass. `_resolve_tagged_to_current` handles deduplicated-terminal; `_confirm_fragmentation` groups and reads from resolved current paths; unresolvable history → one aggregate info event, zero per-file warnings. |
 | S2 | Enrich summary counts acoustid-inconclusive files truthfully               | todo   | —      | |
 | S3 | Acceptance gate on hades: warnings gone, gate opens, fixpoint holds        | todo   | —      | |
 
