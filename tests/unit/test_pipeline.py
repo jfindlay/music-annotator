@@ -1,5 +1,6 @@
 """Unit tests for pipeline functions: build_cea_performers, build_track_tags, apply_tags_flac, apply_tags_mp3,
-find_source_files, check_duration_preflight, _prompt_duration_warnings, run (non-dry-run), and enrich_origin_time.
+find_source_files, check_duration_preflight, _prompt_duration_warnings, run (non-dry-run), enrich_origin_time,
+and the catalog-gate functions validate_local_tags / build_local_track_tags.
 """
 
 # pylint: disable=duplicate-code  # test helper factories intentionally mirror patterns in other test modules
@@ -21,7 +22,7 @@ import pytest
 import yaml
 from mutagen._util import MutagenError
 from mutagen.flac import FLAC
-from mutagen.id3 import ID3, TXXX  # type: ignore[attr-defined]
+from mutagen.id3 import ID3, TALB, TDRC, TIT2, TPE2, TRCK, TXXX  # type: ignore[attr-defined]
 from pyfakefs.fake_filesystem import FakeFilesystem
 from pytest_mock import MockerFixture
 
@@ -90,6 +91,7 @@ from music_annotator._pipeline_io import (
     parse_whipper_log,
     rebuild_journal,
 )
+from music_annotator._pipeline_local import build_local_track_tags, validate_local_tags
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
 from music_annotator._tags import _NAME_MAX, _work_top_dir, build_dest_path, collect_applied_case_ids
 from music_annotator._works import work_group_modal_depth
@@ -13907,3 +13909,449 @@ class TestJournalJSONL:
         result = read_journal(journal_path)
         assert len(result.entries) == 1
         assert result.entries[0].action == "tagged"
+
+
+# ---------------------------------------------------------------------------
+# C-ACCESSION-GATE: validate_local_tags / build_local_track_tags KATs
+# ---------------------------------------------------------------------------
+
+
+class TestLocalCatalogGate:
+    """KATs for the catalog-gate validation and TrackTags builder (C-ACCESSION-GATE).
+
+    Each test exercises one of the six required acceptance criteria for the gate that admits
+    never-in-MB releases.  All tests use pyfakefs and real mutagen writes so the embedded-tag
+    read path is exercised end-to-end.
+    """
+
+    def _write_flac_tags_raw(self, fs: FakeFilesystem, path: Path, tags: dict[str, str]) -> None:
+        """Write a minimal FLAC file with the given Vorbis Comment tags via mutagen directly.
+
+        Uses mutagen directly (not apply_tags_flac) so that arbitrary tag keys — including
+        CWP_* extras — can be written without going through TrackTags field validation.
+
+        :param fs: pyfakefs fixture.
+        :param path: Destination path for the FLAC file.
+        :param tags: Tag key/value pairs to embed (keys are lowercased for Vorbis Comments).
+        """
+        fs.create_file(str(path), contents=_MINIMAL_FLAC)
+        audio = FLAC(str(path))
+        for k, v in tags.items():
+            audio[k.lower()] = v
+        audio.save()
+
+    def _make_src_dir(
+        self,
+        fs: FakeFilesystem,
+        src_dir: Path,
+        tracks: list[dict[str, str]],
+    ) -> list[Path]:
+        """Create a source directory with one FLAC file per track dict.
+
+        :param fs: pyfakefs fixture.
+        :param src_dir: Directory to create.
+        :param tracks: Per-track tag dicts.  Each dict must include at least ``TRACKNUMBER``.
+        :returns: Sorted list of created FLAC file paths.
+        """
+        fs.create_dir(str(src_dir))
+        paths: list[Path] = []
+        for tags in tracks:
+            tn = tags.get("TRACKNUMBER", "1")
+            path = src_dir / f"{int(tn):02d} - track.flac"
+            self._write_flac_tags_raw(fs, path, tags)
+            paths.append(path)
+        return sorted(paths)
+
+    # KAT 1: Complete set validates
+    def test_complete_set_validates(self, fs: FakeFilesystem) -> None:
+        """A source dir with the full required set + real DATE passes the gate.
+
+        Produces one TrackTags per track with musicbrainz_albumid="" and the operator's values
+        threaded through.
+        """
+        src_dir = Path("/src/album")
+        tracks = [
+            {
+                "ALBUMARTIST": "Test Ensemble",
+                "ALBUM": "Test Album",
+                "TITLE": "Track One",
+                "TRACKNUMBER": "1",
+                "DATE": "2023",
+            },
+            {
+                "ALBUMARTIST": "Test Ensemble",
+                "ALBUM": "Test Album",
+                "TITLE": "Track Two",
+                "TRACKNUMBER": "2",
+                "DATE": "2023",
+            },
+        ]
+        src_files = self._make_src_dir(fs, src_dir, tracks)
+
+        validated = validate_local_tags(src_files)
+        assert len(validated) == 2
+        assert validated[0]["ALBUMARTIST"] == "Test Ensemble"
+        assert validated[0]["DATE"] == "2023"
+
+        built = build_local_track_tags(src_files, validated)
+        assert len(built) == 2
+
+        for i, (track_tags, stub_track, _stub_release) in enumerate(built):
+            # musicbrainz_albumid must always be "" (C-LOCAL-ID never-mint rule).
+            assert track_tags.musicbrainz_albumid == ""
+            # musicannotator_releaseid is "" at this stage (UUID minted by the ingest verb).
+            assert track_tags.musicannotator_releaseid == ""
+            # Operator values are threaded through.
+            assert track_tags.albumartist == "Test Ensemble"
+            assert track_tags.album == "Test Album"
+            assert track_tags.date == "2023"
+            # stub_track.position equals the operator's TRACKNUMBER.
+            assert stub_track.position == i + 1
+
+    # KAT 2: Missing required field fails precisely
+    def test_missing_albumartist_fails(self, fs: FakeFilesystem) -> None:
+        """Omitting ALBUMARTIST raises a ValueError naming the missing field and the offending file."""
+        src_dir = Path("/src/album")
+        tracks = [
+            {
+                "ALBUM": "Test Album",
+                "TITLE": "Track One",
+                "TRACKNUMBER": "1",
+                "DATE": "2023",
+            },
+        ]
+        src_files = self._make_src_dir(fs, src_dir, tracks)
+
+        with pytest.raises(ValueError, match="ALBUMARTIST"):
+            validate_local_tags(src_files)
+
+    def test_missing_album_fails(self, fs: FakeFilesystem) -> None:
+        """Omitting ALBUM raises a ValueError naming the missing field."""
+        src_dir = Path("/src/album")
+        tracks = [
+            {
+                "ALBUMARTIST": "Test Ensemble",
+                "TITLE": "Track One",
+                "TRACKNUMBER": "1",
+                "DATE": "2023",
+            },
+        ]
+        src_files = self._make_src_dir(fs, src_dir, tracks)
+
+        with pytest.raises(ValueError, match="ALBUM"):
+            validate_local_tags(src_files)
+
+    def test_missing_title_fails(self, fs: FakeFilesystem) -> None:
+        """Omitting TITLE raises a ValueError naming the missing field."""
+        src_dir = Path("/src/album")
+        tracks = [
+            {
+                "ALBUMARTIST": "Test Ensemble",
+                "ALBUM": "Test Album",
+                "TRACKNUMBER": "1",
+                "DATE": "2023",
+            },
+        ]
+        src_files = self._make_src_dir(fs, src_dir, tracks)
+
+        with pytest.raises(ValueError, match="TITLE"):
+            validate_local_tags(src_files)
+
+    def test_missing_tracknumber_fails(self, fs: FakeFilesystem) -> None:
+        """Omitting TRACKNUMBER raises a ValueError naming the missing field."""
+        src_dir = Path("/src/album")
+        fs.create_dir(str(src_dir))
+        path = src_dir / "01 - track.flac"
+        self._write_flac_tags_raw(
+            fs,
+            path,
+            {
+                "ALBUMARTIST": "Test Ensemble",
+                "ALBUM": "Test Album",
+                "TITLE": "Track One",
+                "DATE": "2023",
+                # Deliberately omit TRACKNUMBER.
+            },
+        )
+
+        with pytest.raises(ValueError, match="TRACKNUMBER"):
+            validate_local_tags([path])
+
+    # KAT 3: Non-contiguous track numbers fail
+    def test_gap_in_track_numbers_fails(self, fs: FakeFilesystem) -> None:
+        """Track numbers {1, 2, 4} (gap) raise the leaf-numbering error."""
+        src_dir = Path("/src/album")
+        tracks = [
+            {"ALBUMARTIST": "A", "ALBUM": "B", "TITLE": "T1", "TRACKNUMBER": "1", "DATE": "2023"},
+            {"ALBUMARTIST": "A", "ALBUM": "B", "TITLE": "T2", "TRACKNUMBER": "2", "DATE": "2023"},
+            {"ALBUMARTIST": "A", "ALBUM": "B", "TITLE": "T4", "TRACKNUMBER": "4", "DATE": "2023"},
+        ]
+        src_files = self._make_src_dir(fs, src_dir, tracks)
+
+        with pytest.raises(ValueError, match="contiguous"):
+            validate_local_tags(src_files)
+
+    def test_duplicate_track_numbers_fail(self, fs: FakeFilesystem) -> None:
+        """Track numbers {1, 1, 2} (duplicate) raise the leaf-numbering error."""
+        src_dir = Path("/src/album")
+        fs.create_dir(str(src_dir))
+        paths: list[Path] = []
+        for i, (tn, title) in enumerate([("1", "T1"), ("1", "T1dup"), ("2", "T2")]):
+            path = src_dir / f"0{i + 1} - track.flac"
+            self._write_flac_tags_raw(
+                fs,
+                path,
+                {"ALBUMARTIST": "A", "ALBUM": "B", "TITLE": title, "TRACKNUMBER": tn, "DATE": "2023"},
+            )
+            paths.append(path)
+
+        with pytest.raises(ValueError, match="contiguous"):
+            validate_local_tags(paths)
+
+    def test_contiguous_track_numbers_pass(self, fs: FakeFilesystem) -> None:
+        """Track numbers {1, 2, 3} pass the gate."""
+        src_dir = Path("/src/album")
+        tracks = [
+            {"ALBUMARTIST": "A", "ALBUM": "B", "TITLE": "T1", "TRACKNUMBER": "1", "DATE": "2023"},
+            {"ALBUMARTIST": "A", "ALBUM": "B", "TITLE": "T2", "TRACKNUMBER": "2", "DATE": "2023"},
+            {"ALBUMARTIST": "A", "ALBUM": "B", "TITLE": "T3", "TRACKNUMBER": "3", "DATE": "2023"},
+        ]
+        src_files = self._make_src_dir(fs, src_dir, tracks)
+
+        validated = validate_local_tags(src_files)
+        assert len(validated) == 3
+
+    # KAT 4: DATE affirmed-unknown passes with empty DATE
+    def test_date_affirmed_unknown_passes(self, fs: FakeFilesystem) -> None:
+        """date_unknown=True with no DATE tag passes the gate; TrackTags.date is "".
+
+        The resulting build_dest_path renders no [rel YYYY] suffix.
+        """
+        src_dir = Path("/src/album")
+        fs.create_dir(str(src_dir))
+        path = src_dir / "01 - track.flac"
+        self._write_flac_tags_raw(
+            fs,
+            path,
+            {
+                "ALBUMARTIST": "Test Ensemble",
+                "ALBUM": "Test Album",
+                "TITLE": "Track One",
+                "TRACKNUMBER": "1",
+                # Deliberately omit DATE.
+            },
+        )
+
+        validated = validate_local_tags([path], date_unknown=True)
+        assert len(validated) == 1
+        # DATE is absent from the tag dict.
+        assert validated[0].get("DATE", "") == ""
+
+        built = build_local_track_tags([path], validated, date_unknown=True)
+        track_tags, stub_track, stub_release = built[0]
+        # TrackTags.date must be "" so build_dest_path renders no [rel YYYY] suffix.
+        assert track_tags.date == ""
+
+        # Verify build_dest_path produces a legal path with no date suffix.
+        dest_root = Path("/dest")
+        dest_path = build_dest_path(dest_root, stub_release, stub_track, track_tags, global_track_idx=1)
+        assert "[rel" not in str(dest_path)
+        assert "[rec" not in str(dest_path)
+
+    # KAT 5: DATE silently-missing fails
+    def test_date_silently_missing_fails(self, fs: FakeFilesystem) -> None:
+        """No real year and no affirmation (date_unknown=False) raises the DATE gate error."""
+        src_dir = Path("/src/album")
+        fs.create_dir(str(src_dir))
+        path = src_dir / "01 - track.flac"
+        self._write_flac_tags_raw(
+            fs,
+            path,
+            {
+                "ALBUMARTIST": "Test Ensemble",
+                "ALBUM": "Test Album",
+                "TITLE": "Track One",
+                "TRACKNUMBER": "1",
+                # Deliberately omit DATE.
+            },
+        )
+
+        with pytest.raises(ValueError, match="DATE"):
+            validate_local_tags([path])
+
+    # KAT 6: Renderable path
+    def test_renderable_path_performer_led(self, fs: FakeFilesystem) -> None:
+        """Constructed TrackTags + stubs feed build_dest_path and produce a legal performer-led path."""
+        src_dir = Path("/src/album")
+        tracks = [
+            {
+                "ALBUMARTIST": "Test Ensemble",
+                "ALBUM": "Test Album",
+                "TITLE": "Track One",
+                "TRACKNUMBER": "1",
+                "DATE": "2023",
+            },
+        ]
+        src_files = self._make_src_dir(fs, src_dir, tracks)
+
+        validated = validate_local_tags(src_files)
+        built = build_local_track_tags(src_files, validated)
+        track_tags, stub_track, stub_release = built[0]
+
+        dest_root = Path("/dest")
+        dest_path = build_dest_path(dest_root, stub_release, stub_track, track_tags, global_track_idx=1)
+
+        # The path must be under dest_root.
+        assert str(dest_path).startswith(str(dest_root))
+        # The first component must derive from ALBUMARTIST (performer-led).
+        rel = dest_path.relative_to(dest_root)
+        assert rel.parts[0].startswith("Test Ensemble")
+
+    def test_renderable_path_composer_led(self, fs: FakeFilesystem) -> None:
+        """When CWP_* fields are supplied, build_dest_path takes the composer-led branch."""
+        src_dir = Path("/src/album")
+        fs.create_dir(str(src_dir))
+        path = src_dir / "01 - track.flac"
+        self._write_flac_tags_raw(
+            fs,
+            path,
+            {
+                "ALBUMARTIST": "Test Ensemble",
+                "ALBUM": "Test Album",
+                "TITLE": "Track One",
+                "TRACKNUMBER": "1",
+                "DATE": "2023",
+                # CWP_* fields that route the composer-led branch.
+                "CWP_WORK_TOP": "Symphony No. 5",
+                "CWP_WORKTYPE_GENRES_TOP": "Classical",
+                "CWP_COMPOSER_LASTNAMES": "Beethoven",
+            },
+        )
+
+        validated = validate_local_tags([path])
+        built = build_local_track_tags([path], validated)
+        track_tags, stub_track, stub_release = built[0]
+
+        dest_root = Path("/dest")
+        dest_path = build_dest_path(dest_root, stub_release, stub_track, track_tags, global_track_idx=1)
+
+        # The path must be under dest_root.
+        assert str(dest_path).startswith(str(dest_root))
+        # The first component must derive from CWP_COMPOSER_LASTNAMES (composer-led).
+        rel = dest_path.relative_to(dest_root)
+        assert "Beethoven" in rel.parts[0]
+
+    # Additional coverage: MP3 source files, unsupported format, non-integer TRACKNUMBER
+    def test_mp3_source_file_validates(self, fs: FakeFilesystem) -> None:
+        """validate_local_tags reads embedded tags from MP3 source files correctly."""
+        src_dir = Path("/src/album")
+        fs.create_dir(str(src_dir))
+        path = src_dir / "01 - track.mp3"
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+        # Write tags via apply_tags_mp3 so the standard ID3 frames are populated.
+        apply_tags_mp3(
+            path,
+            TrackTags(
+                albumartist="MP3 Ensemble",
+                album="MP3 Album",
+                title="MP3 Track",
+                tracknumber="1",
+                date="2024",
+            ),
+        )
+
+        validated = validate_local_tags([path])
+        assert len(validated) == 1
+        assert validated[0]["ALBUMARTIST"] == "MP3 Ensemble"
+        assert validated[0]["DATE"] == "2024"
+        assert validated[0]["TRACKNUMBER"] == "1"
+
+    def test_unsupported_format_raises(self, fs: FakeFilesystem) -> None:
+        """A source file with an unsupported suffix raises ValueError from _read_embedded_tags."""
+        from music_annotator._pipeline_local import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+            _read_embedded_tags,
+        )
+
+        src_dir = Path("/src/album")
+        fs.create_dir(str(src_dir))
+        path = src_dir / "01 - track.ogg"
+        fs.create_file(str(path), contents=b"fake ogg")
+
+        with pytest.raises(ValueError, match="Unsupported audio format"):
+            _read_embedded_tags(path)
+
+    def test_non_integer_tracknumber_fails(self, fs: FakeFilesystem) -> None:
+        """A non-integer TRACKNUMBER value raises a ValueError."""
+        src_dir = Path("/src/album")
+        fs.create_dir(str(src_dir))
+        path = src_dir / "01 - track.flac"
+        self._write_flac_tags_raw(
+            fs,
+            path,
+            {
+                "ALBUMARTIST": "Test Ensemble",
+                "ALBUM": "Test Album",
+                "TITLE": "Track One",
+                "TRACKNUMBER": "not-a-number",
+                "DATE": "2023",
+            },
+        )
+
+        with pytest.raises(ValueError, match="TRACKNUMBER"):
+            validate_local_tags([path])
+
+    def test_empty_src_files_raises(self, fs: FakeFilesystem) -> None:  # pylint: disable=unused-argument
+        """validate_local_tags([]) raises ValueError for an empty file list."""
+        with pytest.raises(ValueError, match="non-empty"):
+            validate_local_tags([])
+
+    def test_mp3_no_trck_frame(self, fs: FakeFilesystem) -> None:
+        """MP3 file without a TRCK frame is read correctly (TRACKNUMBER absent from result)."""
+        from music_annotator._pipeline_local import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+            _read_embedded_tags,
+        )
+
+        src_dir = Path("/src/album")
+        fs.create_dir(str(src_dir))
+        path = src_dir / "01 - track.mp3"
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+
+        # Write an MP3 with standard frames but no TRCK frame.
+        id3_tags = ID3()  # type: ignore[no-untyped-call]
+        id3_tags.add(TIT2(encoding=3, text="Track One"))  # type: ignore[no-untyped-call]
+        id3_tags.add(TPE2(encoding=3, text="Test Ensemble"))  # type: ignore[no-untyped-call]
+        id3_tags.add(TALB(encoding=3, text="Test Album"))  # type: ignore[no-untyped-call]
+        id3_tags.add(TDRC(encoding=3, text="2023"))  # type: ignore[no-untyped-call]
+        # Deliberately omit TRCK.
+        id3_tags.save(str(path), v2_version=4)
+
+        tags = _read_embedded_tags(path)
+        assert "TRACKNUMBER" not in tags
+        assert tags.get("TITLE") == "Track One"
+
+    def test_mp3_unknown_txxx_desc_ignored(self, fs: FakeFilesystem) -> None:
+        """TXXX frames with descriptions not in _MP3_TXXX_MAP are silently ignored."""
+        from music_annotator._pipeline_local import (  # noqa: PLC0415  # pylint: disable=import-outside-toplevel
+            _read_embedded_tags,
+        )
+
+        src_dir = Path("/src/album")
+        fs.create_dir(str(src_dir))
+        path = src_dir / "01 - track.mp3"
+        fs.create_file(str(path), contents=_MINIMAL_MP3)
+
+        id3_tags = ID3()  # type: ignore[no-untyped-call]
+        id3_tags.add(TIT2(encoding=3, text="Track One"))  # type: ignore[no-untyped-call]
+        id3_tags.add(TPE2(encoding=3, text="Test Ensemble"))  # type: ignore[no-untyped-call]
+        id3_tags.add(TALB(encoding=3, text="Test Album"))  # type: ignore[no-untyped-call]
+        id3_tags.add(TDRC(encoding=3, text="2023"))  # type: ignore[no-untyped-call]
+        id3_tags.add(TRCK(encoding=3, text="1"))  # type: ignore[no-untyped-call]
+        # Add a TXXX frame with an unknown description — should be silently ignored.
+        id3_tags.add(TXXX(encoding=3, desc="Unknown Custom Tag", text="some value"))  # type: ignore[no-untyped-call]
+        id3_tags.save(str(path), v2_version=4)
+
+        tags = _read_embedded_tags(path)
+        assert tags.get("TITLE") == "Track One"
+        assert tags.get("TRACKNUMBER") == "1"
+        # The unknown TXXX frame must not appear in the result.
+        assert "UNKNOWN CUSTOM TAG" not in tags
