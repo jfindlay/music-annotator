@@ -2877,6 +2877,12 @@ def enrich(
         # Determine which fields actually need a tag write (acoustid_id is copy-only, not a write)
         write_fields = {k: v for k, v in fields.items() if k in {"audio_hash", "acoustid_fingerprint"}}
 
+        # Count files lacking an embedded AcoustID before the noop gate so that fully-enriched
+        # files (no writes needed) that still have no AcoustID are included in the aggregate.
+        # "acoustid_id" is absent from fields when _needs_enrich found no embedded AcoustID tag.
+        if "acoustid_id" not in fields:
+            count_inconclusive_acoustid += 1
+
         # When re-resolving with an AcoustID key, perform a keyed fingerprint lookup to backfill
         # acoustid_id.  This rides the same re-tag → _verify_copy → journal provenance chain as
         # audio_hash and acoustid_fingerprint.  Only attempted when acoustid_fingerprint was
@@ -2904,10 +2910,6 @@ def enrich(
             log.debug("enrich_noop", path=str(current_path.relative_to(dest_root)))
             count_noop += 1
             continue
-
-        # Count inconclusive acoustid for files that need enrichment but have no acoustid tag
-        if "acoustid_id" not in fields:
-            count_inconclusive_acoustid += 1
 
         if dry_run:
             log.info(

@@ -2892,7 +2892,7 @@ class TestNeedsEnrich:
         assert result["audio_hash"].startswith("flac-md5:")
         assert result["acoustid_fingerprint"] == "AQADtMmybckm"
         assert "acoustid_id" not in result
-        mock_log.info.assert_called_once_with("enrich_acoustid_inconclusive", path=str(path))
+        mock_log.debug.assert_called_once_with("enrich_acoustid_inconclusive", path=str(path))
 
     def test_all_present_returns_empty_dict(self, fs: FakeFilesystem) -> None:
         """_needs_enrich returns {} when all three fields are already present.
@@ -3552,6 +3552,102 @@ class TestEnrich:
         enriched = [e for e in journal.entries if e.action == "enriched"]
         assert len(enriched) == 1
         assert enriched[0].destination == str(new_path)
+
+    # ------------------------------------------------------------------
+    # KAT: noop file lacking AcoustID still increments inconclusive count
+    # ------------------------------------------------------------------
+
+    def test_enrich_noop_file_without_acoustid_counted_inconclusive(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich_complete reports inconclusive_acoustid for files fully enriched except AcoustID.
+
+        A file that already has audio_hash and acoustid_fingerprint (so no tag writes are needed)
+        but lacks acoustid_id must still be counted in inconclusive_acoustid.  The previous
+        implementation incremented the counter only after the noop gate, so such files were
+        silently excluded from the aggregate count.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File has audio_hash and acoustid_fingerprint already embedded — no writes needed.
+        # acoustid_id is absent — the file lacks an embedded AcoustID.
+        tags = TrackTags(audio_hash="flac-md5:aabb")
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+        audio = MutagenFLAC(str(path))
+        audio["acoustid_fingerprint"] = ["ExistingFP"]
+        audio.save()
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mock_log = mocker.patch("music_annotator._pipeline_maint.log")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        # File is a noop (no writes needed) — no enriched journal entry.
+        journal = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        enriched = [e for e in journal.entries if e.action == "enriched"]
+        assert len(enriched) == 0
+
+        # enrich_complete must report inconclusive_acoustid=1 despite the noop.
+        complete_calls = [c for c in mock_log.info.call_args_list if c.args and c.args[0] == "enrich_complete"]
+        assert len(complete_calls) == 1
+        assert complete_calls[0].kwargs["inconclusive_acoustid"] == 1
+
+    # ------------------------------------------------------------------
+    # KAT: file with embedded AcoustID is not counted as inconclusive
+    # ------------------------------------------------------------------
+
+    def test_enrich_file_with_acoustid_not_counted_inconclusive(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """enrich_complete does not count files that have an embedded acoustid_id as inconclusive.
+
+        A file that has an embedded acoustid_id must not appear in inconclusive_acoustid,
+        regardless of whether it needs other tag writes (audio_hash or acoustid_fingerprint).
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File has acoustid_id but is missing audio_hash and acoustid_fingerprint — writes needed.
+        tags = TrackTags(acoustid_id="embedded-acoustid-uuid")
+        path = _make_enrichable_flac(dest_root, "Artist/Album/01 - Track.flac", tags)
+
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-06-01T00:00:00+00:00",
+                    "release_id": "rel-1",
+                    "source": "/src/01.flac",
+                    "destination": str(path),
+                    "action": "tagged",
+                }
+            ],
+        )
+
+        mocker.patch("music_annotator._pipeline_io._run_fpcalc", return_value="AQADtMmybckm")
+        mock_log = mocker.patch("music_annotator._pipeline_maint.log")
+
+        music_annotator.enrich(dest_root=dest_root, re_resolve=False, dry_run=False)
+
+        # File has an embedded AcoustID — must not be counted as inconclusive.
+        complete_calls = [c for c in mock_log.info.call_args_list if c.args and c.args[0] == "enrich_complete"]
+        assert len(complete_calls) == 1
+        assert complete_calls[0].kwargs["inconclusive_acoustid"] == 0
 
 
 # ---------------------------------------------------------------------------

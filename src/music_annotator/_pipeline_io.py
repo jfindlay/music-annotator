@@ -318,7 +318,9 @@ def _needs_enrich(path: Path, re_resolve: bool) -> dict[str, str]:
     if existing_acoustid:
         result["acoustid_id"] = existing_acoustid
     else:
-        log.info("enrich_acoustid_inconclusive", path=str(path))
+        # Per-file debug event; the operator-facing signal is the aggregate inconclusive_acoustid
+        # count in the enrich_complete summary event.
+        log.debug("enrich_acoustid_inconclusive", path=str(path))
 
     return result
 
