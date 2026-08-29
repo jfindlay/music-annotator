@@ -9,7 +9,9 @@ without making MusicBrainz network calls:
 * :func:`enrich`                      — retroactively backfill fingerprint fields into library files.
 * :func:`reconstruct_cross_references` — census the journal for destructive-choice shapes (SKIP and
   OVERWRITE collision policies) and write secondary release MBIDs as cross-reference tags on surviving
-  files.  Offline; dry-run supported.  Also reports evidence-gap candidates for operator review.
+  files.  Offline; dry-run supported.  Also appends truthful ``"cross-referenced"`` journal entries for
+  survivors carrying an embedded secondary MBID with no corroborating journal entry (C-AMEND: append-only,
+  sourced from the embedded tag, records what the current correct code would have journalled).
 * :func:`dedup_library`               — offline census over the live library: group files by embedded
   ``ACOUSTID_ID`` cluster (via the tag-read cache), with ``AUDIO_HASH`` equality as the byte-identity
   fast path; files lacking both are out of scope.  Aggregate per-recording pairs up to medium-level
@@ -3239,10 +3241,16 @@ def reconstruct_cross_references(
     MBID, secondary MBIDs to add) and must confirm before any writes occur.  ``--yes`` does
     **not** suppress this prompt (integrity prompts are not bulk consent).
 
-    **Evidence-gap candidates**: files where the journal shows only one ``"tagged"`` entry but
-    the file currently carries a ``MUSICBRAINZ_SECONDARY_ALBUMID`` tag (suggesting a
-    cross-reference was written outside the journal), or where the journal evidence is otherwise
-    ambiguous.  These are printed for operator review and returned as a list of path strings.
+    **Survivors with embedded secondary MBIDs and no corroborating journal entry**: files where
+    the journal shows only one ``"tagged"`` entry but the live file carries a
+    ``MUSICBRAINZ_SECONDARY_ALBUMID`` tag.  When the embedded secondary is non-empty, a truthful
+    ``"cross-referenced"`` journal entry is appended for each distinct embedded MBID value after
+    a separate operator confirmation (C-AMEND: append-only, sourced from the embedded tag,
+    records what the current correct code would have journalled).  The tag write is a verified
+    set-union no-op (the value is already present); only the journal append is new.  Files whose
+    embedded secondary is empty/whitespace are reported but not amended.  After amendment the
+    file is excluded from future gap reports (idempotency via
+    :func:`_census_journal_for_xrefs`).
 
     This function is offline: it reads the journal and live library files, but makes no
     MusicBrainz network calls.
@@ -3253,8 +3261,10 @@ def reconstruct_cross_references(
         in the operator prompt.
     :param dry_run: When ``True``, report findings without writing tags, prompting, or
         appending journal entries.
-    :returns: A list of destination path strings that are evidence-gap candidates (files where
-        duplication is suspected but not journal-provable).  Empty when no gaps are found.
+    :returns: A list of destination path strings that remain as survivors carrying an embedded
+        secondary MBID with no corroborating ``"cross-referenced"`` entry after this run
+        (i.e. files that were not amended — either because the operator declined or the embedded
+        secondary was empty).  Empty when no unamended gaps remain.
     :raises RuntimeError: If a tag write or read-back verification fails (C-PROV chain).
     """
     journal = _journal if _journal is not None else read_journal(journal_path)
@@ -3301,9 +3311,20 @@ def reconstruct_cross_references(
             actionable.append((current_path, primary_mbid, filtered_secondary))
 
     # --- Evidence-gap candidates: check live files for unexpected secondary MBIDs ---
-    # A file is an evidence-gap candidate when the journal shows only one "tagged" entry
-    # (no journal-provable secondary) but the live file carries a MUSICBRAINZ_SECONDARY_ALBUMID.
+    # A file is a survivor carrying an embedded secondary MBID with no corroborating
+    # "cross-referenced" entry when the journal shows only one "tagged" entry (no journal-provable
+    # secondary) but the live file carries a MUSICBRAINZ_SECONDARY_ALBUMID.
+    #
+    # Two sub-cases:
+    # * Amendable: the embedded secondary is non-empty — a truthful "cross-referenced" journal entry
+    #   can be appended sourced from the embedded value (C-AMEND).  Each distinct embedded MBID
+    #   ("; "-joined set-union) gets its own entry.
+    # * Non-amendable: the embedded secondary is empty/whitespace — no entry can be appended without
+    #   fabricating provenance; the file is reported but the journal is not mutated (C-AMEND clause c).
     gap_paths: list[str] = []
+    # amendable_gaps: (current_path, [secondary_mbids]) for files whose embedded secondary MBID(s)
+    # can be journalled via _write_xref_and_journal (C-AMEND).
+    amendable_gaps: list[tuple[Path, list[str]]] = []
     for dest in evidence_gap_dests:
         current_path = tagged_dest_to_current.get(dest, Path(dest))
         if not current_path.exists():
@@ -3322,6 +3343,10 @@ def reconstruct_cross_references(
         existing_secondary_raw = gap_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
         if existing_secondary_raw.strip():
             gap_paths.append(str(current_path))
+            # Collect each distinct embedded MBID for the amendment prompt.  The outer
+            # .strip() guard ensures at least one non-empty token exists here.
+            embedded_mbids = [m.strip() for m in existing_secondary_raw.split("; ") if m.strip()]
+            amendable_gaps.append((current_path, embedded_mbids))
 
     # --- Dry-run: report findings without prompting or writing ---
     if dry_run:
@@ -3341,70 +3366,126 @@ def reconstruct_cross_references(
             for gp in gap_paths:
                 rel = str(Path(gp).relative_to(dest_root)) if Path(gp).is_relative_to(dest_root) else gp
                 _console.print(f"  [dim]{_markup_escape(rel)}[/]")
+        if amendable_gaps:
+            _console.print(
+                f"\n[bold yellow]Amendable evidence-gap survivors[/]"
+                f" ({len(amendable_gaps)} file(s) — embedded secondary MBID present;"
+                f" would append journal entry on confirmation):\n"
+            )
+            for gap_path, gap_mbids in amendable_gaps:
+                rel = str(gap_path.relative_to(dest_root)) if gap_path.is_relative_to(dest_root) else str(gap_path)
+                _console.print(
+                    f"  [dim]{_markup_escape(rel)}[/]\n    embedded secondary: {_markup_escape('; '.join(gap_mbids))}"
+                )
         log.info(
             "reconstruct_xref_dry_run_complete",
             actionable=len(actionable),
             evidence_gaps=len(gap_paths),
+            amendable_gaps=len(amendable_gaps),
         )
         return gap_paths
 
-    if not actionable:
-        _console.print("\n[bold green]reconstruct-xrefs[/] — no secondary MBIDs to write.\n")
-        if gap_paths:
-            _console.print("\n[bold yellow]Evidence-gap candidates[/] (secondary MBID present but not journal-provable):\n")
-            for gp in gap_paths:
-                rel = str(Path(gp).relative_to(dest_root)) if Path(gp).is_relative_to(dest_root) else gp
-                _console.print(f"  [dim]{_markup_escape(rel)}[/]")
-        log.info("reconstruct_xref_nothing_to_write", dest_root=str(dest_root))
-        return gap_paths
-
-    # --- Interactive prompt: present grouped findings and ask for confirmation ---
-    # This prompt survives --yes (integrity prompts are not bulk consent).
-    _console.print("\n[bold yellow]reconstruct-xrefs[/] — secondary MBIDs to write:\n")
-    for current_path, primary_mbid, secondary_mbids in actionable:
-        rel = str(current_path.relative_to(dest_root)) if current_path.is_relative_to(dest_root) else str(current_path)
-        _console.print(
-            f"  [dim]{_markup_escape(rel)}[/]\n"
-            f"    primary:   {_markup_escape(primary_mbid)}\n"
-            f"    secondary: {_markup_escape('; '.join(secondary_mbids))}"
-        )
-    _console.print(
-        f"\n[bold]{len(actionable)} file(s) will receive secondary MBID cross-references.[/]  Proceed? [dim](y/n)[/]"
-    )
-    _console.print("\n[bold cyan]>[/] ", end="")
-    answer = input("").strip().lower()
-    if answer not in {"y", "yes"}:
-        log.info("reconstruct_xref_aborted", dest_root=str(dest_root))
-        return gap_paths
-
-    # --- Write cross-references through the full C-PROV chain ---
-    now = datetime.datetime.now(datetime.UTC)
-    now_str = now.isoformat()
-    written_count = 0
-    for current_path, _primary_mbid, secondary_mbids in actionable:
-        for secondary_mbid in secondary_mbids:
-            _write_xref_and_journal(
-                current_path,
-                secondary_mbid,
-                journal=journal,
-                journal_path=journal_path,
-                now_str=now_str,
+    # --- Handle actionable groups (SKIP / OVERWRITE policy secondaries) ---
+    if actionable:
+        # Interactive prompt: present grouped findings and ask for confirmation.
+        # This prompt survives --yes (integrity prompts are not bulk consent).
+        _console.print("\n[bold yellow]reconstruct-xrefs[/] — secondary MBIDs to write:\n")
+        for current_path, primary_mbid, secondary_mbids in actionable:
+            rel = str(current_path.relative_to(dest_root)) if current_path.is_relative_to(dest_root) else str(current_path)
+            _console.print(
+                f"  [dim]{_markup_escape(rel)}[/]\n"
+                f"    primary:   {_markup_escape(primary_mbid)}\n"
+                f"    secondary: {_markup_escape('; '.join(secondary_mbids))}"
             )
-            written_count += 1
+        _console.print(
+            f"\n[bold]{len(actionable)} file(s) will receive secondary MBID cross-references.[/]  Proceed? [dim](y/n)[/]"
+        )
+        _console.print("\n[bold cyan]>[/] ", end="")
+        answer = input("").strip().lower()
+        if answer not in {"y", "yes"}:
+            log.info("reconstruct_xref_aborted", dest_root=str(dest_root))
+            return gap_paths
 
-    _console.print(f"\n[bold green]reconstruct-xrefs complete[/] — {written_count} secondary MBID(s) written.\n")
-    if gap_paths:
+        # Write cross-references through the full C-PROV chain.
+        now = datetime.datetime.now(datetime.UTC)
+        now_str = now.isoformat()
+        written_count = 0
+        for current_path, _primary_mbid, secondary_mbids in actionable:
+            for secondary_mbid in secondary_mbids:
+                _write_xref_and_journal(
+                    current_path,
+                    secondary_mbid,
+                    journal=journal,
+                    journal_path=journal_path,
+                    now_str=now_str,
+                )
+                written_count += 1
+
+        _console.print(f"\n[bold green]reconstruct-xrefs complete[/] — {written_count} secondary MBID(s) written.\n")
+    else:
+        _console.print("\n[bold green]reconstruct-xrefs[/] — no secondary MBIDs to write.\n")
+        now = datetime.datetime.now(datetime.UTC)
+        now_str = now.isoformat()
+
+    # --- Amendment prompt: append journal entries for survivors with embedded secondary MBIDs ---
+    # For each survivor carrying an embedded secondary MBID with no corroborating
+    # "cross-referenced" entry, append a truthful journal entry sourced from the embedded value
+    # (C-AMEND: append-only, evidence-backed, records what the current correct code would have
+    # journalled).  The tag write is a verified set-union no-op (the value is already present);
+    # only the journal append is new.  This prompt survives --yes (integrity prompts are not bulk
+    # consent).
+    amended_paths: set[str] = set()
+    if amendable_gaps:
+        _console.print(
+            f"\n[bold yellow]Amend suppressed cross-references[/]"
+            f" — {len(amendable_gaps)} survivor(s) carry an embedded secondary MBID"
+            f" with no corroborating journal entry:\n"
+        )
+        for gap_path, gap_mbids in amendable_gaps:
+            rel = str(gap_path.relative_to(dest_root)) if gap_path.is_relative_to(dest_root) else str(gap_path)
+            _console.print(f"  [dim]{_markup_escape(rel)}[/]\n    embedded secondary: {_markup_escape('; '.join(gap_mbids))}")
+        _console.print(
+            f"\n[bold]{len(amendable_gaps)} file(s) will receive a truthful journal amendment"
+            f" (append-only, sourced from embedded tag).[/]  Proceed? [dim](y/n)[/]"
+        )
+        _console.print("\n[bold cyan]>[/] ", end="")
+        amend_answer = input("").strip().lower()
+        if amend_answer in {"y", "yes"}:
+            amend_count = 0
+            for gap_path, gap_mbids in amendable_gaps:
+                for gap_mbid in gap_mbids:
+                    _write_xref_and_journal(
+                        gap_path,
+                        gap_mbid,
+                        journal=journal,
+                        journal_path=journal_path,
+                        now_str=now_str,
+                    )
+                    amend_count += 1
+                amended_paths.add(str(gap_path))
+            _console.print(f"\n[bold green]Amendment complete[/] — {amend_count} journal entry/entries appended.\n")
+            log.info(
+                "reconstruct_xref_amend_complete",
+                dest_root=str(dest_root),
+                amended=amend_count,
+            )
+        else:
+            log.info("reconstruct_xref_amend_aborted", dest_root=str(dest_root))
+
+    # Report remaining (unamended) evidence-gap survivors.
+    remaining_gaps = [gp for gp in gap_paths if gp not in amended_paths]
+    if remaining_gaps:
         _console.print("\n[bold yellow]Evidence-gap candidates[/] (secondary MBID present but not journal-provable):\n")
-        for gp in gap_paths:
+        for gp in remaining_gaps:
             rel = str(Path(gp).relative_to(dest_root)) if Path(gp).is_relative_to(dest_root) else gp
             _console.print(f"  [dim]{_markup_escape(rel)}[/]")
     log.info(
         "reconstruct_xref_complete",
         dest_root=str(dest_root),
-        written=written_count,
-        evidence_gaps=len(gap_paths),
+        evidence_gaps=len(remaining_gaps),
+        amendable_gaps=len(amendable_gaps),
     )
-    return gap_paths
+    return remaining_gaps
 
 
 # ---------------------------------------------------------------------------

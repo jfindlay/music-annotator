@@ -13956,13 +13956,15 @@ class TestReconstructCrossReferences:
         gaps = reconstruct_cross_references(journal_path, dest_root, dry_run=True)
         assert gaps == []
 
-    def test_evidence_gap_reported_in_non_dry_run(self, fs: FakeFilesystem) -> None:
-        """Evidence-gap candidate reported in non-dry-run mode when no actionable groups exist.
+    def test_evidence_gap_reported_in_non_dry_run(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Evidence-gap survivor reported when operator declines the amendment prompt.
 
-        When there are no actionable groups but evidence-gap candidates exist, they are reported
-        and returned without prompting.
+        When there are no actionable groups but a survivor carries an embedded secondary MBID
+        with no corroborating journal entry, the amendment prompt is shown.  When the operator
+        declines, the file remains in the returned gap list and no journal entry is appended.
 
         :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
         """
         dest_root = Path("/lib")
         fs.create_dir(str(dest_root))
@@ -13984,10 +13986,15 @@ class TestReconstructCrossReferences:
             ],
         )
 
+        # Operator declines the amendment prompt → file remains in gaps, no journal entry.
+        mocker.patch("builtins.input", return_value="n")
         journal_path = dest_root / "music_annotator_journal.json"
         gaps = reconstruct_cross_references(journal_path, dest_root)
 
         assert str(flac_path) in gaps
+        # No "cross-referenced" entry appended.
+        journal = read_journal(journal_path)
+        assert not any(e.action == "cross-referenced" for e in journal.entries)
 
     def test_tag_read_error_in_actionable_loop_skipped(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
         """Tag read failure in actionable loop is logged and the file is skipped.
@@ -14318,11 +14325,13 @@ class TestReconstructCrossReferences:
         assert "secondary-rel" in tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
         assert gaps == []
 
-    def test_evidence_gap_reported_after_write(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
-        """Evidence-gap candidates reported after writing secondary MBIDs.
+    def test_evidence_gap_amended_after_write(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Evidence-gap survivor amended after writing actionable secondary MBIDs.
 
-        When both actionable groups and evidence-gap candidates exist, the gaps are reported
-        after the writes complete.
+        When both actionable groups and a survivor carrying an embedded secondary MBID with no
+        corroborating journal entry exist, and the operator confirms both prompts, the actionable
+        secondary is written to flac1 and the amendment journal entry is appended for flac2.
+        The returned gap list is empty (flac2 was amended).
 
         :param fs: pyfakefs fixture.
         :param mocker: pytest-mock fixture.
@@ -14334,7 +14343,7 @@ class TestReconstructCrossReferences:
         tags1 = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
         flac1 = self._make_flac(dest_root, "Work/01.flac", tags1)
 
-        # File 2: evidence-gap candidate (secondary MBID in tag, not in journal).
+        # File 2: survivor with embedded secondary MBID and no corroborating journal entry.
         tags2 = TrackTags(musicbrainz_albumid="only-rel", title="Track 2")
         flac2 = self._make_flac(dest_root, "Work/02.flac", tags2)
         write_secondary_albumid_flac(flac2, "mystery-rel")
@@ -14366,6 +14375,7 @@ class TestReconstructCrossReferences:
             ],
         )
 
+        # Operator confirms both the primary prompt and the amendment prompt.
         mocker.patch("builtins.input", return_value="y")
         journal_path = dest_root / "music_annotator_journal.json"
         gaps = reconstruct_cross_references(journal_path, dest_root)
@@ -14374,8 +14384,415 @@ class TestReconstructCrossReferences:
         tag_dict = _read_tags_flac(flac1)
         assert "secondary-rel" in tag_dict.get("MUSICBRAINZ_SECONDARY_ALBUMID", "")
 
-        # flac2 is an evidence-gap candidate.
-        assert str(flac2) in gaps
+        # flac2 was amended: journal entry appended, no longer in gaps.
+        assert gaps == []
+        journal = read_journal(journal_path)
+        xref_entries = [e for e in journal.entries if e.action == "cross-referenced"]
+        # One entry for flac1 (secondary-rel) and one for flac2 (mystery-rel).
+        assert any(e.release_id == "mystery-rel" and e.source == str(flac2) for e in xref_entries)
+
+    # --- KAT tests for C-AMEND amendment of survivors with embedded secondary MBIDs ---
+
+    def test_kat1_suppressed_entry_reconstructed(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """KAT-1: Suppressed entry reconstructed from embedded secondary MBID.
+
+        A survivor whose live tag carries a non-empty MUSICBRAINZ_SECONDARY_ALBUMID and has no
+        journal-provable "cross-referenced" entry at its resolved current path gains exactly one
+        truthful "cross-referenced" entry whose release_id equals the embedded secondary MBID and
+        whose source == destination == current path.  The entry is an APPEND; no existing entry
+        is edited or removed.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+        write_secondary_albumid_flac(flac_path, "embedded-secondary-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        # Gaps empty: the file was amended.
+        assert gaps == []
+
+        # Exactly one "cross-referenced" entry appended.
+        journal = read_journal(journal_path)
+        xref_entries = [e for e in journal.entries if e.action == "cross-referenced"]
+        assert len(xref_entries) == 1
+        entry = xref_entries[0]
+        assert entry.release_id == "embedded-secondary-rel"
+        assert entry.source == str(flac_path)
+        assert entry.destination == str(flac_path)
+
+        # Original "tagged" entry is still present and unmodified (append-only).
+        tagged_entries = [e for e in journal.entries if e.action == "tagged"]
+        assert len(tagged_entries) == 1
+        assert tagged_entries[0].release_id == "primary-rel"
+
+    def test_kat2_idempotent_noop_on_rerun(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """KAT-2: Idempotent noop on re-run after amendment.
+
+        Running the amendment a second time over the just-amended journal produces zero new
+        entries; the evidence-gap list for that file is empty.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+        write_secondary_albumid_flac(flac_path, "embedded-secondary-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+
+        # First run: amendment applied.
+        gaps1 = reconstruct_cross_references(journal_path, dest_root)
+        assert gaps1 == []
+
+        journal_after_first = read_journal(journal_path)
+        xref_count_after_first = sum(1 for e in journal_after_first.entries if e.action == "cross-referenced")
+        assert xref_count_after_first == 1
+
+        # Second run: noop — no new entries, no prompt (input not called again).
+        input_mock = mocker.patch("builtins.input")
+        gaps2 = reconstruct_cross_references(journal_path, dest_root)
+        assert gaps2 == []
+        input_mock.assert_not_called()
+
+        journal_after_second = read_journal(journal_path)
+        xref_count_after_second = sum(1 for e in journal_after_second.entries if e.action == "cross-referenced")
+        assert xref_count_after_second == xref_count_after_first
+
+    def test_kat3_already_provable_file_untouched(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """KAT-3: Already-provable file untouched.
+
+        A survivor whose secondary MBID is already recorded by a "cross-referenced" entry at
+        the resolved current path receives no new entry and is not reported as amendable.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+        write_secondary_albumid_flac(flac_path, "already-xref-rel")
+
+        # Journal already has a "cross-referenced" entry for this file.
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:01+00:00",
+                    "release_id": "already-xref-rel",
+                    "source": str(flac_path),
+                    "destination": str(flac_path),
+                    "action": "cross-referenced",
+                },
+            ],
+        )
+
+        input_mock = mocker.patch("builtins.input")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        # File is journal-provable: not in gaps, no prompt, no new entry.
+        assert gaps == []
+        input_mock.assert_not_called()
+
+        journal = read_journal(journal_path)
+        xref_entries = [e for e in journal.entries if e.action == "cross-referenced"]
+        assert len(xref_entries) == 1  # Only the original entry; no new one appended.
+
+    def test_kat4_empty_embedded_evidence_not_amendable(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """KAT-4: Empty embedded evidence is not amendable.
+
+        A survivor with no embedded MUSICBRAINZ_SECONDARY_ALBUMID (or empty/whitespace) receives
+        no amending entry; the journal is not mutated on its behalf.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File has only one tagged entry and no embedded secondary MBID.
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        input_mock = mocker.patch("builtins.input")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        # No embedded secondary → not amendable, no prompt, no journal entry.
+        assert gaps == []
+        input_mock.assert_not_called()
+
+        journal = read_journal(journal_path)
+        assert not any(e.action == "cross-referenced" for e in journal.entries)
+
+    def test_kat5_cprov_cmove_preserved_verification_failure_no_entry(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """KAT-5: C-PROV/C-MOVE preserved — verification failure raises, no journal entry appended.
+
+        If the amendment path's tag write read-back verification fails, a RuntimeError is raised
+        and no "cross-referenced" journal entry is appended.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+        write_secondary_albumid_flac(flac_path, "embedded-secondary-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # Patch _read_tags_flac to return an empty dict on the verification read-back, so the
+        # MBID is not found in the read-back value → RuntimeError raised by _write_xref_and_journal.
+        # The first call (in the gap loop) must succeed to populate amendable_gaps; only the
+        # second call (verification read-back inside _write_xref_and_journal) should fail.
+        real_read = _read_tags_flac
+        call_count: list[int] = [0]
+
+        def _patched_read(path: Path) -> dict[str, str]:
+            call_count[0] += 1
+            if call_count[0] <= 1:
+                return real_read(path)
+            # Verification read-back: return empty dict so MBID is not found.
+            return {}
+
+        mocker.patch("music_annotator._pipeline_maint._read_tags_flac", side_effect=_patched_read)
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+
+        with pytest.raises(RuntimeError, match="cross-reference write verification failed"):
+            reconstruct_cross_references(journal_path, dest_root)
+
+        # No "cross-referenced" entry appended (verification failed before journal append).
+        journal = read_journal(journal_path)
+        assert not any(e.action == "cross-referenced" for e in journal.entries)
+
+    def test_amendment_multiple_embedded_mbids_each_gets_own_entry(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Amendment: multiple embedded secondary MBIDs each get their own journal entry.
+
+        When a survivor's MUSICBRAINZ_SECONDARY_ALBUMID carries multiple "; "-joined values,
+        each distinct embedded MBID gets its own "cross-referenced" journal entry.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+        write_secondary_albumid_flac(flac_path, "embedded-rel-a")
+        write_secondary_albumid_flac(flac_path, "embedded-rel-b")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        assert gaps == []
+        journal = read_journal(journal_path)
+        xref_entries = [e for e in journal.entries if e.action == "cross-referenced"]
+        xref_ids = {e.release_id for e in xref_entries}
+        assert "embedded-rel-a" in xref_ids
+        assert "embedded-rel-b" in xref_ids
+        assert len(xref_entries) == 2
+
+    def test_amendment_declined_file_remains_in_gaps(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Amendment declined: file remains in returned gap list, journal unchanged.
+
+        When the operator declines the amendment prompt, the survivor remains in the returned
+        gap list and no journal entry is appended.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+        write_secondary_albumid_flac(flac_path, "embedded-secondary-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="n")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        assert str(flac_path) in gaps
+        journal = read_journal(journal_path)
+        assert not any(e.action == "cross-referenced" for e in journal.entries)
+
+    def test_amendment_dry_run_reports_amendable_gaps_no_write(self, fs: FakeFilesystem) -> None:
+        """Dry-run: amendable gap survivors reported but no journal entry written.
+
+        In dry-run mode, the function reports survivors with embedded secondary MBIDs but does
+        not prompt or write any journal entries.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        flac_path = self._make_flac(dest_root, "Work/01.flac", tags)
+        write_secondary_albumid_flac(flac_path, "embedded-secondary-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.flac",
+                    "destination": str(flac_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root, dry_run=True)
+
+        # Dry-run: gap still reported, no journal entry written.
+        assert str(flac_path) in gaps
+        journal = read_journal(journal_path)
+        assert not any(e.action == "cross-referenced" for e in journal.entries)
+
+    def test_amendment_mp3_survivor_amended(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """Amendment: MP3 survivor with embedded secondary MBID is amended.
+
+        Exercises the .mp3 branch in the amendment path.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags = TrackTags(musicbrainz_albumid="primary-rel", title="Track 1")
+        mp3_path = self._make_mp3(dest_root, "Work/01.mp3", tags)
+        write_secondary_albumid_mp3(mp3_path, "embedded-secondary-rel")
+
+        self._write_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "primary-rel",
+                    "source": "/src/a.mp3",
+                    "destination": str(mp3_path),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        mocker.patch("builtins.input", return_value="y")
+        journal_path = dest_root / "music_annotator_journal.json"
+        gaps = reconstruct_cross_references(journal_path, dest_root)
+
+        assert gaps == []
+        journal = read_journal(journal_path)
+        xref_entries = [e for e in journal.entries if e.action == "cross-referenced"]
+        assert len(xref_entries) == 1
+        assert xref_entries[0].release_id == "embedded-secondary-rel"
+        assert xref_entries[0].source == str(mp3_path)
+        assert xref_entries[0].destination == str(mp3_path)
 
 
 # ---------------------------------------------------------------------------
