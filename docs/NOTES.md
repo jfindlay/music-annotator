@@ -246,6 +246,28 @@ tracks+sidecars" **holds**.  One genuine gap: rip *origin-time* exists today onl
 (`source` path + earliest `timestamp`); it is the one datum a blind regenerate would lose, which is
 why it must migrate into the provenance sidecar before the journal is ever discarded.
 
+## Journal amendment vs. rewrite: the append-only correction of a bug-suppressed action
+
+Taken with "database-as-infrastructure" above: because the tracks+sidecars are the authority and the
+journal is a regenerable index, a journal write that makes the index agree with a fact the library
+*already durably records* is a truthful **amendment**, not a rewrite (operator ruling 2026-08-29;
+narrows — does not abolish — the prior "fix in code only; do not edit or rewrite journal history"
+ruling).  The distinguishing invariant, in property terms:
+
+> A journal write is a permitted **amendment** iff it (a) only **appends** (never edits, reorders, or
+> deletes an existing entry), (b) records an action the *current, correct* code would have journalled,
+> and (c) is provably derived from evidence that **already durably exists in the library** (e.g. a
+> survivor file's own embedded `MUSICBRAINZ_SECONDARY_ALBUMID`), so the entry asserts nothing the
+> library does not already record.  A write failing any of (a)–(c) — editing/deleting/reordering a
+> real recorded action, or asserting a cross-reference no surviving evidence corroborates — is a
+> forbidden **rewrite**, out of scope forever.
+
+This preserves the re-derivation guarantee: after the amendment, every full-history resolver finds the
+appended entry and re-derives the *same* present state (including idempotent exclusion of the file from
+future gap reports).  The append-only letter of the journal invariant is intact; the amendment is what
+*licenses* an append whose subject is a past (bug-suppressed) action, bounded to the evidence-backed,
+bug-correcting case.
+
 **Note on host paths.**  The canonical library layout is three siblings under `/home/findlay/Music/`
 on hades (music-annotator runs locally on hades); dev mounts (`~/Remote/hades/Music/*`) are a
 convenience vantage only:

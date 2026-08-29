@@ -825,4 +825,6 @@ design pinned in NOTES "Local accession identity"), and misc items (trigger- or 
   Closes the design half of the gap that `apply`/`search` require an MB release and `run()` cannot
   produce `source-tags-only`; the ingest verb (working name C-LOCAL-ID) is a trigger-based shard,
   elected when the operator chooses to catalog never-external material.  No frozen contract
-  invalidated; no destructive-HALT.
+  invalidated; no destructive-HALT.  **Trigger FIRED 2026-08-29** (operator elected): sharded to
+  `docs/PLAN.md` (3 sessions — accession-tag substrate → catalog-gate validation → ingest verb; freezes
+  C-LOCAL-ID + C-ACCESSION-GATE).  The design pinned above remains the reference.
