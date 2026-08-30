@@ -1,6 +1,6 @@
-"""Unit tests for pipeline functions: build_cea_performers, build_track_tags, apply_tags_flac, apply_tags_mp3,
-find_source_files, check_duration_preflight, _prompt_duration_warnings, run (non-dry-run), enrich_origin_time,
-and the catalog-gate functions validate_local_tags / build_local_track_tags.
+"""Unit tests for pipeline functions: assign_group_movement_numbers, build_cea_performers, build_track_tags,
+apply_tags_flac, apply_tags_mp3, find_source_files, check_duration_preflight, _prompt_duration_warnings,
+run (non-dry-run), enrich_origin_time, and the catalog-gate functions validate_local_tags / build_local_track_tags.
 """
 
 # pylint: disable=duplicate-code  # test helper factories intentionally mirror patterns in other test modules
@@ -93,7 +93,13 @@ from music_annotator._pipeline_io import (
 )
 from music_annotator._pipeline_local import build_local_track_tags, validate_local_tags
 from music_annotator._tagger import _FLAC_MAX_PICTURE_BYTES
-from music_annotator._tags import _NAME_MAX, _work_top_dir, build_dest_path, collect_applied_case_ids
+from music_annotator._tags import (
+    _NAME_MAX,
+    _work_top_dir,
+    assign_group_movement_numbers,
+    build_dest_path,
+    collect_applied_case_ids,
+)
 from music_annotator._works import work_group_modal_depth
 from music_annotator.models import (
     JSON,
@@ -455,6 +461,97 @@ class TestBuildCeaPerformers:
         rel = self._rel("conductor", "", "Unknown Conductor", "")
         cea = build_cea_performers(self._recording_multi([rel, rel]))
         assert len(cea.conductors) == 2
+
+
+# ---------------------------------------------------------------------------
+# assign_group_movement_numbers
+# ---------------------------------------------------------------------------
+
+
+def _minimal_tags(title: str = "") -> TrackTags:
+    """Build a minimal :class:`~music_annotator.models.TrackTags` for movement-number tests.
+
+    All required list fields are set to empty.
+
+    :param title: Optional track title string.
+    :returns: A :class:`~music_annotator.models.TrackTags` instance with required fields populated.
+    """
+    return TrackTags(cea_conductors_list=[], cea_ensembles_list=[], title=title)
+
+
+class TestAssignGroupMovementNumbers:
+    """Unit tests for assign_group_movement_numbers.
+
+    Verifies that the shared movement-number authority writes gap-free 1-based indices and the
+    single-work-album flag correctly, independently of how the caller obtained the ordered list
+    of tracks.  These tests guard the contract that both the ingest path and the consolidation
+    path use identically (the leaf ``nn`` is the per-top-work-group gap-free playback index,
+    re-derived from embedded ``(DISCNUMBER, TRACKNUMBER)`` order on every consolidation).
+    """
+
+    def test_single_track_group(self) -> None:
+        """A single-track group gets movt_num=1, tot=1, single_work_album=1.
+
+        :returns: None.
+        """
+        t = _minimal_tags()
+        assign_group_movement_numbers([t], single_work_album=True)
+        assert t.cwp_movt_num == "1"
+        assert t.cwp_movt_tot == "1"
+        assert t.movementnumber == "1"
+        assert t.movementtotal == "1"
+        assert t.cwp_single_work_album == "1"
+
+    def test_multi_track_group_numbering(self) -> None:
+        """Three tracks in a group are numbered 1/3, 2/3, 3/3.
+
+        :returns: None.
+        """
+        tracks = [_minimal_tags() for _ in range(3)]
+        assign_group_movement_numbers(tracks, single_work_album=True)
+        for idx, t in enumerate(tracks, start=1):
+            assert t.cwp_movt_num == str(idx)
+            assert t.movementnumber == str(idx)
+        for t in tracks:
+            assert t.cwp_movt_tot == "3"
+            assert t.movementtotal == "3"
+
+    def test_single_work_album_false(self) -> None:
+        """When single_work_album is False, cwp_single_work_album is set to "0".
+
+        :returns: None.
+        """
+        t = _minimal_tags()
+        assign_group_movement_numbers([t], single_work_album=False)
+        assert t.cwp_single_work_album == "0"
+
+    def test_ordering_is_caller_responsibility(self) -> None:
+        """The function assigns indices in the list order supplied; order is the caller's responsibility.
+
+        Passing tracks in reverse order produces reversed numbering — the function makes no attempt
+        to sort.  This test documents the contract: the caller (ingest path via ``group_idxs``
+        enumeration order, or maintenance path via sorted ``(DISCNUMBER, TRACKNUMBER)``) owns the
+        ordering decision.
+
+        :returns: None.
+        """
+        t1 = _minimal_tags(title="I")
+        t2 = _minimal_tags(title="II")
+        t3 = _minimal_tags(title="III")
+        assign_group_movement_numbers([t3, t2, t1], single_work_album=False)
+        # t3 was passed first — it gets index 1.
+        assert t3.cwp_movt_num == "1"
+        assert t2.cwp_movt_num == "2"
+        assert t1.cwp_movt_num == "3"
+
+    def test_mutates_in_place(self) -> None:
+        """The function mutates the TrackTags objects in the list in-place; has no return value.
+
+        :returns: None.
+        """
+        t = _minimal_tags()
+        assign_group_movement_numbers([t], single_work_album=False)
+        assert t.cwp_movt_num == "1"
 
 
 # ---------------------------------------------------------------------------

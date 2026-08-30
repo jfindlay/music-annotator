@@ -66,6 +66,7 @@ from music_annotator._tags import (
     _NAME_MAX,
     _proposed_short,
     _work_top_dir,
+    assign_group_movement_numbers,
     build_dest_path,
     build_track_tags,
     collect_applied_case_ids,
@@ -884,8 +885,10 @@ def _apply_workgroup_unification(
     Iterates over ``top_work_groups`` and applies five sequential passes to the tracks in each
     group:
 
-    1. **Movement numbers**: assigns ``movementnumber`` / ``movementtotal`` / ``cwp_movt_num`` /
-       ``cwp_movt_tot`` / ``cwp_single_work_album`` based on position within the group.
+    1. **Movement numbers**: delegates to :func:`~music_annotator._tags.assign_group_movement_numbers`
+       to assign ``movementnumber`` / ``movementtotal`` / ``cwp_movt_num`` / ``cwp_movt_tot`` /
+       ``cwp_single_work_album`` based on position within the group (tracks pre-ordered by
+       ``(medium.position, track.position)`` via ``group_idxs``).
     2. **Intermediate sibling index** (C-L1): for each intermediate hierarchy level ``i >= 1``,
        ranks distinct sibling nodes by ascending ``cwp_ordering_key_{i}`` and writes a gap-free
        1-based ``cwp_inter_index_{i}`` to every track belonging to each node.
@@ -908,16 +911,12 @@ def _apply_workgroup_unification(
     :param top_work_groups: Mapping from top-work MBID to the list of global indices (into
         ``tags_map``) that belong to that work group.
     """
+    single_work_album = len(top_work_groups) == 1
     for _twid, group_idxs in top_work_groups.items():
-        total = len(group_idxs)
-        single = len(top_work_groups) == 1
-        for movt_idx, grp_idx in enumerate(group_idxs, start=1):
-            tags_obj = tags_map[grp_idx]
-            tags_obj.movementnumber = str(movt_idx)
-            tags_obj.movementtotal = str(total)
-            tags_obj.cwp_movt_num = str(movt_idx)
-            tags_obj.cwp_movt_tot = str(total)
-            tags_obj.cwp_single_work_album = "1" if single else "0"
+        assign_group_movement_numbers(
+            [tags_map[idx] for idx in group_idxs],
+            single_work_album=single_work_album,
+        )
 
         # Enumerate intermediate sibling nodes at each hierarchy level i >= 1
         # (C-L1 contract).  This mirrors the leaf cwp_movt_num pass above but ranks

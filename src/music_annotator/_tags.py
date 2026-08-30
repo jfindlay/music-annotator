@@ -99,6 +99,39 @@ _DATE_SUFFIX_RE: re.Pattern[str] = re.compile(r"( \[(?:rec|rel) \d{4}(?:-\d{4})?
 _NN_PREFIX_RE: re.Pattern[str] = re.compile(r"^(\d+ - )")
 
 
+def assign_group_movement_numbers(tracks_in_group: list[TrackTags], *, single_work_album: bool) -> None:
+    """Assign gap-free 1-based movement-number tags to an ordered list of tracks within one top-work group.
+
+    Writes ``movementnumber``, ``movementtotal``, ``cwp_movt_num``, ``cwp_movt_tot``, and
+    ``cwp_single_work_album`` on every track in ``tracks_in_group``.  The caller is responsible for
+    supplying the tracks in the correct playback order (for ``run()`` that is ``(medium.position,
+    track.position)`` order; for the maintenance path it is embedded ``(DISCNUMBER, TRACKNUMBER)``
+    order).
+
+    This is the shared authority for the per-top-work-group leaf index (contract C-L0).  Both the
+    ingest path (``_apply_workgroup_unification`` in ``_pipeline.py``) and the consolidation path
+    (``regroup``/``unify`` in ``_pipeline_maint.py``) must call this function with the same ordering
+    rule so that the leaf ``nn`` is idempotent across sessions: the index is re-derived from
+    embedded ``(DISCNUMBER, TRACKNUMBER)`` order after any consolidation, not carried forward from a
+    prior per-session numbering.
+
+    Mutates each :class:`~music_annotator.models.TrackTags` in-place.
+
+    :param tracks_in_group: Tracks belonging to one ``CWP_WORKID_TOP`` group, pre-sorted in playback
+        order.  Must not be empty.
+    :param single_work_album: ``True`` when the release contains exactly one top-work group (i.e.
+        the entire album is one work).  Controls the ``CWP_SINGLE_WORK_ALBUM`` tag.
+    """
+    total = len(tracks_in_group)
+    single_flag = "1" if single_work_album else "0"
+    for movt_idx, tags_obj in enumerate(tracks_in_group, start=1):
+        tags_obj.movementnumber = str(movt_idx)
+        tags_obj.movementtotal = str(total)
+        tags_obj.cwp_movt_num = str(movt_idx)
+        tags_obj.cwp_movt_tot = str(total)
+        tags_obj.cwp_single_work_album = single_flag
+
+
 def safe_name(s: str) -> str:
     """Sanitise a string for use as a filesystem path component.
 
