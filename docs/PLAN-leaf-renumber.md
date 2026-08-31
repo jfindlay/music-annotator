@@ -149,7 +149,7 @@ idempotent across sessions.
 |-----|--------------------------------------------------------------------------------------------|---------|---------|--------|
 | S1  | Extract tag-only movement-renumber helper shared by run() and maintenance                  | done    | e2a6e27 | C-L5   |
 | S2  | Fix source bug: regroup()/unify() re-derive CWP_MOVT_NUM over merged group                | done    | 1fd8da5 | —      |
-| S3 ◆ | Add `renumber-leaves` subcommand: tag-rewrite + rename on the provenance chain           | pending | —       | —      |
+| S3 ◆ | Add `renumber-leaves` subcommand: tag-rewrite + rename on the provenance chain           | done    | 5ee4ce2 + 7840996 | — (◆ boundary: still-on-intent 2026-08-31) |
 
 ## Action-frame digest
 

@@ -450,6 +450,17 @@ source captured before move, move executed, SHA of destination verified equal, `
 round-trip verified, ONLY THEN the journal entry appended.  A crash leaves a complete audit trail of
 what already moved.  (Contract C-L4, frozen by L4 commit `f1ab378`.)
 
+**Invariant 5 — `CWP_MOVT_NUM` is session-local; consolidation must re-derive it (C-L5).**  The leaf
+`nn` prefix is gap-free only *within one ingest session*.  When the same MB work is ingested across
+separate sessions and later consolidated, each session's `CWP_MOVT_NUM` starts from 1 independently.
+The shared authority for re-deriving the index is `assign_group_movement_numbers` in `_tags.py`:
+group by `CWP_WORKID_TOP`, sort by embedded `(DISCNUMBER, TRACKNUMBER)`, assign gap-free 1-based
+`CWP_MOVT_NUM` / `CWP_MOVT_TOT` / `MOVEMENTNUMBER` / `MOVEMENTTOTAL`.  Both the ingest path
+(`_apply_workgroup_unification`) and the consolidation path (`regroup`/`unify`) call this function
+with the same ordering rule, making the leaf `nn` idempotent across sessions.  The `renumber-leaves`
+subcommand retroactively repairs existing collision dirs (duplicate `nn` prefixes in one directory)
+using the same authority.  (Contract C-L5, frozen by commit `e2a6e27`.)
+
 ## Leaf-numbering & non-uniform-depth bugs (corrected diagnosis across four work shapes)
 
 Re-diagnosed against the **current** code (commit `86c47bf`) by reading the real on-disk tags from
