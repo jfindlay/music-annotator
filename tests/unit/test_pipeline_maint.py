@@ -51,6 +51,7 @@ from music_annotator._pipeline_maint import (
     _TAG_CACHE_FILENAME,
     DuplicateResolution,
     TagReadCache,
+    _apply_group_movement_renumber,
     _build_dedup_census,
     _build_dedup_groups,
     _build_maintain_report,
@@ -17733,3 +17734,810 @@ class TestSharedLibraryModalDepth:
         # After regroup: tracks must be at the depth-2 canonical paths.
         assert canonical_1.exists(), f"regroup must place track 1 at canonical path {canonical_1.relative_to(dest_root)}"
         assert canonical_2.exists(), f"regroup must place track 2 at canonical path {canonical_2.relative_to(dest_root)}"
+
+
+class TestApplyGroupMovementRenumber:
+    """Unit tests for :func:`_apply_group_movement_renumber`.
+
+    Verifies the helper that re-derives gap-free ``CWP_MOVT_NUM`` from embedded
+    ``(DISCNUMBER, TRACKNUMBER)`` order and writes changed tags back to disk.
+
+    The leaf ``nn`` prefix (``CWP_MOVT_NUM``) is the per-top-work-group gap-free playback index.
+    It is session-local and must never be trusted across a merge.  After any consolidation the
+    index must be re-derived from embedded ``(DISCNUMBER, TRACKNUMBER)`` order so that the
+    resulting path is idempotent across sessions.
+    """
+
+    def test_already_correct_is_noop(self, fs: FakeFilesystem) -> None:
+        """_apply_group_movement_renumber is a no-op when CWP_MOVT_NUM is already correct.
+
+        When the embedded (DISCNUMBER, TRACKNUMBER) order already yields the same gap-free
+        1-based index as the embedded CWP_MOVT_NUM, no tag write is performed and the
+        TrackTags objects are unchanged.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_1 = TrackTags(
+            cwp_workid_top="w-1",
+            cwp_movt_num="1",
+            cwp_movt_tot="2",
+            movementnumber="1",
+            movementtotal="2",
+            discnumber="1",
+            tracknumber="1",
+            musicbrainz_albumid="rel-1",
+        )
+        tags_2 = TrackTags(
+            cwp_workid_top="w-1",
+            cwp_movt_num="2",
+            cwp_movt_tot="2",
+            movementnumber="2",
+            movementtotal="2",
+            discnumber="1",
+            tracknumber="2",
+            musicbrainz_albumid="rel-1",
+        )
+        path_1 = _make_library_flac(dest_root, "Comp/Work/01 - Mvt1.flac", tags_1)
+        path_2 = _make_library_flac(dest_root, "Comp/Work/02 - Mvt2.flac", tags_2)
+
+        mtime_1_before = path_1.stat().st_mtime_ns
+        mtime_2_before = path_2.stat().st_mtime_ns
+
+        group: list[tuple[Path, TrackTags, dict[str, str], str]] = [
+            (path_1, tags_1, {}, ".flac"),
+            (path_2, tags_2, {}, ".flac"),
+        ]
+        _apply_group_movement_renumber(group, single_work_album=True)
+
+        # Tags unchanged in memory
+        assert tags_1.cwp_movt_num == "1"
+        assert tags_2.cwp_movt_num == "2"
+
+        # Files not rewritten (mtime unchanged)
+        assert path_1.stat().st_mtime_ns == mtime_1_before
+        assert path_2.stat().st_mtime_ns == mtime_2_before
+
+    def test_stale_movt_num_is_corrected(self, fs: FakeFilesystem) -> None:
+        """_apply_group_movement_renumber corrects stale CWP_MOVT_NUM from a prior session.
+
+        When two sessions each numbered their tracks from 1 (collision), the helper re-derives
+        the correct gap-free index from (DISCNUMBER, TRACKNUMBER) and writes the corrected tags
+        back to disk.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Session 1: disc 1, tracks 1-2, numbered 1-2 (correct within session)
+        tags_d1t1 = TrackTags(
+            cwp_workid_top="w-1",
+            cwp_movt_num="1",
+            cwp_movt_tot="2",
+            movementnumber="1",
+            movementtotal="2",
+            discnumber="1",
+            tracknumber="1",
+            musicbrainz_albumid="rel-1",
+        )
+        tags_d1t2 = TrackTags(
+            cwp_workid_top="w-1",
+            cwp_movt_num="2",
+            cwp_movt_tot="2",
+            movementnumber="2",
+            movementtotal="2",
+            discnumber="1",
+            tracknumber="2",
+            musicbrainz_albumid="rel-1",
+        )
+        # Session 2: disc 2, tracks 1-2, also numbered 1-2 (collision after merge)
+        tags_d2t1 = TrackTags(
+            cwp_workid_top="w-1",
+            cwp_movt_num="1",
+            cwp_movt_tot="2",
+            movementnumber="1",
+            movementtotal="2",
+            discnumber="2",
+            tracknumber="1",
+            musicbrainz_albumid="rel-1",
+        )
+        tags_d2t2 = TrackTags(
+            cwp_workid_top="w-1",
+            cwp_movt_num="2",
+            cwp_movt_tot="2",
+            movementnumber="2",
+            movementtotal="2",
+            discnumber="2",
+            tracknumber="2",
+            musicbrainz_albumid="rel-1",
+        )
+
+        path_d1t1 = _make_library_flac(dest_root, "Comp/Work/01 - Mvt1.flac", tags_d1t1)
+        path_d1t2 = _make_library_flac(dest_root, "Comp/Work/02 - Mvt2.flac", tags_d1t2)
+        path_d2t1 = _make_library_flac(dest_root, "Comp/Work/03 - Mvt3.flac", tags_d2t1)
+        path_d2t2 = _make_library_flac(dest_root, "Comp/Work/04 - Mvt4.flac", tags_d2t2)
+
+        group: list[tuple[Path, TrackTags, dict[str, str], str]] = [
+            (path_d1t1, tags_d1t1, {}, ".flac"),
+            (path_d1t2, tags_d1t2, {}, ".flac"),
+            (path_d2t1, tags_d2t1, {}, ".flac"),
+            (path_d2t2, tags_d2t2, {}, ".flac"),
+        ]
+        _apply_group_movement_renumber(group, single_work_album=True)
+
+        # All four tracks renumbered gap-free 1-4 in (disc, track) order
+        assert tags_d1t1.cwp_movt_num == "1"
+        assert tags_d1t2.cwp_movt_num == "2"
+        assert tags_d2t1.cwp_movt_num == "3"
+        assert tags_d2t2.cwp_movt_num == "4"
+
+        # Total updated on all tracks
+        assert tags_d1t1.cwp_movt_tot == "4"
+        assert tags_d2t2.cwp_movt_tot == "4"
+
+        # Tags written to disk: read back and verify
+        assert _read_tags_flac(path_d2t1).get("CWP_MOVT_NUM") == "3"
+        assert _read_tags_flac(path_d2t2).get("CWP_MOVT_NUM") == "4"
+
+        # Disc-1 tracks were already 1 and 2 — they are still written because total changed
+        assert _read_tags_flac(path_d1t1).get("CWP_MOVT_NUM") == "1"
+        assert _read_tags_flac(path_d1t2).get("CWP_MOVT_NUM") == "2"
+
+    def test_renumber_is_idempotent(self, fs: FakeFilesystem) -> None:
+        """A second call to _apply_group_movement_renumber on an already-renumbered group is a no-op.
+
+        After the first call corrects the stale CWP_MOVT_NUM, a second call with the same group
+        (now carrying the corrected in-memory values) must not rewrite any files.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_d1t1 = TrackTags(
+            cwp_workid_top="w-1",
+            cwp_movt_num="1",
+            cwp_movt_tot="2",
+            movementnumber="1",
+            movementtotal="2",
+            discnumber="1",
+            tracknumber="1",
+            musicbrainz_albumid="rel-1",
+        )
+        tags_d2t1 = TrackTags(
+            cwp_workid_top="w-1",
+            cwp_movt_num="1",  # stale: collision with disc-1 track 1
+            cwp_movt_tot="1",
+            movementnumber="1",
+            movementtotal="1",
+            discnumber="2",
+            tracknumber="1",
+            musicbrainz_albumid="rel-1",
+        )
+
+        path_d1t1 = _make_library_flac(dest_root, "Comp/Work/01 - Mvt1.flac", tags_d1t1)
+        path_d2t1 = _make_library_flac(dest_root, "Comp/Work/02 - Mvt2.flac", tags_d2t1)
+
+        group: list[tuple[Path, TrackTags, dict[str, str], str]] = [
+            (path_d1t1, tags_d1t1, {}, ".flac"),
+            (path_d2t1, tags_d2t1, {}, ".flac"),
+        ]
+
+        # First call: corrects the stale value
+        _apply_group_movement_renumber(group, single_work_album=True)
+        assert tags_d2t1.cwp_movt_num == "2"
+
+        # Capture mtime after first call
+        mtime_d1t1_after_first = path_d1t1.stat().st_mtime_ns
+        mtime_d2t1_after_first = path_d2t1.stat().st_mtime_ns
+
+        # Second call: no change expected
+        _apply_group_movement_renumber(group, single_work_album=True)
+
+        assert path_d1t1.stat().st_mtime_ns == mtime_d1t1_after_first
+        assert path_d2t1.stat().st_mtime_ns == mtime_d2t1_after_first
+
+    def test_mp3_stale_movt_num_is_corrected(self, fs: FakeFilesystem) -> None:
+        """_apply_group_movement_renumber corrects stale CWP_MOVT_NUM in MP3 files.
+
+        Exercises the MP3 branch of the tag-write match/case in _apply_group_movement_renumber.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_d1t1 = TrackTags(
+            cwp_workid_top="w-mp3",
+            cwp_movt_num="1",
+            cwp_movt_tot="1",
+            movementnumber="1",
+            movementtotal="1",
+            discnumber="1",
+            tracknumber="1",
+            musicbrainz_albumid="mp3-rel",
+        )
+        tags_d2t1 = TrackTags(
+            cwp_workid_top="w-mp3",
+            cwp_movt_num="1",  # stale: collision with disc-1 track 1
+            cwp_movt_tot="1",
+            movementnumber="1",
+            movementtotal="1",
+            discnumber="2",
+            tracknumber="1",
+            musicbrainz_albumid="mp3-rel",
+        )
+
+        path_d1t1 = _make_library_mp3(dest_root, "Comp/Work/01 - Mvt1.mp3", tags_d1t1)
+        path_d2t1 = _make_library_mp3(dest_root, "Comp/Work/02 - Mvt2.mp3", tags_d2t1)
+
+        group: list[tuple[Path, TrackTags, dict[str, str], str]] = [
+            (path_d1t1, tags_d1t1, {}, ".mp3"),
+            (path_d2t1, tags_d2t1, {}, ".mp3"),
+        ]
+        _apply_group_movement_renumber(group, single_work_album=True)
+
+        # Disc-2 track renumbered to 2
+        assert tags_d2t1.cwp_movt_num == "2"
+        # Tags written to disk: read back and verify
+        assert _read_tags_mp3(path_d2t1).get("CWP_MOVT_NUM") == "2"
+
+    def test_mutagen_error_raises_runtime_error(self, mocker: MockerFixture, fs: FakeFilesystem) -> None:
+        """_apply_group_movement_renumber raises RuntimeError when apply_tags_flac fails.
+
+        Exercises the MutagenError → RuntimeError conversion in the tag-write path.
+
+        :param mocker: pytest-mock fixture.
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        tags_d1t1 = TrackTags(
+            cwp_workid_top="w-err",
+            cwp_movt_num="1",
+            cwp_movt_tot="1",
+            movementnumber="1",
+            movementtotal="1",
+            discnumber="1",
+            tracknumber="1",
+            musicbrainz_albumid="err-rel",
+        )
+        tags_d2t1 = TrackTags(
+            cwp_workid_top="w-err",
+            cwp_movt_num="1",  # stale: collision triggers renumber
+            cwp_movt_tot="1",
+            movementnumber="1",
+            movementtotal="1",
+            discnumber="2",
+            tracknumber="1",
+            musicbrainz_albumid="err-rel",
+        )
+
+        path_d1t1 = _make_library_flac(dest_root, "Comp/Work/01 - Mvt1.flac", tags_d1t1)
+        path_d2t1 = _make_library_flac(dest_root, "Comp/Work/02 - Mvt2.flac", tags_d2t1)
+
+        mocker.patch("music_annotator._pipeline_maint.apply_tags_flac", side_effect=MutagenError("disk full"))
+
+        group: list[tuple[Path, TrackTags, dict[str, str], str]] = [
+            (path_d1t1, tags_d1t1, {}, ".flac"),
+            (path_d2t1, tags_d2t1, {}, ".flac"),
+        ]
+        with pytest.raises(RuntimeError, match="consolidation renumber tag write failure"):
+            _apply_group_movement_renumber(group, single_work_album=True)
+
+
+class TestRegroupMovementRenumber:
+    """Tests for the CWP_MOVT_NUM re-derivation pass inside :func:`music_annotator.regroup`.
+
+    The leaf ``nn`` prefix (``CWP_MOVT_NUM``) is the per-top-work-group gap-free playback index.
+    It is session-local and must never be trusted across a merge.  After consolidating cross-session
+    fragments, ``regroup`` must re-derive the gap-free 1-based index from embedded
+    ``(DISCNUMBER, TRACKNUMBER)`` order within each ``CWP_WORKID_TOP`` group so that the resulting
+    path is idempotent across sessions.
+
+    **Idempotency KAT**: running ``regroup`` on an already-correct (single-session) work is a
+    no-op — no tag change, no move.
+
+    **Convergence KAT**: after ``regroup`` renumbers a cross-session merge, a subsequent
+    ``regroup`` over the same releases is a no-op — the two runs compute the identical
+    ``CWP_MOVT_NUM``.
+    """
+
+    def _build_single_session_scenario(self, dest_root: Path) -> tuple[Path, Path]:
+        """Create a confirmed split-release scenario where CWP_MOVT_NUM is already correct.
+
+        Two tracks of the same work, ingested in one session, with correct gap-free
+        CWP_MOVT_NUM (1 and 2).  The split-release condition is satisfied (two distinct
+        work_dirs in the journal for the same release_id) so regroup will process the files.
+        The canonical path for track 1 differs from its current path so a move is planned.
+
+        :param dest_root: Library root (must already exist).
+        :returns: Tuple of (current path for track 1, canonical path for track 1).
+        """
+        tags_1 = TrackTags(
+            cwp_workid_top="w-single",
+            cwp_composer_lastnames="Bach",
+            cwp_work_top="Goldberg Variations",
+            recording_date="2020",
+            cwp_movt_num="1",
+            cwp_movt_tot="2",
+            movementnumber="1",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="1",
+            tracknumber="1",
+            title="Aria",
+            artist="Gould",
+            musicbrainz_albumid="single-session-rel",
+        )
+        tags_2 = TrackTags(
+            cwp_workid_top="w-single",
+            cwp_composer_lastnames="Bach",
+            cwp_work_top="Goldberg Variations",
+            recording_date="2020",
+            cwp_movt_num="2",
+            cwp_movt_tot="2",
+            movementnumber="2",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="1",
+            tracknumber="2",
+            title="Variation 1",
+            artist="Gould",
+            musicbrainz_albumid="single-session-rel",
+        )
+
+        # Track 1 lives at a legacy path (wrong work_dir) so regroup will plan a move.
+        old_path_1 = _make_library_flac(dest_root, "Bach - Gould/OldWork [2020]/01 - Aria.flac", tags_1)
+        canonical_1 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_1, global_track_idx=0).with_suffix(".flac")
+
+        # Track 2 lives at the canonical path (already correct) — provides the second work_dir
+        # entry in the journal so _confirm_fragmentation marks the release confirmed.
+        canonical_2 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_2, global_track_idx=0).with_suffix(".flac")
+        canonical_rel_2 = str(canonical_2.relative_to(dest_root))
+        _make_library_flac(dest_root, canonical_rel_2, tags_2)
+
+        # Journal: two entries for "single-session-rel" under different work_dirs.
+        phantom = dest_root / "Bach - Gould" / "OtherWork [2020]" / "phantom.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "single-session-rel",
+                    "source": "/src/01.flac",
+                    "destination": str(old_path_1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "single-session-rel",
+                    "source": "/src/phantom.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        return old_path_1, canonical_1
+
+    def test_idempotency_kat_single_session_correct_movt_num_unchanged(self, fs: FakeFilesystem) -> None:
+        """Idempotency KAT: regroup on an already-correct single-session work leaves CWP_MOVT_NUM unchanged.
+
+        When the embedded CWP_MOVT_NUM is already gap-free and consistent with the embedded
+        (DISCNUMBER, TRACKNUMBER) order, the renumber pass must not change any tag values.
+        The file is still moved to its canonical path (the split-release condition is satisfied),
+        but the leaf nn prefix in the moved file must equal the original CWP_MOVT_NUM.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        old_path_1, canonical_1 = self._build_single_session_scenario(dest_root)
+
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # File moved to canonical path
+        assert canonical_1.exists()
+        assert not old_path_1.exists()
+
+        # CWP_MOVT_NUM at the canonical path is still "1" — not changed by the renumber pass
+        tags_at_canonical = _read_tags_flac(canonical_1)
+        assert tags_at_canonical.get("CWP_MOVT_NUM") == "1"
+
+    def test_convergence_kat_cross_session_renumber_then_noop(self, fs: FakeFilesystem) -> None:
+        """Convergence KAT: regroup renumbers a cross-session merge; a second regroup is a no-op.
+
+        Constructs a confirmed split-release where two sessions each numbered their tracks from 1
+        (collision: disc 1 tracks 1-2 with CWP_MOVT_NUM=1,2 and disc 2 tracks 1-2 with
+        CWP_MOVT_NUM=1,2).  After the first regroup:
+
+        (a) CWP_MOVT_NUM is renumbered gap-free 1-4 in (DISCNUMBER, TRACKNUMBER) order.
+        (b) Files are moved to their canonical paths (leaf nn reflects the corrected index).
+
+        A second regroup is a complete no-op: no tag changes, no moves, no new journal entries.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Session 1: disc 1, tracks 1-2, CWP_MOVT_NUM=1,2 (correct within session)
+        tags_d1t1 = TrackTags(
+            cwp_workid_top="w-cross",
+            cwp_composer_lastnames="Bach",
+            cwp_work_top="Art of Fugue",
+            recording_date="2019",
+            cwp_movt_num="1",
+            cwp_movt_tot="2",
+            movementnumber="1",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="1",
+            tracknumber="1",
+            title="Contrapunctus I",
+            artist="Musica Antiqua",
+            musicbrainz_albumid="cross-session-rel",
+        )
+        tags_d1t2 = TrackTags(
+            cwp_workid_top="w-cross",
+            cwp_composer_lastnames="Bach",
+            cwp_work_top="Art of Fugue",
+            recording_date="2019",
+            cwp_movt_num="2",
+            cwp_movt_tot="2",
+            movementnumber="2",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="1",
+            tracknumber="2",
+            title="Contrapunctus II",
+            artist="Musica Antiqua",
+            musicbrainz_albumid="cross-session-rel",
+        )
+        # Session 2: disc 2, tracks 1-2, CWP_MOVT_NUM=1,2 (collision after merge)
+        tags_d2t1 = TrackTags(
+            cwp_workid_top="w-cross",
+            cwp_composer_lastnames="Bach",
+            cwp_work_top="Art of Fugue",
+            recording_date="2019",
+            cwp_movt_num="1",  # stale: collision with disc-1 track 1
+            cwp_movt_tot="2",
+            movementnumber="1",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="2",
+            tracknumber="1",
+            title="Contrapunctus III",
+            artist="Musica Antiqua",
+            musicbrainz_albumid="cross-session-rel",
+        )
+        tags_d2t2 = TrackTags(
+            cwp_workid_top="w-cross",
+            cwp_composer_lastnames="Bach",
+            cwp_work_top="Art of Fugue",
+            recording_date="2019",
+            cwp_movt_num="2",  # stale: collision with disc-1 track 2
+            cwp_movt_tot="2",
+            movementnumber="2",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="2",
+            tracknumber="2",
+            title="Contrapunctus IV",
+            artist="Musica Antiqua",
+            musicbrainz_albumid="cross-session-rel",
+        )
+
+        # Place all four tracks at legacy paths (wrong work_dir) so regroup plans moves.
+        old_d1t1 = _make_library_flac(dest_root, "Bach - Musica Antiqua/OldFugue [2019]/01 - Contrapunctus I.flac", tags_d1t1)
+        old_d1t2 = _make_library_flac(dest_root, "Bach - Musica Antiqua/OldFugue [2019]/02 - Contrapunctus II.flac", tags_d1t2)
+        old_d2t1 = _make_library_flac(
+            dest_root, "Bach - Musica Antiqua/OldFugue2 [2019]/01 - Contrapunctus III.flac", tags_d2t1
+        )
+        old_d2t2 = _make_library_flac(dest_root, "Bach - Musica Antiqua/OldFugue2 [2019]/02 - Contrapunctus IV.flac", tags_d2t2)
+
+        # Phantom entry in a third work_dir to satisfy the two-work_dir case-b condition.
+        phantom = dest_root / "Bach - Musica Antiqua" / "Art of Fugue [rec 2019]" / "phantom.flac"
+        _write_library_journal(
+            dest_root,
+            [
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "cross-session-rel",
+                    "source": "/src/d1t1.flac",
+                    "destination": str(old_d1t1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "cross-session-rel",
+                    "source": "/src/d1t2.flac",
+                    "destination": str(old_d1t2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "cross-session-rel",
+                    "source": "/src/d2t1.flac",
+                    "destination": str(old_d2t1),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "cross-session-rel",
+                    "source": "/src/d2t2.flac",
+                    "destination": str(old_d2t2),
+                    "action": "tagged",
+                },
+                {
+                    "timestamp": "2024-01-01T00:00:00+00:00",
+                    "release_id": "cross-session-rel",
+                    "source": "/src/phantom.flac",
+                    "destination": str(phantom),
+                    "action": "tagged",
+                },
+            ],
+        )
+
+        # First regroup: renumbers and moves all four tracks.
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+
+        # (a) All old paths vacated
+        assert not old_d1t1.exists()
+        assert not old_d1t2.exists()
+        assert not old_d2t1.exists()
+        assert not old_d2t2.exists()
+
+        # (b) CWP_MOVT_NUM renumbered gap-free 1-4 in (disc, track) order.
+        # Compute canonical paths using the corrected tags (cwp_movt_num updated in-memory
+        # before build_dest_path, so the canonical path reflects the corrected index).
+        # We verify by reading the tags at the new locations.
+        journal_after_first = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped_entries = [e for e in journal_after_first.entries if e.action == "regrouped"]
+        assert len(regrouped_entries) == 4
+
+        # Find where each track landed and verify its CWP_MOVT_NUM.
+        dest_by_src: dict[str, str] = {e.source: e.destination for e in regrouped_entries}
+        dest_d1t1 = Path(dest_by_src[str(old_d1t1)])
+        dest_d1t2 = Path(dest_by_src[str(old_d1t2)])
+        dest_d2t1 = Path(dest_by_src[str(old_d2t1)])
+        dest_d2t2 = Path(dest_by_src[str(old_d2t2)])
+
+        assert _read_tags_flac(dest_d1t1).get("CWP_MOVT_NUM") == "1"
+        assert _read_tags_flac(dest_d1t2).get("CWP_MOVT_NUM") == "2"
+        assert _read_tags_flac(dest_d2t1).get("CWP_MOVT_NUM") == "3"
+        assert _read_tags_flac(dest_d2t2).get("CWP_MOVT_NUM") == "4"
+
+        # (c) Second regroup: no new journal entries (complete no-op).
+        music_annotator.regroup(dest_root=dest_root, yes=True)
+        journal_after_second = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        regrouped_after_second = [e for e in journal_after_second.entries if e.action == "regrouped"]
+        assert len(regrouped_after_second) == 4  # same count — no new entries
+
+
+class TestUnifyMovementRenumber:
+    """Tests for the CWP_MOVT_NUM re-derivation pass inside :func:`music_annotator.unify`.
+
+    The leaf ``nn`` prefix (``CWP_MOVT_NUM``) is the per-top-work-group gap-free playback index.
+    It is session-local and must never be trusted across a merge.  After consolidating cross-session
+    fragments, ``unify`` must re-derive the gap-free 1-based index from embedded
+    ``(DISCNUMBER, TRACKNUMBER)`` order within each ``CWP_WORKID_TOP`` group so that the resulting
+    path is idempotent across sessions.
+
+    **Idempotency KAT**: running ``unify`` on an already-correct (single-session) fragmented
+    release is a no-op for the renumber pass — no tag change beyond what the move itself requires.
+
+    **Convergence KAT**: after ``unify`` renumbers a cross-session merge, a subsequent ``unify``
+    over the same releases is a no-op — the two runs compute the identical ``CWP_MOVT_NUM``.
+    """
+
+    def test_idempotency_kat_single_session_correct_movt_num_unchanged(self, fs: FakeFilesystem) -> None:
+        """Idempotency KAT: unify on an already-correct single-session work leaves CWP_MOVT_NUM unchanged.
+
+        When the embedded CWP_MOVT_NUM is already gap-free and consistent with the embedded
+        (DISCNUMBER, TRACKNUMBER) order, the renumber pass must not change any tag values.
+        The file is still moved to its canonical path (the fragmentation condition is satisfied),
+        but the leaf nn prefix in the moved file must equal the original CWP_MOVT_NUM.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Track 1: already has correct CWP_MOVT_NUM=1 for disc 1 track 1.
+        tags_1 = TrackTags(
+            cwp_workid_top="w-unify-idem",
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Symphony No. 4",
+            recording_date="2018",
+            cwp_movt_num="1",
+            cwp_movt_tot="2",
+            movementnumber="1",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="1",
+            tracknumber="1",
+            title="Allegro non troppo",
+            artist="Karajan",
+            musicbrainz_albumid="unify-idem-rel",
+        )
+        # Track 2: already has correct CWP_MOVT_NUM=2 for disc 1 track 2.
+        tags_2 = TrackTags(
+            cwp_workid_top="w-unify-idem",
+            cwp_composer_lastnames="Brahms",
+            cwp_work_top="Symphony No. 4",
+            recording_date="2018",
+            cwp_movt_num="2",
+            cwp_movt_tot="2",
+            movementnumber="2",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="1",
+            tracknumber="2",
+            title="Andante moderato",
+            artist="Karajan",
+            musicbrainz_albumid="unify-idem-rel",
+        )
+
+        # File A: wrong top_dir (Pollini instead of Karajan) — triggers fragmentation detection.
+        old_path_1 = _make_library_flac(
+            dest_root, "Brahms - Pollini/Symphony No. 4 [rec 2018]/01 - Allegro non troppo.flac", tags_1
+        )
+        # File B: correct top_dir (Karajan) — provides the second top_dir for fragmentation.
+        canonical_2 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_2, global_track_idx=0).with_suffix(".flac")
+        _make_library_flac(dest_root, str(canonical_2.relative_to(dest_root)), tags_2)
+
+        canonical_1 = build_dest_path(dest_root, MBRelease(), MBTrack(), tags_1, global_track_idx=0).with_suffix(".flac")
+
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # File moved to canonical path
+        assert canonical_1.exists()
+        assert not old_path_1.exists()
+
+        # CWP_MOVT_NUM at the canonical path is still "1" — not changed by the renumber pass
+        tags_at_canonical = _read_tags_flac(canonical_1)
+        assert tags_at_canonical.get("CWP_MOVT_NUM") == "1"
+
+    def test_convergence_kat_cross_session_renumber_then_noop(self, fs: FakeFilesystem) -> None:
+        """Convergence KAT: unify renumbers a cross-session merge; a second unify is a no-op.
+
+        Constructs a fragmented release where two sessions each numbered their tracks from 1
+        (collision: disc 1 tracks 1-2 with CWP_MOVT_NUM=1,2 and disc 2 tracks 1-2 with
+        CWP_MOVT_NUM=1,2).  The files are split across two top_dirs (triggering fragmentation
+        detection).  After the first unify:
+
+        (a) CWP_MOVT_NUM is renumbered gap-free 1-4 in (DISCNUMBER, TRACKNUMBER) order.
+        (b) All files are moved to their canonical paths (leaf nn reflects the corrected index).
+
+        A second unify is a complete no-op: no tag changes, no moves, no new journal entries.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Session 1: disc 1, tracks 1-2, CWP_MOVT_NUM=1,2 (correct within session)
+        tags_d1t1 = TrackTags(
+            cwp_workid_top="w-unify-conv",
+            cwp_composer_lastnames="Mahler",
+            cwp_work_top="Symphony No. 9",
+            recording_date="2015",
+            cwp_movt_num="1",
+            cwp_movt_tot="2",
+            movementnumber="1",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="1",
+            tracknumber="1",
+            title="Andante comodo",
+            artist="Bernstein",
+            musicbrainz_albumid="unify-conv-rel",
+        )
+        tags_d1t2 = TrackTags(
+            cwp_workid_top="w-unify-conv",
+            cwp_composer_lastnames="Mahler",
+            cwp_work_top="Symphony No. 9",
+            recording_date="2015",
+            cwp_movt_num="2",
+            cwp_movt_tot="2",
+            movementnumber="2",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="1",
+            tracknumber="2",
+            title="Im Tempo eines gemachlichen Landlers",
+            artist="Bernstein",
+            musicbrainz_albumid="unify-conv-rel",
+        )
+        # Session 2: disc 2, tracks 1-2, CWP_MOVT_NUM=1,2 (collision after merge)
+        tags_d2t1 = TrackTags(
+            cwp_workid_top="w-unify-conv",
+            cwp_composer_lastnames="Mahler",
+            cwp_work_top="Symphony No. 9",
+            recording_date="2015",
+            cwp_movt_num="1",  # stale: collision with disc-1 track 1
+            cwp_movt_tot="2",
+            movementnumber="1",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="2",
+            tracknumber="1",
+            title="Rondo-Burleske",
+            artist="Bernstein",
+            musicbrainz_albumid="unify-conv-rel",
+        )
+        tags_d2t2 = TrackTags(
+            cwp_workid_top="w-unify-conv",
+            cwp_composer_lastnames="Mahler",
+            cwp_work_top="Symphony No. 9",
+            recording_date="2015",
+            cwp_movt_num="2",  # stale: collision with disc-1 track 2
+            cwp_movt_tot="2",
+            movementnumber="2",
+            movementtotal="2",
+            cwp_part_levels="1",
+            discnumber="2",
+            tracknumber="2",
+            title="Adagio",
+            artist="Bernstein",
+            musicbrainz_albumid="unify-conv-rel",
+        )
+
+        # Place disc-1 tracks under wrong top_dir (Karajan instead of Bernstein) — triggers
+        # fragmentation detection (two distinct top_dirs for the same MUSICBRAINZ_ALBUMID).
+        old_d1t1 = _make_library_flac(
+            dest_root, "Mahler - Karajan/Symphony No. 9 [rec 2015]/01 - Andante comodo.flac", tags_d1t1
+        )
+        old_d1t2 = _make_library_flac(
+            dest_root,
+            "Mahler - Karajan/Symphony No. 9 [rec 2015]/02 - Im Tempo eines gemachlichen Landlers.flac",
+            tags_d1t2,
+        )
+        # Disc-2 tracks under the canonical top_dir (Bernstein) — provides the second top_dir.
+        # These tracks have stale CWP_MOVT_NUM=1,2; after renumbering they will move to new paths.
+        old_d2t1 = _make_library_flac(
+            dest_root, "Mahler - Bernstein/Symphony No. 9 [rec 2015]/01 - Rondo-Burleske.flac", tags_d2t1
+        )
+        old_d2t2 = _make_library_flac(dest_root, "Mahler - Bernstein/Symphony No. 9 [rec 2015]/02 - Adagio.flac", tags_d2t2)
+
+        # First unify: renumbers all four tracks and moves them to canonical paths.
+        # The renumber assigns CWP_MOVT_NUM=1,2,3,4 in (disc, track) order.
+        # All four tracks move: disc-1 tracks move to the Bernstein top_dir, disc-2 tracks
+        # move within the Bernstein top_dir to reflect the corrected leaf nn prefix.
+        music_annotator.unify(dest_root=dest_root, yes=True)
+
+        # (a) All old paths vacated
+        assert not old_d1t1.exists()
+        assert not old_d1t2.exists()
+        assert not old_d2t1.exists()
+        assert not old_d2t2.exists()
+
+        # (b) CWP_MOVT_NUM renumbered gap-free 1-4 in (disc, track) order.
+        journal_after_first = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified_entries = [e for e in journal_after_first.entries if e.action == "unified"]
+        assert len(unified_entries) == 4  # all four tracks moved
+
+        # Verify CWP_MOVT_NUM at the new destinations.
+        dest_by_src: dict[str, str] = {e.source: e.destination for e in unified_entries}
+        dest_d1t1 = Path(dest_by_src[str(old_d1t1)])
+        dest_d1t2 = Path(dest_by_src[str(old_d1t2)])
+        dest_d2t1 = Path(dest_by_src[str(old_d2t1)])
+        dest_d2t2 = Path(dest_by_src[str(old_d2t2)])
+
+        assert _read_tags_flac(dest_d1t1).get("CWP_MOVT_NUM") == "1"
+        assert _read_tags_flac(dest_d1t2).get("CWP_MOVT_NUM") == "2"
+        assert _read_tags_flac(dest_d2t1).get("CWP_MOVT_NUM") == "3"
+        assert _read_tags_flac(dest_d2t2).get("CWP_MOVT_NUM") == "4"
+
+        # (c) Second unify: no new journal entries (complete no-op).
+        music_annotator.unify(dest_root=dest_root, yes=True)
+        journal_after_second = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
+        unified_after_second = [e for e in journal_after_second.entries if e.action == "unified"]
+        assert len(unified_after_second) == 4  # same count — no new entries

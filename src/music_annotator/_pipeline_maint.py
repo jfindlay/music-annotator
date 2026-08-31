@@ -41,6 +41,10 @@ Also provides the shared primitives consumed by all commands:
   canonical entity name-forms (the MB artist ``name`` field verbatim per NORM-2 as revised) in the
   compact path projection.  No MusicBrainz network calls are made — the maintenance path reads
   embedded tags alone.
+* :func:`_apply_group_movement_renumber` — re-derive gap-free ``CWP_MOVT_NUM`` for one
+  ``CWP_WORKID_TOP`` group from embedded ``(DISCNUMBER, TRACKNUMBER)`` order and write changed
+  tags to disk.  Called by :func:`regroup` and :func:`unify` after any consolidation so that the
+  leaf ``nn`` prefix is idempotent across sessions.
 
 """
 
@@ -87,7 +91,14 @@ from music_annotator._pipeline_io import (
     read_journal,
 )
 from music_annotator._tagger import apply_tags_flac, apply_tags_mp3, write_secondary_albumid_flac, write_secondary_albumid_mp3
-from music_annotator._tags import _CLASS_VOCAB, _NAME_MAX, _proposed_short, build_dest_path, sel23_ensemble_patch
+from music_annotator._tags import (
+    _CLASS_VOCAB,
+    _NAME_MAX,
+    _proposed_short,
+    assign_group_movement_numbers,
+    build_dest_path,
+    sel23_ensemble_patch,
+)
 from music_annotator._works import (
     work_group_modal_depth,
 )
@@ -2156,6 +2167,101 @@ def repath(  # pylint: disable=too-many-return-statements
     return None
 
 
+def _apply_group_movement_renumber(
+    group: list[tuple[Path, TrackTags, dict[str, str], str]],
+    *,
+    single_work_album: bool,
+) -> None:
+    """Re-derive gap-free ``CWP_MOVT_NUM`` for one ``CWP_WORKID_TOP`` group and write changed tags to disk.
+
+    Sorts the supplied tracks by embedded ``(DISCNUMBER, TRACKNUMBER)`` (the ordering authority
+    for the maintenance path) and calls
+    :func:`~music_annotator._tags.assign_group_movement_numbers` to assign gap-free 1-based
+    ``cwp_movt_num`` / ``cwp_movt_tot`` / ``movementnumber`` / ``movementtotal`` /
+    ``cwp_single_work_album``.
+
+    The leaf ``nn`` prefix (``CWP_MOVT_NUM``) is the per-top-work-group gap-free playback index.
+    It is session-local and must never be trusted across a merge.  After any consolidation the
+    index must be re-derived from embedded ``(DISCNUMBER, TRACKNUMBER)`` order so that the
+    resulting path is idempotent across sessions.
+
+    **Collision guard**: if all embedded ``CWP_MOVT_NUM`` values are already unique (no
+    duplicates), the group is already gap-free and the renumber is skipped entirely.  This
+    preserves the existing numbering for single-session works and for groups whose
+    ``DISCNUMBER``/``TRACKNUMBER`` tags are absent or non-unique (where the sort order would
+    be non-deterministic).  Only groups with duplicate ``CWP_MOVT_NUM`` values — the signature
+    of a cross-session merge — are renumbered.
+
+    For each track whose ``cwp_movt_num`` changed, the updated :class:`~music_annotator.models.TrackTags`
+    is written back to the audio file in-place via :func:`~music_annotator._tagger.apply_tags_flac`
+    or :func:`~music_annotator._tagger.apply_tags_mp3`.  The caller's ``tags`` object is mutated
+    in-place, so subsequent :func:`~music_annotator._tags.build_dest_path` calls see the corrected
+    value without re-reading the file.
+
+    :param group: List of ``(path, tags, file_dict, ext)`` tuples for one ``CWP_WORKID_TOP``
+        group, in any order.  ``tags`` is mutated in-place.  ``ext`` is the lowercase file
+        extension (``".flac"`` or ``".mp3"``).
+    :param single_work_album: ``True`` when the release contains exactly one top-work group.
+        Passed through to :func:`~music_annotator._tags.assign_group_movement_numbers` to set
+        ``CWP_SINGLE_WORK_ALBUM``.
+    :raises RuntimeError: If a tag write fails (propagated from
+        :func:`~music_annotator._tagger.apply_tags_flac` /
+        :func:`~music_annotator._tagger.apply_tags_mp3`).
+    """
+    # Collision guard: if all CWP_MOVT_NUM values are already unique, the group is already
+    # gap-free.  Skip the renumber to preserve the existing numbering for single-session works
+    # and for groups whose DISCNUMBER/TRACKNUMBER tags are absent or non-unique.
+    existing_nums = [tags.cwp_movt_num for _, tags, _, _ in group]
+    if len(set(existing_nums)) == len(existing_nums):
+        return  # all unique — no collision, no renumber needed
+
+    def _sort_key(item: tuple[Path, TrackTags, dict[str, str], str]) -> tuple[int, int]:
+        """Return ``(disc, track)`` sort key from embedded tags.
+
+        Non-integer or absent values map to 0 so they sort first without raising.
+
+        :param item: ``(path, tags, file_dict, ext)`` tuple.
+        :returns: ``(discnumber_int, tracknumber_int)`` pair.
+        """
+        _, _tags, _, _ = item
+        disc_str = _tags.discnumber.split("/", maxsplit=1)[0].strip()
+        track_str = _tags.tracknumber.split("/", maxsplit=1)[0].strip()
+        disc = int(disc_str) if disc_str.isdigit() else 0
+        track = int(track_str) if track_str.isdigit() else 0
+        return disc, track
+
+    ordered = sorted(group, key=_sort_key)
+
+    # Snapshot movement tags before the call so we can detect which files changed.
+    # Both cwp_movt_num and cwp_movt_tot are written by assign_group_movement_numbers; either
+    # changing (e.g. total changes when the group grows) triggers a tag rewrite.
+    before = [(tags.cwp_movt_num, tags.cwp_movt_tot) for _, tags, _, _ in ordered]
+
+    assign_group_movement_numbers([tags for _, tags, _, _ in ordered], single_work_album=single_work_album)
+
+    for (path, tags, _, ext), (old_num, old_tot) in zip(ordered, before):
+        if tags.cwp_movt_num == old_num and tags.cwp_movt_tot == old_tot:
+            continue  # no change — skip the write
+        log.info(
+            "consolidation_renumber",
+            path=str(path),
+            old_cwp_movt_num=old_num,
+            new_cwp_movt_num=tags.cwp_movt_num,
+            old_cwp_movt_tot=old_tot,
+            new_cwp_movt_tot=tags.cwp_movt_tot,
+        )
+        try:
+            match ext:
+                case ".flac":
+                    apply_tags_flac(path, tags)
+                case ".mp3":
+                    apply_tags_mp3(path, tags)
+                case _:  # pragma: no cover — callers filter to .flac/.mp3 before building groups
+                    pass
+        except MutagenError as exc:
+            raise RuntimeError(f"consolidation renumber tag write failure for '{path.name}': {exc}") from exc
+
+
 def regroup(  # pylint: disable=too-many-return-statements
     dest_root: Path,
     *,
@@ -2337,6 +2443,29 @@ def regroup(  # pylint: disable=too-many-return-statements
             continue  # pragma: no cover — defensive guard; regroup only processes confirmed
             # split-release candidates which always have MUSICBRAINZ_ALBUMID embedded.
         sel23_ensemble_patch([_regroup_file_data[_i][1] for _i in _release_idxs])
+
+    # --- Movement renumber pass: re-derive CWP_MOVT_NUM from embedded (DISCNUMBER, TRACKNUMBER) ---
+    # The leaf nn prefix (CWP_MOVT_NUM) is session-local and must never be trusted across a merge.
+    # After consolidating cross-session fragments, re-derive the gap-free 1-based index from
+    # embedded (DISCNUMBER, TRACKNUMBER) order within each CWP_WORKID_TOP group so that the
+    # resulting path is idempotent across sessions.  This must run after the SEL-23 patch (which
+    # may change performer tags) and before Pass 2 (which calls build_dest_path).
+    # Only classical tracks with a non-empty CWP_WORKID_TOP are renumbered; non-classical tracks
+    # (empty CWP_WORKID_TOP) have no top-work group identity and must not be renumbered here.
+    for _album_id, _release_idxs in _regroup_release_groups.items():
+        if not _album_id:
+            continue  # pragma: no cover — defensive guard (same as SEL-23 guard above)
+        # Group the release's files by CWP_WORKID_TOP; skip the empty-TWID group (non-classical).
+        _rg_twid_groups: dict[str, list[tuple[Path, TrackTags, dict[str, str], str]]] = {}
+        for _ri in _release_idxs:
+            _rg_path, _rg_tags, _rg_fd, _rg_ext, _ = _regroup_file_data[_ri]
+            _rg_twid = _rg_tags.cwp_workid_top
+            if not _rg_twid:
+                continue  # non-classical track: no top-work group; skip renumber
+            _rg_twid_groups.setdefault(_rg_twid, []).append((_rg_path, _rg_tags, _rg_fd, _rg_ext))
+        _rg_single_work = len(_rg_twid_groups) == 1
+        for _rg_group in _rg_twid_groups.values():
+            _apply_group_movement_renumber(_rg_group, single_work_album=_rg_single_work)
 
     # --- Pass 2: build regroup plan using the per-group modal depth ---
     plan_pairs: list[tuple[Path, Path, str, int, str]] = []
@@ -2627,6 +2756,24 @@ def unify(  # pylint: disable=too-many-return-statements
         for _, _tags, _file_dict in group_tags:
             _hydrate_performer_lists(_tags, _file_dict)
         sel23_ensemble_patch([_tags for _, _tags, _ in group_tags])
+
+        # --- Movement renumber pass: re-derive CWP_MOVT_NUM from embedded (DISCNUMBER, TRACKNUMBER) ---
+        # The leaf nn prefix (CWP_MOVT_NUM) is session-local and must never be trusted across a merge.
+        # After consolidating cross-session fragments, re-derive the gap-free 1-based index from
+        # embedded (DISCNUMBER, TRACKNUMBER) order within each CWP_WORKID_TOP group so that the
+        # resulting path is idempotent across sessions.  This must run after the SEL-23 patch and
+        # before build_dest_path so the corrected CWP_MOVT_NUM drives the leaf nn component.
+        # Only classical tracks with a non-empty CWP_WORKID_TOP are renumbered; non-classical
+        # tracks (empty CWP_WORKID_TOP) have no top-work group identity and must not be renumbered.
+        _un_twid_groups: dict[str, list[tuple[Path, TrackTags, dict[str, str], str]]] = {}
+        for _un_path, _un_tags, _un_fd in group_tags:
+            _un_ext = _un_path.suffix.lower()
+            if not _un_tags.cwp_workid_top:
+                continue  # non-classical track: no top-work group; skip renumber
+            _un_twid_groups.setdefault(_un_tags.cwp_workid_top, []).append((_un_path, _un_tags, _un_fd, _un_ext))
+        _un_single_work = len(_un_twid_groups) == 1
+        for _un_group in _un_twid_groups.values():
+            _apply_group_movement_renumber(_un_group, single_work_album=_un_single_work)
 
         # --- Work-group modal depth per CWP_WORKID_TOP group (C-CANON / C-GROUPSCOPE) ---
         # When _modal_depth_map is supplied by maintain (computed once over the full library scan
