@@ -2801,3 +2801,154 @@ class TestIngestSubcommand:
 
 
 # ---------------------------------------------------------------------------
+# renumber-leaves subcommand
+# ---------------------------------------------------------------------------
+
+
+class TestRenumberLeavesSubcommand:
+    """Tests for the ``renumber-leaves`` CLI subcommand.
+
+    Verifies that the subcommand parser is registered correctly, that arguments are forwarded
+    to :func:`~music_annotator.renumber_leaves`, and that error paths exit with code 1.
+    """
+
+    _BASE = ["renumber-leaves", "/music_lib"]
+
+    # ------------------------------------------------------------------
+    # Parser registration
+    # ------------------------------------------------------------------
+
+    def test_renumber_leaves_parser_registered(self) -> None:
+        """renumber-leaves subcommand is registered in the argument parser.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args(self._BASE)
+        assert args.subcommand == "renumber-leaves"
+        assert args.dest_dir == Path("/music_lib")
+        assert args.dry_run is False
+        assert args.yes is False
+
+    def test_renumber_leaves_dry_run_flag(self) -> None:
+        """renumber-leaves --dry-run sets dry_run=True.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args([*self._BASE, "--dry-run"])
+        assert args.dry_run is True
+
+    def test_renumber_leaves_yes_flag_short(self) -> None:
+        """renumber-leaves -y sets yes=True.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args([*self._BASE, "-y"])
+        assert args.yes is True
+
+    def test_renumber_leaves_yes_flag_long(self) -> None:
+        """renumber-leaves --yes sets yes=True.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        args = parser.parse_args([*self._BASE, "--yes"])
+        assert args.yes is True
+
+    def test_renumber_leaves_requires_dest_dir(self) -> None:
+        """renumber-leaves exits with code 2 when dest_dir positional is missing.
+
+        :returns: None.
+        """
+        parser = _build_parser()
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["renumber-leaves"])
+        assert exc.value.code == 2
+
+    # ------------------------------------------------------------------
+    # Dispatch
+    # ------------------------------------------------------------------
+
+    def test_renumber_leaves_dispatches_to_function(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """renumber-leaves subcommand dispatches to renumber_leaves with correct arguments.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_dir = Path("/lib")
+        fs.create_dir(str(dest_dir))
+
+        mock_fn = mocker.patch("music_annotator.renumber_leaves")
+
+        sys.argv = ["music-annotator", "renumber-leaves", str(dest_dir)]
+        main()
+
+        mock_fn.assert_called_once_with(
+            dest_root=dest_dir,
+            dry_run=False,
+            yes=False,
+        )
+
+    def test_renumber_leaves_dry_run_forwarded(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """renumber-leaves --dry-run forwards dry_run=True to renumber_leaves.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_dir = Path("/lib")
+        fs.create_dir(str(dest_dir))
+
+        mock_fn = mocker.patch("music_annotator.renumber_leaves")
+
+        sys.argv = ["music-annotator", "renumber-leaves", str(dest_dir), "--dry-run"]
+        main()
+
+        mock_fn.assert_called_once_with(
+            dest_root=dest_dir,
+            dry_run=True,
+            yes=False,
+        )
+
+    def test_renumber_leaves_yes_forwarded(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """renumber-leaves --yes forwards yes=True to renumber_leaves.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_dir = Path("/lib")
+        fs.create_dir(str(dest_dir))
+
+        mock_fn = mocker.patch("music_annotator.renumber_leaves")
+
+        sys.argv = ["music-annotator", "renumber-leaves", str(dest_dir), "--yes"]
+        main()
+
+        mock_fn.assert_called_once_with(
+            dest_root=dest_dir,
+            dry_run=False,
+            yes=True,
+        )
+
+    def test_renumber_leaves_error_exits_1(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """renumber-leaves subcommand exits with code 1 on unhandled exception.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_dir = Path("/lib")
+        fs.create_dir(str(dest_dir))
+
+        mocker.patch(
+            "music_annotator.renumber_leaves",
+            side_effect=RuntimeError("tag write failed"),
+        )
+
+        sys.argv = ["music-annotator", "renumber-leaves", str(dest_dir)]
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------

@@ -17,6 +17,14 @@ without making MusicBrainz network calls:
   fast path; files lacking both are out of scope.  Aggregate per-recording pairs up to medium-level
   groups before prompting.  Each group runs the shared group-resolution flow (survivor / keep-both /
   abort) with C-DEDUP ordering.  Dry-run reports the full census without prompting.
+* :func:`renumber_leaves`             — retroactive repair tool for cross-session leaf-collision defect:
+  scans for directories with duplicate ``CWP_MOVT_NUM`` prefixes, re-derives the gap-free 1-based index
+  from embedded ``(DISCNUMBER, TRACKNUMBER)`` order within each ``CWP_WORKID_TOP`` group, rewrites tags,
+  recomputes the destination via :func:`~music_annotator._tags.build_dest_path`, and moves each file on
+  the full provenance chain (SHA source → rewrite tags → move → SHA verify → ``_verify_copy`` tag
+  round-trip → ``action="renumbered"`` journal entry).  Dirs with a stray-minority fragment (1–2-file
+  fragment merged with a large one) or multiple distinct ``CWP_WORKID_TOP`` values are reported but not
+  auto-moved even with ``--yes``.
 
 Also provides the shared primitives consumed by all commands:
 
@@ -538,7 +546,7 @@ def _resolve_current_lib(journal: TransactionLog) -> dict[Path, str]:
         dest_path = Path(entry.destination)
         if entry.action == "tagged":
             current_lib[dest_path] = entry.release_id
-        elif entry.action in {"repathed", "regrouped", "unified"}:
+        elif entry.action in {"repathed", "regrouped", "unified", "renumbered"}:
             old_path = Path(entry.source)
             release_id_for_path = current_lib.pop(old_path, entry.release_id)
             current_lib[dest_path] = release_id_for_path
@@ -1159,7 +1167,7 @@ def _warn_inverse_moves(
     """
     # Build a mapping from (source, destination) → pass name for all move-type journal entries.
     # Only move-type actions carry a meaningful (source, destination) pair where source != destination.
-    _move_actions = frozenset({"repathed", "regrouped", "unified"})
+    _move_actions = frozenset({"repathed", "regrouped", "unified", "renumbered"})
     recorded_moves: dict[tuple[str, str], str] = {}
     for entry in journal.entries:
         if entry.action in _move_actions:
@@ -2952,6 +2960,442 @@ def unify(  # pylint: disable=too-many-return-statements
     cache.save()
     log.info("unify_complete", dest_root=str(dest_root), moved=total_moved)
     return None
+
+
+# ---------------------------------------------------------------------------
+# Leaf-renumber collision repair (retroactive cross-session fix)
+# ---------------------------------------------------------------------------
+
+
+def _scan_leaf_collision_dirs(
+    dest_root: Path,
+    cache: TagReadCache,
+) -> dict[Path, list[tuple[Path, dict[str, str]]]]:
+    """Walk ``dest_root`` and return directories that contain duplicate ``CWP_MOVT_NUM`` prefixes.
+
+    A collision directory is one where two or more audio files share the same ``CWP_MOVT_NUM``
+    tag value.  This is the signature of a cross-session merge: each ingest session assigns
+    ``CWP_MOVT_NUM`` from 1 independently, so merging two sessions' fragments into one directory
+    produces duplicate leaf prefixes.
+
+    Only FLAC and MP3 files are considered.  Directories with all-unique ``CWP_MOVT_NUM`` values
+    are skipped silently.
+
+    :param dest_root: Root of the annotated music library.
+    :param cache: Tag-read cache to consult before opening audio files.
+    :returns: Mapping from directory path to list of ``(file_path, tag_dict)`` pairs for all
+        audio files in that directory that have a non-empty ``CWP_MOVT_NUM``.  Only directories
+        with at least one duplicate ``CWP_MOVT_NUM`` value are included.
+    """
+    collision_dirs: dict[Path, list[tuple[Path, dict[str, str]]]] = {}
+
+    for dirpath_str, _dirnames, filenames in os.walk(dest_root):
+        dirpath = Path(dirpath_str)
+        # Collect (file_path, tag_dict) for all audio files in this directory.
+        dir_files: list[tuple[Path, dict[str, str]]] = []
+        for fname in filenames:
+            fpath = dirpath / fname
+            ext = fpath.suffix.lower()
+            if ext not in {".flac", ".mp3"}:
+                continue
+            try:
+                tag_dict = _read_tags_cached(fpath, ext, cache)
+            except Exception:  # noqa: BLE001 — tag read failure: skip file
+                continue
+            movt_num = tag_dict.get("CWP_MOVT_NUM", "").strip()
+            if not movt_num:
+                continue
+            dir_files.append((fpath, tag_dict))
+
+        if len(dir_files) < 2:  # noqa: PLR2004 — need at least 2 files to have a collision
+            continue
+
+        # Check for duplicate CWP_MOVT_NUM values.
+        movt_nums = [td.get("CWP_MOVT_NUM", "").strip() for _, td in dir_files]
+        if len(set(movt_nums)) < len(movt_nums):
+            collision_dirs[dirpath] = dir_files
+
+    return collision_dirs
+
+
+def _classify_collision_dir(
+    dir_files: list[tuple[Path, dict[str, str]]],
+) -> tuple[str, dict[str, list[tuple[Path, dict[str, str]]]]]:
+    """Classify one collision directory and group its files by ``CWP_WORKID_TOP``.
+
+    A collision directory is classified as:
+
+    * ``"auto"`` — single ``CWP_WORKID_TOP`` value across all files, and every
+      ``CWP_WORKID_TOP`` fragment has at least 3 files.  These are the balanced splits that
+      can be safely renumbered by re-deriving ``CWP_MOVT_NUM`` from embedded
+      ``(DISCNUMBER, TRACKNUMBER)`` order.
+    * ``"stray"`` — single ``CWP_WORKID_TOP`` value, but at least one fragment has only 1–2
+      files.  These may signal a tag mis-grouping (wrong ``DISCNUMBER`` / ``MUSICBRAINZ_ALBUMID``)
+      and require explicit per-dir operator review.
+    * ``"out_of_scope"`` — multiple distinct ``CWP_WORKID_TOP`` values.  These are a different
+      shape (mis-grouping / over-truncation / dedup) and must not be renumbered here.
+
+    The fragment size threshold (≥ 3 files) is the boundary between a balanced split and a
+    stray-minority fragment.  A fragment with 1–2 files is too small to be a complete disc
+    fragment and is more likely a mis-grouped stray track.
+
+    :param dir_files: List of ``(file_path, tag_dict)`` pairs for all audio files in the directory.
+    :returns: A ``(classification, groups)`` tuple where ``classification`` is one of
+        ``"auto"``, ``"stray"``, or ``"out_of_scope"``, and ``groups`` maps each
+        ``CWP_WORKID_TOP`` value to its list of ``(file_path, tag_dict)`` pairs.
+    """
+    groups: dict[str, list[tuple[Path, dict[str, str]]]] = {}
+    for fpath, tag_dict in dir_files:
+        twid = tag_dict.get("CWP_WORKID_TOP", "").strip()
+        groups.setdefault(twid, []).append((fpath, tag_dict))
+
+    if len(groups) > 1:
+        return "out_of_scope", groups
+
+    # Single CWP_WORKID_TOP group.
+    # Check fragment sizes: group by (DISCNUMBER, MUSICBRAINZ_ALBUMID) to identify fragments.
+    # A fragment is a set of files from the same ingest session (same disc/release).
+    # We approximate fragment identity by MUSICBRAINZ_ALBUMID (release MBID).
+    fragments: dict[str, list[tuple[Path, dict[str, str]]]] = {}
+    for fpath, tag_dict in dir_files:
+        album_id = tag_dict.get("MUSICBRAINZ_ALBUMID", "").strip()
+        fragments.setdefault(album_id, []).append((fpath, tag_dict))
+
+    # If any fragment has fewer than 3 files, classify as stray.
+    # A fragment with 1-2 files is too small to be a complete disc fragment.
+    _stray_threshold = 3
+    for frag_files in fragments.values():
+        if len(frag_files) < _stray_threshold:
+            return "stray", groups
+
+    return "auto", groups
+
+
+def _renumber_and_move_group(
+    group: list[tuple[Path, dict[str, str]]],
+    dest_root: Path,
+    *,
+    cache: TagReadCache,
+    modal_depth_map: dict[str, int | None],
+    dry_run: bool,
+) -> list[tuple[Path, Path]]:
+    """Re-derive ``CWP_MOVT_NUM`` for one group and build the move plan.
+
+    Sorts the group by embedded ``(DISCNUMBER, TRACKNUMBER)`` (the ordering authority), calls
+    :func:`~music_annotator._tags.assign_group_movement_numbers` to assign gap-free 1-based
+    ``CWP_MOVT_NUM``, writes the changed tags to disk (in-place, before the move), then
+    recomputes the destination via :func:`~music_annotator._tags.build_dest_path` and returns
+    the ``(src, dest)`` pairs for files that need to move.
+
+    The tag rewrite happens before the move so that the destination path is derived from the
+    corrected ``CWP_MOVT_NUM``.  The provenance chain for each file is:
+
+    1. SHA-256 of source captured before the move (inside :func:`_move_verify_journal`).
+    2. Tags rewritten in-place (this function).
+    3. Move via :func:`_move_verify_journal` (SHA verify + ``_verify_copy`` + journal entry).
+
+    Only files whose destination differs from their current path are included in the returned
+    plan.  Files already at the correct destination are skipped.
+
+    :param group: List of ``(file_path, tag_dict)`` pairs for one ``CWP_WORKID_TOP`` group.
+    :param dest_root: Root of the annotated music library.
+    :param cache: Tag-read cache to update after each in-place tag rewrite.
+    :param modal_depth_map: ``cwp_workid_top`` → modal-depth map for :func:`build_dest_path`.
+    :param dry_run: When ``True``, compute the plan without writing tags or moving files.
+    :returns: List of ``(src, dest)`` pairs for files that need to move.
+    :raises RuntimeError: If a tag write fails.
+    """
+
+    def _sort_key(item: tuple[Path, dict[str, str]]) -> tuple[int, int]:
+        """Return ``(disc, track)`` sort key from embedded tags.
+
+        :param item: ``(file_path, tag_dict)`` pair.
+        :returns: ``(discnumber_int, tracknumber_int)`` pair.
+        """
+        _, td = item
+        disc_str = td.get("DISCNUMBER", "").split("/", maxsplit=1)[0].strip()
+        track_str = td.get("TRACKNUMBER", "").split("/", maxsplit=1)[0].strip()
+        disc = int(disc_str) if disc_str.isdigit() else 0
+        track = int(track_str) if track_str.isdigit() else 0
+        return disc, track
+
+    ordered = sorted(group, key=_sort_key)
+
+    # Reconstruct TrackTags for each file and hydrate performer lists.
+    ordered_tags: list[tuple[Path, TrackTags, dict[str, str], str]] = []
+    for fpath, tag_dict in ordered:
+        ext = fpath.suffix.lower()
+        tags = _tags_from_file_dict(tag_dict)
+        _hydrate_performer_lists(tags, tag_dict)
+        ordered_tags.append((fpath, tags, tag_dict, ext))
+
+    # Snapshot movement tags before the renumber call.
+    before = [(tags.cwp_movt_num, tags.cwp_movt_tot) for _, tags, _, _ in ordered_tags]
+
+    # Re-derive gap-free CWP_MOVT_NUM from (DISCNUMBER, TRACKNUMBER) order.
+    assign_group_movement_numbers([tags for _, tags, _, _ in ordered_tags], single_work_album=True)
+
+    # Write changed tags to disk (in-place, before the move).
+    if not dry_run:
+        for (fpath, tags, _, ext), (old_num, old_tot) in zip(ordered_tags, before):
+            if tags.cwp_movt_num == old_num and tags.cwp_movt_tot == old_tot:
+                continue
+            log.info(
+                "renumber_leaves_tag_rewrite",
+                path=str(fpath),
+                old_cwp_movt_num=old_num,
+                new_cwp_movt_num=tags.cwp_movt_num,
+            )
+            try:
+                match ext:
+                    case ".flac":
+                        apply_tags_flac(fpath, tags)
+                    case ".mp3":
+                        apply_tags_mp3(fpath, tags)
+                    case _:  # pragma: no cover — callers filter to .flac/.mp3
+                        pass
+            except MutagenError as exc:
+                raise RuntimeError(f"renumber_leaves tag write failure for '{fpath.name}': {exc}") from exc
+            # Update the cache entry after the in-place tag rewrite so subsequent reads
+            # see the corrected tags without re-opening the file.
+            cache.put(fpath, _read_tags_flac(fpath) if ext == ".flac" else _read_tags_mp3(fpath))
+
+    # Build the move plan: recompute destination from updated tags.
+    stub_release = MBRelease()
+    stub_track = MBTrack()
+    plan_pairs: list[tuple[Path, Path]] = []
+
+    for fpath, tags, _, ext in ordered_tags:
+        twid = tags.cwp_workid_top
+        modal_depth = modal_depth_map.get(twid) if twid else None
+        new_dest_base = build_dest_path(
+            dest_root,
+            stub_release,
+            stub_track,
+            tags,
+            global_track_idx=0,
+            group_modal_depth=modal_depth,
+        )
+        new_dest = _clamp_maint_dest(dest_root, new_dest_base.with_suffix(ext), fpath)
+
+        if new_dest == fpath:
+            log.debug("renumber_leaves_noop", path=str(fpath.relative_to(dest_root)))
+            continue
+
+        log.info(
+            "renumber_leaves_plan",
+            old=str(fpath.relative_to(dest_root)),
+            new=str(new_dest.relative_to(dest_root)),
+            dry_run=dry_run,
+        )
+        plan_pairs.append((fpath, new_dest))
+
+    return plan_pairs
+
+
+def renumber_leaves(  # pylint: disable=too-many-return-statements,too-many-branches
+    dest_root: Path,
+    *,
+    dry_run: bool = False,
+    yes: bool = False,
+) -> None:
+    """Retroactive repair tool for the cross-session leaf-collision defect.
+
+    Scans ``dest_root`` for directories that contain duplicate ``CWP_MOVT_NUM`` prefixes — the
+    signature of a cross-session merge where each ingest session assigned ``CWP_MOVT_NUM`` from 1
+    independently.  For each auto-fixable collision directory (single ``CWP_WORKID_TOP``, all
+    fragments ≥ 3 files), re-derives the gap-free 1-based ``CWP_MOVT_NUM`` from embedded
+    ``(DISCNUMBER, TRACKNUMBER)`` order, rewrites the affected tags in-place, recomputes the
+    destination via :func:`~music_annotator._tags.build_dest_path`, and moves each file on the
+    full provenance chain:
+
+    1. Rewrite ``CWP_MOVT_NUM`` (and mirror tags) in-place on the source file.
+    2. Capture source SHA-256.
+    3. Move atomically via ``os.replace``; fall back to ``shutil.copy2`` + ``os.unlink`` on
+       ``OSError`` with ``errno.EXDEV`` (cross-filesystem).
+    4. Verify destination SHA-256 == source SHA-256 (``RuntimeError`` on mismatch — NO journal
+       entry written).
+    5. Run ``_verify_copy`` tag round-trip on the new path (``RuntimeError`` on mismatch — NO
+       journal entry written).
+    6. **Only then** append ``TransactionEntry(action="renumbered", release_id=<the release's
+       MBID>, source=<old path>, destination=<new path>)`` and flush it to the journal.
+
+    The leaf ``nn`` prefix (``CWP_MOVT_NUM``) is the per-top-work-group gap-free playback index.
+    It is session-local and must never be trusted across a merge.  The shared authority is
+    :func:`~music_annotator._tags.assign_group_movement_numbers` with ordering by embedded
+    ``(DISCNUMBER, TRACKNUMBER)`` within one ``CWP_WORKID_TOP`` group.
+
+    **Stray-minority and out-of-scope dirs are reported but never auto-moved**, even with
+    ``--yes``.  These require explicit per-dir operator review because the collision may signal
+    a tag mis-grouping (wrong ``DISCNUMBER`` / ``MUSICBRAINZ_ALBUMID``) rather than a simple
+    cross-session merge.
+
+    In ``dry_run`` mode: all planned moves are logged but **no files are moved, no tags are
+    rewritten, and no journal entries are written**.
+
+    When ``yes=True`` the move-confirmation prompt is skipped; files are moved immediately after
+    building the plan.  When ``yes=False`` (default), the planned moves are printed and the user
+    must confirm with ``y``/``yes`` before any move is performed.
+
+    :param dest_root: Root of the annotated music library (contains
+        ``music_annotator_journal.json``).
+    :param dry_run: When ``True``, log planned moves without performing any filesystem
+        operations, tag rewrites, or journal entries.
+    :param yes: When ``True``, skip the move-confirmation prompt and move files immediately.
+        Has no effect on stray-minority and out-of-scope dirs (those are never auto-moved).
+    :raises RuntimeError: If a tag write, SHA-256 check, or ``_verify_copy`` fails.
+    """
+    journal_path = dest_root / JOURNAL_FILENAME
+    journal = read_journal(journal_path)
+    cache = TagReadCache.load(dest_root / _TAG_CACHE_FILENAME)
+
+    # --- Scan for collision directories ---
+    log.info("renumber_leaves_scan_start", dest_root=str(dest_root))
+    collision_dirs = _scan_leaf_collision_dirs(dest_root, cache)
+
+    if not collision_dirs:
+        log.info("renumber_leaves_nothing_to_fix", dest_root=str(dest_root))
+        cache.save()
+        return
+
+    # --- Classify each collision directory ---
+    auto_dirs: list[tuple[Path, dict[str, list[tuple[Path, dict[str, str]]]]]] = []
+    report_dirs: list[tuple[Path, str, dict[str, list[tuple[Path, dict[str, str]]]]]] = []
+
+    for dirpath, dir_files in sorted(collision_dirs.items()):
+        classification, groups = _classify_collision_dir(dir_files)
+        if classification == "auto":
+            auto_dirs.append((dirpath, groups))
+        else:
+            report_dirs.append((dirpath, classification, groups))
+
+    # --- Report stray-minority and out-of-scope dirs ---
+    # These are never auto-moved; they require explicit per-dir operator review.
+    if report_dirs:
+        _console.print(
+            f"\n[bold yellow]renumber-leaves[/] — {len(report_dirs)} dir(s) require explicit operator review "
+            f"(not auto-moved even with --yes):\n"
+        )
+        for dirpath, classification, groups in report_dirs:
+            rel = str(dirpath.relative_to(dest_root)) if dirpath.is_relative_to(dest_root) else str(dirpath)
+            twid_count = len(groups)
+            reason = (
+                f"multiple CWP_WORKID_TOP values ({twid_count})"
+                if classification == "out_of_scope"
+                else "stray-minority fragment (1–2-file fragment present)"
+            )
+            _console.print(f"  [dim]{_markup_escape(rel)}[/]  [yellow]({_markup_escape(reason)})[/]")
+            for twid, twid_files in groups.items():
+                twid_label = twid if twid else "(no CWP_WORKID_TOP)"
+                _console.print(f"    {_markup_escape(twid_label)}: {len(twid_files)} file(s)")
+        log.info(
+            "renumber_leaves_report_dirs",
+            count=len(report_dirs),
+        )
+
+    if not auto_dirs:
+        log.info("renumber_leaves_no_auto_dirs", dest_root=str(dest_root))
+        cache.save()
+        return
+
+    # --- Build move plan for auto-fixable dirs ---
+    # Compute the library-wide modal depth map for build_dest_path.
+    _rl_pairs: list[tuple[str, int]] = []
+    for _dirpath, groups in auto_dirs:
+        for _twid, _twid_files in groups.items():
+            for _, _td in _twid_files:
+                _rl_pairs.append((_td.get("CWP_WORKID_TOP", ""), int(_td.get("CWP_PART_LEVELS") or "0")))
+    modal_depth_map = compute_library_modal_depth(_rl_pairs)
+
+    # Derive release_id for each directory from the embedded MUSICBRAINZ_ALBUMID of its files.
+    # When files in the dir have multiple release IDs, use the most common one.
+    all_plan_pairs: list[tuple[Path, Path, str]] = []  # (src, dest, release_id)
+
+    for dirpath, groups in auto_dirs:
+        # Determine the release_id for this directory (most common MUSICBRAINZ_ALBUMID).
+        album_ids: list[str] = []
+        for _twid, _twid_files in groups.items():
+            for _, _td in _twid_files:
+                aid = _td.get("MUSICBRAINZ_ALBUMID", "").strip()
+                if aid:
+                    album_ids.append(aid)
+        release_id = max(set(album_ids), key=album_ids.count) if album_ids else ""
+
+        for _twid, twid_files in groups.items():
+            move_pairs = _renumber_and_move_group(
+                twid_files,
+                dest_root,
+                cache=cache,
+                modal_depth_map=modal_depth_map,
+                dry_run=dry_run,
+            )
+            for src, dest in move_pairs:
+                all_plan_pairs.append((src, dest, release_id))
+
+    if not all_plan_pairs:
+        log.info("renumber_leaves_all_current", dest_root=str(dest_root))
+        cache.save()
+        return
+
+    if dry_run:
+        _console.print(f"\n[bold yellow]renumber-leaves[/] (dry-run) — {len(all_plan_pairs)} file(s) would be moved:\n")
+        for src, dest, _rid in all_plan_pairs:
+            src_rel = str(src.relative_to(dest_root)) if src.is_relative_to(dest_root) else str(src)
+            dest_rel = str(dest.relative_to(dest_root)) if dest.is_relative_to(dest_root) else str(dest)
+            _console.print(f"  [dim]{_markup_escape(src_rel)}[/]\n    → [green]{_markup_escape(dest_rel)}[/]")
+        cache.save()
+        log.info("renumber_leaves_dry_run_complete", dest_root=str(dest_root), planned=len(all_plan_pairs))
+        return
+
+    # --- Confirmation prompt ---
+    if not yes:
+        _console.print(f"\n[bold yellow]renumber-leaves[/] will move {len(all_plan_pairs)} file(s):\n")
+        for src, dest, _rid in all_plan_pairs:
+            src_rel = str(src.relative_to(dest_root)) if src.is_relative_to(dest_root) else str(src)
+            dest_rel = str(dest.relative_to(dest_root)) if dest.is_relative_to(dest_root) else str(dest)
+            _console.print(f"  [dim]{_markup_escape(src_rel)}[/]\n    → [green]{_markup_escape(dest_rel)}[/]")
+        _console.print(f"\n[bold]{len(all_plan_pairs)} file(s) will be moved.[/]  Proceed? [dim](y/n)[/]")
+        _console.print("\n[bold cyan]>[/] ", end="")
+        answer = input("").strip().lower()
+        if answer not in {"y", "yes"}:
+            log.info("renumber_leaves_aborted", dest_root=str(dest_root))
+            cache.save()
+            return
+
+    # --- Perform moves, verify, journal ---
+    # Group plan_pairs by release_id so each batch shares the same journal release_id.
+    # The provenance-chain invariant: no "renumbered" journal entry before _verify_copy passes.
+    # Tags were already rewritten in-place by _renumber_and_move_group (dry_run=False path).
+    now = datetime.datetime.now(datetime.UTC)
+    total_moved = 0
+    release_groups: dict[str, list[tuple[Path, Path]]] = {}
+    for src, dest, rid in all_plan_pairs:
+        release_groups.setdefault(rid, []).append((src, dest))
+
+    # C-IDEM tripwire: warn before executing if any planned move inverts a prior journal entry.
+    all_move_pairs = [(src, dest) for src, dest, _ in all_plan_pairs]
+    _warn_inverse_moves(all_move_pairs, "renumber_leaves", journal)
+
+    for rid, move_pairs in release_groups.items():
+        total_moved += _move_verify_journal(
+            move_pairs,
+            journal=journal,
+            journal_path=journal_path,
+            action="renumbered",
+            dest_root=dest_root,
+            now=now,
+            release_id=rid,
+            cache=cache,
+        )
+
+    cache.save()
+    log.info("renumber_leaves_complete", dest_root=str(dest_root), moved=total_moved)
+
+    # User-facing confirmation: derived exclusively from in-memory journal entries gated on
+    # successful _verify_copy (provenance-chain invariant: the "renumbered" entries in journal
+    # were appended only after verification passed inside _move_verify_journal).
+    renumbered_this_run = [e for e in journal.entries if e.action == "renumbered"]
+    _console.print(f"\n[bold green]renumber-leaves complete[/] — {len(renumbered_this_run)} file(s) renumbered and moved.\n")
 
 
 def enrich(

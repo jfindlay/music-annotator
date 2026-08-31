@@ -58,19 +58,23 @@ from music_annotator._pipeline_maint import (
     _census_journal_for_xrefs,
     _check_dest_root,
     _clamp_maint_dest,
+    _classify_collision_dir,
     _execute_single_move,
     _hydrate_performer_lists,
     _journal_capacity,
     _move_verify_journal,
     _read_tags_cached,
     _reference_evidence,
+    _renumber_and_move_group,
     _resolve_current_lib,
+    _scan_leaf_collision_dirs,
     _scatter_consequence_note,
     _write_xref_and_journal,
     compute_library_modal_depth,
     dedup_library,
     maintain,
     reconstruct_cross_references,
+    renumber_leaves,
     resolve_duplicate_group,
 )
 from music_annotator._tagger import write_secondary_albumid_flac, write_secondary_albumid_mp3
@@ -18541,3 +18545,594 @@ class TestUnifyMovementRenumber:
         journal_after_second = music_annotator.read_journal(dest_root / "music_annotator_journal.json")
         unified_after_second = [e for e in journal_after_second.entries if e.action == "unified"]
         assert len(unified_after_second) == 4  # same count — no new entries
+
+
+# ---------------------------------------------------------------------------
+# renumber_leaves — unit tests for scan, classify, and renumber helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_collision_tags_unit(
+    disc: int,
+    track: int,
+    movt_num: str,
+    movt_tot: str,
+    album_id: str = "rel-unit",
+    twid: str = "work-unit",
+) -> TrackTags:
+    """Build TrackTags for renumber_leaves unit tests.
+
+    :param disc: DISCNUMBER value.
+    :param track: TRACKNUMBER value.
+    :param movt_num: CWP_MOVT_NUM value.
+    :param movt_tot: CWP_MOVT_TOT value.
+    :param album_id: MUSICBRAINZ_ALBUMID value.
+    :param twid: CWP_WORKID_TOP value.
+    :returns: A :class:`TrackTags` instance.
+    """
+    return TrackTags(
+        cwp_composer_lastnames="Bach",
+        cwp_work_top="Die Kunst der Fuge",
+        cwp_workid_top=twid,
+        recording_date="2000",
+        cwp_movt_num=movt_num,
+        cwp_movt_tot=movt_tot,
+        movementnumber=movt_num,
+        movementtotal=movt_tot,
+        cwp_part_levels="1",
+        title=f"Contrapunctus {track}",
+        discnumber=str(disc),
+        tracknumber=str(track),
+        musicbrainz_albumid=album_id,
+    )
+
+
+class TestScanLeafCollisionDirs:
+    """Unit tests for :func:`_scan_leaf_collision_dirs`.
+
+    Verifies that the scanner correctly identifies directories with duplicate CWP_MOVT_NUM
+    values and skips directories with all-unique values or files without CWP_MOVT_NUM.
+    """
+
+    def test_detects_collision_directory(self, fs: FakeFilesystem) -> None:
+        """_scan_leaf_collision_dirs returns a directory with duplicate CWP_MOVT_NUM values.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+        work_dir = dest_root / "Bach" / "Work [rec 2000]"
+        work_dir.mkdir(parents=True)
+
+        # Two files with the same CWP_MOVT_NUM (collision).
+        p1 = _make_library_flac(dest_root, "Bach/Work [rec 2000]/01 - Track A.flac", _make_collision_tags_unit(1, 1, "1", "4"))
+        p2 = _make_library_flac(dest_root, "Bach/Work [rec 2000]/01 - Track B.flac", _make_collision_tags_unit(2, 1, "1", "4"))
+
+        cache = TagReadCache(dest_root / ".cache.json")
+        result = _scan_leaf_collision_dirs(dest_root, cache)
+
+        assert work_dir in result
+        paths_in_result = {fpath for fpath, _ in result[work_dir]}
+        assert p1 in paths_in_result
+        assert p2 in paths_in_result
+
+    def test_skips_directory_with_unique_movt_nums(self, fs: FakeFilesystem) -> None:
+        """_scan_leaf_collision_dirs skips directories where all CWP_MOVT_NUM values are unique.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        _make_library_flac(dest_root, "Bach/Work [rec 2000]/01 - Track A.flac", _make_collision_tags_unit(1, 1, "1", "2"))
+        _make_library_flac(dest_root, "Bach/Work [rec 2000]/02 - Track B.flac", _make_collision_tags_unit(1, 2, "2", "2"))
+
+        cache = TagReadCache(dest_root / ".cache.json")
+        result = _scan_leaf_collision_dirs(dest_root, cache)
+
+        assert not result
+
+    def test_skips_files_without_cwp_movt_num(self, fs: FakeFilesystem) -> None:
+        """_scan_leaf_collision_dirs skips files that have no CWP_MOVT_NUM tag.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # File without CWP_MOVT_NUM.
+        p = dest_root / "Bach" / "Work [rec 2000]" / "01 - Track.flac"
+        p.parent.mkdir(parents=True)
+        p.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(p, TrackTags(title="Track", discnumber="1", tracknumber="1"))
+
+        cache = TagReadCache(dest_root / ".cache.json")
+        result = _scan_leaf_collision_dirs(dest_root, cache)
+
+        assert not result
+
+    def test_skips_file_on_tag_read_error(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """_scan_leaf_collision_dirs skips files whose tags cannot be read.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        p = dest_root / "Bach" / "Work [rec 2000]" / "01 - Track.flac"
+        p.parent.mkdir(parents=True)
+        p.write_bytes(_MINIMAL_FLAC)
+
+        # Patch _read_tags_cached to raise on this file.
+        mocker.patch(
+            "music_annotator._pipeline_maint._read_tags_cached",
+            side_effect=OSError("corrupt"),
+        )
+
+        cache = TagReadCache(dest_root / ".cache.json")
+        result = _scan_leaf_collision_dirs(dest_root, cache)
+
+        # File skipped on read error — no collision dirs detected.
+        assert not result
+
+
+class TestClassifyCollisionDir:
+    """Unit tests for :func:`_classify_collision_dir`.
+
+    Verifies that the classifier correctly identifies auto-fixable, stray-minority, and
+    out-of-scope collision directories.
+    """
+
+    def test_auto_classification_single_twid_all_fragments_large(self) -> None:
+        """_classify_collision_dir returns 'auto' for single CWP_WORKID_TOP, all fragments >= 3 files.
+
+        :returns: None.
+        """
+        # 6 files: 3 from release A, 3 from release B — both fragments >= 3 files.
+        dir_files: list[tuple[Path, dict[str, str]]] = []
+        for i in range(1, 4):
+            dir_files.append(
+                (
+                    Path(f"/lib/f{i}a.flac"),
+                    {
+                        "CWP_WORKID_TOP": "work-x",
+                        "CWP_MOVT_NUM": str(i),
+                        "MUSICBRAINZ_ALBUMID": "rel-a",
+                        "DISCNUMBER": "1",
+                        "TRACKNUMBER": str(i),
+                    },
+                )
+            )
+            dir_files.append(
+                (
+                    Path(f"/lib/f{i}b.flac"),
+                    {
+                        "CWP_WORKID_TOP": "work-x",
+                        "CWP_MOVT_NUM": str(i),
+                        "MUSICBRAINZ_ALBUMID": "rel-b",
+                        "DISCNUMBER": "2",
+                        "TRACKNUMBER": str(i),
+                    },
+                )
+            )
+
+        classification, groups = _classify_collision_dir(dir_files)
+
+        assert classification == "auto"
+        assert "work-x" in groups
+
+    def test_stray_classification_single_twid_small_fragment(self) -> None:
+        """_classify_collision_dir returns 'stray' when a fragment has fewer than 3 files.
+
+        :returns: None.
+        """
+        # 5 files from release A, 1 file from release B (stray).
+        dir_files: list[tuple[Path, dict[str, str]]] = []
+        for i in range(1, 6):
+            dir_files.append(
+                (
+                    Path(f"/lib/fa{i}.flac"),
+                    {
+                        "CWP_WORKID_TOP": "work-x",
+                        "CWP_MOVT_NUM": str(i),
+                        "MUSICBRAINZ_ALBUMID": "rel-a",
+                        "DISCNUMBER": "1",
+                        "TRACKNUMBER": str(i),
+                    },
+                )
+            )
+        # Stray: 1 file from release B.
+        dir_files.append(
+            (
+                Path("/lib/fb1.flac"),
+                {
+                    "CWP_WORKID_TOP": "work-x",
+                    "CWP_MOVT_NUM": "1",
+                    "MUSICBRAINZ_ALBUMID": "rel-b",
+                    "DISCNUMBER": "2",
+                    "TRACKNUMBER": "1",
+                },
+            )
+        )
+
+        classification, _groups = _classify_collision_dir(dir_files)
+
+        assert classification == "stray"
+
+    def test_out_of_scope_classification_multiple_twids(self) -> None:
+        """_classify_collision_dir returns 'out_of_scope' for multiple CWP_WORKID_TOP values.
+
+        :returns: None.
+        """
+        dir_files: list[tuple[Path, dict[str, str]]] = []
+        for i in range(1, 4):
+            dir_files.append(
+                (
+                    Path(f"/lib/fa{i}.flac"),
+                    {
+                        "CWP_WORKID_TOP": "work-a",
+                        "CWP_MOVT_NUM": str(i),
+                        "MUSICBRAINZ_ALBUMID": "rel-a",
+                        "DISCNUMBER": "1",
+                        "TRACKNUMBER": str(i),
+                    },
+                )
+            )
+            dir_files.append(
+                (
+                    Path(f"/lib/fb{i}.flac"),
+                    {
+                        "CWP_WORKID_TOP": "work-b",
+                        "CWP_MOVT_NUM": str(i),
+                        "MUSICBRAINZ_ALBUMID": "rel-a",
+                        "DISCNUMBER": "2",
+                        "TRACKNUMBER": str(i),
+                    },
+                )
+            )
+
+        classification, groups = _classify_collision_dir(dir_files)
+
+        assert classification == "out_of_scope"
+        assert len(groups) == 2
+
+
+class TestRenumberAndMoveGroup:
+    """Unit tests for :func:`_renumber_and_move_group`.
+
+    Verifies that the helper correctly re-derives CWP_MOVT_NUM, writes tags in-place,
+    and builds the move plan.  Covers both FLAC and MP3 paths.
+    """
+
+    def test_mp3_tag_rewrite_path(self, fs: FakeFilesystem) -> None:
+        """_renumber_and_move_group rewrites CWP_MOVT_NUM on MP3 files.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two MP3 files with colliding CWP_MOVT_NUM=1.
+        tags_a = _make_collision_tags_unit(disc=1, track=1, movt_num="1", movt_tot="4")
+        tags_b = _make_collision_tags_unit(disc=2, track=1, movt_num="1", movt_tot="4")
+        p_a = _make_library_mp3(dest_root, "Bach/Work [rec 2000]/01 - Track A.mp3", tags_a)
+        p_b = _make_library_mp3(dest_root, "Bach/Work [rec 2000]/01 - Track B.mp3", tags_b)
+
+        group: list[tuple[Path, dict[str, str]]] = [
+            (p_a, _read_tags_mp3(p_a)),
+            (p_b, _read_tags_mp3(p_b)),
+        ]
+
+        cache = TagReadCache(dest_root / ".cache.json")
+
+        plan = _renumber_and_move_group(
+            group,
+            dest_root,
+            cache=cache,
+            modal_depth_map={},
+            dry_run=False,
+        )
+
+        # At least one file should have a new destination.
+        assert len(plan) >= 1
+
+        # The MP3 file that changed CWP_MOVT_NUM should have been rewritten.
+        # Read back the tags to verify the rewrite.
+        tags_a_after = _read_tags_mp3(p_a)
+        tags_b_after = _read_tags_mp3(p_b)
+        movt_nums_after = {tags_a_after.get("CWP_MOVT_NUM", ""), tags_b_after.get("CWP_MOVT_NUM", "")}
+        assert movt_nums_after == {"1", "2"}, f"expected unique CWP_MOVT_NUM after rewrite, got {movt_nums_after}"
+
+    def test_no_move_when_already_at_correct_path(self, fs: FakeFilesystem) -> None:
+        """_renumber_and_move_group returns empty plan when files are already at correct paths.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two files with unique CWP_MOVT_NUM (no collision — but we call the function directly).
+        tags_a = _make_collision_tags_unit(disc=1, track=1, movt_num="1", movt_tot="2")
+        tags_b = _make_collision_tags_unit(disc=1, track=2, movt_num="2", movt_tot="2")
+
+        # Place files at their canonical destinations.
+        stub_release = MBRelease()
+        stub_track = MBTrack()
+        dest_a = build_dest_path(dest_root, stub_release, stub_track, tags_a, global_track_idx=0).with_suffix(".flac")
+        dest_b = build_dest_path(dest_root, stub_release, stub_track, tags_b, global_track_idx=0).with_suffix(".flac")
+
+        dest_a.parent.mkdir(parents=True, exist_ok=True)
+        dest_a.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_a, tags_a)
+
+        dest_b.parent.mkdir(parents=True, exist_ok=True)
+        dest_b.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(dest_b, tags_b)
+
+        group: list[tuple[Path, dict[str, str]]] = [
+            (dest_a, _read_tags_flac(dest_a)),
+            (dest_b, _read_tags_flac(dest_b)),
+        ]
+
+        cache = TagReadCache(dest_root / ".cache.json")
+
+        plan = _renumber_and_move_group(
+            group,
+            dest_root,
+            cache=cache,
+            modal_depth_map={},
+            dry_run=False,
+        )
+
+        # No moves needed — files are already at canonical paths.
+        assert plan == []
+
+
+class TestRenumberLeaves:
+    """Unit tests for :func:`renumber_leaves`.
+
+    Verifies the scan → classify → tag-rewrite → move → journal chain, including
+    edge cases: no collisions, confirmation prompt abort, and empty album_id handling.
+    """
+
+    def test_no_collision_dirs_is_noop(self, fs: FakeFilesystem) -> None:
+        """renumber_leaves() is a no-op when no collision directories exist.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two files with unique CWP_MOVT_NUM values.
+        _make_library_flac(dest_root, "Bach/Work [rec 2000]/01 - Track A.flac", _make_collision_tags_unit(1, 1, "1", "2"))
+        _make_library_flac(dest_root, "Bach/Work [rec 2000]/02 - Track B.flac", _make_collision_tags_unit(1, 2, "2", "2"))
+
+        files_before = set(dest_root.rglob("*.flac"))
+        renumber_leaves(dest_root=dest_root, yes=True)
+        files_after = set(dest_root.rglob("*.flac"))
+
+        assert files_before == files_after
+        assert not (dest_root / JOURNAL_FILENAME).exists()
+
+    def test_confirmation_prompt_abort(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """renumber_leaves() aborts when the user declines the confirmation prompt.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two files with colliding CWP_MOVT_NUM=1 (from different releases).
+        _make_library_flac(
+            dest_root, "Bach/Work [rec 2000]/01 - Track A.flac", _make_collision_tags_unit(1, 1, "1", "4", album_id="rel-a")
+        )
+        _make_library_flac(
+            dest_root, "Bach/Work [rec 2000]/01 - Track B.flac", _make_collision_tags_unit(2, 1, "1", "4", album_id="rel-b")
+        )
+        _make_library_flac(
+            dest_root, "Bach/Work [rec 2000]/02 - Track C.flac", _make_collision_tags_unit(1, 2, "2", "4", album_id="rel-a")
+        )
+        _make_library_flac(
+            dest_root, "Bach/Work [rec 2000]/02 - Track D.flac", _make_collision_tags_unit(2, 2, "2", "4", album_id="rel-b")
+        )
+        _make_library_flac(
+            dest_root, "Bach/Work [rec 2000]/03 - Track E.flac", _make_collision_tags_unit(1, 3, "3", "4", album_id="rel-a")
+        )
+        _make_library_flac(
+            dest_root, "Bach/Work [rec 2000]/03 - Track F.flac", _make_collision_tags_unit(2, 3, "3", "4", album_id="rel-b")
+        )
+
+        mocker.patch("builtins.input", return_value="n")
+
+        files_before = set(dest_root.rglob("*.flac"))
+        renumber_leaves(dest_root=dest_root, yes=False)
+        files_after = set(dest_root.rglob("*.flac"))
+
+        # Files must not have moved (user aborted).
+        assert files_before == files_after
+        assert not (dest_root / JOURNAL_FILENAME).exists()
+
+    def test_empty_album_id_uses_empty_release_id(self, fs: FakeFilesystem) -> None:
+        """renumber_leaves() handles files with no MUSICBRAINZ_ALBUMID (empty release_id).
+
+        When files have no MUSICBRAINZ_ALBUMID, the release_id in journal entries is "".
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two files with colliding CWP_MOVT_NUM=1 but no MUSICBRAINZ_ALBUMID.
+        tags_a = TrackTags(
+            cwp_composer_lastnames="Bach",
+            cwp_work_top="Die Kunst der Fuge",
+            cwp_workid_top="work-unit",
+            recording_date="2000",
+            cwp_movt_num="1",
+            cwp_movt_tot="4",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_part_levels="1",
+            title="Contrapunctus 1",
+            discnumber="1",
+            tracknumber="1",
+            # No musicbrainz_albumid — empty string.
+        )
+        tags_b = TrackTags(
+            cwp_composer_lastnames="Bach",
+            cwp_work_top="Die Kunst der Fuge",
+            cwp_workid_top="work-unit",
+            recording_date="2000",
+            cwp_movt_num="1",
+            cwp_movt_tot="4",
+            movementnumber="1",
+            movementtotal="4",
+            cwp_part_levels="1",
+            title="Contrapunctus 2",
+            discnumber="2",
+            tracknumber="1",
+            # No musicbrainz_albumid — empty string.
+        )
+        _make_library_flac(dest_root, "Bach/Work [rec 2000]/01 - Contrapunctus 1.flac", tags_a)
+        _make_library_flac(dest_root, "Bach/Work [rec 2000]/01 - Contrapunctus 2.flac", tags_b)
+        # Add more files to reach the 3-file-per-fragment threshold.
+        for i in range(2, 4):
+            tags_extra_a = TrackTags(
+                cwp_composer_lastnames="Bach",
+                cwp_work_top="Die Kunst der Fuge",
+                cwp_workid_top="work-unit",
+                recording_date="2000",
+                cwp_movt_num=str(i),
+                cwp_movt_tot="4",
+                movementnumber=str(i),
+                movementtotal="4",
+                cwp_part_levels="1",
+                title=f"Contrapunctus {i}",
+                discnumber="1",
+                tracknumber=str(i),
+            )
+            tags_extra_b = TrackTags(
+                cwp_composer_lastnames="Bach",
+                cwp_work_top="Die Kunst der Fuge",
+                cwp_workid_top="work-unit",
+                recording_date="2000",
+                cwp_movt_num=str(i),
+                cwp_movt_tot="4",
+                movementnumber=str(i),
+                movementtotal="4",
+                cwp_part_levels="1",
+                title=f"Contrapunctus {i + 2}",
+                discnumber="2",
+                tracknumber=str(i),
+            )
+            _make_library_flac(dest_root, f"Bach/Work [rec 2000]/0{i} - Contrapunctus {i}.flac", tags_extra_a)
+            _make_library_flac(dest_root, f"Bach/Work [rec 2000]/0{i} - Contrapunctus {i + 2}.flac", tags_extra_b)
+
+        # Act: renumber_leaves with yes=True.
+        renumber_leaves(dest_root=dest_root, yes=True)
+
+        # Journal entries must have empty release_id (no MUSICBRAINZ_ALBUMID in files).
+        journal = read_journal(dest_root / JOURNAL_FILENAME)
+        renumbered = [e for e in journal.entries if e.action == "renumbered"]
+        assert len(renumbered) > 0, "expected at least one 'renumbered' journal entry"
+        for entry in renumbered:
+            assert entry.release_id == "", (
+                f"renumbered entry with no album_id must have empty release_id, got {entry.release_id!r}"
+            )
+
+    def test_resolve_current_lib_handles_renumbered_action(self) -> None:
+        """_resolve_current_lib correctly handles action='renumbered' entries.
+
+        A 'renumbered' entry moves the file from source to destination, like 'repathed'.
+
+        :returns: None.
+        """
+        journal = TransactionLog(
+            entries=[
+                TransactionEntry(
+                    timestamp="2026-01-01T00:00:00",
+                    release_id="rel-1",
+                    source="/lib/old/01 - Track.flac",
+                    destination="/lib/new/01 - Track.flac",
+                    action="tagged",
+                ),
+                TransactionEntry(
+                    timestamp="2026-01-02T00:00:00",
+                    release_id="rel-1",
+                    source="/lib/old/01 - Track.flac",
+                    destination="/lib/new/01 - Track.flac",
+                    action="renumbered",
+                ),
+            ]
+        )
+
+        result = _resolve_current_lib(journal)
+
+        # The file should be at the new path after the renumbered entry.
+        assert Path("/lib/new/01 - Track.flac") in result
+        assert Path("/lib/old/01 - Track.flac") not in result
+
+    def test_confirmation_prompt_yes_proceeds(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """renumber_leaves() proceeds when the user confirms with 'y' at the prompt.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two files with colliding CWP_MOVT_NUM=1 (from different releases, both >= 3 files).
+        for i in range(1, 4):
+            _make_library_flac(
+                dest_root,
+                f"Bach/Work [rec 2000]/0{i} - Track A{i}.flac",
+                _make_collision_tags_unit(1, i, str(i), "6", album_id="rel-a"),
+            )
+            _make_library_flac(
+                dest_root,
+                f"Bach/Work [rec 2000]/0{i} - Track B{i}.flac",
+                _make_collision_tags_unit(2, i, str(i), "6", album_id="rel-b"),
+            )
+
+        mocker.patch("builtins.input", return_value="y")
+
+        # Act: renumber_leaves with yes=False (use prompt).
+        renumber_leaves(dest_root=dest_root, yes=False)
+
+        # Journal must have renumbered entries (prompt was confirmed).
+        journal = read_journal(dest_root / JOURNAL_FILENAME)
+        renumbered = [e for e in journal.entries if e.action == "renumbered"]
+        assert len(renumbered) > 0, "expected renumbered entries after prompt confirmation"
+
+    def test_tag_write_failure_raises_runtime_error(self, fs: FakeFilesystem, mocker: MockerFixture) -> None:
+        """_renumber_and_move_group raises RuntimeError when apply_tags_flac raises MutagenError.
+
+        :param fs: pyfakefs fixture.
+        :param mocker: pytest-mock fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Two files with colliding CWP_MOVT_NUM=1 (from different releases, both >= 3 files).
+        for i in range(1, 4):
+            _make_library_flac(
+                dest_root,
+                f"Bach/Work [rec 2000]/0{i} - Track A{i}.flac",
+                _make_collision_tags_unit(1, i, str(i), "6", album_id="rel-a"),
+            )
+            _make_library_flac(
+                dest_root,
+                f"Bach/Work [rec 2000]/0{i} - Track B{i}.flac",
+                _make_collision_tags_unit(2, i, str(i), "6", album_id="rel-b"),
+            )
+
+        # Patch apply_tags_flac to raise MutagenError on the first call that changes a tag.
+        mocker.patch(
+            "music_annotator._pipeline_maint.apply_tags_flac",
+            side_effect=MutagenError("disk full"),
+        )
+
+        with pytest.raises(RuntimeError, match="renumber_leaves tag write failure"):
+            renumber_leaves(dest_root=dest_root, yes=True)

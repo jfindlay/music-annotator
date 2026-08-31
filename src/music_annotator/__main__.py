@@ -41,6 +41,11 @@ Configures structlog for human-friendly console output and exposes fifteen subco
   suppressed.  Supports ``--dry-run`` to preview all passes without mutations and emit a
   consolidated report (overlap map, journal capacity, Reference/ evidence).  Supports
   ``--json PATH`` to serialise the dry-run report to JSON.
+* ``renumber-leaves``          — retroactive repair tool for the cross-session leaf-collision defect:
+  scans for directories with duplicate ``CWP_MOVT_NUM`` prefixes, re-derives the gap-free 1-based
+  index from embedded ``(DISCNUMBER, TRACKNUMBER)`` order, rewrites tags, and moves each file on the
+  full provenance chain.  Dirs with stray-minority fragments or multiple ``CWP_WORKID_TOP`` values
+  are reported but not auto-moved even with ``--yes``.
 
 Usage::
 
@@ -108,6 +113,10 @@ Usage::
     music-annotator maintain \\
         <dest_dir> \\
         [--dry-run] [-y/--yes] [--json PATH]
+
+    music-annotator renumber-leaves \\
+        <dest_dir> \\
+        [--dry-run] [-y/--yes]
 """
 
 from __future__ import annotations
@@ -337,6 +346,9 @@ def _build_parser() -> argparse.ArgumentParser:
     ``-y``/``--yes``, and ``--json PATH``.  Move-confirmation prompts are suppressible by ``--yes`` but
     integrity prompts are never suppressed.  When ``--dry-run`` is supplied, a consolidated report is emitted
     covering all seven passes; ``--json PATH`` serialises the report to JSON.
+    ``renumber-leaves`` scans for directories with duplicate ``CWP_MOVT_NUM`` prefixes and repairs them by
+    re-deriving the gap-free index from embedded ``(DISCNUMBER, TRACKNUMBER)`` order; accepts ``--dry-run``
+    and ``-y``/``--yes``.  Stray-minority and out-of-scope dirs are reported but never auto-moved.
 
     :returns: A fully configured :class:`argparse.ArgumentParser` instance.
     """
@@ -1049,6 +1061,62 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # ------------------------------------------------------------------
+    # renumber-leaves subcommand
+    # ------------------------------------------------------------------
+    renumber_leaves_parser = subparsers.add_parser(
+        "renumber-leaves",
+        help="Retroactive repair for cross-session leaf-collision defect (duplicate CWP_MOVT_NUM prefixes).",
+        formatter_class=_Formatter,
+        epilog=textwrap.dedent("""\
+            Scans the library at <dest_dir> for directories that contain duplicate CWP_MOVT_NUM
+            prefixes — the signature of a cross-session merge where each ingest session assigned
+            CWP_MOVT_NUM from 1 independently.
+
+            The leaf nn prefix (CWP_MOVT_NUM) is the per-top-work-group gap-free playback index.
+            It is session-local and must never be trusted across a merge.  This command re-derives
+            the gap-free 1-based index from embedded (DISCNUMBER, TRACKNUMBER) order within each
+            CWP_WORKID_TOP group, rewrites the affected tags in-place, recomputes the destination
+            via build_dest_path, and moves each file on the full provenance chain:
+
+              SHA source → rewrite tags → move → SHA verify → _verify_copy tag round-trip →
+              only then append action="renumbered" journal entry.
+
+            Auto-fixable dirs: single CWP_WORKID_TOP, all fragments >= 3 files.
+            Reported (not auto-moved): stray-minority dirs (1-2-file fragment present) and
+            out-of-scope dirs (multiple CWP_WORKID_TOP values).  --yes does NOT auto-consent
+            these — they require explicit per-dir operator review.
+
+            Use --dry-run first to preview all planned moves.  Use -y/--yes to skip the
+            confirmation prompt for auto-fixable dirs.
+
+            Examples:
+              music-annotator renumber-leaves /tmp/music_library --dry-run
+              music-annotator renumber-leaves /tmp/music_library
+              music-annotator renumber-leaves /tmp/music_library --yes
+            """),
+    )
+    renumber_leaves_parser.add_argument(
+        "dest_dir",
+        metavar="dest_dir",
+        type=_resolve_path,
+        help="Root of the annotated music library (contains music_annotator_journal.json).",
+    )
+    renumber_leaves_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log planned moves without performing any filesystem operations, tag rewrites, or journal entries.",
+    )
+    renumber_leaves_parser.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help=(
+            "Skip the move-confirmation prompt for auto-fixable dirs.  "
+            "Has no effect on stray-minority and out-of-scope dirs (those are never auto-moved)."
+        ),
+    )
+
     return parser
 
 
@@ -1057,7 +1125,7 @@ def main() -> None:
 
     Supported subcommands: ``apply``, ``search``, ``ingest``, ``prune``, ``repath``, ``regroup``,
     ``audit``, ``enrich``, ``diff``, ``origin-time``, ``rebuild``, ``unify``,
-    ``reconstruct-xrefs``, ``dedup-library``, ``maintain``.
+    ``reconstruct-xrefs``, ``dedup-library``, ``maintain``, ``renumber-leaves``.
 
     The ``ingest`` subcommand dispatches to :func:`~music_annotator.ingest_local` with
     ``date_unknown`` and ``dry_run`` forwarded.  No MusicBrainz user-agent is required because
@@ -1078,11 +1146,13 @@ def main() -> None:
     has been removed from the maintenance path).  The ``reconstruct-xrefs`` subcommand dispatches to
     :func:`~music_annotator.reconstruct_cross_references` with ``dry_run`` forwarded; the
     operator confirmation prompt is never suppressed by ``--yes`` (integrity prompts are not
-    bulk consent).  The ``maintain`` subcommand dispatches to :func:`~music_annotator.maintain`
+    bulk consent).      The ``maintain`` subcommand dispatches to :func:`~music_annotator.maintain`
     with ``dry_run``, ``yes``, and ``json_path`` forwarded; move-confirmation prompts are
     suppressible by ``--yes`` but integrity prompts are never suppressed.  When ``--dry-run``
     is supplied, a consolidated report is emitted covering all seven passes; ``--json PATH``
-    serialises the report to JSON.
+    serialises the report to JSON.  The ``renumber-leaves`` subcommand dispatches to
+    :func:`~music_annotator.renumber_leaves` with ``dry_run`` and ``yes`` forwarded; stray-minority
+    and out-of-scope dirs are reported but never auto-moved even with ``--yes``.
 
     This function is the entry point registered as ``music-annotator`` in ``pyproject.toml``.  It validates source directories
     before delegating.  All subcommands except ``prune`` use :func:`_dispatch` to convert any unhandled exception or keyboard
@@ -1279,6 +1349,17 @@ def main() -> None:
                     json_path=args.json_path,
                 ),
                 "maintain_error",
+                dest_root=str(args.dest_dir),
+            )
+
+        case "renumber-leaves":
+            _dispatch(
+                lambda: music_annotator.renumber_leaves(
+                    dest_root=args.dest_dir,
+                    dry_run=args.dry_run,
+                    yes=args.yes,
+                ),
+                "renumber_leaves_error",
                 dest_root=str(args.dest_dir),
             )
 

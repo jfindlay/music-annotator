@@ -3678,3 +3678,322 @@ class TestLocalIngestIntegration:
         # MUSICBRAINZ_ALBUMID must be absent (KAT 3).
         mb_txxx = txxx_frames.get("MusicBrainz Album Id", "")
         assert not mb_txxx, f"MUSICBRAINZ_ALBUMID must be empty in MP3, got {mb_txxx!r}"
+
+
+# ---------------------------------------------------------------------------
+# Integration tests: renumber_leaves — cross-session leaf-collision repair
+# ---------------------------------------------------------------------------
+
+
+class TestRenumberLeavesIntegration:
+    """Integration tests for :func:`music_annotator.renumber_leaves`.
+
+    These tests exercise the full scan → classify → tag-rewrite → move → verify → journal chain
+    without mocking any internal helpers.  The real mutagen write-and-read-back path executes
+    via pyfakefs.
+
+    The cross-session collision scenario: two ingest sessions each assigned CWP_MOVT_NUM from 1
+    independently.  After merging into one directory, the leaf prefixes restart and collide.
+    renumber_leaves() must re-derive the gap-free index from embedded (DISCNUMBER, TRACKNUMBER)
+    order and move each file to its corrected destination.
+    """
+
+    @staticmethod
+    def _make_collision_tags(
+        disc: int,
+        track: int,
+        movt_num: str,
+        movt_tot: str,
+        album_id: str = "rel-collision",
+    ) -> TrackTags:
+        """Build TrackTags for the leaf-collision integration test.
+
+        :param disc: DISCNUMBER value.
+        :param track: TRACKNUMBER value.
+        :param movt_num: CWP_MOVT_NUM value (the colliding leaf prefix).
+        :param movt_tot: CWP_MOVT_TOT value.
+        :param album_id: MUSICBRAINZ_ALBUMID value.
+        :returns: A :class:`TrackTags` instance with CWP and disc/track tags set.
+        """
+        return TrackTags(
+            cwp_composer_lastnames="Bach",
+            cwp_work_top="Die Kunst der Fuge, BWV 1080",
+            cwp_workid_top="work-bwv1080",
+            recording_date="2000",
+            cwp_movt_num=movt_num,
+            cwp_movt_tot=movt_tot,
+            movementnumber=movt_num,
+            movementtotal=movt_tot,
+            cwp_part_levels="1",
+            title=f"Contrapunctus {track}",
+            discnumber=str(disc),
+            tracknumber=str(track),
+            musicbrainz_albumid=album_id,
+        )
+
+    def test_renumber_leaves_auto_fix_provenance_chain(self, fs: FakeFilesystem) -> None:
+        """renumber_leaves() repairs a collision dir: tag-rewrite → move → verify → journal.
+
+        Full integration: no internal helpers are mocked.  The real _sha256_file, _verify_copy,
+        apply_tags_flac, and write_transaction_log all execute.
+
+        Scenario: two ingest sessions each produced 3 files with CWP_MOVT_NUM 1, 2, 3.
+        After merging into one directory, the leaf prefixes collide (two "01 - ...", two "02 - ...",
+        two "03 - ...").
+
+        Asserts:
+        (a) renumber_leaves() detects the collision directory.
+        (b) After renumber_leaves(yes=True), files are at corrected paths with unique prefixes.
+        (c) action="renumbered" journal entries are present, one per moved file.
+        (d) No "renumbered" journal entry is present before _verify_copy passes (provenance-chain
+            invariant: entries are appended only after verification).
+        (e) A second run is a no-op (idempotency).
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        # Build a collision directory: 6 files from 2 sessions, each with CWP_MOVT_NUM 1-3.
+        # Session A: disc 1, tracks 1-3 (CWP_MOVT_NUM 1, 2, 3)
+        # Session B: disc 2, tracks 1-3 (CWP_MOVT_NUM 1, 2, 3 — collision!)
+        work_dir = dest_root / "Bach" / "Die Kunst der Fuge, BWV 1080 [rec 2000]"
+        work_dir.mkdir(parents=True)
+
+        for track in range(1, 4):
+            # Session A: disc 1
+            tags_a = self._make_collision_tags(disc=1, track=track, movt_num=str(track), movt_tot="6")
+            path_a = work_dir / f"0{track} - Contrapunctus {track}.flac"
+            path_a.write_bytes(_MINIMAL_FLAC)
+            apply_tags_flac(path_a, tags_a)
+
+            # Session B: disc 2, same CWP_MOVT_NUM (collision)
+            tags_b = self._make_collision_tags(disc=2, track=track, movt_num=str(track), movt_tot="6")
+            # Use a slightly different filename to avoid filesystem collision at creation time.
+            path_b = work_dir / f"0{track} - Contrapunctus {track + 3}.flac"
+            path_b.write_bytes(_MINIMAL_FLAC)
+            apply_tags_flac(path_b, tags_b)
+
+        # (a) Verify the collision exists before repair: 6 files, CWP_MOVT_NUM 1-3 duplicated.
+        movt_nums_before = [FLAC(str(p))["CWP_MOVT_NUM"][0] for p in sorted(work_dir.iterdir())]
+        assert sorted(movt_nums_before) == ["1", "1", "2", "2", "3", "3"], (
+            f"expected duplicate CWP_MOVT_NUM before repair, got {movt_nums_before}"
+        )
+
+        # Act: renumber_leaves with yes=True (skip confirmation prompt).
+        music_annotator.renumber_leaves(dest_root=dest_root, yes=True)
+
+        # (b) After repair: 6 files exist, CWP_MOVT_NUM values are unique (1-6).
+        all_flacs = sorted(dest_root.rglob("*.flac"))
+        assert len(all_flacs) == 6, f"expected 6 FLAC files after repair, got {all_flacs}"
+
+        movt_nums_after = sorted(FLAC(str(p))["CWP_MOVT_NUM"][0] for p in all_flacs)
+        assert movt_nums_after == ["1", "2", "3", "4", "5", "6"], (
+            f"expected unique CWP_MOVT_NUM 1-6 after repair, got {movt_nums_after}"
+        )
+
+        # (c) Journal has action="renumbered" entries.
+        journal = music_annotator.read_journal(dest_root / JOURNAL_FILENAME)
+        renumbered = [e for e in journal.entries if e.action == "renumbered"]
+        # At least some files moved (those whose CWP_MOVT_NUM changed from 1-3 to 4-6).
+        assert len(renumbered) > 0, "expected at least one 'renumbered' journal entry"
+        for entry in renumbered:
+            assert entry.release_id == "rel-collision", (
+                f"renumbered entry must carry the release MBID, got {entry.release_id!r}"
+            )
+            assert entry.source != entry.destination, "renumbered entry must record a real move (source != destination)"
+
+        # (d) Provenance-chain invariant: every "renumbered" entry's destination file exists
+        # and has the CWP_MOVT_NUM that was written before the move.
+        for entry in renumbered:
+            dest_path = Path(entry.destination)
+            assert dest_path.exists(), f"renumbered destination must exist: {dest_path}"
+            dest_tags = FLAC(str(dest_path))
+            assert "CWP_MOVT_NUM" in dest_tags, f"renumbered file must have CWP_MOVT_NUM: {dest_path}"
+
+        # (e) Idempotency: second run finds nothing to do (no new journal entries).
+        music_annotator.renumber_leaves(dest_root=dest_root, yes=True)
+        journal2 = music_annotator.read_journal(dest_root / JOURNAL_FILENAME)
+        renumbered2 = [e for e in journal2.entries if e.action == "renumbered"]
+        assert len(renumbered2) == len(renumbered), (
+            f"second run must be a no-op: expected {len(renumbered)} entries, got {len(renumbered2)}"
+        )
+
+    def test_renumber_leaves_dry_run_no_mutations(self, fs: FakeFilesystem) -> None:
+        """renumber_leaves(dry_run=True) reports planned moves without mutating files or journal.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_dir = dest_root / "Bach" / "Die Kunst der Fuge, BWV 1080 [rec 2000]"
+        work_dir.mkdir(parents=True)
+
+        for track in range(1, 4):
+            tags_a = self._make_collision_tags(disc=1, track=track, movt_num=str(track), movt_tot="6")
+            path_a = work_dir / f"0{track} - Contrapunctus {track}.flac"
+            path_a.write_bytes(_MINIMAL_FLAC)
+            apply_tags_flac(path_a, tags_a)
+
+            tags_b = self._make_collision_tags(disc=2, track=track, movt_num=str(track), movt_tot="6")
+            path_b = work_dir / f"0{track} - Contrapunctus {track + 3}.flac"
+            path_b.write_bytes(_MINIMAL_FLAC)
+            apply_tags_flac(path_b, tags_b)
+
+        # Capture file paths before dry-run.
+        files_before = set(dest_root.rglob("*.flac"))
+
+        # Act: dry-run.
+        music_annotator.renumber_leaves(dest_root=dest_root, dry_run=True)
+
+        # No files must have moved.
+        files_after = set(dest_root.rglob("*.flac"))
+        assert files_before == files_after, f"dry-run must not move files; before={files_before}, after={files_after}"
+
+        # No journal must be written.
+        journal_path = dest_root / JOURNAL_FILENAME
+        assert not journal_path.exists(), "dry-run must not write a journal"
+
+    def test_renumber_leaves_stray_minority_not_moved(self, fs: FakeFilesystem) -> None:
+        """renumber_leaves() reports stray-minority dirs but does not move them even with yes=True.
+
+        A stray-minority dir has a single CWP_WORKID_TOP but at least one fragment with only
+        1-2 files.  These require explicit per-dir operator review.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_dir = dest_root / "Walcha" / "Die Kunst der Fuge, BWV 1080 [rec 1962]"
+        work_dir.mkdir(parents=True)
+
+        # Large fragment: 5 files from disc 1, release A (CWP_MOVT_NUM 1-5).
+        for track in range(1, 6):
+            tags = self._make_collision_tags(disc=1, track=track, movt_num=str(track), movt_tot="6", album_id="rel-walcha-a")
+            path = work_dir / f"0{track} - Contrapunctus {track}.flac"
+            path.write_bytes(_MINIMAL_FLAC)
+            apply_tags_flac(path, tags)
+
+        # Stray fragment: 1 file from disc 2, release B (CWP_MOVT_NUM 1 — collision with disc 1 track 1).
+        # Different album_id simulates a different ingest session (the stray fragment).
+        tags_stray = self._make_collision_tags(disc=2, track=1, movt_num="1", movt_tot="6", album_id="rel-walcha-b")
+        path_stray = work_dir / "01 - Contrapunctus XVIII.flac"
+        path_stray.write_bytes(_MINIMAL_FLAC)
+        apply_tags_flac(path_stray, tags_stray)
+
+        # Capture file paths before.
+        files_before = set(dest_root.rglob("*.flac"))
+
+        # Act: renumber_leaves with yes=True.
+        music_annotator.renumber_leaves(dest_root=dest_root, yes=True)
+
+        # No files must have moved (stray-minority dir is reported, not auto-moved).
+        files_after = set(dest_root.rglob("*.flac"))
+        assert files_before == files_after, (
+            f"stray-minority dir must not be auto-moved; before={files_before}, after={files_after}"
+        )
+
+        # No journal must be written.
+        journal_path = dest_root / JOURNAL_FILENAME
+        assert not journal_path.exists(), "stray-minority dir must not produce journal entries"
+
+    def test_renumber_leaves_out_of_scope_not_moved(self, fs: FakeFilesystem) -> None:
+        """renumber_leaves() reports out-of-scope dirs (multiple CWP_WORKID_TOP) but does not move them.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_dir = dest_root / "Brahms" / "Mixed Works [rec 2000]"
+        work_dir.mkdir(parents=True)
+
+        # Work A: 3 files with CWP_WORKID_TOP "work-a", CWP_MOVT_NUM 1-3.
+        for track in range(1, 4):
+            tags = TrackTags(
+                cwp_composer_lastnames="Brahms",
+                cwp_work_top="Symphony No. 1",
+                cwp_workid_top="work-a",
+                recording_date="2000",
+                cwp_movt_num=str(track),
+                cwp_movt_tot="6",
+                movementnumber=str(track),
+                movementtotal="6",
+                cwp_part_levels="1",
+                title=f"Movement {track}",
+                discnumber="1",
+                tracknumber=str(track),
+                musicbrainz_albumid="rel-mixed",
+            )
+            path = work_dir / f"0{track} - Movement {track}.flac"
+            path.write_bytes(_MINIMAL_FLAC)
+            apply_tags_flac(path, tags)
+
+        # Work B: 3 files with CWP_WORKID_TOP "work-b", CWP_MOVT_NUM 1-3 (collision with work-a).
+        for track in range(1, 4):
+            tags = TrackTags(
+                cwp_composer_lastnames="Brahms",
+                cwp_work_top="Symphony No. 2",
+                cwp_workid_top="work-b",
+                recording_date="2000",
+                cwp_movt_num=str(track),
+                cwp_movt_tot="6",
+                movementnumber=str(track),
+                movementtotal="6",
+                cwp_part_levels="1",
+                title=f"Movement {track}",
+                discnumber="2",
+                tracknumber=str(track),
+                musicbrainz_albumid="rel-mixed",
+            )
+            path = work_dir / f"0{track} - Sym2 Movement {track}.flac"
+            path.write_bytes(_MINIMAL_FLAC)
+            apply_tags_flac(path, tags)
+
+        # Capture file paths before.
+        files_before = set(dest_root.rglob("*.flac"))
+
+        # Act: renumber_leaves with yes=True.
+        music_annotator.renumber_leaves(dest_root=dest_root, yes=True)
+
+        # No files must have moved (out-of-scope dir is reported, not auto-moved).
+        files_after = set(dest_root.rglob("*.flac"))
+        assert files_before == files_after, (
+            f"out-of-scope dir must not be auto-moved; before={files_before}, after={files_after}"
+        )
+
+        # No journal must be written.
+        journal_path = dest_root / JOURNAL_FILENAME
+        assert not journal_path.exists(), "out-of-scope dir must not produce journal entries"
+
+    def test_renumber_leaves_no_collision_is_noop(self, fs: FakeFilesystem) -> None:
+        """renumber_leaves() is a no-op when no collision directories exist.
+
+        :param fs: pyfakefs fixture.
+        """
+        dest_root = Path("/lib")
+        fs.create_dir(str(dest_root))
+
+        work_dir = dest_root / "Bach" / "Die Kunst der Fuge, BWV 1080 [rec 2000]"
+        work_dir.mkdir(parents=True)
+
+        # 6 files with unique CWP_MOVT_NUM values (no collision).
+        for track in range(1, 7):
+            disc = 1 if track <= 3 else 2
+            disc_track = track if track <= 3 else track - 3
+            tags = self._make_collision_tags(disc=disc, track=disc_track, movt_num=str(track), movt_tot="6")
+            path = work_dir / f"0{track} - Contrapunctus {track}.flac"
+            path.write_bytes(_MINIMAL_FLAC)
+            apply_tags_flac(path, tags)
+
+        files_before = set(dest_root.rglob("*.flac"))
+
+        music_annotator.renumber_leaves(dest_root=dest_root, yes=True)
+
+        files_after = set(dest_root.rglob("*.flac"))
+        assert files_before == files_after, "no-collision library must not be modified"
+
+        journal_path = dest_root / JOURNAL_FILENAME
+        assert not journal_path.exists(), "no-collision library must not produce journal entries"
