@@ -3391,11 +3391,11 @@ def renumber_leaves(  # pylint: disable=too-many-return-statements,too-many-bran
     cache.save()
     log.info("renumber_leaves_complete", dest_root=str(dest_root), moved=total_moved)
 
-    # User-facing confirmation: derived exclusively from in-memory journal entries gated on
-    # successful _verify_copy (provenance-chain invariant: the "renumbered" entries in journal
-    # were appended only after verification passed inside _move_verify_journal).
-    renumbered_this_run = [e for e in journal.entries if e.action == "renumbered"]
-    _console.print(f"\n[bold green]renumber-leaves complete[/] — {len(renumbered_this_run)} file(s) renumbered and moved.\n")
+    # User-facing confirmation: use total_moved (this-run count, accumulated from
+    # _move_verify_journal) rather than re-filtering the journal, which would conflate
+    # entries from prior runs.  Every counted move passed _verify_copy before being
+    # journalled (provenance-chain invariant).
+    _console.print(f"\n[bold green]renumber-leaves complete[/] — {total_moved} file(s) renumbered and moved.\n")
 
 
 def enrich(
