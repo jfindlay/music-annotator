@@ -148,7 +148,7 @@ idempotent across sessions.
 | #   | Session                                                                                    | Status  | Commit  | Froze  |
 |-----|--------------------------------------------------------------------------------------------|---------|---------|--------|
 | S1  | Extract tag-only movement-renumber helper shared by run() and maintenance                  | done    | e2a6e27 | C-L5   |
-| S2  | Fix source bug: regroup()/unify() re-derive CWP_MOVT_NUM over merged group                | pending | —       | —      |
+| S2  | Fix source bug: regroup()/unify() re-derive CWP_MOVT_NUM over merged group                | done    | 1fd8da5 | —      |
 | S3 ◆ | Add `renumber-leaves` subcommand: tag-rewrite + rename on the provenance chain           | pending | —       | —      |
 
 ## Action-frame digest
